@@ -1,0 +1,41 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# env files
+.env*.local
+
+# credentials — NEVER commit
+platform-credentials.md
+claude-gmail-connector-*.json
+.mcp.json
+
+# internal docs — not for git
+CRM-Data-Schema.md
+SOP-Business-Rules.md
+Technical-Roadmap.md
+SKILL*.md
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
