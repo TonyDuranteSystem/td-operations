@@ -10,9 +10,9 @@ export const COMPANY_TYPE = [
 
 export const SERVICE_TYPE = [
   'Company Formation', 'Client Onboarding', 'Tax Return', 'State RA Renewal',
-  'State Annual Report', 'EIN Application', 'CMRA Mailing Address', 'ITIN',
+  'State Annual Report', 'EIN Application', 'CMRA', 'ITIN',
   'Banking Fintech', 'Banking Physical', 'Shipping', 'Public Notary',
-  'Company Closure', 'Offboarding', 'Annual Renewal', 'Support',
+  'Company Closure', 'Client Offboarding', 'Support',
 ] as const
 
 export const SERVICE_STATUS = [
@@ -51,9 +51,9 @@ export const TASK_CATEGORY = [
 export const TAX_RETURN_TYPE = ['SMLLC', 'MMLLC', 'Corp', 'LSE'] as const
 
 export const TAX_RETURN_STATUS = [
-  'Payment Pending', 'Paid - Need Deal', 'Deal Created - Need Link',
-  'Link Sent - Awaiting Data', 'Data Received', 'Sent to India',
-  'Extension Filed', 'TR Completed - Awaiting Signature', 'TR Filed',
+  'Payment Pending', 'Link Sent - Awaiting Data', 'Data Received',
+  'Sent to India', 'Extension Filed', 'TR Completed - Awaiting Signature',
+  'TR Filed',
 ] as const
 
 export const CONVERSATION_CHANNEL = [

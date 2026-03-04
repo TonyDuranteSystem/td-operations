@@ -3,7 +3,7 @@ import { TaxBoard } from '@/components/tax-returns/tax-board'
 import type { TaxReturn, TaxSection } from '@/lib/types'
 
 const SECTION_DEFS = [
-  { key: 'da_elaborare', title: 'Da Elaborare', statuses: ['Payment Pending', 'Paid - Need Deal', 'Deal Created - Need Link'], color: 'amber', icon: 'clipboard' },
+  { key: 'da_elaborare', title: 'Da Elaborare', statuses: ['Payment Pending'], color: 'amber', icon: 'clipboard' },
   { key: 'attesa_dati', title: 'Attesa Dati', statuses: ['Link Sent - Awaiting Data'], color: 'orange', icon: 'clock' },
   { key: 'pronti_india', title: 'Pronti India', statuses: ['Data Received'], color: 'blue', icon: 'send' },
   { key: 'in_corso_india', title: 'In Corso India', statuses: ['Sent to India'], color: 'indigo', icon: 'loader' },
