@@ -2,19 +2,22 @@ import { createClient } from '@/lib/supabase/server'
 import { AccountTable } from '@/components/accounts/account-table'
 import type { AccountListItem } from '@/lib/types'
 
+const PAGE_SIZE = 50
+
 export default async function AccountsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; status?: string; type?: string }
+  searchParams: { q?: string; status?: string; type?: string; page?: string }
 }) {
   const supabase = createClient()
   const query = searchParams.q?.trim() ?? ''
   const statusFilter = searchParams.status ?? 'Active'
   const typeFilter = searchParams.type ?? ''
+  const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
 
   let dbQuery = supabase
     .from('accounts')
-    .select('id, company_name, entity_type, status, state_of_formation, formation_date, client_health, created_at')
+    .select('id, company_name, entity_type, status, state_of_formation, formation_date, client_health, created_at', { count: 'exact' })
     .order('company_name', { ascending: true })
 
   if (statusFilter && statusFilter !== 'all') {
@@ -27,7 +30,11 @@ export default async function AccountsPage({
     dbQuery = dbQuery.ilike('company_name', `%${query}%`)
   }
 
-  const { data: accounts } = await dbQuery
+  const from = (currentPage - 1) * PAGE_SIZE
+  dbQuery = dbQuery.range(from, from + PAGE_SIZE - 1)
+
+  const { data: accounts, count: totalCount } = await dbQuery
+  const totalPages = Math.ceil((totalCount ?? 0) / PAGE_SIZE)
 
   // Get primary contact for each account
   const accountIds = (accounts ?? []).map(a => a.id)
@@ -118,6 +125,9 @@ export default async function AccountsPage({
         statusFilter={statusFilter}
         typeFilter={typeFilter}
         stats={stats}
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalCount={totalCount ?? 0}
       />
     </div>
   )

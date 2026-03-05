@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useTransition } from 'react'
+import { useState, useTransition } from 'react'
 import {
   AlertCircle,
   Clock,
@@ -9,6 +9,8 @@ import {
   Calendar,
   Check,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
@@ -121,8 +123,11 @@ function MarkPaidButton({ paymentId, description }: { paymentId: string; descrip
   )
 }
 
+const PAYMENTS_PER_PAGE = 30
+
 export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today }: PaymentBoardProps) {
   const router = useRouter()
+  const [page, setPage] = useState(1)
 
   const tabs = [
     { key: 'scaduti', label: 'Scaduti', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
@@ -130,8 +135,10 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
     { key: 'pagati', label: 'Pagati', count: stats.paidCount, icon: CheckCircle2, color: 'text-emerald-600' },
   ]
 
-  const currentPayments = activeTab === 'scaduti' ? overdue :
-                          activeTab === 'arrivo' ? upcoming : paid
+  const allPayments = activeTab === 'scaduti' ? overdue :
+                      activeTab === 'arrivo' ? upcoming : paid
+  const totalPages = Math.ceil(allPayments.length / PAYMENTS_PER_PAGE)
+  const currentPayments = allPayments.slice((page - 1) * PAYMENTS_PER_PAGE, page * PAYMENTS_PER_PAGE)
 
   return (
     <div className="space-y-6">
@@ -159,7 +166,7 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
             return (
               <button
                 key={tab.key}
-                onClick={() => router.push(`/payments?tab=${tab.key}`)}
+                onClick={() => { setPage(1); router.push(`/payments?tab=${tab.key}`) }}
                 className={cn(
                   'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
                   activeTab === tab.key
@@ -273,6 +280,43 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
           })
         )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">
+            {((page - 1) * PAYMENTS_PER_PAGE) + 1}–{Math.min(page * PAYMENTS_PER_PAGE, allPayments.length)} di {allPayments.length}
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage(p => p - 1)}
+              className={cn('p-1.5 rounded-lg', page <= 1 ? 'text-zinc-300 cursor-not-allowed' : 'text-zinc-600 hover:bg-zinc-100')}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+              <button
+                key={p}
+                onClick={() => setPage(p)}
+                className={cn(
+                  'px-2.5 py-1 rounded-lg text-xs font-medium transition-colors',
+                  p === page ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'
+                )}
+              >
+                {p}
+              </button>
+            ))}
+            <button
+              disabled={page >= totalPages}
+              onClick={() => setPage(p => p + 1)}
+              className={cn('p-1.5 rounded-lg', page >= totalPages ? 'text-zinc-300 cursor-not-allowed' : 'text-zinc-600 hover:bg-zinc-100')}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

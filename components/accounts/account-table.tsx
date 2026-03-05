@@ -1,8 +1,8 @@
 'use client'
 
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
-import { Search, Building2, AlertCircle, ChevronRight } from 'lucide-react'
+import { Search, Building2, AlertCircle, ChevronRight, ChevronLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
 import Link from 'next/link'
@@ -31,30 +31,38 @@ interface AccountTableProps {
     corp: number
     withOverdue: number
   }
+  currentPage: number
+  totalPages: number
+  totalCount: number
 }
 
-export function AccountTable({ items, query, statusFilter, typeFilter, stats }: AccountTableProps) {
+export function AccountTable({ items, query, statusFilter, typeFilter, stats, currentPage, totalPages, totalCount }: AccountTableProps) {
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
 
-  function updateFilter(key: string, value: string) {
+  function buildParams(overrides: Record<string, string> = {}) {
     const params = new URLSearchParams()
-    if (key === 'q') {
-      if (value) params.set('q', value)
-      if (statusFilter) params.set('status', statusFilter)
-      if (typeFilter) params.set('type', typeFilter)
-    } else if (key === 'status') {
-      if (query) params.set('q', query)
-      if (value) params.set('status', value)
-      if (typeFilter) params.set('type', typeFilter)
-    } else if (key === 'type') {
-      if (query) params.set('q', query)
-      if (statusFilter) params.set('status', statusFilter)
-      if (value) params.set('type', value)
-    }
+    const q = overrides.q ?? query
+    const s = overrides.status ?? statusFilter
+    const t = overrides.type ?? typeFilter
+    const p = overrides.page ?? ''
+    if (q) params.set('q', q)
+    if (s) params.set('status', s)
+    if (t) params.set('type', t)
+    if (p && p !== '1') params.set('page', p)
+    return params.toString()
+  }
+
+  function updateFilter(key: string, value: string) {
     startTransition(() => {
-      router.push(`/accounts?${params.toString()}`)
+      router.push(`/accounts?${buildParams({ [key]: value, page: '1' })}`)
+    })
+  }
+
+  function goToPage(page: number) {
+    startTransition(() => {
+      router.push(`/accounts?${buildParams({ page: String(page) })}`)
     })
   }
 
@@ -201,6 +209,67 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats }: 
           )}
         </div>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-xs text-muted-foreground">
+            {((currentPage - 1) * 50) + 1}–{Math.min(currentPage * 50, totalCount)} di {totalCount}
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              disabled={currentPage <= 1 || isPending}
+              onClick={() => goToPage(currentPage - 1)}
+              className={cn(
+                'p-1.5 rounded-lg text-sm transition-colors',
+                currentPage <= 1 || isPending
+                  ? 'text-zinc-300 cursor-not-allowed'
+                  : 'text-zinc-600 hover:bg-zinc-100'
+              )}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+              .reduce<(number | string)[]>((acc, p, i, arr) => {
+                if (i > 0 && p - (arr[i - 1] as number) > 1) acc.push('...')
+                acc.push(p)
+                return acc
+              }, [])
+              .map((p, i) =>
+                typeof p === 'string' ? (
+                  <span key={`dots-${i}`} className="px-1 text-xs text-muted-foreground">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    disabled={isPending}
+                    onClick={() => goToPage(p)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-lg text-xs font-medium transition-colors',
+                      p === currentPage
+                        ? 'bg-zinc-900 text-white'
+                        : 'text-zinc-600 hover:bg-zinc-100'
+                    )}
+                  >
+                    {p}
+                  </button>
+                )
+              )}
+            <button
+              disabled={currentPage >= totalPages || isPending}
+              onClick={() => goToPage(currentPage + 1)}
+              className={cn(
+                'p-1.5 rounded-lg text-sm transition-colors',
+                currentPage >= totalPages || isPending
+                  ? 'text-zinc-300 cursor-not-allowed'
+                  : 'text-zinc-600 hover:bg-zinc-100'
+              )}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
