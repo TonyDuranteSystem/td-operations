@@ -32,9 +32,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(dashboardUrl)
   }
 
-  // Log the realm ID received (should match our configured one)
-  if (realmId && realmId !== process.env.QB_REALM_ID) {
-    console.warn(`[QB Callback] Realm ID mismatch: received ${realmId}, expected ${process.env.QB_REALM_ID}`)
+  // Log and check realm ID
+  console.log(`[QB Callback] Received realmId: ${realmId}`)
+  console.log(`[QB Callback] Configured QB_REALM_ID: ${process.env.QB_REALM_ID}`)
+
+  const realmMatch = realmId === process.env.QB_REALM_ID
+  if (realmId && !realmMatch) {
+    console.warn(`[QB Callback] ⚠️ REALM ID MISMATCH: received "${realmId}", expected "${process.env.QB_REALM_ID}"`)
   }
 
   try {
@@ -49,9 +53,11 @@ export async function GET(request: NextRequest) {
     await storeTokens(tokenData)
     console.log('[QB Callback] Tokens stored successfully in Supabase')
 
-    // Redirect to dashboard with success
+    // Redirect to dashboard with success + diagnostic info
     const dashboardUrl = new URL('/', request.url)
     dashboardUrl.searchParams.set('qb_connected', 'true')
+    dashboardUrl.searchParams.set('qb_realm', realmId || 'none')
+    dashboardUrl.searchParams.set('qb_realm_match', String(realmMatch))
     return NextResponse.redirect(dashboardUrl)
 
   } catch (err) {
