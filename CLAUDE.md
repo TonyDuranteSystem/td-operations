@@ -1,5 +1,5 @@
 # Tony Durante LLC — Claude Code Context
-## Last Updated: 2026-03-04
+## Last Updated: 2026-03-05
 
 ## Who You Are
 You are working for Antonio Durante, owner of Tony Durante LLC — a Florida-based consulting firm helping international entrepreneurs (primarily European/Italian) set up and manage LLCs in the United States.
@@ -39,6 +39,18 @@ All operational documents are stored in **Google Drive** (Shared Drive: Tony Dur
 - **TD Operations Folder:** `1EdxwvqFTlmMbO9lVRwlV9tKklqbXcMy0`
 - **References Folder:** `1z1FrM170XG7dWyf8IwpqK4z1mujYY6-i`
 - **Access:** Service Account with Domain-Wide Delegation (see google-drive.md)
+
+### QuickBooks Online — ✅ OPERATIONAL (Invoicing & Payments)
+- **Company:** Tony Durante LLC (Realm: `13845050572680403`)
+- **Status:** Production, OAuth2 tokens in Supabase `qb_tokens` table, auto-refresh on demand
+- **API Base:** `https://quickbooks.api.intuit.com/v3/company/13845050572680403`
+- **API Routes (live):**
+  - `POST /api/qb/create-invoice` → creates QB invoice, links to CRM
+  - `GET /api/qb/invoice-pdf?invoice_id=X` → branded PDF from QB invoice
+  - `POST /api/qb/invoice-pdf` → branded PDF from custom JSON
+  - `GET /api/qb/status` → health check
+- **Invoice PDF:** Full TD logo, US flag colors, certifications. Uses pdf-lib (pure JS).
+- **Phone on invoices:** +1 (727) 452-1093
 
 ### Other Platforms
 - **Airtable** — Base ID: `apppWyKkOSZXQE6s8` — Backup/safety net. 17 tables. DO NOT DELETE.
