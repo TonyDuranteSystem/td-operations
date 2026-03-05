@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Clock,
@@ -9,10 +9,15 @@ import {
   ChevronDown,
   ChevronRight,
   Filter,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO } from 'date-fns'
+import { toast } from 'sonner'
 import Link from 'next/link'
+import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
+import { completeService, updateServiceStatus } from '@/app/(dashboard)/services/actions'
 
 interface ServiceItem {
   id: string
@@ -59,9 +64,40 @@ function StatCard({ label, value, color }: { label: string; value: number; color
   )
 }
 
+function CompleteButton({ serviceId, serviceName }: { serviceId: string; serviceName: string }) {
+  const [isPending, startTransition] = useTransition()
+
+  return (
+    <button
+      disabled={isPending}
+      onClick={(e) => {
+        e.stopPropagation()
+        startTransition(async () => {
+          try {
+            await completeService(serviceId)
+            toast.success('Servizio completato', { description: serviceName })
+          } catch {
+            toast.error('Errore nel completare il servizio')
+          }
+        })
+      }}
+      className={cn(
+        'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors',
+        isPending
+          ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+          : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+      )}
+      title="Segna come completato"
+    >
+      {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+      <span className="hidden sm:inline">Completa</span>
+    </button>
+  )
+}
+
 export function ServiceBoard({ columns, stats, serviceTypes, typeFilter, today }: ServiceBoardProps) {
   const router = useRouter()
-  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list')
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('kanban')
 
   return (
     <div className="space-y-6">
@@ -157,7 +193,7 @@ function StatusSection({ column, today }: { column: Column; today: string }) {
             <p className="text-sm text-muted-foreground col-span-full pl-6">Nessun servizio</p>
           ) : (
             column.items.map(s => (
-              <ServiceCard key={s.id} service={s} today={today} />
+              <ServiceCard key={s.id} service={s} today={today} showComplete />
             ))
           )}
         </div>
@@ -166,7 +202,7 @@ function StatusSection({ column, today }: { column: Column; today: string }) {
   )
 }
 
-function ServiceCard({ service: s, today }: { service: ServiceItem; today: string }) {
+function ServiceCard({ service: s, today, showComplete = false }: { service: ServiceItem; today: string; showComplete?: boolean }) {
   const isBlocked = s.blocked_waiting_external === true
   const hasSla = s.sla_due_date != null
   let slaDays: number | null = null
@@ -188,14 +224,10 @@ function ServiceCard({ service: s, today }: { service: ServiceItem; today: strin
         </span>
         <div className="flex items-center gap-1">
           {isBlocked && (
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700">
-              BLOCKED
-            </span>
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700">BLOCKED</span>
           )}
           {slaOverdue && (
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
-              SLA
-            </span>
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">SLA</span>
           )}
         </div>
       </div>
@@ -215,17 +247,20 @@ function ServiceCard({ service: s, today }: { service: ServiceItem; today: strin
             <span>Step {s.current_step}/{s.total_steps}</span>
           )}
         </div>
-        {slaDays !== null && (
-          <span className={cn(
-            'flex items-center gap-1',
-            slaDays < 0 ? 'text-red-600 font-medium' :
-            slaDays <= 3 ? 'text-amber-600' : ''
-          )}>
-            <Clock className="h-3 w-3" />
-            {slaDays < 0 ? `${Math.abs(slaDays)}g scaduto` :
-             slaDays === 0 ? 'Oggi' : `${slaDays}g`}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {slaDays !== null && (
+            <span className={cn(
+              'flex items-center gap-1',
+              slaDays < 0 ? 'text-red-600 font-medium' : slaDays <= 3 ? 'text-amber-600' : ''
+            )}>
+              <Clock className="h-3 w-3" />
+              {slaDays < 0 ? `${Math.abs(slaDays)}g scaduto` : slaDays === 0 ? 'Oggi' : `${slaDays}g`}
+            </span>
+          )}
+          {showComplete && s.status === 'In Progress' && (
+            <CompleteButton serviceId={s.id} serviceName={s.service_name} />
+          )}
+        </div>
       </div>
       {isBlocked && s.blocked_reason && (
         <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
@@ -237,34 +272,91 @@ function ServiceCard({ service: s, today }: { service: ServiceItem; today: strin
   )
 }
 
-/* ── Kanban View ───────────────────────────────────── */
+/* ── Kanban View with Drag & Drop ───────────────────── */
 
 function KanbanView({ columns, today }: { columns: Column[]; today: string }) {
+  const [cols, setCols] = useState(columns)
+  const [, startTransition] = useTransition()
+
+  function handleDragEnd(result: DropResult) {
+    if (!result.destination) return
+    const srcStatus = result.source.droppableId
+    const dstStatus = result.destination.droppableId
+    if (srcStatus === dstStatus && result.source.index === result.destination.index) return
+
+    const newCols = cols.map(c => ({ ...c, items: [...c.items] }))
+    const srcCol = newCols.find(c => c.status === srcStatus)
+    const dstCol = newCols.find(c => c.status === dstStatus)
+    if (!srcCol || !dstCol) return
+
+    const [moved] = srcCol.items.splice(result.source.index, 1)
+    dstCol.items.splice(result.destination.index, 0, { ...moved, status: dstStatus })
+    setCols(newCols)
+
+    // Persist to DB
+    if (srcStatus !== dstStatus) {
+      startTransition(async () => {
+        try {
+          await updateServiceStatus(moved.id, dstStatus)
+          toast.success(`Servizio spostato in "${dstStatus}"`, { description: moved.service_name })
+        } catch {
+          toast.error('Errore nello spostamento del servizio')
+          setCols(columns) // revert
+        }
+      })
+    }
+  }
+
   return (
-    <div className="flex gap-4 overflow-x-auto pb-4">
-      {columns.map(col => {
-        const colors = STATUS_COLORS[col.status] ?? STATUS_COLORS['Not Started']
-        return (
-          <div key={col.status} className="flex-shrink-0 w-80">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="font-semibold text-xs uppercase tracking-wide">{col.status}</span>
-              <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', colors.bg, colors.text)}>
-                {col.items.length}
-              </span>
+    <DragDropContext onDragEnd={handleDragEnd}>
+      <div className="flex gap-4 overflow-x-auto pb-4">
+        {cols.map(col => {
+          const colors = STATUS_COLORS[col.status] ?? STATUS_COLORS['Not Started']
+          return (
+            <div key={col.status} className="flex-shrink-0 w-80">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="font-semibold text-xs uppercase tracking-wide">{col.status}</span>
+                <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', colors.bg, colors.text)}>
+                  {col.items.length}
+                </span>
+              </div>
+              <Droppable droppableId={col.status}>
+                {(provided, snapshot) => (
+                  <div
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    className={cn(
+                      'space-y-2 max-h-[70vh] overflow-y-auto min-h-[60px] rounded-lg p-1 transition-colors',
+                      snapshot.isDraggingOver && 'bg-blue-50 ring-2 ring-blue-200'
+                    )}
+                  >
+                    {col.items.map((s, index) => (
+                      <Draggable key={s.id} draggableId={s.id} index={index}>
+                        {(provided, snapshot) => (
+                          <div
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            {...provided.dragHandleProps}
+                            className={cn(snapshot.isDragging && 'opacity-90 rotate-1 shadow-lg')}
+                          >
+                            <ServiceCard service={s} today={today} showComplete />
+                          </div>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                    {col.items.length === 0 && !snapshot.isDraggingOver && (
+                      <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
+                        Trascina qui
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Droppable>
             </div>
-            <div className="space-y-2 max-h-[70vh] overflow-y-auto">
-              {col.items.map(s => (
-                <ServiceCard key={s.id} service={s} today={today} />
-              ))}
-              {col.items.length === 0 && (
-                <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
-                  Nessun servizio
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      })}
-    </div>
+          )
+        })}
+      </div>
+    </DragDropContext>
   )
 }
