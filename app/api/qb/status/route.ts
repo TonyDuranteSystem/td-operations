@@ -31,6 +31,13 @@ export async function GET() {
         status: 'NOT_CONNECTED',
         message: 'No active QuickBooks connection. Visit /api/qb/authorize to connect.',
         authorize_url: '/api/qb/authorize',
+        debug: {
+          has_supabase_url: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+          has_service_role_key: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+          has_realm_id: !!process.env.QB_REALM_ID,
+          realm_id_value: process.env.QB_REALM_ID || 'MISSING',
+          db_error: error?.message || null,
+        },
       })
     }
 
