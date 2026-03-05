@@ -36,8 +36,6 @@ export function getAuthorizationUrl(state?: string): string {
     response_type: 'code',
     scope: QB_SCOPES,
     state: state || 'td-operations-qb-auth',
-    // Force consent screen to appear (company selection + permission grant)
-    prompt: 'consent',
   })
 
   return `${QB_AUTH_URL}?${params.toString()}`
