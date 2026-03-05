@@ -98,6 +98,9 @@ function drawCenter(
   page.drawText(text, { x: (pageWidth - width) / 2, y, size, font, color })
 }
 
+// ─── Logo URL (Supabase public storage) ─────────────────────
+const LOGO_URL = 'https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/tony-logos.jpg'
+
 // ─── Main Generator ─────────────────────────────────────────
 export async function generateInvoicePDF(data: InvoiceData): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
@@ -114,47 +117,49 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<Uint8Array>
   let y = height - margin
 
   // ═══════════════════════════════════════════════════════════
-  // HEADER
+  // HEADER — Logo Image + Contact Details
   // ═══════════════════════════════════════════════════════════
 
-  // Company name (large, red)
-  page.drawText('TONY DURANTE', {
-    x: margin,
-    y: y,
-    size: 24,
-    font: helveticaBold,
-    color: COLORS.tdRed,
-  })
-  y -= 16
+  // Fetch and embed the logo from Supabase storage
+  try {
+    const logoResponse = await fetch(LOGO_URL)
+    if (logoResponse.ok) {
+      const logoBytes = new Uint8Array(await logoResponse.arrayBuffer())
+      const logoImage = await doc.embedJpg(logoBytes)
 
-  // Tagline
-  page.drawText('Your Way to Freedom', {
-    x: margin,
-    y: y,
-    size: 11,
-    font: helveticaOblique,
-    color: COLORS.mediumGray,
-  })
+      // Logo is 1789x264 — scale to fit page width with margins
+      const logoDrawWidth = width - margin * 2  // 512pt
+      const logoAspectRatio = logoImage.width / logoImage.height
+      const logoDrawHeight = logoDrawWidth / logoAspectRatio  // ~75.6pt
 
-  // Company details (right side)
-  let headerY = height - margin + 2
-  const headerLines = [
-    { text: COMPANY.name, font: helveticaBold, size: 9 },
-    { text: COMPANY.address, font: helvetica, size: 9 },
-    { text: COMPANY.cityStateZip, font: helvetica, size: 9 },
-    { text: COMPANY.phone, font: helvetica, size: 9 },
-    { text: COMPANY.email, font: helvetica, size: 9 },
-    { text: COMPANY.website, font: helveticaBold, size: 9 },
-  ]
+      page.drawImage(logoImage, {
+        x: margin,
+        y: height - margin - logoDrawHeight,
+        width: logoDrawWidth,
+        height: logoDrawHeight,
+      })
 
-  for (const line of headerLines) {
-    drawRight(page, line.text, rightEdge, headerY, line.font, line.size,
-      line.text === COMPANY.website ? COLORS.blue : COLORS.mediumGray)
-    headerY -= 13
+      y = height - margin - logoDrawHeight - 8
+    }
+  } catch (logoErr) {
+    // Fallback: draw text if logo fetch fails
+    console.warn('[Invoice PDF] Logo fetch failed, using text fallback:', logoErr)
+    page.drawText('TONY DURANTE', {
+      x: margin, y, size: 24, font: helveticaBold, color: COLORS.tdRed,
+    })
+    y -= 16
+    page.drawText('Your Way to Freedom', {
+      x: margin, y, size: 11, font: helveticaOblique, color: COLORS.mediumGray,
+    })
+    y -= 12
   }
 
-  // Red line under header
-  y -= 15
+  // Contact details line below logo
+  const contactLine = `${COMPANY.address}, ${COMPANY.cityStateZip}  |  ${COMPANY.phone}  |  ${COMPANY.email}  |  ${COMPANY.website}`
+  drawCenter(page, contactLine, y, helvetica, 7.5, COLORS.mediumGray)
+  y -= 14
+
+  // Red separator line
   page.drawRectangle({
     x: margin,
     y: y,
