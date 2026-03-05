@@ -106,6 +106,9 @@ export async function refreshAccessToken(refreshToken: string) {
 
 /**
  * Store tokens in Supabase (deactivates previous tokens first)
+ *
+ * Uses UPDATE (not delete+insert) to avoid unique constraint issues.
+ * Falls back to upsert if no active row exists.
  */
 export async function storeTokens(tokenData: {
   access_token: string
@@ -121,21 +124,41 @@ export async function storeTokens(tokenData: {
   const accessExpires = new Date(now.getTime() + tokenData.expires_in * 1000)
   const refreshExpires = new Date(now.getTime() + tokenData.x_refresh_token_expires_in * 1000)
 
-  // Delete all previous inactive tokens for this realm (cleanup old history)
-  await supabaseAdmin
+  // Strategy: UPDATE the existing active row in-place (avoids constraint issues)
+  const { data: updated, error: updateErr } = await supabaseAdmin
+    .from('qb_tokens')
+    .update({
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      token_type: tokenData.token_type || 'bearer',
+      access_token_expires_at: accessExpires.toISOString(),
+      refresh_token_expires_at: refreshExpires.toISOString(),
+      updated_at: now.toISOString(),
+    })
+    .eq('realm_id', realmId)
+    .eq('is_active', true)
+    .select()
+    .single()
+
+  if (!updateErr && updated) {
+    console.log('[QB] Token refreshed and saved to Supabase')
+    return updated
+  }
+
+  // Fallback: no active row found — insert a new one
+  console.warn('[QB] No active token row to update, inserting new row...')
+
+  // Clean up any stale inactive rows first
+  const { error: cleanupErr } = await supabaseAdmin
     .from('qb_tokens')
     .delete()
     .eq('realm_id', realmId)
     .eq('is_active', false)
 
-  // Deactivate the current active token
-  await supabaseAdmin
-    .from('qb_tokens')
-    .update({ is_active: false })
-    .eq('realm_id', realmId)
-    .eq('is_active', true)
+  if (cleanupErr) {
+    console.error('[QB] Cleanup failed:', cleanupErr.message)
+  }
 
-  // Insert new active token
   const { data, error } = await supabaseAdmin
     .from('qb_tokens')
     .insert({
@@ -151,7 +174,12 @@ export async function storeTokens(tokenData: {
     .select()
     .single()
 
-  if (error) throw new Error(`Failed to store tokens: ${error.message}`)
+  if (error) {
+    console.error('[QB] Failed to store tokens:', error.message, error.details)
+    throw new Error(`Failed to store tokens: ${error.message}`)
+  }
+
+  console.log('[QB] New token row inserted')
   return data
 }
 

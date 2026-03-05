@@ -9,6 +9,7 @@
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getActiveToken } from '@/lib/quickbooks'
 
 export async function GET() {
   try {
@@ -17,7 +18,16 @@ export async function GET() {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
-    // Get current active token
+    // Try to get (and auto-refresh if needed) the active token
+    let refreshedNow = false
+    try {
+      await getActiveToken()
+      refreshedNow = true
+    } catch {
+      // Token refresh failed — continue to report stored status
+    }
+
+    // Get current active token from Supabase
     const { data: token, error } = await supabaseAdmin
       .from('qb_tokens')
       .select('realm_id, access_token_expires_at, refresh_token_expires_at, updated_at, is_active')
@@ -56,6 +66,19 @@ export async function GET() {
       status = 'HEALTHY'
     }
 
+    // Check critical env vars (presence only, not values)
+    const envCheck = {
+      NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      QB_CLIENT_ID: !!process.env.QB_CLIENT_ID,
+      QB_CLIENT_SECRET: !!process.env.QB_CLIENT_SECRET,
+      QB_REALM_ID: !!process.env.QB_REALM_ID,
+      QB_REDIRECT_URI: !!process.env.QB_REDIRECT_URI,
+    }
+    const envMissing = Object.entries(envCheck)
+      .filter(([, v]) => !v)
+      .map(([k]) => k)
+
     const response = NextResponse.json({
       connected: refreshValid,
       status,
@@ -71,6 +94,10 @@ export async function GET() {
         days_remaining: refreshValid ? refreshDaysLeft : 0,
       },
       last_updated: token.updated_at,
+      env: {
+        all_set: envMissing.length === 0,
+        missing: envMissing.length > 0 ? envMissing : undefined,
+      },
       ...((!refreshValid) && {
         action_required: 'Re-authorize at /api/qb/authorize',
         authorize_url: '/api/qb/authorize',
