@@ -117,7 +117,14 @@ export async function storeTokens(tokenData: {
   const accessExpires = new Date(now.getTime() + tokenData.expires_in * 1000)
   const refreshExpires = new Date(now.getTime() + tokenData.x_refresh_token_expires_in * 1000)
 
-  // Deactivate all previous tokens for this realm
+  // Delete all previous inactive tokens for this realm (cleanup old history)
+  await supabaseAdmin
+    .from('qb_tokens')
+    .delete()
+    .eq('realm_id', realmId)
+    .eq('is_active', false)
+
+  // Deactivate the current active token
   await supabaseAdmin
     .from('qb_tokens')
     .update({ is_active: false })
