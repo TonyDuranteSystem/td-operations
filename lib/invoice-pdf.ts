@@ -27,7 +27,7 @@ const COMPANY = {
   tagline: 'Your Way to Freedom',
   address: '10225 Ulmerton Rd Ste 3D',
   cityStateZip: 'Largo, FL 33771',
-  phone: '+1 (727) 423-4285',
+  phone: '+1 (727) 452-1093',
   email: 'support@tonydurante.us',
   website: 'tonydurante.us',
   certifications: 'IRS Certified Acceptance Agent  •  Public Notary  •  Professional Tax Preparer',
