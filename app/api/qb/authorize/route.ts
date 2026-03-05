@@ -8,15 +8,26 @@
  * Usage: Navigate to https://td-operations.vercel.app/api/qb/authorize
  */
 
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getAuthorizationUrl } from '@/lib/quickbooks'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // Debug mode: ?debug=1 shows the URL instead of redirecting
+  const debug = request.nextUrl.searchParams.get('debug')
+
   try {
     // Generate a random state parameter for CSRF protection
     const state = crypto.randomUUID()
 
     const authUrl = getAuthorizationUrl(state)
+
+    if (debug) {
+      return NextResponse.json({
+        auth_url: authUrl,
+        client_id_prefix: process.env.QB_CLIENT_ID?.substring(0, 12) + '...',
+        redirect_uri: process.env.QB_REDIRECT_URI,
+      })
+    }
 
     // Redirect user to Intuit's OAuth consent page
     return NextResponse.redirect(authUrl)
