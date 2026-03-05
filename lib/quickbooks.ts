@@ -20,7 +20,11 @@ const supabaseAdmin = createClient(
 const QB_AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2'
 const QB_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
 const QB_REVOKE_URL = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke'
-const QB_API_BASE = 'https://quickbooks.api.intuit.com/v3/company'
+
+// API base — uses QB_BASE_URL env var (sandbox or production)
+const QB_API_BASE = process.env.QB_BASE_URL
+  ? process.env.QB_BASE_URL.replace(/\/v3\/company\/.*$/, '/v3/company')
+  : 'https://quickbooks.api.intuit.com/v3/company'
 
 // Scopes
 const QB_SCOPES = 'com.intuit.quickbooks.accounting'
