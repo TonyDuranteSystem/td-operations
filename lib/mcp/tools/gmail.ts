@@ -89,12 +89,18 @@ async function getGmailToken(asUser?: string): Promise<{ token: string; userEmai
 
 // ─── API Helpers ────────────────────────────────────────────
 
-async function gmailGet(endpoint: string, params?: Record<string, string>, asUser?: string) {
+async function gmailGet(endpoint: string, params?: Record<string, string | string[]>, asUser?: string) {
   const { token, userEmail } = await getGmailToken(asUser)
   const url = new URL(`${GMAIL_API}/users/${userEmail}${endpoint}`)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      url.searchParams.set(k, v)
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          url.searchParams.append(k, item)
+        }
+      } else {
+        url.searchParams.set(k, v)
+      }
     }
   }
 
@@ -251,7 +257,7 @@ export function registerGmailTools(server: McpServer) {
         for (const msg of listResult.messages.slice(0, 15)) {
           const detail = await gmailGet(`/messages/${msg.id}`, {
             format: "metadata",
-            metadataHeaders: "From,To,Subject,Date",
+            metadataHeaders: ["From", "To", "Subject", "Date"],
           }, as_user) as GmailMessage
 
           const from = getHeader(detail.payload.headers, "From")
