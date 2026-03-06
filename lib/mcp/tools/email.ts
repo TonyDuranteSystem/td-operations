@@ -212,10 +212,10 @@ export function registerEmailTools(server: McpServer) {
             text: [
               `${statusEmoji} Email Status: ${result.Status}`,
               "",
-              `📧 To: ${result.To}`,
+              `📧 To: ${Array.isArray(result.To) ? (result.To as Array<{Email: string}>).map(t => t.Email).join(", ") : result.To}`,
               `📋 Subject: ${result.Subject}`,
               `🏷️ Tag: ${result.Tag || "(none)"}`,
-              `📮 Sent: ${result.SubmittedAt}`,
+              `📮 Sent: ${result.ReceivedAt}`,
               "",
               `👁️ Opens: ${openCount}`,
               `🔗 Clicks: ${clickCount}`,
@@ -262,7 +262,7 @@ export function registerEmailTools(server: McpServer) {
             Subject: string
             Status: string
             Tag: string
-            SubmittedAt: string
+            ReceivedAt: string
             Opens: Array<unknown>
           }>
         }
@@ -283,7 +283,7 @@ export function registerEmailTools(server: McpServer) {
           const statusEmoji = msg.Status === "Sent" ? "✅" : msg.Status === "Processed" ? "⏳" : "📤"
           const opened = msg.Opens && msg.Opens.length > 0 ? "👁️" : "📭"
 
-          lines.push(`${statusEmoji} ${opened} ${msg.SubmittedAt} → ${to}`)
+          lines.push(`${statusEmoji} ${opened} ${msg.ReceivedAt} → ${to}`)
           lines.push(`   📋 ${msg.Subject}`)
           if (msg.Tag) lines.push(`   🏷️ ${msg.Tag}`)
           lines.push(`   📨 ID: ${msg.MessageID}`)
