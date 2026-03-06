@@ -11,6 +11,9 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getActiveToken } from '@/lib/quickbooks'
 
+// Prevent Next.js from prerendering this route at build time
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const supabaseAdmin = createClient(
