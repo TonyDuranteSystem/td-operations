@@ -161,7 +161,8 @@ interface GmailMessage {
   internalDate: string
 }
 
-function getHeader(headers: GmailHeader[], name: string): string {
+function getHeader(headers: GmailHeader[] | undefined, name: string): string {
+  if (!headers) return ""
   return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || ""
 }
 
