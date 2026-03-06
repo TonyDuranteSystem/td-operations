@@ -269,7 +269,7 @@ export function registerGmailTools(server: McpServer) {
           lines.push(`   👤 ${from}`)
           lines.push(`   📅 ${date}`)
           lines.push(`   💬 ${detail.snippet}`)
-          lines.push(`   🆔 ID: ${msg.id}`)
+          lines.push(`   🆔 Message: ${msg.id}  |  Thread: ${msg.threadId}`)
           lines.push("")
         }
 
