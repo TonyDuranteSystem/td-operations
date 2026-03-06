@@ -15,6 +15,7 @@
  *   qb_*    — QuickBooks Online (invoices, customers, payments, company info)
  *   email_* — Postmark transactional email (send, track opens/clicks, stats)
  *   drive_* — Google Drive (search, list, upload, read, create folder, move)
+ *   gmail_* — Gmail (search, read, read thread, draft, labels)
  *
  * Deploy: Vercel serverless function (Pro plan, 60s timeout)
  */
@@ -24,6 +25,7 @@ import { registerCrmTools } from "@/lib/mcp/tools/crm"
 import { registerQbTools } from "@/lib/mcp/tools/qb"
 import { registerEmailTools } from "@/lib/mcp/tools/email"
 import { registerDriveTools } from "@/lib/mcp/tools/drive"
+import { registerGmailTools } from "@/lib/mcp/tools/gmail"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
 export const maxDuration = 60
@@ -36,9 +38,9 @@ const handler = createMcpHandler(
     registerQbTools(server)
     registerEmailTools(server)
     registerDriveTools(server)
+    registerGmailTools(server)
 
     // Future tool groups (uncomment as they're built):
-    // registerGmailTools(server)
     // registerDocaiTools(server)
     // registerClassifyTools(server)
     // registerCalendlyTools(server)
