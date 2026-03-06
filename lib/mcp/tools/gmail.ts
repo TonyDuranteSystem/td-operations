@@ -18,7 +18,8 @@ interface SACredentials {
   token_uri: string
 }
 
-let cachedGmailToken: { token: string; expiresAt: number } | null = null
+// Per-user token cache (SA+DWD can impersonate any domain user)
+const tokenCache = new Map<string, { token: string; expiresAt: number }>()
 
 function getCredentials(): SACredentials {
   const b64 = process.env.GOOGLE_SA_KEY
@@ -33,16 +34,19 @@ const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
 ].join(" ")
 
-const IMPERSONATE_EMAIL = () =>
+const DEFAULT_EMAIL = () =>
   process.env.GOOGLE_IMPERSONATE_EMAIL || "support@tonydurante.us"
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
 
-// ─── Token Management ───────────────────────────────────────
+// ─── Token Management (per-user) ────────────────────────────
 
-async function getGmailToken(): Promise<string> {
-  if (cachedGmailToken && Date.now() < cachedGmailToken.expiresAt - 5 * 60 * 1000) {
-    return cachedGmailToken.token
+async function getGmailToken(asUser?: string): Promise<{ token: string; userEmail: string }> {
+  const userEmail = asUser || DEFAULT_EMAIL()
+  const cached = tokenCache.get(userEmail)
+
+  if (cached && Date.now() < cached.expiresAt - 5 * 60 * 1000) {
+    return { token: cached.token, userEmail }
   }
 
   const creds = getCredentials()
@@ -51,7 +55,7 @@ async function getGmailToken(): Promise<string> {
   const privateKey = await importPKCS8(creds.private_key, "RS256")
   const assertion = await new SignJWT({
     scope: GMAIL_SCOPES,
-    sub: IMPERSONATE_EMAIL(),
+    sub: userEmail,
   })
     .setProtectedHeader({ alg: "RS256", typ: "JWT" })
     .setIssuer(creds.client_email)
@@ -75,19 +79,18 @@ async function getGmailToken(): Promise<string> {
   }
 
   const data = (await res.json()) as { access_token: string; expires_in: number }
-  cachedGmailToken = {
+  tokenCache.set(userEmail, {
     token: data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
-  }
+  })
 
-  return data.access_token
+  return { token: data.access_token, userEmail }
 }
 
 // ─── API Helpers ────────────────────────────────────────────
 
-async function gmailGet(endpoint: string, params?: Record<string, string>) {
-  const token = await getGmailToken()
-  const userEmail = IMPERSONATE_EMAIL()
+async function gmailGet(endpoint: string, params?: Record<string, string>, asUser?: string) {
+  const { token, userEmail } = await getGmailToken(asUser)
   const url = new URL(`${GMAIL_API}/users/${userEmail}${endpoint}`)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -109,9 +112,8 @@ async function gmailGet(endpoint: string, params?: Record<string, string>) {
   return res.json()
 }
 
-async function gmailPost(endpoint: string, body: Record<string, unknown>) {
-  const token = await getGmailToken()
-  const userEmail = IMPERSONATE_EMAIL()
+async function gmailPost(endpoint: string, body: Record<string, unknown>, asUser?: string) {
+  const { token, userEmail } = await getGmailToken(asUser)
 
   const res = await fetch(`${GMAIL_API}/users/${userEmail}${endpoint}`, {
     method: "POST",
@@ -220,17 +222,18 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_search",
-    "Search emails in the support@tonydurante.us Gmail inbox. Uses Gmail search syntax: from:, to:, subject:, has:attachment, is:unread, after:, before:, label:. Returns message snippets with IDs for reading full content.",
+    "Search emails in a Gmail mailbox. Default: support@tonydurante.us. Use as_user to switch (e.g. 'antonio.durante@tonydurante.us'). Uses Gmail search syntax: from:, to:, subject:, has:attachment, is:unread, after:, before:, label:.",
     {
       query: z.string().describe("Gmail search query (e.g. 'from:client@example.com', 'subject:invoice is:unread', 'after:2026/01/01 has:attachment')"),
       max_results: z.number().optional().default(15).describe("Max results (default 15, max 50)"),
+      as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us). E.g. 'antonio.durante@tonydurante.us'"),
     },
-    async ({ query, max_results }) => {
+    async ({ query, max_results, as_user }) => {
       try {
         const listResult = await gmailGet("/messages", {
           q: query,
           maxResults: String(Math.min(max_results || 15, 50)),
-        }) as { messages?: Array<{ id: string; threadId: string }>; resultSizeEstimate?: number }
+        }, as_user) as { messages?: Array<{ id: string; threadId: string }>; resultSizeEstimate?: number }
 
         if (!listResult.messages || listResult.messages.length === 0) {
           return {
@@ -248,7 +251,7 @@ export function registerGmailTools(server: McpServer) {
           const detail = await gmailGet(`/messages/${msg.id}`, {
             format: "metadata",
             metadataHeaders: "From,To,Subject,Date",
-          }) as GmailMessage
+          }, as_user) as GmailMessage
 
           const from = getHeader(detail.payload.headers, "From")
           const subject = getHeader(detail.payload.headers, "Subject")
@@ -282,12 +285,13 @@ export function registerGmailTools(server: McpServer) {
     "Read the full content of an email by its message ID (from gmail_search results). Returns subject, from, to, date, and body text.",
     {
       message_id: z.string().describe("Gmail message ID (from gmail_search results)"),
+      as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
     },
-    async ({ message_id }) => {
+    async ({ message_id, as_user }) => {
       try {
         const msg = await gmailGet(`/messages/${message_id}`, {
           format: "full",
-        }) as GmailMessage
+        }, as_user) as GmailMessage
 
         const from = getHeader(msg.payload.headers, "From")
         const to = getHeader(msg.payload.headers, "To")
@@ -328,12 +332,13 @@ export function registerGmailTools(server: McpServer) {
     "Read an entire email thread (conversation) by thread ID. Shows all messages in chronological order.",
     {
       thread_id: z.string().describe("Gmail thread ID (from gmail_search results)"),
+      as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
     },
-    async ({ thread_id }) => {
+    async ({ thread_id, as_user }) => {
       try {
         const thread = await gmailGet(`/threads/${thread_id}`, {
           format: "full",
-        }) as { id: string; messages: GmailMessage[] }
+        }, as_user) as { id: string; messages: GmailMessage[] }
 
         const lines = [
           `📧 Thread: ${thread.messages.length} messages`,
@@ -372,7 +377,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_draft",
-    "Create an email draft in the support@tonydurante.us mailbox. The draft can be reviewed and sent manually from Gmail. Does NOT send the email.",
+    "Create an email draft in a Gmail mailbox. Default: support@tonydurante.us. The draft can be reviewed and sent manually from Gmail. Does NOT send the email.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -380,10 +385,11 @@ export function registerGmailTools(server: McpServer) {
       cc: z.string().optional().describe("CC recipient(s)"),
       bcc: z.string().optional().describe("BCC recipient(s)"),
       reply_to_message_id: z.string().optional().describe("If replying, the original Gmail message ID to thread with"),
+      as_user: z.string().optional().describe("Mailbox to create draft in (default: support@tonydurante.us)"),
     },
-    async ({ to, subject, body, cc, bcc, reply_to_message_id }) => {
+    async ({ to, subject, body, cc, bcc, reply_to_message_id, as_user }) => {
       try {
-        const fromEmail = IMPERSONATE_EMAIL()
+        const fromEmail = as_user || DEFAULT_EMAIL()
 
         // Build RFC 2822 email
         const headers = [
@@ -401,7 +407,7 @@ export function registerGmailTools(server: McpServer) {
           const original = await gmailGet(`/messages/${reply_to_message_id}`, {
             format: "metadata",
             metadataHeaders: "Message-ID,References",
-          }) as GmailMessage
+          }, as_user) as GmailMessage
 
           const originalMessageId = getHeader(original.payload.headers, "Message-ID")
           const references = getHeader(original.payload.headers, "References")
@@ -423,7 +429,7 @@ export function registerGmailTools(server: McpServer) {
           (draftPayload.message as Record<string, unknown>).threadId = threadId
         }
 
-        const result = await gmailPost("/drafts", draftPayload) as {
+        const result = await gmailPost("/drafts", draftPayload, as_user) as {
           id: string
           message: { id: string; threadId: string }
         }
@@ -457,11 +463,13 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_labels",
-    "List all Gmail labels (folders/categories) for the support@tonydurante.us mailbox. Useful for understanding email organization.",
-    {},
-    async () => {
+    "List all Gmail labels (folders/categories) for a Gmail mailbox. Default: support@tonydurante.us.",
+    {
+      as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
+    },
+    async ({ as_user }) => {
       try {
-        const result = await gmailGet("/labels") as {
+        const result = await gmailGet("/labels", undefined, as_user) as {
           labels: Array<{ id: string; name: string; type: string; messagesTotal?: number; messagesUnread?: number }>
         }
 
