@@ -1,34 +1,39 @@
-// POST /api/qb/refresh
+// GET /api/qb/refresh  (Vercel Cron — every 6 hours)
+// POST /api/qb/refresh (Manual trigger)
 //
-// Manually triggers a token refresh.
-// Can also be called by a cron job (Vercel Cron or external).
+// Proactively refreshes the QB access token before it expires.
+// Each refresh also renews the 101-day refresh token window.
 //
-// The getActiveToken() helper auto-refreshes when needed,
-// but this endpoint allows proactive refresh before expiry.
+// Auth (any of):
+//   - Authorization: Bearer <CRON_SECRET>          (Vercel Cron)
+//   - Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY> (manual/server)
+//   - Authorization: Bearer <TD_MCP_API_KEY>       (MCP server calls)
 //
-// Headers:
-//   Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY> (for cron/server calls)
-//
-// Vercel Cron config (add to vercel.json):
-//   { "crons": [{ "path": "/api/qb/refresh", "schedule": "0 0,12 * * *" }] }
+// Vercel Cron config: vercel.json → "0 */6 * * *" (every 6 hours)
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { refreshAccessToken, storeTokens } from '@/lib/quickbooks'
 
-export async function POST(request: NextRequest) {
-  // Verify authorization (service role key or cron secret)
+function isAuthorized(request: NextRequest): boolean {
   const authHeader = request.headers.get('authorization')
-  const cronSecret = request.headers.get('x-vercel-cron-secret')
+  if (!authHeader) return false
 
-  // Allow Vercel cron jobs (they don't send auth headers but come from Vercel infra)
-  // For manual calls, verify the service role key
-  if (!cronSecret && authHeader !== `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`) {
-    // Also check if it's a Vercel cron call (has specific user-agent)
-    const userAgent = request.headers.get('user-agent') || ''
-    if (!userAgent.includes('vercel-cron')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+  const token = authHeader.replace('Bearer ', '')
+
+  // Check against all valid secrets
+  const validSecrets = [
+    process.env.CRON_SECRET,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    process.env.TD_MCP_API_KEY,
+  ].filter(Boolean)
+
+  return validSecrets.includes(token)
+}
+
+export async function GET(request: NextRequest) {
+  if (!isAuthorized(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   try {
@@ -46,6 +51,7 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (error || !token) {
+      console.error('[QB Cron] No active token found')
       return NextResponse.json(
         { error: 'No active token found. Re-authorize at /api/qb/authorize' },
         { status: 404 }
@@ -56,32 +62,38 @@ export async function POST(request: NextRequest) {
     const now = new Date()
     const refreshExpiresAt = new Date(token.refresh_token_expires_at)
     if (now >= refreshExpiresAt) {
+      console.error('[QB Cron] Refresh token EXPIRED — manual re-auth required')
       return NextResponse.json(
         { error: 'Refresh token expired. Re-authorize at /api/qb/authorize' },
         { status: 401 }
       )
     }
 
+    // Calculate days until refresh token expires
+    const daysRemaining = Math.floor((refreshExpiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+
     // Refresh the token
-    console.log('[QB Refresh] Refreshing access token...')
+    console.log(`[QB Cron] Refreshing access token... (refresh token: ${daysRemaining} days remaining)`)
     const newTokenData = await refreshAccessToken(token.refresh_token)
     await storeTokens(newTokenData, token.created_by)
 
     // Calculate when the new tokens expire
     const newAccessExpires = new Date(now.getTime() + newTokenData.expires_in * 1000)
     const newRefreshExpires = new Date(now.getTime() + newTokenData.x_refresh_token_expires_in * 1000)
+    const newDaysRemaining = Math.floor((newRefreshExpires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 
-    console.log('[QB Refresh] Token refreshed successfully')
+    console.log(`[QB Cron] ✅ Token refreshed. Access expires: ${newAccessExpires.toISOString()}, Refresh: ${newDaysRemaining} days`)
 
     return NextResponse.json({
       success: true,
       message: 'Token refreshed successfully',
       access_token_expires_at: newAccessExpires.toISOString(),
       refresh_token_expires_at: newRefreshExpires.toISOString(),
+      refresh_token_days_remaining: newDaysRemaining,
     })
 
   } catch (err) {
-    console.error('[QB Refresh] Error:', err)
+    console.error('[QB Cron] Error:', err)
     return NextResponse.json(
       { error: 'Token refresh failed', details: String(err) },
       { status: 500 }
@@ -89,7 +101,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Also support GET for Vercel Cron (crons use GET by default)
-export async function GET(request: NextRequest) {
-  return POST(request)
+// POST handler — same logic
+export async function POST(request: NextRequest) {
+  return GET(request)
 }
