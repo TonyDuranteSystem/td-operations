@@ -18,6 +18,7 @@
  *   gmail_*    — Gmail (search, read, read thread, draft, labels)
  *   docai_*    — Document AI OCR (extract text from PDFs/images)
  *   classify_* — Document classification (40+ rules, auto-detect type & category)
+ *   cal_*      — Calendly (list bookings, event details, availability)
  *
  * Deploy: Vercel serverless function (Pro plan, 60s timeout)
  */
@@ -30,6 +31,7 @@ import { registerDriveTools } from "@/lib/mcp/tools/drive"
 import { registerGmailTools } from "@/lib/mcp/tools/gmail"
 import { registerDocaiTools } from "@/lib/mcp/tools/docai"
 import { registerClassifyTools } from "@/lib/mcp/tools/classify"
+import { registerCalendlyTools } from "@/lib/mcp/tools/calendly"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
 export const maxDuration = 60
@@ -45,9 +47,7 @@ const handler = createMcpHandler(
     registerGmailTools(server)
     registerDocaiTools(server)
     registerClassifyTools(server)
-
-    // Future tool groups (uncomment as they're built):
-    // registerCalendlyTools(server)
+    registerCalendlyTools(server)
   },
   {
     serverInfo: {
