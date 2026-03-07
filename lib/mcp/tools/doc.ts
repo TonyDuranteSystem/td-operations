@@ -3,13 +3,16 @@
  * Pipeline: Google Drive file -> OCR -> Classify -> Store in Supabase
  *
  * Tools:
- *   doc_process_file    — Full pipeline for a single file
- *   doc_process_folder  — Batch process all files in a folder (flat)
- *   doc_process_client  — Recursive: process entire client folder tree (subfolders 1-5)
- *   doc_search          — Search processed documents
- *   doc_list            — List documents by account/category
- *   doc_get             — Get full document details
- *   doc_stats           — Document statistics
+ *   doc_process_file      — Full pipeline for a single file
+ *   doc_process_folder    — Batch process all files in a folder (flat)
+ *   doc_process_client    — Recursive: process entire client folder tree (subfolders 1-5)
+ *   doc_bulk_process      — Process all docs for a CRM account (auto-resolves Drive folder)
+ *   doc_search            — Search processed documents
+ *   doc_list              — List documents by account/category
+ *   doc_get               — Get full document details
+ *   doc_stats             — Document statistics
+ *   doc_map_folders       — Link orphan documents to CRM accounts via Drive folder ancestry
+ *   doc_compliance_check  — Check required vs present docs for a client
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
@@ -716,6 +719,383 @@ export function registerDocTools(server: McpServer) {
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Stats failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_map_folders — Link orphan documents to CRM accounts via Drive folder ancestry
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_map_folders",
+    "Link orphan documents (no account_id) to CRM accounts by matching their Drive parent folder to accounts.drive_folder_id. Walks up to 3 levels of parent folders to find a match.",
+    {
+      dry_run: z.boolean().optional().default(false).describe("If true, show matches without updating (default: false)"),
+    },
+    async ({ dry_run }) => {
+      try {
+        // 1. Get all accounts with drive_folder_id
+        const { data: accounts } = await supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, drive_folder_id")
+          .not("drive_folder_id", "is", null)
+
+        if (!accounts || accounts.length === 0) {
+          return { content: [{ type: "text" as const, text: "⚠️ No accounts have drive_folder_id set." }] }
+        }
+
+        // Build folder→account lookup map
+        const folderToAccount = new Map<string, { id: string; name: string }>()
+        for (const acc of accounts) {
+          if (acc.drive_folder_id) {
+            folderToAccount.set(acc.drive_folder_id, { id: acc.id, name: acc.company_name })
+          }
+        }
+
+        // 2. Get orphan documents (no account_id)
+        const { data: orphans } = await supabaseAdmin
+          .from("documents")
+          .select("id, file_name, drive_file_id, drive_parent_folder_id")
+          .is("account_id", null)
+
+        if (!orphans || orphans.length === 0) {
+          return { content: [{ type: "text" as const, text: "✅ No orphan documents to link." }] }
+        }
+
+        // 3. For each orphan, walk up parent folders to find account match
+        const matches: Array<{ docId: string; fileName: string; accountId: string; accountName: string }> = []
+        const noMatch: string[] = []
+
+        // Cache parent folder lookups to avoid repeated API calls
+        const parentCache = new Map<string, string | null>()
+
+        for (const doc of orphans) {
+          let currentFolderId = doc.drive_parent_folder_id
+          let matched = false
+
+          // Walk up to 3 levels of parent folders
+          for (let level = 0; level < 4 && currentFolderId; level++) {
+            // Check if this folder matches an account
+            const account = folderToAccount.get(currentFolderId)
+            if (account) {
+              matches.push({
+                docId: doc.id,
+                fileName: doc.file_name,
+                accountId: account.id,
+                accountName: account.name,
+              })
+              matched = true
+              break
+            }
+
+            // Get parent of current folder (with cache)
+            if (parentCache.has(currentFolderId)) {
+              currentFolderId = parentCache.get(currentFolderId) || null
+            } else {
+              try {
+                const meta = (await getFileMetadata(currentFolderId)) as { parents?: string[] }
+                const parent = meta.parents?.[0] || null
+                parentCache.set(currentFolderId, parent)
+                currentFolderId = parent
+              } catch {
+                parentCache.set(currentFolderId, null)
+                currentFolderId = null
+              }
+            }
+          }
+
+          if (!matched) {
+            noMatch.push(doc.file_name)
+          }
+        }
+
+        // 4. Update documents if not dry_run
+        if (!dry_run && matches.length > 0) {
+          for (const m of matches) {
+            await supabaseAdmin
+              .from("documents")
+              .update({
+                account_id: m.accountId,
+                account_name: m.accountName,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", m.docId)
+          }
+        }
+
+        // 5. Build output
+        const lines = [
+          `🔗 Document ↔ Account Mapping${dry_run ? " (DRY RUN)" : ""}`,
+          "",
+          `📄 Orphan documents: ${orphans.length}`,
+          `✅ Matched: ${matches.length}`,
+          `❌ No match: ${noMatch.length}`,
+          "",
+        ]
+
+        if (matches.length > 0) {
+          lines.push("── Matches ──")
+          // Group by account
+          const byAccount = new Map<string, string[]>()
+          for (const m of matches) {
+            if (!byAccount.has(m.accountName)) byAccount.set(m.accountName, [])
+            byAccount.get(m.accountName)!.push(m.fileName)
+          }
+          for (const [acct, files] of byAccount) {
+            lines.push(`👤 ${acct} (${files.length} docs)`)
+            for (const f of files) {
+              lines.push(`   📄 ${f}`)
+            }
+          }
+        }
+
+        if (noMatch.length > 0) {
+          lines.push("", "── No Match ──")
+          for (const f of noMatch) {
+            lines.push(`   ❓ ${f}`)
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Mapping failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_compliance_check — Check required vs present documents for a client
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_compliance_check",
+    "Check document compliance for a client: compares required documents (based on entity type) against actually processed documents. Returns a checklist with ✅/❌ and a compliance score.",
+    {
+      account_id: z.string().uuid().optional().describe("Account UUID (use this if you have it)"),
+      company_name: z.string().optional().describe("Company name search (use this if you don't have the ID)"),
+    },
+    async ({ account_id, company_name }) => {
+      try {
+        // 1. Find account
+        let accountQuery = supabaseAdmin.from("accounts").select("id, company_name, entity_type, state_of_formation, drive_folder_id")
+        if (account_id) {
+          accountQuery = accountQuery.eq("id", account_id)
+        } else if (company_name) {
+          accountQuery = accountQuery.ilike("company_name", `%${company_name}%`)
+        } else {
+          return { content: [{ type: "text" as const, text: "❌ Provide either account_id or company_name" }] }
+        }
+
+        const { data: accounts, error: accErr } = await accountQuery
+        if (accErr || !accounts?.length) {
+          return { content: [{ type: "text" as const, text: accErr ? `❌ Error: ${accErr.message}` : "❌ Account not found" }] }
+        }
+
+        const account = accounts[0]
+
+        if (!account.entity_type) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `⚠️ ${account.company_name}: entity_type is not set.\nCannot check compliance without knowing the entity type.\nPlease update the account's entity_type first (Single Member LLC, Multi Member LLC, or C-Corp Elected).`,
+            }],
+          }
+        }
+
+        // 2. Get compliance requirements for this entity type
+        const { data: requirements } = await supabaseAdmin
+          .from("compliance_requirements")
+          .select("*")
+          .eq("entity_type", account.entity_type)
+          .eq("is_required", true)
+          .order("category", { ascending: true })
+
+        if (!requirements || requirements.length === 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `⚠️ No compliance requirements defined for entity type "${account.entity_type}".\nThis may need to be configured in the compliance_requirements table.`,
+            }],
+          }
+        }
+
+        // 3. Get documents for this account
+        const { data: docs } = await supabaseAdmin
+          .from("documents")
+          .select("document_type_name, status, confidence, file_name, processed_at")
+          .eq("account_id", account.id)
+          .eq("status", "classified")
+
+        // Build a set of present document types
+        const presentTypes = new Map<string, { fileName: string; confidence: string; processedAt: string }>()
+        if (docs) {
+          for (const d of docs) {
+            if (d.document_type_name && !presentTypes.has(d.document_type_name)) {
+              presentTypes.set(d.document_type_name, {
+                fileName: d.file_name,
+                confidence: d.confidence || "—",
+                processedAt: d.processed_at ? new Date(d.processed_at).toLocaleDateString("it-IT") : "—",
+              })
+            }
+          }
+        }
+
+        // 4. Compare: required vs present
+        let found = 0
+        let missing = 0
+        const checklistLines: string[] = []
+
+        const categoryNames: Record<number, string> = { 1: "Company", 2: "Contacts", 3: "Tax", 4: "Banking", 5: "Correspondence" }
+        let lastCategory = 0
+
+        for (const req of requirements) {
+          if (req.category !== lastCategory) {
+            checklistLines.push("")
+            checklistLines.push(`── ${categoryNames[req.category] || `Category ${req.category}`} ──`)
+            lastCategory = req.category
+          }
+
+          const present = presentTypes.get(req.document_type_name)
+          if (present) {
+            found++
+            checklistLines.push(`✅ ${req.document_type_name} — ${present.fileName} [${present.confidence}]`)
+          } else {
+            missing++
+            checklistLines.push(`❌ ${req.document_type_name} — MISSING`)
+          }
+        }
+
+        const score = requirements.length > 0 ? Math.round((found / requirements.length) * 100) : 0
+        const scoreEmoji = score === 100 ? "🟢" : score >= 60 ? "🟡" : "🔴"
+
+        const lines = [
+          `📋 Compliance Check: ${account.company_name}`,
+          `🏢 Entity: ${account.entity_type} | 📍 ${account.state_of_formation || "—"}`,
+          `📂 Drive folder: ${account.drive_folder_id ? "linked" : "NOT linked"}`,
+          "",
+          `${scoreEmoji} Score: ${score}% (${found}/${requirements.length} required documents present)`,
+          ...checklistLines,
+        ]
+
+        if (missing > 0 && !account.drive_folder_id) {
+          lines.push("", "💡 Tip: Account has no Drive folder linked. Run doc_bulk_process after linking to populate documents.")
+        } else if (missing > 0) {
+          lines.push("", `💡 Tip: ${missing} documents missing. They may not have been processed yet — try doc_bulk_process with this account.`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Compliance check failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_bulk_process — Process all documents for a CRM account (auto-resolves Drive folder)
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_bulk_process",
+    "Process all documents in a client's Drive folder, auto-resolved from their CRM account. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call.",
+    {
+      account_id: z.string().uuid().describe("CRM account UUID — folder is auto-resolved from accounts.drive_folder_id"),
+      skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default: true)"),
+    },
+    async ({ account_id, skip_existing }) => {
+      try {
+        const startTime = Date.now()
+
+        // 1. Resolve account → drive_folder_id
+        const { data: account, error: accErr } = await supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, drive_folder_id")
+          .eq("id", account_id)
+          .single()
+
+        if (accErr || !account) {
+          return { content: [{ type: "text" as const, text: `❌ Account not found: ${accErr?.message || account_id}` }] }
+        }
+
+        if (!account.drive_folder_id) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `❌ ${account.company_name} has no Drive folder linked (drive_folder_id is null).\n\n💡 Options:\n1. Set gdrive_folder_url on the account\n2. Use doc_process_client with a folder_id directly`,
+            }],
+          }
+        }
+
+        // 2. Recursively collect files
+        const allFiles = await collectFilesRecursive(account.drive_folder_id, 3)
+
+        if (allFiles.length === 0) {
+          return { content: [{ type: "text" as const, text: `📭 No processable files found in ${account.company_name}'s Drive folder.` }] }
+        }
+
+        // 3. Check existing if skip_existing
+        let toProcess = allFiles
+        if (skip_existing) {
+          const fileIds = allFiles.map(f => f.id)
+          const existingIds = new Set<string>()
+          for (let i = 0; i < fileIds.length; i += 50) {
+            const chunk = fileIds.slice(i, i + 50)
+            const { data: existing } = await supabaseAdmin
+              .from("documents")
+              .select("drive_file_id")
+              .in("drive_file_id", chunk)
+            existing?.forEach(e => existingIds.add(e.drive_file_id))
+          }
+          toProcess = allFiles.filter(f => !existingIds.has(f.id))
+        }
+
+        if (toProcess.length === 0) {
+          return { content: [{ type: "text" as const, text: `✅ All ${allFiles.length} files in ${account.company_name} already processed. Nothing to do.` }] }
+        }
+
+        // 4. Process files (with timeout + batch limit)
+        const batch = toProcess.slice(0, BATCH_MAX_FILES)
+        const results: Array<{ fileName: string; status: string; type?: string; error?: string }> = []
+        let timedOut = false
+
+        for (const file of batch) {
+          if (Date.now() - startTime > BATCH_TIMEOUT_MS) {
+            timedOut = true
+            break
+          }
+          const r = await processFile(file.id, account.id, account.company_name)
+          results.push({ fileName: r.fileName, status: r.status, type: r.type, error: r.error })
+        }
+
+        // 5. Summary
+        const classified = results.filter(r => r.status === "classified").length
+        const unclassified = results.filter(r => r.status === "unclassified").length
+        const errors = results.filter(r => r.status === "error").length
+        const skipped = allFiles.length - toProcess.length
+        const remaining = toProcess.length - results.length
+
+        const lines = [
+          `📊 Bulk Process: ${account.company_name}`,
+          "",
+          `📄 Total files: ${allFiles.length} | Skipped (existing): ${skipped} | Processed: ${results.length}`,
+          `✅ Classified: ${classified} | ⚠️ Unclassified: ${unclassified} | ❌ Errors: ${errors}`,
+          timedOut ? `⏱️ Timeout — ${remaining} files remaining (run again)` : "",
+          remaining > 0 && !timedOut ? `📌 Batch limit — ${remaining} files remaining (run again)` : "",
+          "",
+          "── Details ──",
+        ]
+
+        for (const r of results) {
+          const icon = r.status === "classified" ? "✅" : r.status === "unclassified" ? "⚠️" : "❌"
+          lines.push(`${icon} ${r.fileName} → ${r.type || r.status}${r.error ? ` (${r.error.slice(0, 80)})` : ""}`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Bulk process failed: ${error instanceof Error ? error.message : String(error)}` }],
         }
       }
     }

@@ -287,7 +287,7 @@ export function registerCrmTools(server: McpServer) {
       const id = account.id
 
       // Fetch all related data in parallel
-      const [contacts, services, payments, deals, tasks] = await Promise.all([
+      const [contacts, services, payments, deals, tasks, documents] = await Promise.all([
         supabaseAdmin
           .from('account_contacts')
           .select('*, contacts(*)')
@@ -312,6 +312,11 @@ export function registerCrmTools(server: McpServer) {
           .select('*')
           .eq('account_id', id)
           .order('due_date', { ascending: true }),
+        supabaseAdmin
+          .from('documents')
+          .select('id, file_name, document_type_name, category_name, confidence, status, processed_at')
+          .eq('account_id', id)
+          .order('category', { ascending: true }),
       ])
 
       // Calculate payment totals
@@ -345,6 +350,12 @@ export function registerCrmTools(server: McpServer) {
           total: tasks.data?.length || 0,
           open: tasks.data?.filter((t: Record<string, unknown>) => t.status !== 'done').length || 0,
           items: tasks.data || [],
+        },
+        documents: {
+          total: documents.data?.length || 0,
+          classified: documents.data?.filter((d: Record<string, unknown>) => d.status === 'classified').length || 0,
+          unclassified: documents.data?.filter((d: Record<string, unknown>) => d.status === 'unclassified').length || 0,
+          items: documents.data || [],
         },
       }
 
