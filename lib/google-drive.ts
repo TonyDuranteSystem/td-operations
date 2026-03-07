@@ -217,7 +217,7 @@ export async function getFileMetadata(fileId: string) {
 }
 
 /**
- * Upload a text-based file to Drive
+ * Upload a text-based file to Drive (creates new file)
  */
 export async function uploadFile(
   parentFolderId: string,
@@ -226,6 +226,84 @@ export async function uploadFile(
   mimeType = "text/plain",
 ) {
   return driveUpload(fileName, content, mimeType, parentFolderId)
+}
+
+/**
+ * Update (overwrite) an existing file's content on Drive
+ * Uses PATCH to replace the content while keeping the same file ID.
+ */
+export async function updateFileContent(
+  fileId: string,
+  content: string,
+  mimeType = "text/plain",
+  newName?: string,
+) {
+  const token = await getAccessToken()
+
+  const boundary = "----DriveUpdateBoundary"
+  const metadata: Record<string, string> = {}
+  if (newName) metadata.name = newName
+
+  const body = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    `Content-Type: ${mimeType}`,
+    "",
+    content,
+    `--${boundary}--`,
+  ].join("\r\n")
+
+  const res = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&supportsAllDrives=true`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive update ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
+/**
+ * Rename a file or folder on Drive (metadata-only update)
+ */
+export async function renameFile(fileId: string, newName: string) {
+  const token = await getAccessToken()
+
+  const res = await fetch(
+    `${DRIVE_API}/files/${fileId}?supportsAllDrives=true`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: newName }),
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive rename ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
 }
 
 /**

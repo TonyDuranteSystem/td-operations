@@ -11,6 +11,8 @@ import {
   listFolder,
   getFileMetadata,
   uploadFile,
+  updateFileContent,
+  renameFile,
   createFolder,
   moveFile,
   downloadFileContent,
@@ -237,22 +239,39 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_upload",
-    "Upload a text-based file to the Shared Drive. Supports text, CSV, JSON, HTML, Markdown. For large binary files, use other methods.",
+    "Upload or overwrite a text-based file on the Shared Drive. If file_id is provided, overwrites the existing file (keeps same ID, creates new version). If not, creates a new file in folder_id. Supports text, CSV, JSON, HTML, Markdown.",
     {
-      folder_id: z.string().describe("Parent folder ID where the file will be uploaded"),
-      file_name: z.string().describe("File name with extension (e.g. 'report.csv', 'notes.md')"),
+      folder_id: z.string().optional().describe("Parent folder ID for NEW uploads. Required when creating a new file, ignored when overwriting (file_id)."),
+      file_id: z.string().optional().describe("Existing file ID to OVERWRITE. If provided, replaces the file content (same ID, new version). If omitted, creates a new file."),
+      file_name: z.string().describe("File name with extension (e.g. 'report.csv', 'notes.md'). For overwrites, also renames the file if different."),
       content: z.string().describe("File content (text)"),
       mime_type: z.string().optional().default("text/plain").describe("MIME type (default: text/plain). Common: text/csv, application/json, text/html, text/markdown"),
     },
-    async ({ folder_id, file_name, content, mime_type }) => {
+    async ({ folder_id, file_id, file_name, content, mime_type }) => {
       try {
-        const result = (await uploadFile(folder_id, file_name, content, mime_type || "text/plain")) as DriveFile
+        let result: DriveFile
+        let action: string
+
+        if (file_id) {
+          // Overwrite existing file
+          result = (await updateFileContent(file_id, content, mime_type || "text/plain", file_name)) as DriveFile
+          action = "overwritten"
+        } else {
+          // Create new file
+          if (!folder_id) {
+            return {
+              content: [{ type: "text" as const, text: `❌ folder_id is required when creating a new file (no file_id provided)` }],
+            }
+          }
+          result = (await uploadFile(folder_id, file_name, content, mime_type || "text/plain")) as DriveFile
+          action = "uploaded"
+        }
 
         return {
           content: [{
             type: "text" as const,
             text: [
-              `✅ File uploaded successfully`,
+              `✅ File ${action} successfully`,
               "",
               `📄 Name: ${result.name}`,
               `🆔 ID: ${result.id}`,
@@ -331,6 +350,39 @@ export function registerDriveTools(server: McpServer) {
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Move failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // drive_rename
+  // ═══════════════════════════════════════
+  server.tool(
+    "drive_rename",
+    "Rename a file or folder on the Shared Drive. Changes only the name, not the location or content.",
+    {
+      file_id: z.string().describe("File or folder ID to rename"),
+      new_name: z.string().describe("New name for the file/folder (include extension for files)"),
+    },
+    async ({ file_id, new_name }) => {
+      try {
+        const result = (await renameFile(file_id, new_name)) as DriveFile
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Renamed successfully`,
+              "",
+              `📄 New name: ${result.name}`,
+              `🆔 ID: ${result.id}`,
+            ].join("\n"),
+          }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Rename failed: ${error instanceof Error ? error.message : String(error)}` }],
         }
       }
     }
