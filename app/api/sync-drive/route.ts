@@ -176,7 +176,7 @@ async function syncFolder(
         .list(folderPath, { search: finalName, limit: 1 });
 
       if (existing?.length) {
-        const match = existing.find((f) => f.name === finalName);
+        const match = existing.find((f: any) => f.name === finalName);
         if (match) {
           const driveMs = new Date(modifiedTime).getTime();
           const storageMs = new Date(
