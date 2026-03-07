@@ -83,16 +83,18 @@ export const RULES: ClassificationRule[] = [
     patterns: [/(?:notice\s+(?:CP|P)\s*\d{2,4}|LTR\s+\d+\s*C)/i],
     excludes: [/CP\s*575/i], scope: "page1",
   },
-  {
-    type: "IRS Fax", category: 5,
-    patterns: [/fax\s+(?:transmission|cover)/i, /(?:irs|internal\s+revenue)/i],
-    excludes: [], scope: "page1",
-  },
 
-  // ═══ PRIORITÀ 3: EIN Letter CP 575 ═══
+  // ═══ PRIORITÀ 3: EIN Letter CP 575 (page1-2 per intercettare EIN ricevuti via fax) ═══
   {
     type: "EIN Letter (IRS)", category: 1,
     patterns: [/(?:CP\s*575|we\s+(?:have\s+)?assigned\s+you\s+an?\s+employer\s+identification|your\s+(?:new\s+)?employer\s+identification\s+number)/i],
+    excludes: [], scope: "page1-2",
+  },
+
+  // ═══ PRIORITÀ 3b: IRS Fax generico (solo se NON è un EIN) ═══
+  {
+    type: "IRS Fax", category: 5,
+    patterns: [/fax\s+(?:transmission|cover)/i, /(?:irs|internal\s+revenue)/i],
     excludes: [], scope: "page1",
   },
 
@@ -183,7 +185,7 @@ export const RULES: ClassificationRule[] = [
   },
   {
     type: "Registered Agent", category: 1,
-    patterns: [/(?:registered\s+agent\s+(?:consent|acceptance|resignation|change|statement)|(?:consent|acceptance)\s+(?:of|by)\s+registered\s+agent)/i],
+    patterns: [/(?:registered\s+agent\s+(?:consent|acceptance|resignation|change|statement|details)|(?:consent|acceptance)\s+(?:of|by)\s+registered\s+agent|your\s+registered\s+agent\s+details|registered\s+agents?\s+(?:inc|llc|service))/i],
     excludes: [], scope: "page1",
   },
   {
@@ -381,6 +383,8 @@ export function classifyByFilename(filename: string): ClassificationResult | nul
     { pattern: /passport/i, type: "Passport", category: 2 },
     { pattern: /(?:driver|id\s*card|identity)/i, type: "ID Document", category: 2 },
     { pattern: /bank\s*statement/i, type: "Bank Statement", category: 4 },
+    { pattern: /registered\s*agent/i, type: "Registered Agent", category: 1 },
+    { pattern: /itin/i, type: "ITIN Letter", category: 2 },
     { pattern: /(?:boi|beneficial\s*owner)/i, type: "BOI Report", category: 2 },
     { pattern: /(?:offer|proposta|offerta)/i, type: "Offer Letter", category: 5 },
     { pattern: /receipt|ricevuta/i, type: "Receipt", category: 5 },
