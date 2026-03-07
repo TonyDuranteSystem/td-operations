@@ -11,11 +11,13 @@
  * Auth: Bearer token in Authorization header (TD_MCP_API_KEY)
  *
  * Tools registered:
- *   crm_*   — Supabase CRM queries (accounts, contacts, payments, services, deals, tasks)
- *   qb_*    — QuickBooks Online (invoices, customers, payments, company info)
- *   email_* — Postmark transactional email (send, track opens/clicks, stats)
- *   drive_* — Google Drive (search, list, upload, read, create folder, move)
- *   gmail_* — Gmail (search, read, read thread, draft, labels)
+ *   crm_*      — Supabase CRM queries (accounts, contacts, payments, services, deals, tasks)
+ *   qb_*       — QuickBooks Online (invoices, customers, payments, company info)
+ *   email_*    — Postmark transactional email (send, track opens/clicks, stats)
+ *   drive_*    — Google Drive (search, list, upload, read, create folder, move)
+ *   gmail_*    — Gmail (search, read, read thread, draft, labels)
+ *   docai_*    — Document AI OCR (extract text from PDFs/images)
+ *   classify_* — Document classification (40+ rules, auto-detect type & category)
  *
  * Deploy: Vercel serverless function (Pro plan, 60s timeout)
  */
@@ -26,6 +28,8 @@ import { registerQbTools } from "@/lib/mcp/tools/qb"
 import { registerEmailTools } from "@/lib/mcp/tools/email"
 import { registerDriveTools } from "@/lib/mcp/tools/drive"
 import { registerGmailTools } from "@/lib/mcp/tools/gmail"
+import { registerDocaiTools } from "@/lib/mcp/tools/docai"
+import { registerClassifyTools } from "@/lib/mcp/tools/classify"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
 export const maxDuration = 60
@@ -39,10 +43,10 @@ const handler = createMcpHandler(
     registerEmailTools(server)
     registerDriveTools(server)
     registerGmailTools(server)
+    registerDocaiTools(server)
+    registerClassifyTools(server)
 
     // Future tool groups (uncomment as they're built):
-    // registerDocaiTools(server)
-    // registerClassifyTools(server)
     // registerCalendlyTools(server)
   },
   {
