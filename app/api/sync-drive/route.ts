@@ -135,7 +135,7 @@ interface Stats {
 
 async function syncFolder(
   token: string,
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   folderId: string,
   pathPrefix: string,
   stats: Stats
