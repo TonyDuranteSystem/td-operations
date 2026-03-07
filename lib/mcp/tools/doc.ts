@@ -1000,12 +1000,13 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_bulk_process",
-    "Process all documents in a client's Drive folder, auto-resolved from their CRM account. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call.",
+    "Process all documents in a client's Drive folder, auto-resolved from their CRM account. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call. Use offset to resume after timeout.",
     {
       account_id: z.string().uuid().describe("CRM account UUID — folder is auto-resolved from accounts.drive_folder_id"),
-      skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default: true)"),
+      skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default: true). Set false to re-classify with updated rules."),
+      offset: z.number().optional().default(0).describe("Skip this many files before processing (use to resume after timeout). E.g. offset=11 skips the first 11 files."),
     },
-    async ({ account_id, skip_existing }) => {
+    async ({ account_id, skip_existing, offset }) => {
       try {
         const startTime = Date.now()
 
@@ -1052,6 +1053,12 @@ export function registerDocTools(server: McpServer) {
           toProcess = allFiles.filter(f => !existingIds.has(f.id))
         }
 
+        // 3b. Apply offset for resumable processing
+        const fileOffset = offset || 0
+        if (fileOffset > 0) {
+          toProcess = toProcess.slice(fileOffset)
+        }
+
         if (toProcess.length === 0) {
           return { content: [{ type: "text" as const, text: `✅ All ${allFiles.length} files in ${account.company_name} already processed. Nothing to do.` }] }
         }
@@ -1077,13 +1084,14 @@ export function registerDocTools(server: McpServer) {
         const skipped = allFiles.length - toProcess.length
         const remaining = toProcess.length - results.length
 
+        const nextOffset = fileOffset + results.length
         const lines = [
           `📊 Bulk Process: ${account.company_name}`,
           "",
-          `📄 Total files: ${allFiles.length} | Skipped (existing): ${skipped} | Processed: ${results.length}`,
+          `📄 Total files: ${allFiles.length} | Skipped (existing): ${skipped} | Offset: ${fileOffset} | Processed: ${results.length}`,
           `✅ Classified: ${classified} | ⚠️ Unclassified: ${unclassified} | ❌ Errors: ${errors}`,
-          timedOut ? `⏱️ Timeout — ${remaining} files remaining (run again)` : "",
-          remaining > 0 && !timedOut ? `📌 Batch limit — ${remaining} files remaining (run again)` : "",
+          timedOut ? `⏱️ Timeout — ${remaining} files remaining → run again with offset: ${nextOffset}` : "",
+          remaining > 0 && !timedOut ? `📌 Batch limit — ${remaining} files remaining → run again with offset: ${nextOffset}` : "",
           "",
           "── Details ──",
         ]
