@@ -1110,4 +1110,504 @@ export function registerDocTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // doc_compliance_report — Aggregate compliance across all accounts
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_compliance_report",
+    "Generate an aggregate compliance report across all active accounts. Shows which accounts are green/yellow/red, most common missing documents, and breakdown by entity type. Read-only — no processing or updates.",
+    {
+      entity_type: z.string().optional().describe("Filter by entity type (e.g. 'Single Member LLC')"),
+      state: z.string().optional().describe("Filter by state_of_formation"),
+      min_score: z.number().optional().describe("Show only accounts with score >= this (0-100)"),
+      max_score: z.number().optional().describe("Show only accounts with score <= this (0-100)"),
+    },
+    async ({ entity_type, state, min_score, max_score }) => {
+      try {
+        // 1. Parallel queries
+        let accountsQuery = supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, entity_type, state_of_formation, status, client_health")
+          .eq("status", "Active")
+        if (entity_type) accountsQuery = accountsQuery.eq("entity_type", entity_type)
+        if (state) accountsQuery = accountsQuery.eq("state_of_formation", state)
+
+        const [accountsRes, requirementsRes, docsRes] = await Promise.all([
+          accountsQuery.order("company_name"),
+          supabaseAdmin.from("compliance_requirements").select("*").eq("is_required", true),
+          supabaseAdmin
+            .from("documents")
+            .select("account_id, document_type_name, status")
+            .eq("status", "classified")
+            .not("account_id", "is", null),
+        ])
+
+        const accounts = accountsRes.data || []
+        const requirements = requirementsRes.data || []
+        const docs = docsRes.data || []
+
+        // 2. Build requirements map: entity_type → Set<document_type_name>
+        const reqMap: Record<string, string[]> = {}
+        for (const r of requirements) {
+          if (!reqMap[r.entity_type]) reqMap[r.entity_type] = []
+          reqMap[r.entity_type].push(r.document_type_name)
+        }
+
+        // 3. Build docs map: account_id → Set<document_type_name>
+        const docMap: Record<string, Set<string>> = {}
+        for (const d of docs) {
+          if (!d.account_id) continue
+          if (!docMap[d.account_id]) docMap[d.account_id] = new Set()
+          docMap[d.account_id].add(d.document_type_name)
+        }
+
+        // 4. Calculate scores
+        interface AccountScore {
+          id: string
+          name: string
+          entityType: string | null
+          state: string | null
+          score: number
+          found: number
+          required: number
+          missing: string[]
+          color: string
+        }
+
+        const scores: AccountScore[] = []
+        const missingCounts: Record<string, number> = {}
+        let noEntityCount = 0
+        let noDocsCount = 0
+
+        for (const acc of accounts) {
+          if (!acc.entity_type) {
+            noEntityCount++
+            continue
+          }
+
+          const required = reqMap[acc.entity_type] || []
+          if (required.length === 0) continue
+
+          const present = docMap[acc.id] || new Set<string>()
+          const found = required.filter(r => present.has(r)).length
+          const score = Math.round((found / required.length) * 100)
+          const missing = required.filter(r => !present.has(r))
+
+          if (present.size === 0) noDocsCount++
+
+          // Count missing documents globally
+          for (const m of missing) {
+            missingCounts[m] = (missingCounts[m] || 0) + 1
+          }
+
+          const color = score >= 80 ? "green" : score >= 50 ? "yellow" : "red"
+
+          // Apply score filters
+          if (min_score !== undefined && score < min_score) continue
+          if (max_score !== undefined && score > max_score) continue
+
+          scores.push({
+            id: acc.id,
+            name: acc.company_name,
+            entityType: acc.entity_type,
+            state: acc.state_of_formation,
+            score,
+            found,
+            required: required.length,
+            missing,
+            color,
+          })
+        }
+
+        // 5. Aggregate
+        const green = scores.filter(s => s.color === "green")
+        const yellow = scores.filter(s => s.color === "yellow")
+        const red = scores.filter(s => s.color === "red")
+        const avgScore = scores.length > 0 ? Math.round(scores.reduce((s, a) => s + a.score, 0) / scores.length) : 0
+
+        // By entity type
+        const byEntity: Record<string, { g: number; y: number; r: number; total: number; sum: number }> = {}
+        for (const s of scores) {
+          const et = s.entityType || "Unknown"
+          if (!byEntity[et]) byEntity[et] = { g: 0, y: 0, r: 0, total: 0, sum: 0 }
+          byEntity[et][s.color === "green" ? "g" : s.color === "yellow" ? "y" : "r"]++
+          byEntity[et].total++
+          byEntity[et].sum += s.score
+        }
+
+        // Top missing docs
+        const topMissing = Object.entries(missingCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+
+        // 6. Build output
+        const lines = [
+          `📋 Compliance Report — ${scores.length} accounts analyzed`,
+          "",
+          "── Summary ──",
+          `🟢 Green (≥80%): ${green.length} accounts (${scores.length ? Math.round(green.length / scores.length * 100) : 0}%)`,
+          `🟡 Yellow (50-79%): ${yellow.length} accounts (${scores.length ? Math.round(yellow.length / scores.length * 100) : 0}%)`,
+          `🔴 Red (<50%): ${red.length} accounts (${scores.length ? Math.round(red.length / scores.length * 100) : 0}%)`,
+          `⚪ No entity type: ${noEntityCount} accounts (not checked)`,
+          `📄 No documents yet: ${noDocsCount} accounts`,
+          `📊 Average score: ${avgScore}%`,
+          "",
+          "── Most Common Missing Documents ──",
+        ]
+
+        for (const [doc, count] of topMissing) {
+          const pct = scores.length > 0 ? Math.round(count / scores.length * 100) : 0
+          lines.push(`  ${doc} — missing in ${count} accounts (${pct}%)`)
+        }
+
+        lines.push("", "── By Entity Type ──")
+        for (const [et, stats] of Object.entries(byEntity)) {
+          const avg = stats.total > 0 ? Math.round(stats.sum / stats.total) : 0
+          lines.push(`  ${et}: 🟢${stats.g} 🟡${stats.y} 🔴${stats.r} (avg ${avg}%)`)
+        }
+
+        // Red accounts (top 20)
+        if (red.length > 0) {
+          lines.push("", "── 🔴 Red Accounts (top 20) ──")
+          const topRed = red.sort((a, b) => a.score - b.score).slice(0, 20)
+          for (const a of topRed) {
+            lines.push(`  🔴 ${a.score}% — ${a.name} (${a.entityType}, ${a.state || "?"}) — missing: ${a.missing.join(", ")}`)
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Compliance report failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_mass_process — Process all accounts with Drive folders (cursor-based)
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_mass_process",
+    "Mass-process documents across all active accounts with linked Drive folders. Processes accounts one by one in alphabetical order. Use after_account_id to resume from a previous run. Returns progress + next cursor.",
+    {
+      after_account_id: z.string().uuid().optional().describe("Resume cursor — start after this account ID (from previous run's next_cursor)"),
+      skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default true)"),
+      limit: z.number().optional().default(5).describe("Max accounts to attempt per call (default 5)"),
+    },
+    async ({ after_account_id, skip_existing, limit: maxAccounts }) => {
+      try {
+        const startTime = Date.now()
+
+        // 1. Get accounts to process
+        let query = supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, drive_folder_id")
+          .eq("status", "Active")
+          .not("drive_folder_id", "is", null)
+          .order("company_name", { ascending: true })
+          .limit(maxAccounts || 5)
+
+        if (after_account_id) {
+          // Get the company_name of the cursor account for keyset pagination
+          const { data: cursorAcc } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", after_account_id)
+            .single()
+          if (cursorAcc) {
+            query = query.gt("company_name", cursorAcc.company_name)
+          }
+        }
+
+        const { data: accounts, error: accErr } = await query
+
+        if (accErr || !accounts || accounts.length === 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: after_account_id
+                ? `✅ Mass processing complete — no more accounts after cursor.`
+                : `📭 No active accounts with Drive folders found.`,
+            }],
+          }
+        }
+
+        // 2. Process each account
+        interface AccResult {
+          id: string
+          name: string
+          totalFiles: number
+          processed: number
+          classified: number
+          unclassified: number
+          errors: number
+          skipped: number
+          partial: boolean
+        }
+
+        const accResults: AccResult[] = []
+        let lastProcessedId = ""
+        let timedOut = false
+
+        for (const acc of accounts) {
+          if (Date.now() - startTime > BATCH_TIMEOUT_MS) {
+            timedOut = true
+            break
+          }
+
+          const result: AccResult = {
+            id: acc.id,
+            name: acc.company_name,
+            totalFiles: 0,
+            processed: 0,
+            classified: 0,
+            unclassified: 0,
+            errors: 0,
+            skipped: 0,
+            partial: false,
+          }
+
+          try {
+            // Collect files
+            const allFiles = await collectFilesRecursive(acc.drive_folder_id!, 3)
+            result.totalFiles = allFiles.length
+
+            if (allFiles.length === 0) {
+              lastProcessedId = acc.id
+              accResults.push(result)
+              continue
+            }
+
+            // Filter existing
+            let toProcess = allFiles
+            if (skip_existing) {
+              const fileIds = allFiles.map(f => f.id)
+              const existingIds = new Set<string>()
+              for (let i = 0; i < fileIds.length; i += 50) {
+                const chunk = fileIds.slice(i, i + 50)
+                const { data: existing } = await supabaseAdmin
+                  .from("documents")
+                  .select("drive_file_id")
+                  .in("drive_file_id", chunk)
+                existing?.forEach(e => existingIds.add(e.drive_file_id))
+              }
+              result.skipped = existingIds.size
+              toProcess = allFiles.filter(f => !existingIds.has(f.id))
+            }
+
+            if (toProcess.length === 0) {
+              lastProcessedId = acc.id
+              accResults.push(result)
+              continue
+            }
+
+            // Process batch
+            for (const file of toProcess.slice(0, BATCH_MAX_FILES)) {
+              if (Date.now() - startTime > BATCH_TIMEOUT_MS) {
+                result.partial = true
+                timedOut = true
+                break
+              }
+              const r = await processFile(file.id, acc.id, acc.company_name)
+              result.processed++
+              if (r.status === "classified") result.classified++
+              else if (r.status === "unclassified") result.unclassified++
+              else result.errors++
+            }
+
+            if (toProcess.length > BATCH_MAX_FILES) result.partial = true
+
+          } catch (e) {
+            result.errors++
+          }
+
+          lastProcessedId = acc.id
+          accResults.push(result)
+
+          if (timedOut) break
+        }
+
+        // 3. Summary
+        const totalProcessed = accResults.reduce((s, a) => s + a.processed, 0)
+        const totalClassified = accResults.reduce((s, a) => s + a.classified, 0)
+        const totalUnclassified = accResults.reduce((s, a) => s + a.unclassified, 0)
+        const totalErrors = accResults.reduce((s, a) => s + a.errors, 0)
+        const completed = accResults.filter(a => !a.partial && a.processed > 0 || a.skipped === a.totalFiles).length
+        const partial = accResults.filter(a => a.partial).length
+
+        const lines = [
+          `📊 Mass Process — ${accResults.length} accounts attempted`,
+          "",
+          `🏢 Completed: ${completed} | Partial: ${partial}`,
+          `📄 Files processed: ${totalProcessed} | ✅ ${totalClassified} | ⚠️ ${totalUnclassified} | ❌ ${totalErrors}`,
+          "",
+          "── Per Account ──",
+        ]
+
+        for (const a of accResults) {
+          if (a.totalFiles === 0) {
+            lines.push(`📭 ${a.name} — empty folder`)
+          } else if (a.skipped === a.totalFiles) {
+            lines.push(`⏭️ ${a.name} — all ${a.totalFiles} files already done`)
+          } else if (a.partial) {
+            lines.push(`🟡 ${a.name} — ${a.processed}/${a.totalFiles - a.skipped} new files (partial)`)
+          } else {
+            lines.push(`✅ ${a.name} — ${a.processed} files (✅${a.classified} ⚠️${a.unclassified} ❌${a.errors})`)
+          }
+        }
+
+        if (timedOut || accResults.length === (maxAccounts || 5)) {
+          lines.push("", `📌 Next cursor: ${lastProcessedId}`)
+          lines.push(`💡 Run again with after_account_id: "${lastProcessedId}" to continue`)
+        } else {
+          lines.push("", "✅ All accounts processed!")
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Mass process failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_update_health — Batch update client_health from compliance scores
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_update_health",
+    "Update accounts.client_health (green/yellow/red) based on document compliance scores. Use dry_run=true first to preview changes.",
+    {
+      dry_run: z.boolean().optional().default(true).describe("Preview changes without updating (default true)"),
+      green_threshold: z.number().optional().default(80).describe("Score >= this = green (default 80)"),
+      yellow_threshold: z.number().optional().default(50).describe("Score >= this = yellow (default 50)"),
+    },
+    async ({ dry_run, green_threshold, yellow_threshold }) => {
+      try {
+        const greenT = green_threshold ?? 80
+        const yellowT = yellow_threshold ?? 50
+
+        // 1. Get accounts with entity_type
+        const [accountsRes, requirementsRes, docsRes] = await Promise.all([
+          supabaseAdmin
+            .from("accounts")
+            .select("id, company_name, entity_type, client_health, status")
+            .eq("status", "Active")
+            .not("entity_type", "is", null),
+          supabaseAdmin.from("compliance_requirements").select("*").eq("is_required", true),
+          supabaseAdmin
+            .from("documents")
+            .select("account_id, document_type_name, status")
+            .eq("status", "classified")
+            .not("account_id", "is", null),
+        ])
+
+        const accounts = accountsRes.data || []
+        const requirements = requirementsRes.data || []
+        const docs = docsRes.data || []
+
+        // Build maps
+        const reqMap: Record<string, string[]> = {}
+        for (const r of requirements) {
+          if (!reqMap[r.entity_type]) reqMap[r.entity_type] = []
+          reqMap[r.entity_type].push(r.document_type_name)
+        }
+
+        const docMap: Record<string, Set<string>> = {}
+        for (const d of docs) {
+          if (!d.account_id) continue
+          if (!docMap[d.account_id]) docMap[d.account_id] = new Set()
+          docMap[d.account_id].add(d.document_type_name)
+        }
+
+        // 2. Calculate changes
+        interface HealthChange {
+          id: string
+          name: string
+          oldHealth: string | null
+          newHealth: string
+          score: number
+        }
+
+        const changes: HealthChange[] = []
+        let unchanged = 0
+
+        for (const acc of accounts) {
+          const required = reqMap[acc.entity_type!] || []
+          if (required.length === 0) continue
+
+          const present = docMap[acc.id] || new Set<string>()
+          const found = required.filter(r => present.has(r)).length
+          const score = Math.round((found / required.length) * 100)
+
+          const newHealth = score >= greenT ? "green" : score >= yellowT ? "yellow" : "red"
+
+          if (acc.client_health === newHealth) {
+            unchanged++
+            continue
+          }
+
+          changes.push({
+            id: acc.id,
+            name: acc.company_name,
+            oldHealth: acc.client_health,
+            newHealth,
+            score,
+          })
+        }
+
+        // 3. Apply or preview
+        if (!dry_run && changes.length > 0) {
+          // Batch update in chunks of 10
+          for (let i = 0; i < changes.length; i += 10) {
+            const chunk = changes.slice(i, i + 10)
+            for (const c of chunk) {
+              await supabaseAdmin
+                .from("accounts")
+                .update({ client_health: c.newHealth, updated_at: new Date().toISOString() })
+                .eq("id", c.id)
+            }
+          }
+        }
+
+        // 4. Summary
+        const toGreen = changes.filter(c => c.newHealth === "green").length
+        const toYellow = changes.filter(c => c.newHealth === "yellow").length
+        const toRed = changes.filter(c => c.newHealth === "red").length
+
+        const lines = [
+          dry_run ? "🔍 Health Update Preview (DRY RUN)" : "✅ Health Updated",
+          "",
+          `📊 Accounts analyzed: ${accounts.length}`,
+          `🔄 Changes: ${changes.length} | Unchanged: ${unchanged}`,
+          `   → 🟢 green: ${toGreen} | 🟡 yellow: ${toYellow} | 🔴 red: ${toRed}`,
+          `   Thresholds: green ≥${greenT}%, yellow ≥${yellowT}%`,
+        ]
+
+        if (changes.length > 0) {
+          lines.push("", "── Changes ──")
+          for (const c of changes.slice(0, 30)) {
+            const arrow = `${c.oldHealth || "null"} → ${c.newHealth}`
+            lines.push(`  ${c.newHealth === "green" ? "🟢" : c.newHealth === "yellow" ? "🟡" : "🔴"} ${c.name} — ${c.score}% (${arrow})`)
+          }
+          if (changes.length > 30) {
+            lines.push(`  ... and ${changes.length - 30} more`)
+          }
+        }
+
+        if (dry_run && changes.length > 0) {
+          lines.push("", "💡 Run with dry_run=false to apply these changes")
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Health update failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
 }

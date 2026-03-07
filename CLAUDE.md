@@ -1,21 +1,26 @@
 # Tony Durante LLC — Claude Code Context
-## Last Updated: 2026-03-05
+## Last Updated: 2026-03-08
 
 ## Who You Are
-You are working for Antonio Durante, owner of Tony Durante LLC — a Florida-based consulting firm helping international entrepreneurs (primarily European/Italian) set up and manage LLCs in the United States.
+You are working for Antonio Durante, owner of Tony Durante LLC — a Wyoming-based consulting firm helping international entrepreneurs (primarily European/Italian) set up and manage LLCs in the United States.
+
+## 🚀 CLOUD MEMORY — Read at Session Start
+Complete project memory is stored in Google Drive. At session start, use the Remote MCP `drive_search` tool to find and read it:
+1. `drive_search("Claude Memory")` → find the folder in Shared Drive → TD Operations → Claude Memory
+2. Read all 7 files (MEMORY.md first, then credentials.md, infrastructure.md, codebase.md, milestones.md)
+3. These files contain ALL credentials, architecture, tools, decisions, and roadmap
+
+**Shared Drive folder**: TD Operations / Claude Memory (ID: `1IKz0ZoDAQDOUL57jxrwP7EQhVXwMJxws`)
+**Backup**: support@tonydurante.us My Drive / Claude Memory (ID: `1Np2moTTIRx4nDoyAiJIrJcuXSv-yX9IF`)
 
 ## Key Documents (Read Before Any Task)
 All operational documents are stored in **Google Drive** (Shared Drive: Tony Durante LLC) and locally in `~/Desktop/td-operations/`.
 
-1. **SKILL.md** — Main operational skill file. Defines all workflows, rules, communication protocols. READ THIS AT SESSION START.
+1. **Cloud Memory (Google Drive)** — 7 files with complete project state, credentials, architecture. READ AT SESSION START.
 2. **CRM-Data-Schema.md** — All tables, fields, enums, relationships, migration rules. READ THIS FIRST for any database work.
 3. **SOP-Business-Rules.md** — How the business operates. Rules for payments, services, escalations, SLAs.
 4. **Technical-Roadmap.md** — Infrastructure projects, deployment procedures, automations, API details.
 5. **platform-credentials.md** — All API keys, tokens, login credentials. NEVER commit to git.
-
-### Reference Files (in `references/` or Google Drive → TD Operations → References)
-- **supabase.md** — Supabase project details, REST API patterns, table schemas, auth keys, enum values
-- **google-drive.md** — Google Drive Shared Drive IDs, folder structure, API patterns, service account auth
 
 ## System Architecture
 
@@ -59,18 +64,22 @@ All operational documents are stored in **Google Drive** (Shared Drive: Tony Dur
 
 ## MCP Connectors
 
-### Local MCP (configured in `.mcp.json`)
-- **supabase** — Local MCP server via `npx @supabase/mcp-server-supabase`. Connects directly to production project `ydzipybqeebtpcvsbtvs`. No third-party proxy dependency. Requires Node.js installed on the machine.
+### Remote MCP — td-hub (configured in `.mcp.json`)
+- **Endpoint**: `https://td-operations.vercel.app/api/mcp`
+- **Auth**: `Authorization: Bearer ${TD_MCP_API_KEY}`
+- **30 tools**: CRM (7) + QB (6) + Email (5) + Drive (7) + Gmail (5)
+- All credentials in Cloud Memory → credentials.md
 
-### Marketplace MCP (cloud-managed)
-- **Airtable** — Connected via marketplace token
-- **HubSpot** — Connected via marketplace
-- **Box** — Connected via marketplace (being phased out → Google Drive)
-- **Gmail** — Connected via marketplace
-- **Fireflies** — Connected via marketplace
-- **Circleback** — Connected via marketplace
+### Local MCP — Supabase (configured in `.mcp.json`)
+- **supabase** — Local MCP server via `npx @supabase/mcp-server-supabase@0.7.0`. Connects directly to production project `ydzipybqeebtpcvsbtvs`. Used for SQL/DDL only.
 
-⚠ **NOTE:** If a marketplace Supabase connector is also active, it may point to the OLD project (`dlwzcxrdkxkwjblgfxtj`). Always verify which project you're querying. The local `.mcp.json` connector is authoritative.
+### Marketplace MCP (complementari)
+- **Fireflies** — Meeting AI transcripts (specializzato, tenere)
+- **Circleback** — Meeting notes (specializzato, tenere)
+- **Airtable** — Backup reference only (congelato)
+- ~~Box~~ — IN DISMISSIONE, da rimuovere
+- ~~Gmail marketplace~~ — Sostituito da gmail_* nel Remote MCP
+- ~~HubSpot~~ — Trial scaduto 2026-03-06
 
 ## Critical Rules
 1. **Supabase is the SOT** — Project `ydzipybqeebtpcvsbtvs` is the single source of truth for all CRM data.

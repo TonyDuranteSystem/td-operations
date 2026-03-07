@@ -364,4 +364,168 @@ export function registerCrmTools(server: McpServer) {
       }
     }
   )
+
+  // ═══════════════════════════════════════
+  // crm_dashboard_stats — Business snapshot in one call
+  // ═══════════════════════════════════════
+  server.tool(
+    "crm_dashboard_stats",
+    "Get a complete operational snapshot of the business: account counts by status/type/state, service pipeline, payment totals (invoiced/paid/outstanding), document stats, and task overview. No parameters — returns everything.",
+    {},
+    async () => {
+      try {
+        // Parallel queries for all major tables
+        const [
+          accountsRes,
+          servicesRes,
+          paymentsRes,
+          documentsRes,
+          tasksRes,
+          dealsRes,
+        ] = await Promise.all([
+          supabaseAdmin.from("accounts").select("id, status, entity_type, state_of_formation, client_health"),
+          supabaseAdmin.from("services").select("id, service_type, status, blocked_waiting_external"),
+          supabaseAdmin.from("payments").select("id, status, amount, amount_currency, year"),
+          supabaseAdmin
+            .from("documents")
+            .select("id, status, category_name, account_id"),
+          supabaseAdmin.from("tasks").select("id, status, priority"),
+          supabaseAdmin.from("deals").select("id, stage, value"),
+        ])
+
+        const accounts = accountsRes.data || []
+        const services = servicesRes.data || []
+        const payments = paymentsRes.data || []
+        const documents = documentsRes.data || []
+        const tasks = tasksRes.data || []
+        const deals = dealsRes.data || []
+
+        // ── Accounts ──
+        const accByStatus: Record<string, number> = {}
+        const accByType: Record<string, number> = {}
+        const accByState: Record<string, number> = {}
+        const accByHealth: Record<string, number> = {}
+        let noEntityType = 0
+        let noDriveFolder = 0
+
+        for (const a of accounts) {
+          accByStatus[a.status || "unknown"] = (accByStatus[a.status || "unknown"] || 0) + 1
+          if (a.entity_type) {
+            accByType[a.entity_type] = (accByType[a.entity_type] || 0) + 1
+          } else {
+            noEntityType++
+          }
+          if (a.state_of_formation) {
+            accByState[a.state_of_formation] = (accByState[a.state_of_formation] || 0) + 1
+          }
+          if (a.client_health) {
+            accByHealth[a.client_health] = (accByHealth[a.client_health] || 0) + 1
+          }
+        }
+
+        // ── Services ──
+        const svcByType: Record<string, number> = {}
+        const svcByStatus: Record<string, number> = {}
+        let blockedCount = 0
+        for (const s of services) {
+          svcByType[s.service_type || "unknown"] = (svcByType[s.service_type || "unknown"] || 0) + 1
+          svcByStatus[s.status || "unknown"] = (svcByStatus[s.status || "unknown"] || 0) + 1
+          if (s.blocked_waiting_external) blockedCount++
+        }
+
+        // ── Payments ──
+        let totalInvoiced = 0
+        let totalPaid = 0
+        let totalOverdue = 0
+        let totalPending = 0
+        const payByStatus: Record<string, number> = {}
+        const payByCurrency: Record<string, number> = {}
+
+        for (const p of payments) {
+          const amt = (p.amount as number) || 0
+          totalInvoiced += amt
+          payByStatus[p.status || "unknown"] = (payByStatus[p.status || "unknown"] || 0) + 1
+          payByCurrency[p.amount_currency || "USD"] = (payByCurrency[p.amount_currency || "USD"] || 0) + amt
+
+          if (p.status === "paid") totalPaid += amt
+          else if (p.status === "overdue") totalOverdue += amt
+          else if (p.status === "pending") totalPending += amt
+        }
+
+        // ── Documents ──
+        const docByStatus: Record<string, number> = {}
+        const docByCategory: Record<string, number> = {}
+        const accountsWithDocs = new Set<string>()
+        for (const d of documents) {
+          docByStatus[d.status || "unknown"] = (docByStatus[d.status || "unknown"] || 0) + 1
+          if (d.category_name) {
+            docByCategory[d.category_name] = (docByCategory[d.category_name] || 0) + 1
+          }
+          if (d.account_id) accountsWithDocs.add(d.account_id)
+        }
+
+        // ── Tasks ──
+        const taskByStatus: Record<string, number> = {}
+        const taskByPriority: Record<string, number> = {}
+        for (const t of tasks) {
+          taskByStatus[t.status || "unknown"] = (taskByStatus[t.status || "unknown"] || 0) + 1
+          if (t.priority) taskByPriority[t.priority] = (taskByPriority[t.priority] || 0) + 1
+        }
+
+        // ── Deals ──
+        const dealByStage: Record<string, number> = {}
+        let dealTotalValue = 0
+        for (const d of deals) {
+          dealByStage[d.stage || "unknown"] = (dealByStage[d.stage || "unknown"] || 0) + 1
+          dealTotalValue += (d.value as number) || 0
+        }
+
+        // ── Build Output ──
+        const fmt = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        const sortDesc = (obj: Record<string, number>) => Object.entries(obj).sort((a, b) => b[1] - a[1])
+
+        const lines = [
+          "📊 CRM Dashboard — Business Snapshot",
+          "",
+          `══ 🏢 Accounts (${accounts.length}) ══`,
+          `By status: ${sortDesc(accByStatus).map(([k, v]) => `${k}: ${v}`).join(" | ")}`,
+          `By entity: ${sortDesc(accByType).map(([k, v]) => `${k}: ${v}`).join(" | ")}${noEntityType > 0 ? ` | ⚠️ No type: ${noEntityType}` : ""}`,
+          `Top states: ${sortDesc(accByState).slice(0, 5).map(([k, v]) => `${k}: ${v}`).join(" | ")}`,
+          Object.keys(accByHealth).length > 0 ? `Health: 🟢${accByHealth["green"] || 0} 🟡${accByHealth["yellow"] || 0} 🔴${accByHealth["red"] || 0}` : "",
+          "",
+          `══ ⚙️ Services (${services.length}) ══`,
+          `By type: ${sortDesc(svcByType).map(([k, v]) => `${k}: ${v}`).join(" | ")}`,
+          `By status: ${sortDesc(svcByStatus).map(([k, v]) => `${k}: ${v}`).join(" | ")}`,
+          blockedCount > 0 ? `🚧 Blocked (waiting external): ${blockedCount}` : "",
+          "",
+          `══ 💰 Payments (${payments.length}) ══`,
+          `Total invoiced: ${fmt(totalInvoiced)}`,
+          `Paid: ${fmt(totalPaid)} | Outstanding: ${fmt(totalInvoiced - totalPaid)}`,
+          `Overdue: ${fmt(totalOverdue)} | Pending: ${fmt(totalPending)}`,
+          `By status: ${sortDesc(payByStatus).map(([k, v]) => `${k}: ${v}`).join(" | ")}`,
+          Object.keys(payByCurrency).length > 1 ? `By currency: ${sortDesc(payByCurrency).map(([k, v]) => `${k}: ${fmt(v)}`).join(" | ")}` : "",
+          "",
+          `══ 📄 Documents (${documents.length}) ══`,
+          `By status: ${sortDesc(docByStatus).map(([k, v]) => `${k}: ${v}`).join(" | ")}`,
+          `Accounts with docs: ${accountsWithDocs.size}/${accounts.length}`,
+          Object.keys(docByCategory).length > 0 ? `By category: ${sortDesc(docByCategory).slice(0, 5).map(([k, v]) => `${k}: ${v}`).join(" | ")}` : "",
+          "",
+          `══ ✅ Tasks (${tasks.length}) ══`,
+          tasks.length > 0 ? `By status: ${sortDesc(taskByStatus).map(([k, v]) => `${k}: ${v}`).join(" | ")}` : "No tasks recorded",
+          Object.keys(taskByPriority).length > 0 ? `By priority: ${sortDesc(taskByPriority).map(([k, v]) => `${k}: ${v}`).join(" | ")}` : "",
+          "",
+          `══ 🤝 Deals (${deals.length}) ══`,
+          deals.length > 0
+            ? `Pipeline value: ${fmt(dealTotalValue)} | By stage: ${sortDesc(dealByStage).map(([k, v]) => `${k}: ${v}`).join(" | ")}`
+            : "No deals recorded",
+        ]
+
+        return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Dashboard stats failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
 }
