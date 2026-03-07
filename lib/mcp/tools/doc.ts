@@ -837,12 +837,13 @@ export function registerDocTools(server: McpServer) {
         if (matches.length > 0) {
           lines.push("── Matches ──")
           // Group by account
-          const byAccount = new Map<string, string[]>()
+          const byAccount: Record<string, string[]> = {}
           for (const m of matches) {
-            if (!byAccount.has(m.accountName)) byAccount.set(m.accountName, [])
-            byAccount.get(m.accountName)!.push(m.fileName)
+            if (!byAccount[m.accountName]) byAccount[m.accountName] = []
+            byAccount[m.accountName].push(m.fileName)
           }
-          for (const [acct, files] of byAccount) {
+          for (const acct of Object.keys(byAccount)) {
+            const files = byAccount[acct]
             lines.push(`👤 ${acct} (${files.length} docs)`)
             for (const f of files) {
               lines.push(`   📄 ${f}`)
