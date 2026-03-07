@@ -34,7 +34,8 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/qb') &&
     !request.nextUrl.pathname.startsWith('/api/mcp') &&
     !request.nextUrl.pathname.startsWith('/api/sse') &&
-    !request.nextUrl.pathname.startsWith('/api/message')
+    !request.nextUrl.pathname.startsWith('/api/message') &&
+    !request.nextUrl.pathname.startsWith('/api/sync-drive')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
