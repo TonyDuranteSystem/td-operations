@@ -3,8 +3,9 @@
  * Pipeline: Google Drive file -> OCR -> Classify -> Store in Supabase
  *
  * Tools:
- *   doc_process_file   — Full pipeline for a single file
- *   doc_process_folder  — Batch process all files in a folder
+ *   doc_process_file    — Full pipeline for a single file
+ *   doc_process_folder  — Batch process all files in a folder (flat)
+ *   doc_process_client  — Recursive: process entire client folder tree (subfolders 1-5)
  *   doc_search          — Search processed documents
  *   doc_list            — List documents by account/category
  *   doc_get             — Get full document details
@@ -166,6 +167,39 @@ async function processFile(
   }
 }
 
+/**
+ * Recursively collect all processable files from a folder and its subfolders.
+ */
+async function collectFilesRecursive(
+  folderId: string,
+  maxDepth: number = 3,
+  depth: number = 0,
+): Promise<DriveFileMeta[]> {
+  if (depth > maxDepth) return []
+
+  const result = (await listFolder(folderId, 200)) as { files: DriveFileMeta[] }
+  if (!result.files || result.files.length === 0) return []
+
+  const files: DriveFileMeta[] = []
+  const subfolders: DriveFileMeta[] = []
+
+  for (const item of result.files) {
+    if (item.mimeType === "application/vnd.google-apps.folder") {
+      subfolders.push(item)
+    } else if (PROCESSABLE_MIMES.some(m => item.mimeType.startsWith(m) || item.mimeType === m)) {
+      files.push(item)
+    }
+  }
+
+  // Recurse into subfolders
+  for (const sub of subfolders) {
+    const subFiles = await collectFilesRecursive(sub.id, maxDepth, depth + 1)
+    files.push(...subFiles)
+  }
+
+  return files
+}
+
 // ─── Tool Registration ──────────────────────────────────────
 
 export function registerDocTools(server: McpServer) {
@@ -314,6 +348,107 @@ export function registerDocTools(server: McpServer) {
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Batch processing failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_process_client
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_process_client",
+    "Process all documents in a client's Google Drive folder recursively (walks into subfolders 1-5). Extracts text, classifies, and stores each in Supabase. Automatically links to CRM account if account_id provided. Max 20 files per call (run again for remaining).",
+    {
+      folder_id: z.string().describe("Client's root Google Drive folder ID (parent of subfolders 1-5)"),
+      account_id: z.string().uuid().optional().describe("CRM account UUID to link documents to"),
+      skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default: true)"),
+    },
+    async ({ folder_id, account_id, skip_existing }) => {
+      try {
+        const startTime = Date.now()
+
+        // 1. Recursively collect all files from client folder tree
+        const allFiles = await collectFilesRecursive(folder_id, 3)
+
+        if (allFiles.length === 0) {
+          return { content: [{ type: "text" as const, text: "📭 No processable files found in client folder tree." }] }
+        }
+
+        // 2. Check existing if skip_existing
+        let toProcess = allFiles
+        if (skip_existing) {
+          const fileIds = allFiles.map(f => f.id)
+          // Query in chunks of 50 (Supabase IN limit)
+          const existingIds = new Set<string>()
+          for (let i = 0; i < fileIds.length; i += 50) {
+            const chunk = fileIds.slice(i, i + 50)
+            const { data: existing } = await supabaseAdmin
+              .from("documents")
+              .select("drive_file_id")
+              .in("drive_file_id", chunk)
+            existing?.forEach(e => existingIds.add(e.drive_file_id))
+          }
+          toProcess = allFiles.filter(f => !existingIds.has(f.id))
+        }
+
+        if (toProcess.length === 0) {
+          return { content: [{ type: "text" as const, text: `✅ All ${allFiles.length} files already processed. Nothing to do.` }] }
+        }
+
+        // 3. Resolve account name once
+        let accountName: string | undefined
+        if (account_id) {
+          const { data: acc } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", account_id)
+            .single()
+          if (acc) accountName = acc.company_name
+        }
+
+        // 4. Process files (with timeout + batch limit)
+        const batch = toProcess.slice(0, BATCH_MAX_FILES)
+        const results: Array<{ fileName: string; status: string; type?: string; error?: string }> = []
+        let timedOut = false
+
+        for (const file of batch) {
+          if (Date.now() - startTime > BATCH_TIMEOUT_MS) {
+            timedOut = true
+            break
+          }
+          const r = await processFile(file.id, account_id, accountName)
+          results.push({ fileName: r.fileName, status: r.status, type: r.type, error: r.error })
+        }
+
+        // 5. Summary
+        const classified = results.filter(r => r.status === "classified").length
+        const unclassified = results.filter(r => r.status === "unclassified").length
+        const errors = results.filter(r => r.status === "error").length
+        const skipped = allFiles.length - toProcess.length
+        const remaining = toProcess.length - results.length
+
+        const lines = [
+          `📊 Client Folder Processing Complete`,
+          accountName ? `👤 Account: ${accountName}` : "",
+          "",
+          `📄 Total files found: ${allFiles.length} | Skipped (existing): ${skipped} | Processed: ${results.length}`,
+          `✅ Classified: ${classified} | ⚠️ Unclassified: ${unclassified} | ❌ Errors: ${errors}`,
+          timedOut ? `⏱️ Timeout reached — ${remaining} files remaining (run again)` : "",
+          remaining > 0 && !timedOut ? `📌 Batch limit: ${remaining} files remaining (run again)` : "",
+          "",
+          "── Details ──",
+        ]
+
+        for (const r of results) {
+          const icon = r.status === "classified" ? "✅" : r.status === "unclassified" ? "⚠️" : "❌"
+          lines.push(`${icon} ${r.fileName} → ${r.type || r.status}${r.error ? ` (${r.error.slice(0, 80)})` : ""}`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Client processing failed: ${error instanceof Error ? error.message : String(error)}` }],
         }
       }
     }
