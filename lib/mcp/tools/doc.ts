@@ -1,0 +1,589 @@
+/**
+ * Document Intelligence MCP Tools
+ * Pipeline: Google Drive file -> OCR -> Classify -> Store in Supabase
+ *
+ * Tools:
+ *   doc_process_file   — Full pipeline for a single file
+ *   doc_process_folder  — Batch process all files in a folder
+ *   doc_search          — Search processed documents
+ *   doc_list            — List documents by account/category
+ *   doc_get             — Get full document details
+ *   doc_stats           — Document statistics
+ */
+
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { z } from "zod"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { classifyDocument, classifyByFilename } from "@/lib/classifier"
+import { getFileMetadata, listFolder } from "@/lib/google-drive"
+import { extractTextFromFile } from "@/lib/mcp/tools/classify"
+
+// ─── Constants ──────────────────────────────────────────────
+
+const MAX_OCR_TEXT = 50_000 // Truncate stored OCR text
+const BATCH_MAX_FILES = 20
+const BATCH_TIMEOUT_MS = 50_000 // Stop 10s before Vercel 60s limit
+
+// Supported MIME types for processing
+const PROCESSABLE_MIMES = [
+  "application/pdf",
+  "image/tiff", "image/gif", "image/jpeg", "image/png",
+  "image/bmp", "image/webp",
+  "text/plain", "text/csv", "text/html",
+  "application/json", "application/xml",
+  "application/vnd.google-apps.document",
+  "application/vnd.google-apps.spreadsheet",
+]
+
+// ─── Helpers ────────────────────────────────────────────────
+
+interface DriveFileMeta {
+  id: string
+  name: string
+  mimeType: string
+  size?: string
+  webViewLink?: string
+  parents?: string[]
+}
+
+/**
+ * Process a single file: extract text -> classify -> upsert into documents table.
+ */
+async function processFile(
+  fileId: string,
+  accountId?: string,
+  accountName?: string,
+): Promise<{
+  success: boolean
+  fileName: string
+  type?: string
+  category?: string
+  confidence?: string
+  status: string
+  error?: string
+}> {
+  try {
+    // 1. Get metadata
+    const meta = (await getFileMetadata(fileId)) as DriveFileMeta
+
+    // 2. Extract text (OCR or direct)
+    const { pages, method, fileName } = await extractTextFromFile(fileId)
+
+    // 3. Classify
+    let classification = pages.length > 0
+      ? classifyDocument(pages)
+      : null
+
+    // Fallback to filename classification
+    if (!classification && fileName) {
+      classification = classifyByFilename(fileName)
+    }
+
+    // 4. Lookup document_type_id if classified
+    let documentTypeId: number | null = null
+    if (classification) {
+      const { data: dtRow } = await supabaseAdmin
+        .from("document_types")
+        .select("id")
+        .eq("type_name", classification.type)
+        .single()
+      if (dtRow) documentTypeId = dtRow.id
+    }
+
+    // 5. If account_id provided but no name, look it up
+    if (accountId && !accountName) {
+      const { data: acc } = await supabaseAdmin
+        .from("accounts")
+        .select("company_name")
+        .eq("id", accountId)
+        .single()
+      if (acc) accountName = acc.company_name
+    }
+
+    // 6. Prepare OCR text (truncated)
+    const ocrText = pages.join("\n---PAGE BREAK---\n").slice(0, MAX_OCR_TEXT)
+
+    // 7. Upsert document record
+    const status = classification ? "classified" : (pages.length > 0 ? "unclassified" : "error")
+
+    const { error: dbError } = await supabaseAdmin
+      .from("documents")
+      .upsert({
+        drive_file_id: fileId,
+        file_name: fileName,
+        mime_type: meta.mimeType,
+        file_size: meta.size ? parseInt(meta.size, 10) : null,
+        drive_link: meta.webViewLink || null,
+        drive_parent_folder_id: meta.parents?.[0] || null,
+        document_type_id: documentTypeId,
+        document_type_name: classification?.type || null,
+        category: classification?.category || null,
+        category_name: classification?.categoryName || null,
+        confidence: classification?.confidence || null,
+        ocr_text: ocrText || null,
+        ocr_page_count: pages.length || null,
+        account_id: accountId || null,
+        account_name: accountName || null,
+        processed_at: new Date().toISOString(),
+        status,
+        error_message: null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "drive_file_id" })
+
+    if (dbError) throw new Error(`DB error: ${dbError.message}`)
+
+    return {
+      success: true,
+      fileName,
+      type: classification?.type,
+      category: classification?.categoryName,
+      confidence: classification?.confidence,
+      status,
+    }
+  } catch (error) {
+    // Store error in documents table
+    try {
+      const meta = (await getFileMetadata(fileId)) as DriveFileMeta
+      await supabaseAdmin.from("documents").upsert({
+        drive_file_id: fileId,
+        file_name: meta.name,
+        mime_type: meta.mimeType,
+        status: "error",
+        error_message: error instanceof Error ? error.message : String(error),
+        processed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "drive_file_id" })
+    } catch {
+      // Ignore secondary errors
+    }
+
+    return {
+      success: false,
+      fileName: fileId,
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+// ─── Tool Registration ──────────────────────────────────────
+
+export function registerDocTools(server: McpServer) {
+
+  // ═══════════════════════════════════════
+  // doc_process_file
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_process_file",
+    "Process a single file from Google Drive: extract text (OCR if needed), classify document type, and store result in Supabase. Returns classification details.",
+    {
+      file_id: z.string().describe("Google Drive file ID"),
+      account_id: z.string().uuid().optional().describe("Link document to this client account (UUID)"),
+    },
+    async ({ file_id, account_id }) => {
+      try {
+        const result = await processFile(file_id, account_id)
+
+        if (result.success) {
+          const lines = [
+            `✅ Processed: ${result.fileName}`,
+            "",
+            result.type ? `📋 Type: ${result.type}` : "⚠️ Unclassified",
+            result.category ? `📁 Category: ${result.category}` : "",
+            result.confidence ? `📊 Confidence: ${result.confidence}` : "",
+            `📌 Status: ${result.status}`,
+          ].filter(Boolean)
+
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `❌ Processing failed for ${result.fileName}: ${result.error}` }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Process file failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_process_folder
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_process_folder",
+    "Batch process all supported files in a Google Drive folder. Extracts text, classifies, and stores each in Supabase. Skips already-processed files by default. Max 20 files per batch (60s timeout).",
+    {
+      folder_id: z.string().describe("Google Drive folder ID"),
+      account_id: z.string().uuid().optional().describe("Link all documents to this client account (UUID)"),
+      skip_existing: z.boolean().optional().default(true).describe("Skip files already in documents table (default: true)"),
+    },
+    async ({ folder_id, account_id, skip_existing }) => {
+      try {
+        const startTime = Date.now()
+
+        // 1. List folder contents
+        const result = (await listFolder(folder_id, 100)) as { files: DriveFileMeta[] }
+        if (!result.files || result.files.length === 0) {
+          return { content: [{ type: "text" as const, text: "📭 Folder is empty." }] }
+        }
+
+        // 2. Filter to processable files
+        const files = result.files.filter(f =>
+          PROCESSABLE_MIMES.some(m => f.mimeType.startsWith(m) || f.mimeType === m)
+        )
+
+        if (files.length === 0) {
+          return { content: [{ type: "text" as const, text: `📭 No processable files found (${result.files.length} items in folder, none are PDF/image/text).` }] }
+        }
+
+        // 3. Check existing if skip_existing
+        let toProcess = files
+        if (skip_existing) {
+          const fileIds = files.map(f => f.id)
+          const { data: existing } = await supabaseAdmin
+            .from("documents")
+            .select("drive_file_id")
+            .in("drive_file_id", fileIds)
+
+          const existingIds = new Set(existing?.map(e => e.drive_file_id) || [])
+          toProcess = files.filter(f => !existingIds.has(f.id))
+        }
+
+        if (toProcess.length === 0) {
+          return { content: [{ type: "text" as const, text: `✅ All ${files.length} files already processed. Nothing to do.` }] }
+        }
+
+        // 4. Resolve account name once
+        let accountName: string | undefined
+        if (account_id) {
+          const { data: acc } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", account_id)
+            .single()
+          if (acc) accountName = acc.company_name
+        }
+
+        // 5. Process files (with timeout safety)
+        const batch = toProcess.slice(0, BATCH_MAX_FILES)
+        const results: Array<{ fileName: string; status: string; type?: string; error?: string }> = []
+        let timedOut = false
+
+        for (const file of batch) {
+          // Check timeout
+          if (Date.now() - startTime > BATCH_TIMEOUT_MS) {
+            timedOut = true
+            break
+          }
+
+          const r = await processFile(file.id, account_id, accountName)
+          results.push({
+            fileName: r.fileName,
+            status: r.status,
+            type: r.type,
+            error: r.error,
+          })
+        }
+
+        // 6. Summary
+        const classified = results.filter(r => r.status === "classified").length
+        const unclassified = results.filter(r => r.status === "unclassified").length
+        const errors = results.filter(r => r.status === "error").length
+        const skipped = files.length - toProcess.length
+
+        const lines = [
+          `📊 Batch Processing Complete`,
+          "",
+          `📁 Folder: ${folder_id}`,
+          `📄 Total files: ${result.files.length} | Processable: ${files.length} | Skipped (existing): ${skipped}`,
+          `✅ Classified: ${classified} | ⚠️ Unclassified: ${unclassified} | ❌ Errors: ${errors}`,
+          timedOut ? `⏱️ Timeout reached — ${batch.length - results.length} files remaining` : "",
+          toProcess.length > BATCH_MAX_FILES ? `📌 Batch limit: processed ${batch.length}/${toProcess.length} (run again for remaining)` : "",
+          "",
+          "── Details ──",
+        ]
+
+        for (const r of results) {
+          const icon = r.status === "classified" ? "✅" : r.status === "unclassified" ? "⚠️" : "❌"
+          lines.push(`${icon} ${r.fileName} → ${r.type || r.status}${r.error ? ` (${r.error.slice(0, 80)})` : ""}`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Batch processing failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_search
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_search",
+    "Search processed documents by file name, document type, category, account, or status. Returns matching documents with classification details.",
+    {
+      query: z.string().optional().describe("Search text (matches file_name or document_type_name, case-insensitive)"),
+      category: z.number().optional().describe("Filter by category: 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence"),
+      document_type: z.string().optional().describe("Filter by exact document type name (e.g. 'Tax Return', 'Passport')"),
+      account_id: z.string().uuid().optional().describe("Filter by client account UUID"),
+      status: z.enum(["pending", "processed", "classified", "unclassified", "error"]).optional().describe("Filter by processing status"),
+      limit: z.number().optional().default(25).describe("Max results (default 25, max 100)"),
+    },
+    async ({ query, category, document_type, account_id, status, limit }) => {
+      try {
+        let q = supabaseAdmin
+          .from("documents")
+          .select("id, drive_file_id, file_name, document_type_name, category, category_name, confidence, status, account_name, processed_at, drive_link")
+          .order("processed_at", { ascending: false, nullsFirst: false })
+          .limit(Math.min(limit || 25, 100))
+
+        if (query) q = q.or(`file_name.ilike.%${query}%,document_type_name.ilike.%${query}%`)
+        if (category) q = q.eq("category", category)
+        if (document_type) q = q.eq("document_type_name", document_type)
+        if (account_id) q = q.eq("account_id", account_id)
+        if (status) q = q.eq("status", status)
+
+        const { data, error } = await q
+
+        if (error) {
+          return { content: [{ type: "text" as const, text: `❌ Search error: ${error.message}` }] }
+        }
+
+        if (!data || data.length === 0) {
+          return { content: [{ type: "text" as const, text: "📭 No documents found matching criteria." }] }
+        }
+
+        const lines = [`🔍 Found ${data.length} document(s)`, ""]
+
+        for (const doc of data) {
+          const icon = doc.status === "classified" ? "✅" : doc.status === "unclassified" ? "⚠️" : "❌"
+          lines.push(`${icon} ${doc.file_name}`)
+          if (doc.document_type_name) lines.push(`   📋 Type: ${doc.document_type_name} (${doc.category_name}) [${doc.confidence}]`)
+          if (doc.account_name) lines.push(`   👤 Account: ${doc.account_name}`)
+          if (doc.processed_at) lines.push(`   📅 Processed: ${new Date(doc.processed_at).toLocaleString("it-IT")}`)
+          if (doc.drive_link) lines.push(`   🔗 ${doc.drive_link}`)
+          lines.push(`   🆔 ${doc.id}`)
+          lines.push("")
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Search failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_list
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_list",
+    "List processed documents for a specific account or category. Sorted by most recently processed.",
+    {
+      account_id: z.string().uuid().optional().describe("Filter by client account UUID"),
+      category: z.number().optional().describe("Filter by category: 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence"),
+      status: z.enum(["pending", "processed", "classified", "unclassified", "error"]).optional().describe("Filter by status"),
+      limit: z.number().optional().default(50).describe("Max results (default 50, max 200)"),
+    },
+    async ({ account_id, category, status, limit }) => {
+      try {
+        let q = supabaseAdmin
+          .from("documents")
+          .select("id, file_name, document_type_name, category_name, confidence, status, account_name, drive_file_id")
+          .order("processed_at", { ascending: false, nullsFirst: false })
+          .limit(Math.min(limit || 50, 200))
+
+        if (account_id) q = q.eq("account_id", account_id)
+        if (category) q = q.eq("category", category)
+        if (status) q = q.eq("status", status)
+
+        const { data, error } = await q
+
+        if (error) {
+          return { content: [{ type: "text" as const, text: `❌ List error: ${error.message}` }] }
+        }
+
+        if (!data || data.length === 0) {
+          return { content: [{ type: "text" as const, text: "📭 No documents found." }] }
+        }
+
+        const lines = [`📄 Documents (${data.length})`, ""]
+
+        for (const doc of data) {
+          const icon = doc.status === "classified" ? "✅" : doc.status === "unclassified" ? "⚠️" : "❌"
+          const type = doc.document_type_name ? `[${doc.document_type_name}]` : `[${doc.status}]`
+          const acct = doc.account_name ? ` — ${doc.account_name}` : ""
+          lines.push(`${icon} ${doc.file_name} ${type}${acct}`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ List failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_get
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_get",
+    "Get full details of a processed document, including OCR extracted text. Lookup by document ID (UUID) or Drive file ID.",
+    {
+      id: z.string().optional().describe("Document UUID (from doc_search/doc_list)"),
+      drive_file_id: z.string().optional().describe("Google Drive file ID"),
+    },
+    async ({ id, drive_file_id }) => {
+      try {
+        if (!id && !drive_file_id) {
+          return { content: [{ type: "text" as const, text: "❌ Provide either 'id' or 'drive_file_id'" }] }
+        }
+
+        let q = supabaseAdmin.from("documents").select("*")
+        if (id) q = q.eq("id", id)
+        else q = q.eq("drive_file_id", drive_file_id!)
+
+        const { data, error } = await q.single()
+
+        if (error || !data) {
+          return { content: [{ type: "text" as const, text: `❌ Document not found: ${error?.message || "no match"}` }] }
+        }
+
+        const lines = [
+          `📄 ${data.file_name}`,
+          "",
+          `📋 Type: ${data.document_type_name || "(unclassified)"}`,
+          `📁 Category: ${data.category_name || "—"} (${data.category || "—"})`,
+          `📊 Confidence: ${data.confidence || "—"}`,
+          `📌 Status: ${data.status}`,
+          "",
+          `👤 Account: ${data.account_name || "(none)"}`,
+          `🆔 Account ID: ${data.account_id || "—"}`,
+          "",
+          `📋 MIME: ${data.mime_type}`,
+          `📦 Size: ${data.file_size ? `${(data.file_size / 1024).toFixed(1)} KB` : "—"}`,
+          `📄 OCR Pages: ${data.ocr_page_count || "—"}`,
+          `📊 OCR Confidence: ${data.ocr_confidence ? `${(data.ocr_confidence * 100).toFixed(1)}%` : "—"}`,
+          "",
+          `📅 Processed: ${data.processed_at ? new Date(data.processed_at).toLocaleString("it-IT") : "—"}`,
+          `📅 Created: ${new Date(data.created_at).toLocaleString("it-IT")}`,
+          `🔗 Drive: ${data.drive_link || `ID: ${data.drive_file_id}`}`,
+          `🆔 Doc ID: ${data.id}`,
+        ]
+
+        if (data.error_message) {
+          lines.push("", `❌ Error: ${data.error_message}`)
+        }
+
+        if (data.ocr_text) {
+          const preview = data.ocr_text.slice(0, 2000)
+          const truncated = data.ocr_text.length > 2000
+          lines.push(
+            "",
+            "── OCR Text Preview ──",
+            preview,
+            truncated ? `\n⚠️ Showing 2000/${data.ocr_text.length} chars` : "",
+          )
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Get document failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // doc_stats
+  // ═══════════════════════════════════════
+  server.tool(
+    "doc_stats",
+    "Get document processing statistics: counts by category, type, status. Optionally filter by account.",
+    {
+      account_id: z.string().uuid().optional().describe("Filter stats for a specific client account"),
+    },
+    async ({ account_id }) => {
+      try {
+        // Total count
+        let totalQ = supabaseAdmin.from("documents").select("id", { count: "exact", head: true })
+        if (account_id) totalQ = totalQ.eq("account_id", account_id)
+        const { count: total } = await totalQ
+
+        // By status
+        const statusCounts: Record<string, number> = {}
+        for (const s of ["classified", "unclassified", "error", "pending"]) {
+          let sq = supabaseAdmin.from("documents").select("id", { count: "exact", head: true }).eq("status", s)
+          if (account_id) sq = sq.eq("account_id", account_id)
+          const { count } = await sq
+          if (count && count > 0) statusCounts[s] = count
+        }
+
+        // By category
+        let catQ = supabaseAdmin.from("documents").select("category, category_name").not("category", "is", null)
+        if (account_id) catQ = catQ.eq("account_id", account_id)
+        const { data: catData } = await catQ
+
+        const categoryCounts: Record<string, number> = {}
+        if (catData) {
+          for (const row of catData) {
+            const key = `${row.category}. ${row.category_name}`
+            categoryCounts[key] = (categoryCounts[key] || 0) + 1
+          }
+        }
+
+        // Top types
+        let typeQ = supabaseAdmin.from("documents").select("document_type_name").not("document_type_name", "is", null)
+        if (account_id) typeQ = typeQ.eq("account_id", account_id)
+        const { data: typeData } = await typeQ
+
+        const typeCounts: Record<string, number> = {}
+        if (typeData) {
+          for (const row of typeData) {
+            typeCounts[row.document_type_name] = (typeCounts[row.document_type_name] || 0) + 1
+          }
+        }
+        const topTypes = Object.entries(typeCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+
+        // Build output
+        const lines = [
+          `📊 Document Statistics${account_id ? " (filtered by account)" : ""}`,
+          "",
+          `📄 Total documents: ${total || 0}`,
+          "",
+          "── By Status ──",
+          ...Object.entries(statusCounts).map(([s, c]) => {
+            const icon = s === "classified" ? "✅" : s === "unclassified" ? "⚠️" : s === "error" ? "❌" : "⏳"
+            return `${icon} ${s}: ${c}`
+          }),
+          "",
+          "── By Category ──",
+          ...Object.entries(categoryCounts)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([cat, c]) => `📁 ${cat}: ${c}`),
+          "",
+          "── Top Document Types ──",
+          ...topTypes.map(([t, c]) => `📋 ${t}: ${c}`),
+        ]
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Stats failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+}

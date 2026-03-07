@@ -33,7 +33,7 @@ interface DriveFileMeta {
  * 2. If it's a text file, download directly (fast).
  * 3. If it's a PDF/image, use Document AI OCR (slower).
  */
-async function extractTextFromFile(
+export async function extractTextFromFile(
   fileId: string,
 ): Promise<{ pages: string[]; method: "text" | "ocr" | "filename_only"; fileName: string }> {
   const meta = (await getFileMetadata(fileId)) as DriveFileMeta
