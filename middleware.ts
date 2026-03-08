@@ -2,6 +2,15 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
+  // Legacy rewrite: /?t=TOKEN → /offer/TOKEN (must happen before auth check)
+  if (request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('t')) {
+    const token = request.nextUrl.searchParams.get('t')
+    const url = request.nextUrl.clone()
+    url.pathname = `/offer/${token}`
+    url.search = ''
+    return NextResponse.rewrite(url)
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -35,7 +44,9 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/mcp') &&
     !request.nextUrl.pathname.startsWith('/api/sse') &&
     !request.nextUrl.pathname.startsWith('/api/message') &&
-    !request.nextUrl.pathname.startsWith('/api/sync-drive')
+    !request.nextUrl.pathname.startsWith('/api/sync-drive') &&
+    !request.nextUrl.pathname.startsWith('/offer') &&
+    !request.nextUrl.pathname.startsWith('/contract-template')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'

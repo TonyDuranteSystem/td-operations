@@ -8,5 +8,25 @@
       "path": "/api/sync-drive",
       "schedule": "0 */6 * * *"
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/",
+      "has": [{ "type": "query", "key": "t", "value": "(?<token>.*)" }],
+      "destination": "/offer/:token"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/contract.html",
+      "has": [{ "type": "query", "key": "t", "value": "(?<token>.*)" }],
+      "destination": "/offer/:token/contract",
+      "permanent": true
+    },
+    {
+      "source": "/contract-v2.html",
+      "destination": "/contract-template.html",
+      "permanent": true
+    }
   ]
 }

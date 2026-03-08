@@ -375,6 +375,153 @@ export async function moveFile(
 }
 
 /**
+ * List files in any folder (My Drive or Shared Drive)
+ * Uses corpora=allDrives to search across all drives.
+ */
+export async function listFolderAnyDrive(folderId: string, maxResults = 50) {
+  const token = await getAccessToken()
+  const q = `'${folderId}' in parents and trashed = false`
+
+  const url = new URL(`${DRIVE_API}/files`)
+  url.searchParams.set("q", q)
+  url.searchParams.set("corpora", "user")
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("includeItemsFromAllDrives", "true")
+  url.searchParams.set("fields", "files(id,name,mimeType,size,modifiedTime)")
+  url.searchParams.set("pageSize", String(Math.min(maxResults, 100)))
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
+// ─── My Drive Operations (no driveId) ───────────────────────
+
+/**
+ * Create a folder in My Drive (not Shared Drive).
+ * Used for TD Operations mirror structure.
+ */
+export async function createFolderMyDrive(parentFolderId: string, folderName: string) {
+  const token = await getAccessToken()
+
+  const res = await fetch(
+    `${DRIVE_API}/files?supportsAllDrives=true`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: folderName,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentFolderId],
+      }),
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive create folder ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
+/**
+ * Upload a file to My Drive (not Shared Drive).
+ * Used for TD Operations mirror.
+ */
+export async function uploadFileMyDrive(
+  parentFolderId: string,
+  fileName: string,
+  content: string,
+  mimeType = "text/plain",
+) {
+  const token = await getAccessToken()
+
+  const boundary = "----DriveUploadBoundary"
+  const metadata = JSON.stringify({
+    name: fileName,
+    parents: [parentFolderId],
+  })
+
+  const body = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    metadata,
+    `--${boundary}`,
+    `Content-Type: ${mimeType}`,
+    "",
+    content,
+    `--${boundary}--`,
+  ].join("\r\n")
+
+  const res = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive upload ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
+/**
+ * Ensure a folder path exists in My Drive, creating folders as needed.
+ * Returns the ID of the deepest folder.
+ * Example: ensureDrivePath("rootId", ["SOP", "Templates"]) → creates SOP/ and SOP/Templates/ if needed
+ */
+export async function ensureDrivePath(rootFolderId: string, pathSegments: string[]): Promise<string> {
+  let currentParent = rootFolderId
+
+  for (const segment of pathSegments) {
+    // List current folder to check if subfolder exists
+    const listing = (await listFolderAnyDrive(currentParent, 200)) as {
+      files?: { id: string; name: string; mimeType: string }[]
+    }
+
+    const existing = listing.files?.find(
+      (f) => f.name === segment && f.mimeType === "application/vnd.google-apps.folder",
+    )
+
+    if (existing) {
+      currentParent = existing.id
+    } else {
+      // Create the folder
+      const created = (await createFolderMyDrive(currentParent, segment)) as { id: string }
+      currentParent = created.id
+    }
+  }
+
+  return currentParent
+}
+
+/**
  * Download file content (text-based files only)
  */
 export async function downloadFileContent(fileId: string): Promise<string> {
