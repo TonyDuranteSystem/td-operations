@@ -3,6 +3,8 @@
  * These tools allow Claude to search and retrieve CRM data from any device.
  */
 
+import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
+
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -524,6 +526,41 @@ export function registerCrmTools(server: McpServer) {
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Dashboard stats failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ─── crm_sync_airtable ───────────────────────────────────────────────
+  server.tool(
+    "crm_sync_airtable",
+    "One-way sync from Supabase (source of truth) to Airtable. Pushes account data: company info, EIN, filing, address, status, dates, services, payments. Only updates accounts that have an airtable_id link.",
+    {
+      dry_run: z.boolean().optional().default(false).describe("If true, count records without actually updating Airtable"),
+      limit: z.number().optional().default(0).describe("Max accounts to sync (0 = all)"),
+    },
+    async ({ dry_run, limit }) => {
+      try {
+        const stats = await syncSupabaseToAirtable({ dry_run, limit })
+
+        const lines = [
+          dry_run ? "🔍 DRY RUN — no changes made" : "✅ Sync complete",
+          "",
+          `📊 Total accounts with airtable_id: ${stats.total}`,
+          `✅ Synced: ${stats.synced}`,
+          `⏭️ Skipped (no data to push): ${stats.skipped}`,
+          `❌ Failed: ${stats.failed}`,
+          `⏱️ Elapsed: ${(stats.elapsed_ms / 1000).toFixed(1)}s`,
+        ]
+
+        if (stats.errors.length > 0) {
+          lines.push("", "Errors:", ...stats.errors.map((e) => `  • ${e}`))
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Sync failed: ${error instanceof Error ? error.message : String(error)}` }],
         }
       }
     }
