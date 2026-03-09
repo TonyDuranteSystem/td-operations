@@ -3,8 +3,10 @@
  *
  * system_docs stores operational documentation:
  * - Milestones & Roadmap
+ * - Session Context (read at start of every session)
  * - System Issues to Fix
  * - Credenziali & Chiavi API
+ * - Episodic session logs (doc_type='ops_session')
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
@@ -69,6 +71,45 @@ export function registerSysdocTools(server: McpServer) {
         }
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `❌ sysdoc_read error: ${err.message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // sysdoc_create — Create a new system document
+  // ═══════════════════════════════════════
+  server.tool(
+    "sysdoc_create",
+    "Create a new system document. Use for episodic session logs (doc_type='ops_session') or new reference docs (doc_type='markdown'). Slug must be unique. For session logs, use slug format 'ops-YYYY-MM-DD' or 'ops-YYYY-MM-DD-topic'.",
+    {
+      slug: z.string().describe("Unique slug (e.g. 'ops-2026-03-09', 'ops-2026-03-09-hubspot-sync')"),
+      title: z.string().describe("Document title"),
+      content: z.string().describe("Full content (Markdown)"),
+      doc_type: z.enum(["markdown", "ops_session"]).default("ops_session").describe("Document type: 'ops_session' for session logs, 'markdown' for reference docs"),
+    },
+    async ({ slug, title, content, doc_type }) => {
+      try {
+        const { data, error } = await supabaseAdmin
+          .from("system_docs")
+          .insert({ slug, title, content, doc_type, updated_at: new Date().toISOString() })
+          .select("slug, title, doc_type, updated_at")
+          .single()
+
+        if (error) {
+          if (error.code === "23505") {
+            return { content: [{ type: "text" as const, text: `❌ Slug '${slug}' already exists. Use sysdoc_update to modify it.` }] }
+          }
+          throw error
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Document created: ${data.slug} (${data.doc_type}) at ${data.updated_at}`,
+          }],
+        }
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `❌ sysdoc_create error: ${err.message}` }] }
       }
     }
   )
