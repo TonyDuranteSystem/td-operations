@@ -522,6 +522,58 @@ export async function ensureDrivePath(rootFolderId: string, pathSegments: string
 }
 
 /**
+ * Upload a binary file (Buffer) to the Shared Drive.
+ * Used for PDFs, images, and other non-text files.
+ */
+export async function uploadBinaryToDrive(
+  fileName: string,
+  data: Buffer,
+  mimeType: string,
+  parentFolderId: string,
+) {
+  const token = await getAccessToken()
+  const boundary = "----DriveUploadBinaryBoundary"
+
+  const metadata = JSON.stringify({
+    name: fileName,
+    parents: [parentFolderId],
+    driveId: SHARED_DRIVE_ID(),
+  })
+
+  // Build multipart body with binary content
+  const metadataPart = Buffer.from(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`
+  )
+  const contentHeader = Buffer.from(
+    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
+  )
+  const ending = Buffer.from(`\r\n--${boundary}--`)
+
+  const body = Buffer.concat([metadataPart, contentHeader, data, ending])
+
+  const res = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive binary upload ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  return res.json()
+}
+
+/**
  * Download file content (text-based files only)
  */
 export async function downloadFileContent(fileId: string): Promise<string> {

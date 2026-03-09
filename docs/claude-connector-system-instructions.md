@@ -52,14 +52,15 @@ You have 76 tools organized into functional groups. **Read each tool's descripti
 | `doc_compliance_report` | Aggregate compliance report across ALL active accounts. |
 | `doc_update_health` | Batch-update `client_health` (green/yellow/red) from compliance scores. |
 
-### Google Drive — File Management (8 tools)
+### Google Drive — File Management (9 tools)
 | Tool | When to Use |
 |------|-------------|
 | `drive_search` | Find files/folders by name or keyword. |
 | `drive_list_folder` | Browse contents of a specific folder by ID. Root: `0AOLZHXSfKUMHUk9PVA`. |
 | `drive_get_file_info` | Get metadata (size, dates, link) for a specific file/folder. |
 | `drive_read_file` | Read text content of a file. For PDFs/images, use `docai_ocr_file` instead. |
-| `drive_upload` | Create or overwrite a text file on Drive. |
+| `drive_upload` | Create or overwrite a **text** file on Drive. |
+| `drive_upload_file` | Upload a **binary** file (PDF, image, doc) from a Gmail attachment or URL. Use `gmail_read` first to get `message_id` + `attachment_id`. Max ~4MB. |
 | `drive_create_folder` | Create a new folder. |
 | `drive_move` | Move a file/folder to a different location. |
 | `drive_rename` | Rename a file/folder (include extension for files). |

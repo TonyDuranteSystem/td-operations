@@ -16,7 +16,9 @@ import {
   createFolder,
   moveFile,
   downloadFileContent,
+  uploadBinaryToDrive,
 } from "@/lib/google-drive"
+import { getGmailAttachment } from "@/lib/gmail"
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -388,4 +390,157 @@ export function registerDriveTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // drive_upload_file
+  // ═══════════════════════════════════════
+  server.tool(
+    "drive_upload_file",
+    "Upload a binary file (PDF, image, etc.) to Google Drive from Gmail attachments or external URLs. Use this for ANY non-text file that drive_upload cannot handle. Workflow for Gmail: 1) gmail_read to get message_id + attachment details, 2) call this with source='gmail'. Workflow for URL: call with source='url' and the direct download link. Max file size: ~4MB.",
+    {
+      source: z.enum(["gmail", "url"]).describe("Where to get the file: 'gmail' = Gmail attachment, 'url' = download from URL"),
+      folder_id: z.string().describe("Target Google Drive folder ID"),
+      filename: z.string().optional().describe("Override filename (optional — auto-detected from source if omitted)"),
+      // Gmail source params
+      message_id: z.string().optional().describe("Gmail message ID (required when source='gmail')"),
+      attachment_id: z.string().optional().describe("Gmail attachment ID from message parts (required when source='gmail')"),
+      // URL source params
+      url: z.string().optional().describe("Direct download URL (required when source='url')"),
+    },
+    async ({ source, folder_id, filename, message_id, attachment_id, url }) => {
+      try {
+        let fileData: Buffer
+        let finalFilename: string
+        let mimeType: string
+
+        if (source === "gmail") {
+          // ── Gmail Attachment ──
+          if (!message_id || !attachment_id) {
+            return {
+              content: [{ type: "text" as const, text: "❌ message_id and attachment_id are required when source='gmail'. Use gmail_read first to get these values." }],
+            }
+          }
+
+          // Get attachment binary
+          const { data } = await getGmailAttachment(message_id, attachment_id)
+          fileData = data
+
+          // Get filename from message metadata if not provided
+          if (!filename) {
+            // Fetch message to get attachment filename
+            const { gmailGet } = await import("@/lib/gmail")
+            const msg = (await gmailGet(`/messages/${message_id}`, { format: "full" })) as {
+              payload: {
+                parts?: Array<{
+                  filename?: string
+                  mimeType: string
+                  body?: { attachmentId?: string }
+                }>
+              }
+            }
+            const part = msg.payload.parts?.find(
+              (p) => p.body?.attachmentId === attachment_id
+            )
+            finalFilename = part?.filename || `attachment-${Date.now()}`
+            mimeType = part?.mimeType || "application/octet-stream"
+          } else {
+            finalFilename = filename
+            mimeType = guessMimeType(filename)
+          }
+
+        } else if (source === "url") {
+          // ── URL Download ──
+          if (!url) {
+            return {
+              content: [{ type: "text" as const, text: "❌ url is required when source='url'" }],
+            }
+          }
+
+          const res = await fetch(url)
+          if (!res.ok) {
+            return {
+              content: [{ type: "text" as const, text: `❌ Failed to download from URL: ${res.status} ${res.statusText}` }],
+            }
+          }
+
+          const arrayBuffer = await res.arrayBuffer()
+          fileData = Buffer.from(arrayBuffer)
+
+          // Detect filename from URL or Content-Disposition header
+          const disposition = res.headers.get("content-disposition")
+          if (filename) {
+            finalFilename = filename
+          } else if (disposition) {
+            const match = disposition.match(/filename[*]?=(?:UTF-8''|"?)([^";]+)/i)
+            finalFilename = match ? decodeURIComponent(match[1]) : `download-${Date.now()}`
+          } else {
+            const urlPath = new URL(url).pathname
+            finalFilename = urlPath.split("/").pop() || `download-${Date.now()}`
+          }
+
+          mimeType = res.headers.get("content-type") || guessMimeType(finalFilename)
+
+        } else {
+          return {
+            content: [{ type: "text" as const, text: "❌ Invalid source. Use 'gmail' or 'url'." }],
+          }
+        }
+
+        // Check size (~4MB limit for Vercel)
+        if (fileData.length > 4 * 1024 * 1024) {
+          return {
+            content: [{ type: "text" as const, text: `❌ File too large (${formatSize(fileData.length)}). Max supported: ~4MB. Upload manually via Google Drive.` }],
+          }
+        }
+
+        // Upload to Drive
+        const result = (await uploadBinaryToDrive(finalFilename, fileData, mimeType, folder_id)) as DriveFile
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ File uploaded successfully`,
+              "",
+              `📄 Name: ${result.name}`,
+              `📦 Size: ${formatSize(fileData.length)}`,
+              `📋 Type: ${mimeType}`,
+              `🆔 ID: ${result.id}`,
+              `🔗 Link: https://drive.google.com/file/d/${result.id}/view`,
+            ].join("\n"),
+          }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Upload failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+}
+
+// ─── Utility ────────────────────────────────────────────────
+
+function guessMimeType(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase()
+  const map: Record<string, string> = {
+    pdf: "application/pdf",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    zip: "application/zip",
+    csv: "text/csv",
+    txt: "text/plain",
+    html: "text/html",
+    json: "application/json",
+  }
+  return map[ext || ""] || "application/octet-stream"
 }

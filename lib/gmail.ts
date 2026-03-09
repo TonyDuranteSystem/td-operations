@@ -152,6 +152,40 @@ export async function gmailPost(
   return res.json()
 }
 
+// ─── Attachment Download ────────────────────────────────
+
+/**
+ * Download a Gmail attachment as binary Buffer.
+ * Returns the decoded binary data + metadata.
+ */
+export async function getGmailAttachment(
+  messageId: string,
+  attachmentId: string,
+  asUser?: string,
+): Promise<{ data: Buffer; size: number }> {
+  const { token, userEmail } = await getGmailToken(asUser)
+
+  const res = await fetch(
+    `${GMAIL_API}/users/${userEmail}/messages/${messageId}/attachments/${attachmentId}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Gmail attachment ${res.status}: ${
+        (err as { error?: { message?: string } }).error?.message || res.statusText
+      }`
+    )
+  }
+
+  const json = (await res.json()) as { data: string; size: number }
+  // Gmail returns base64url-encoded data — convert to standard base64 then to Buffer
+  const base64 = json.data.replace(/-/g, "+").replace(/_/g, "/")
+  const buffer = Buffer.from(base64, "base64")
+  return { data: buffer, size: json.size }
+}
+
 // ─── Email Parsing Helpers ──────────────────────────────
 
 interface GmailHeader {
