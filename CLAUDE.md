@@ -56,7 +56,7 @@ If context compacts mid-session:
 ### Subagent pattern (for heavy operations)
 Use `.claude/agents/` templates when spawning agents for batch processing, audits, or reports.
 Key rule: agent writes results to Supabase BEFORE returning. Chat gets only a compact summary.
-Available templates: `batch-processor.md`, `data-auditor.md`, `report-generator.md`.
+Available templates: `batch-processor.md`, `data-auditor.md`, `report-generator.md`, `client-onboarding.md`, `communication-triage.md`.
 
 ### Key tables for dev context
 - `dev_tasks` — Issue tracker for development work (NOT client tasks)

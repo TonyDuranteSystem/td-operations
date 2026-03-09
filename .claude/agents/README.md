@@ -11,6 +11,8 @@ main conversation context light and compaction-resistant.
 | Batch Processor | `batch-processor.md` | Processing 10+ records (docs, CRM updates, bulk ops) |
 | Data Auditor | `data-auditor.md` | Data quality checks, cross-source verification, compliance |
 | Report Generator | `report-generator.md` | KPI reports, analytics, business reviews |
+| Client Onboarding | `client-onboarding.md` | New client setup end-to-end (account, contacts, Drive, offer, email) |
+| Communication Triage | `communication-triage.md` | Daily inbox triage (Gmail + WA + TG), match to accounts, draft responses |
 
 ## How to Use
 
