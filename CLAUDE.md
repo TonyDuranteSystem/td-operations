@@ -42,8 +42,9 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 
 ### Checkpoint Rule
 After completing significant work blocks (feature implemented, bug fixed, tool added):
-1. Update the relevant `dev_tasks` record with progress_log entry: `[{date, action, result}]`
+1. Update the relevant `dev_tasks` record with progress_log entry
 2. If the task doesn't exist yet, create one
+3. Format: `[{"date": "YYYY-MM-DD", "action": "What was done", "result": "Concise outcome"}]`
 
 ### Recovery after compaction
 If context compacts mid-session:
@@ -52,9 +53,14 @@ If context compacts mid-session:
 3. Read the task's `progress_log` to understand what was done
 4. Resume from last checkpoint
 
+### Subagent pattern (for heavy operations)
+Use `.claude/agents/` templates when spawning agents for batch processing, audits, or reports.
+Key rule: agent writes results to Supabase BEFORE returning. Chat gets only a compact summary.
+Available templates: `batch-processor.md`, `data-auditor.md`, `report-generator.md`.
+
 ### Key tables for dev context
 - `dev_tasks` — Issue tracker for development work (NOT client tasks)
-- `system_docs` — Session context, milestones, credentials, issues
+- `system_docs` — Session context (lean), project-state (milestones), tech-stack (architecture)
 - `knowledge_articles` — Business rules (57 articles)
 
 ## Business Rules
@@ -70,6 +76,8 @@ app/
   api/accounts/               <- Account API routes
   api/inbox/                  <- Unified inbox API
   (dashboard)/                <- CRM dashboard pages
+.claude/
+  agents/                     <- Subagent prompt templates (anti-compaction)
 lib/
   mcp/
     instructions.ts           <- Server instructions (sent in MCP initialize)

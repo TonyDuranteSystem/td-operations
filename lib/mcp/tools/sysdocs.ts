@@ -20,7 +20,7 @@ export function registerSysdocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "sysdoc_list",
-    "List all system documentation entries with slug, title, type, and last updated timestamp. Use the slug with sysdoc_read to get full content. Key documents: 'session-context', 'platform-credentials', 'system-issues-to-fix', 'milestones'.",
+    "List all system documentation entries with slug, title, type, and last updated timestamp. Use the slug with sysdoc_read to get full content. Key documents: 'session-context' (lean quick-ref), 'project-state' (milestones), 'tech-stack' (architecture), 'platform-credentials'.",
     {},
     async () => {
       try {
@@ -48,9 +48,9 @@ export function registerSysdocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "sysdoc_read",
-    "Read a system document by slug. Key documents: 'session-context' (current state + milestones — MUST read at start of every operational session), 'platform-credentials' (API keys + config), 'system-issues-to-fix' (known bugs), 'milestones' (roadmap). Returns full Markdown content.",
+    "Read a system document by slug. Key documents: 'session-context' (lean quick-ref — MUST read at start of every session), 'project-state' (milestones + tool inventory), 'tech-stack' (architecture + identifiers), 'platform-credentials' (API keys + config), 'system-issues-to-fix' (known bugs). Returns full Markdown content.",
     {
-      slug: z.string().describe("Document slug (e.g. 'milestones', 'system-issues-to-fix', 'platform-credentials')"),
+      slug: z.string().describe("Document slug (e.g. 'session-context', 'project-state', 'tech-stack', 'platform-credentials')"),
     },
     async ({ slug }) => {
       try {

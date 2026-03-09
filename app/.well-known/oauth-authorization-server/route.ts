@@ -7,6 +7,8 @@
 
 import { NextResponse } from "next/server"
 
+export const dynamic = "force-dynamic"
+
 const ISSUER = process.env.NEXT_PUBLIC_APP_URL || "https://td-operations.vercel.app"
 
 export async function GET() {
