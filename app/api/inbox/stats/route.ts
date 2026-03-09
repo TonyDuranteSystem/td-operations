@@ -7,12 +7,11 @@ export const dynamic = "force-dynamic"
 
 export async function GET() {
   try {
-    // Parallel: Supabase unread counts + Gmail unread count
-    const [channelsResult, gmailResult] = await Promise.allSettled([
+    // Parallel: Supabase unread counts (from view) + Gmail unread count
+    const [viewResult, gmailResult] = await Promise.allSettled([
       supabaseAdmin
-        .from("messaging_channels")
-        .select("id, provider")
-        .eq("is_active", true),
+        .from("v_messaging_inbox")
+        .select("platform, unread_count"),
       gmailGet("/labels/INBOX") as Promise<{
         messagesUnread?: number
       }>,
@@ -21,44 +20,12 @@ export async function GET() {
     let whatsappUnread = 0
     let telegramUnread = 0
 
-    if (channelsResult.status === "fulfilled" && channelsResult.value.data) {
-      const channels = channelsResult.value.data
-      for (const ch of channels) {
-        const { data } = await supabaseAdmin
-          .from("messages")
-          .select("id", { count: "exact", head: true })
-          .eq("channel_id", ch.id)
-          .eq("status", "new")
-          .eq("direction", "inbound")
-
-        const count = (data as unknown as { count?: number })?.count || 0
-        if (ch.provider === "WhatsApp") whatsappUnread += count
-        else if (ch.provider === "Telegram") telegramUnread += count
+    if (viewResult.status === "fulfilled" && viewResult.value.data) {
+      for (const row of viewResult.value.data) {
+        const count = row.unread_count || 0
+        if (row.platform === "whatsapp") whatsappUnread += count
+        else if (row.platform === "telegram") telegramUnread += count
       }
-
-      // Simpler: query all unread by joining
-      const { count: waCount } = await supabaseAdmin
-        .from("messages")
-        .select("id, messaging_channels!inner(provider)", {
-          count: "exact",
-          head: true,
-        })
-        .eq("messaging_channels.provider", "WhatsApp")
-        .eq("status", "new")
-        .eq("direction", "inbound")
-
-      const { count: tgCount } = await supabaseAdmin
-        .from("messages")
-        .select("id, messaging_channels!inner(provider)", {
-          count: "exact",
-          head: true,
-        })
-        .eq("messaging_channels.provider", "Telegram")
-        .eq("status", "new")
-        .eq("direction", "inbound")
-
-      whatsappUnread = waCount || 0
-      telegramUnread = tgCount || 0
     }
 
     const gmailUnread =

@@ -116,7 +116,7 @@ export async function GET(
 
     return NextResponse.json({
       conversationId: id,
-      channel: provider === "Telegram" ? "telegram" : "whatsapp",
+      channel: provider === "telegram_bot_api" ? "telegram" : "whatsapp",
       name: group.group_name,
       externalId: group.external_group_id,
       accountId: group.account_id,

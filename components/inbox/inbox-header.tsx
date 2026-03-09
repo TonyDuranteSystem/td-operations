@@ -24,7 +24,7 @@ export function InboxHeader({ activeChannel, onChannelChange }: InboxHeaderProps
   ]
 
   return (
-    <div className="flex items-center gap-1 px-4 py-2 border-b bg-white">
+    <div className="flex items-center gap-1 px-4 py-2 bg-white">
       {channels.map((ch) => {
         const isActive = activeChannel === ch.key
         return (

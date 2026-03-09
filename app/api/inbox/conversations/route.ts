@@ -15,39 +15,21 @@ export async function GET(req: NextRequest) {
 
     const conversations: InboxConversation[] = []
 
-    // ─── WhatsApp + Telegram from Supabase ──────────────
+    // ─── WhatsApp + Telegram from Supabase view ──────────
     if (!channel || channel === "whatsapp" || channel === "telegram") {
       let q = supabaseAdmin
         .from("v_messaging_inbox")
         .select(
-          "id, group_name, last_message_at, last_message_preview, unread_count, account_id, contact_id, channel_id, messaging_channels(provider)"
+          "group_id, group_name, unread_count, last_message_at, platform, last_message_preview, last_message_sender, account_name, contact_name"
         )
         .order("last_message_at", { ascending: false, nullsFirst: false })
         .limit(limit)
 
+      // Filter by platform field directly from the view
       if (channel === "whatsapp") {
-        // Get WhatsApp channel IDs
-        const { data: waCh } = await supabaseAdmin
-          .from("messaging_channels")
-          .select("id")
-          .eq("provider", "WhatsApp")
-        if (waCh?.length) {
-          q = q.in(
-            "channel_id",
-            waCh.map((c: { id: string }) => c.id)
-          )
-        }
+        q = q.eq("platform", "whatsapp")
       } else if (channel === "telegram") {
-        const { data: tgCh } = await supabaseAdmin
-          .from("messaging_channels")
-          .select("id")
-          .eq("provider", "Telegram")
-        if (tgCh?.length) {
-          q = q.in(
-            "channel_id",
-            tgCh.map((c: { id: string }) => c.id)
-          )
-        }
+        q = q.eq("platform", "telegram")
       }
 
       const { data: groups, error } = await q
@@ -55,24 +37,15 @@ export async function GET(req: NextRequest) {
       if (error) throw error
 
       for (const g of groups || []) {
-        const provider =
-          (g as Record<string, unknown>).messaging_channels &&
-          typeof (g as Record<string, unknown>).messaging_channels === "object"
-            ? ((g as Record<string, unknown>).messaging_channels as { provider?: string })?.provider
-            : null
-
         conversations.push({
-          id: g.id,
-          channel:
-            provider === "Telegram"
-              ? "telegram"
-              : "whatsapp",
-          name: g.group_name || "Unknown",
-          preview: g.last_message_preview || "",
+          id: g.group_id,
+          channel: g.platform === "telegram" ? "telegram" : "whatsapp",
+          name: g.group_name || g.contact_name || g.account_name || "Unknown",
+          preview: g.last_message_preview
+            ? `${g.last_message_sender ? g.last_message_sender + ": " : ""}${g.last_message_preview}`
+            : "",
           unread: g.unread_count || 0,
           lastMessageAt: g.last_message_at || "",
-          accountId: g.account_id,
-          contactId: g.contact_id,
         })
       }
     }
