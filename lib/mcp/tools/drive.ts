@@ -64,7 +64,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_search",
-    "Search files and folders on the Tony Durante LLC Shared Drive by name or keyword. Returns file details with links.",
+    "Search files and folders on the Tony Durante LLC Shared Drive by name or keyword. Returns file names, sizes, modification dates, and direct links. Optionally filter by MIME type (e.g. 'application/pdf' for PDFs only). For browsing a known folder, use drive_list_folder instead.",
     {
       query: z.string().describe("Search text (matches file/folder names)"),
       mime_type: z.string().optional().describe("Filter by MIME type (e.g. 'application/pdf', 'application/vnd.google-apps.folder')"),
@@ -111,7 +111,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_list_folder",
-    "List contents of a folder on the Shared Drive. Shows files and subfolders with size, type, and modification date. Use the Shared Drive root ID '0AOLZHXSfKUMHUk9PVA' to list top-level folders.",
+    "List contents of a specific folder on the Shared Drive by folder ID. Shows subfolders and files with size, type, and modification date. Use '0AOLZHXSfKUMHUk9PVA' for the Shared Drive root. Returns folder IDs for navigating deeper. For searching by name, use drive_search instead.",
     {
       folder_id: z.string().describe("Google Drive folder ID (use '0AOLZHXSfKUMHUk9PVA' for Shared Drive root)"),
       max_results: z.number().optional().default(50).describe("Max results (default 50, max 100)"),
@@ -169,7 +169,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_get_file_info",
-    "Get detailed metadata for a file or folder (name, type, size, dates, link, parents).",
+    "Get detailed metadata for a file or folder by ID: name, MIME type, size, created/modified dates, description, parent folder ID, and web view link. Use this to inspect a specific file before reading or processing it.",
     {
       file_id: z.string().describe("Google Drive file or folder ID"),
     },
@@ -207,7 +207,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_read_file",
-    "Read the text content of a file (text, CSV, Google Docs/Sheets). Returns the file content as plain text. For binary files (PDFs, images), use drive_get_file_info for metadata instead.",
+    "Read the text content of a Drive file (text, CSV, Google Docs/Sheets exported as text). Returns plain text, truncated at max_chars. For PDFs and images, use docai_ocr_file for OCR text extraction instead. For metadata only, use drive_get_file_info.",
     {
       file_id: z.string().describe("Google Drive file ID"),
       max_chars: z.number().optional().default(10000).describe("Maximum characters to return (default 10000)"),
@@ -239,7 +239,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_upload",
-    "Upload or overwrite a text-based file on the Shared Drive. If file_id is provided, overwrites the existing file (keeps same ID, creates new version). If not, creates a new file in folder_id. Supports text, CSV, JSON, HTML, Markdown.",
+    "Upload a new text file or overwrite an existing one on the Shared Drive. For NEW files: provide folder_id + file_name + content. For OVERWRITING: provide file_id + content (keeps same ID, creates new version). Supports text, CSV, JSON, HTML, Markdown.",
     {
       folder_id: z.string().optional().describe("Parent folder ID for NEW uploads. Required when creating a new file, ignored when overwriting (file_id)."),
       file_id: z.string().optional().describe("Existing file ID to OVERWRITE. If provided, replaces the file content (same ID, new version). If omitted, creates a new file."),
@@ -293,7 +293,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_create_folder",
-    "Create a new folder on the Shared Drive. Returns the new folder ID.",
+    "Create a new folder on the Shared Drive inside a parent folder. Returns the new folder ID and link. Use '0AOLZHXSfKUMHUk9PVA' for the Shared Drive root as parent.",
     {
       parent_folder_id: z.string().describe("Parent folder ID (use '0AOLZHXSfKUMHUk9PVA' for Shared Drive root)"),
       folder_name: z.string().describe("Name for the new folder"),
@@ -327,7 +327,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_move",
-    "Move a file or folder to a different parent folder on the Shared Drive.",
+    "Move a file or folder to a different parent folder on the Shared Drive. Provide the file/folder ID and the destination folder ID. The file keeps its name and content.",
     {
       file_id: z.string().describe("File or folder ID to move"),
       new_parent_id: z.string().describe("Destination folder ID"),
@@ -360,7 +360,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_rename",
-    "Rename a file or folder on the Shared Drive. Changes only the name, not the location or content.",
+    "Rename a file or folder on the Shared Drive. Changes only the name — location and content are unchanged. Include the file extension when renaming files (e.g. 'new-name.pdf').",
     {
       file_id: z.string().describe("File or folder ID to rename"),
       new_name: z.string().describe("New name for the file/folder (include extension for files)"),

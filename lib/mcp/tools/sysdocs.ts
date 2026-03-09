@@ -18,7 +18,7 @@ export function registerSysdocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "sysdoc_list",
-    "List all system documentation with slug, title, type, and last updated time. Use slug to read full content.",
+    "List all system documentation entries with slug, title, type, and last updated timestamp. Use the slug with sysdoc_read to get full content. Key documents: 'session-context', 'platform-credentials', 'system-issues-to-fix', 'milestones'.",
     {},
     async () => {
       try {
@@ -46,7 +46,7 @@ export function registerSysdocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "sysdoc_read",
-    "Read the full content of a system document by slug. Slugs: 'milestones', 'system-issues-to-fix', 'platform-credentials'.",
+    "Read a system document by slug. Key documents: 'session-context' (current state + milestones — MUST read at start of every operational session), 'platform-credentials' (API keys + config), 'system-issues-to-fix' (known bugs), 'milestones' (roadmap). Returns full Markdown content.",
     {
       slug: z.string().describe("Document slug (e.g. 'milestones', 'system-issues-to-fix', 'platform-credentials')"),
     },
@@ -78,7 +78,7 @@ export function registerSysdocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "sysdoc_update",
-    "Update the content (or title) of an existing system document by slug. The updated_at timestamp is set automatically.",
+    "Update the content and/or title of an existing system document by slug. Only provided fields are changed. The updated_at timestamp is set automatically. Use sysdoc_read first to get current content before making changes.",
     {
       slug: z.string().describe("Document slug to update"),
       content: z.string().optional().describe("New full content (Markdown)"),

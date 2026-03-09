@@ -17,7 +17,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_inbox",
-    "Get messaging inbox overview: groups sorted by last message, with unread counts and last message preview. Filter by channel, unread status, or linked account.",
+    "Get the WhatsApp/Telegram inbox overview: groups sorted by last message, with unread counts and message preview. Use this to see what conversations need attention. Filter by channel, unread status, or linked CRM account.",
     {
       channel_id: z.string().uuid().optional().describe("Filter by messaging channel UUID"),
       unread_only: z.boolean().optional().default(false).describe("Only show groups with unread messages"),
@@ -63,7 +63,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_read_group",
-    "Read the full message thread for a specific messaging group. Returns messages in chronological order with sender info.",
+    "Read the full message thread for a WhatsApp or Telegram group by group_id. Returns messages in chronological order with sender info. Use msg_inbox first to find the group_id.",
     {
       group_id: z.string().uuid().describe("Messaging group UUID"),
       limit: z.number().optional().default(50).describe("Max messages (default 50, max 200)"),
@@ -112,7 +112,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_search",
-    "Search messages by text content, sender phone, or sender name. Returns matching messages with group context.",
+    "Search across all WhatsApp/Telegram messages by text content, sender phone, or sender name. Returns matching messages with group context. Use this to find specific conversations across all channels.",
     {
       text: z.string().optional().describe("Search in message content (case-insensitive)"),
       sender_phone: z.string().optional().describe("Filter by sender phone number (partial match)"),
@@ -156,7 +156,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_send",
-    "Send a message to a WhatsApp chat/group via the send-message Edge Function. Requires the external chat_id (e.g. 393480610794@c.us) and the message text.",
+    "Send a WhatsApp message to a chat or group. Requires the external chat_id (e.g. '393480610794@c.us'). Use msg_inbox or msg_read_group first to find the correct chat_id for the recipient.",
     {
       chat_id: z.string().describe("External chat ID (e.g. 393480610794@c.us for WhatsApp)"),
       message: z.string().describe("Message text to send"),
@@ -204,7 +204,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_mark_read",
-    "Mark messages as read (or other status). Can mark a single message, all messages in a group, or all new messages.",
+    "Mark messages as read, responded, or archived. Can target a single message by ID or all unread messages in a group. Use after reading or responding to conversations.",
     {
       message_id: z.string().uuid().optional().describe("Single message UUID to update"),
       group_id: z.string().uuid().optional().describe("Mark all new messages in this group as read"),
@@ -252,7 +252,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_list_channels",
-    "List all messaging channels (WhatsApp numbers, Telegram bots) with their status and group counts.",
+    "List all messaging channels (WhatsApp numbers, Telegram bots) with status, group counts, and total unread. Use this to see which channels are active and their overall activity.",
     {},
     async () => {
       try {

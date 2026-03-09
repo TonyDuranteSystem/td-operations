@@ -19,7 +19,7 @@ export function registerKnowledgeTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "kb_search",
-    "Search knowledge base across both knowledge_articles and approved_responses. Matches title, content, category, and tags. Use this BEFORE answering client questions to check if there's an approved response or business rule.",
+    "Search the knowledge base for business rules, pricing, banking info, and approved client response templates. Matches title, content, and tags. ALWAYS search here BEFORE answering client-facing questions to check for approved responses or established business rules. Covers knowledge_articles (35 rules) and approved_responses (66 templates).",
     {
       query: z.string().describe("Search text (matches title, content, tags — case-insensitive)"),
       source: z.enum(["all", "articles", "responses"]).optional().default("all").describe("Search in articles, responses, or both"),
@@ -75,7 +75,7 @@ export function registerKnowledgeTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "kb_get",
-    "Get the full content of a knowledge article or approved response by ID.",
+    "Get the full content of a knowledge article or approved response by UUID. Use after kb_search to retrieve complete details. For approved_responses, automatically increments the usage counter.",
     {
       id: z.string().uuid().describe("Article or response UUID"),
       source: z.enum(["article", "response"]).describe("Whether this is a knowledge_article or approved_response"),
@@ -119,7 +119,7 @@ export function registerKnowledgeTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "kb_create",
-    "Create a new knowledge article or approved response. For responses, include the reasoning behind the decision (Antonio Brain).",
+    "Create a new knowledge article or approved response template. Use this to codify new business rules or save approved client responses for future reuse. For responses, include reasoning in the 'notes' field (Antonio Brain learning).",
     {
       source: z.enum(["article", "response"]).describe("Create in knowledge_articles or approved_responses"),
       title: z.string().describe("Title/name"),
@@ -170,7 +170,7 @@ export function registerKnowledgeTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "kb_update",
-    "Update an existing knowledge article or approved response. Only provided fields are changed.",
+    "Update an existing knowledge article or approved response by UUID. Only provided fields are changed. Use kb_search first to find the record ID.",
     {
       id: z.string().uuid().describe("Record UUID"),
       source: z.enum(["article", "response"]).describe("Table to update"),

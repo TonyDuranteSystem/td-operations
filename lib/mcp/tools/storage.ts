@@ -79,7 +79,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_list ────────────────────────────────────────
   server.tool(
     "storage_list",
-    "List files and folders in Supabase Storage (td-operations bucket). Use path '' for root.",
+    "List files and folders in Supabase Storage (td-operations bucket). Use path '' for root. Shows folder names and file details (name, size, last updated). Use storage_read to read file content. Storage files are auto-mirrored to Google Drive.",
     {
       path: z
         .string()
@@ -159,7 +159,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_read ────────────────────────────────────────
   server.tool(
     "storage_read",
-    "Read/download a text file from Supabase Storage. Returns the file content as text. Works for .md, .txt, .json, .csv, .ts, .js, .html, .xml and similar text files.",
+    "Read a text file from Supabase Storage and return its content. Works for .md, .txt, .json, .csv, .ts, .js, .html, .xml. Truncates at 50KB. Use storage_list first to find the exact file path.",
     {
       path: z
         .string()
@@ -210,7 +210,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_write ───────────────────────────────────────
   server.tool(
     "storage_write",
-    "Upload or overwrite a text file in Supabase Storage. Creates parent folders automatically.",
+    "Write (create or overwrite) a text file in Supabase Storage. Creates parent folders automatically. Auto-detects MIME type from file extension. Files are automatically mirrored to Google Drive (My Drive > TD Operations/).",
     {
       path: z
         .string()
@@ -284,7 +284,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_delete ──────────────────────────────────────
   server.tool(
     "storage_delete",
-    "Delete one or more files from Supabase Storage.",
+    "Delete one or more files from Supabase Storage by path. Accepts an array of paths. Note: does NOT delete the Google Drive mirror copy — that must be removed separately if needed.",
     {
       paths: z
         .array(z.string())
@@ -323,7 +323,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_move ────────────────────────────────────────
   server.tool(
     "storage_move",
-    "Move or rename a file within Supabase Storage.",
+    "Move or rename a file within Supabase Storage. Provide the current full path and the new full path. Use this for reorganizing files or renaming them.",
     {
       from_path: z.string().describe("Current file path"),
       to_path: z.string().describe("New file path"),

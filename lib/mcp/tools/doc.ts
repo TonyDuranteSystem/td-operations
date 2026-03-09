@@ -212,7 +212,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_process_file",
-    "Process a single file from Google Drive: extract text (OCR if needed), classify document type, and store result in Supabase. Returns classification details.",
+    "Process a single Google Drive file: extracts text via OCR (docai_ocr_file), classifies document type and category using AI rules (classify_document), and stores the result in Supabase documents table. Returns document type, category, confidence score, and status. Provide account_id to link the document to a CRM client. For batch processing an entire folder, use doc_process_folder or doc_bulk_process instead.",
     {
       file_id: z.string().describe("Google Drive file ID"),
       account_id: z.string().uuid().optional().describe("Link document to this client account (UUID)"),
@@ -250,7 +250,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_process_folder",
-    "Batch process all supported files in a Google Drive folder. Extracts text, classifies, and stores each in Supabase. Skips already-processed files by default. Max 20 files per batch (60s timeout).",
+    "Batch-process all supported files in a single Google Drive folder (non-recursive). Extracts text, classifies, and stores each document in Supabase. Skips already-processed files by default. Max 20 files per call (60s timeout). Returns per-file results with success/fail counts. For recursive folder processing (subfolders), use doc_process_client. For auto-resolving a client's folder from CRM, use doc_bulk_process instead.",
     {
       folder_id: z.string().describe("Google Drive folder ID"),
       account_id: z.string().uuid().optional().describe("Link all documents to this client account (UUID)"),
@@ -361,7 +361,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_process_client",
-    "Process all documents in a client's Google Drive folder recursively (walks into subfolders 1-5). Extracts text, classifies, and stores each in Supabase. Automatically links to CRM account if account_id provided. Max 20 files per call (run again for remaining).",
+    "Recursively process all documents in a client's Google Drive folder tree (walks subfolders up to 5 levels deep). Extracts text, classifies, and stores each in Supabase. Links all documents to the CRM account if account_id provided. Max 20 files per call — run again for remaining. For a simpler approach that auto-resolves the Drive folder from CRM, use doc_bulk_process instead.",
     {
       folder_id: z.string().describe("Client's root Google Drive folder ID (parent of subfolders 1-5)"),
       account_id: z.string().uuid().optional().describe("CRM account UUID to link documents to"),
@@ -462,7 +462,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_search",
-    "Search processed documents by file name, document type, category, account, or status. Returns matching documents with classification details.",
+    "Search the processed documents table in Supabase by file name, document type, category, account, or processing status. Returns matching documents with type, category, confidence, account name, processing date, and Drive link. Categories: 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence. Use doc_get with the document ID to retrieve full details including OCR text.",
     {
       query: z.string().optional().describe("Search text (matches file_name or document_type_name, case-insensitive)"),
       category: z.number().optional().describe("Filter by category: 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence"),
@@ -522,7 +522,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_list",
-    "List processed documents for a specific account or category. Sorted by most recently processed.",
+    "List processed documents filtered by account, category, or status. Sorted by most recently processed first. Returns file name, document type, category, confidence, and account name. Use this to browse documents for a specific client or category without a search query. For text-based searching, use doc_search instead.",
     {
       account_id: z.string().uuid().optional().describe("Filter by client account UUID"),
       category: z.number().optional().describe("Filter by category: 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence"),
@@ -574,7 +574,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_get",
-    "Get full details of a processed document, including OCR extracted text. Lookup by document ID (UUID) or Drive file ID.",
+    "Get full details of a single processed document including OCR-extracted text, classification, confidence, account link, and Drive metadata. Lookup by document UUID (from doc_search or doc_list) or by Google Drive file ID. Use this to read the actual content of a processed document.",
     {
       id: z.string().optional().describe("Document UUID (from doc_search/doc_list)"),
       drive_file_id: z.string().optional().describe("Google Drive file ID"),
@@ -646,7 +646,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_stats",
-    "Get document processing statistics: counts by category, type, status. Optionally filter by account.",
+    "Get aggregate document processing statistics: total count, breakdown by category (Company/Contacts/Tax/Banking/Correspondence), top document types, and status distribution (classified/unclassified/error). Optionally filter by a specific account to see that client's document stats. Use this for reporting and overview — for individual documents, use doc_search or doc_list.",
     {
       account_id: z.string().uuid().optional().describe("Filter stats for a specific client account"),
     },
@@ -729,7 +729,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_map_folders",
-    "Link orphan documents (no account_id) to CRM accounts by matching their Drive parent folder to accounts.drive_folder_id. Walks up to 3 levels of parent folders to find a match.",
+    "Link orphan documents (missing account_id) to CRM accounts by matching their Google Drive parent folder against accounts.drive_folder_id. Walks up to 3 levels of parent folders to find a match. Use dry_run=true first to preview which documents would be linked. Run this after doc_process_folder or doc_mass_process to clean up unlinked documents.",
     {
       dry_run: z.boolean().optional().default(false).describe("If true, show matches without updating (default: false)"),
     },
@@ -872,7 +872,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_compliance_check",
-    "Check document compliance for a client: compares required documents (based on entity type) against actually processed documents. Returns a checklist with ✅/❌ and a compliance score.",
+    "Check document compliance for a specific client: compares required documents (based on entity type and state) against actually processed documents in Supabase. Returns a checklist with ✅ present / ❌ missing for each required document, plus a compliance score (0-100%). Accepts account_id or company_name. For a cross-account compliance overview, use doc_compliance_report instead.",
     {
       account_id: z.string().uuid().optional().describe("Account UUID (use this if you have it)"),
       company_name: z.string().optional().describe("Company name search (use this if you don't have the ID)"),
@@ -1000,7 +1000,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_bulk_process",
-    "Process all documents in a client's Drive folder, auto-resolved from their CRM account. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call. Use offset to resume after timeout.",
+    "Process all documents for a CRM client by account UUID — automatically resolves the client's Drive folder from accounts.drive_folder_id. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call. Use offset to resume from where a previous call left off. PREFERRED over doc_process_client when you have the account_id (no need to look up the folder ID manually).",
     {
       account_id: z.string().uuid().describe("CRM account UUID — folder is auto-resolved from accounts.drive_folder_id"),
       skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default: true). Set false to re-classify with updated rules."),
@@ -1115,7 +1115,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_compliance_report",
-    "Generate an aggregate compliance report across all active accounts. Shows which accounts are green/yellow/red, most common missing documents, and breakdown by entity type. Read-only — no processing or updates.",
+    "Generate an aggregate compliance report across all active CRM accounts. Shows each account's compliance score and health (green ≥80% / yellow ≥50% / red <50%), most commonly missing documents, and breakdown by entity type. Read-only — does not process files or update records. Filter by entity_type, state, or score range. For a single client's compliance, use doc_compliance_check instead.",
     {
       entity_type: z.string().optional().describe("Filter by entity type (e.g. 'Single Member LLC')"),
       state: z.string().optional().describe("Filter by state_of_formation"),
@@ -1289,7 +1289,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_mass_process",
-    "Mass-process documents across all active accounts with linked Drive folders. Processes accounts one by one in alphabetical order. Use after_account_id to resume from a previous run. Returns progress + next cursor.",
+    "Mass-process documents across ALL active CRM accounts that have linked Drive folders (accounts.drive_folder_id). Processes accounts one by one in alphabetical order, extracting, classifying, and storing documents. Cursor-based: use after_account_id to resume from a previous run's next_cursor. Default: 5 accounts per call. Returns per-account results and next cursor for continuation.",
     {
       after_account_id: z.string().uuid().optional().describe("Resume cursor — start after this account ID (from previous run's next_cursor)"),
       skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default true)"),
@@ -1478,7 +1478,7 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_update_health",
-    "Update accounts.client_health (green/yellow/red) based on document compliance scores. Use dry_run=true first to preview changes.",
+    "Batch-update accounts.client_health field (green/yellow/red) based on document compliance scores. Green ≥80% (configurable), yellow ≥50%, red <50%. Use dry_run=true first to preview which accounts would change. Run this after doc_mass_process or doc_compliance_report to sync health indicators with actual compliance data.",
     {
       dry_run: z.boolean().optional().default(true).describe("Preview changes without updating (default true)"),
       green_threshold: z.number().optional().default(80).describe("Score >= this = green (default 80)"),

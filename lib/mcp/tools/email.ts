@@ -58,7 +58,7 @@ export function registerEmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "email_send",
-    "Send a transactional email via Postmark from any @tonydurante.us address. Supports HTML body, CC/BCC, reply-to, and open/link tracking. Returns MessageID for tracking.",
+    "Send a transactional email via Postmark from any @tonydurante.us address. Supports HTML body, CC/BCC, reply-to, and open/click tracking. Returns MessageID for delivery tracking. Use email_get_delivery_status with the MessageID to check if delivered/opened/clicked. For Gmail inbox operations (search, read, draft), use gmail_* tools instead.",
     {
       from: z.string().optional().default("support@tonydurante.us").describe("Sender address (must be @tonydurante.us)"),
       to: z.string().describe("Recipient email address (or comma-separated for multiple)"),
@@ -141,7 +141,7 @@ export function registerEmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "email_send_with_template",
-    "Send an email using a Postmark template. Templates are pre-designed email layouts stored in Postmark. Pass template variables as key-value pairs.",
+    "Send an email using a pre-designed Postmark template (e.g. welcome, invoice-reminder). Pass template variables as key-value pairs. Returns MessageID. Use this instead of email_send when a matching template exists — ensures consistent branding.",
     {
       from: z.string().optional().default("support@tonydurante.us").describe("Sender address"),
       to: z.string().describe("Recipient email address"),
@@ -188,7 +188,7 @@ export function registerEmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "email_get_delivery_status",
-    "Check delivery status of a sent email. Shows if the email was delivered, opened, clicked, or bounced. Use the MessageID returned by email_send.",
+    "Check delivery status, opens, and clicks of a sent email by MessageID (returned by email_send or email_send_with_template). Returns: status (Sent/Processed/Queued), open count + first open time, click count. Use this to verify an email was received and read.",
     {
       message_id: z.string().describe("Postmark MessageID (UUID format, returned by email_send)"),
     },
@@ -238,7 +238,7 @@ export function registerEmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "email_search_activity",
-    "Search recent email activity. Find sent emails by recipient, subject, or tag. Shows delivery status, opens, and clicks for each message.",
+    "Search recent outbound email activity in Postmark. Filter by recipient, subject, or tag. Returns delivery status, opens, and clicks for each message. Use this to find previously sent emails or audit email activity. For inbox searching (received emails), use gmail_search instead.",
     {
       recipient: z.string().optional().describe("Filter by recipient email address"),
       tag: z.string().optional().describe("Filter by tag (e.g. 'invoice', 'onboarding')"),
@@ -306,7 +306,7 @@ export function registerEmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "email_get_stats",
-    "Get email delivery statistics overview. Shows sent, delivered, opened, clicked, bounced counts for a date range.",
+    "Get aggregate email delivery statistics: sent, delivered, opened, clicked, bounced, and spam complaint counts for a date range (default: last 30 days). Optionally filter by tag. Returns open rate and click rate percentages.",
     {
       tag: z.string().optional().describe("Filter stats by tag"),
       from_date: z.string().optional().describe("Start date (YYYY-MM-DD). Defaults to 30 days ago."),

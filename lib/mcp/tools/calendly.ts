@@ -112,7 +112,7 @@ export function registerCalendlyTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "cal_list_bookings",
-    "List scheduled Calendly events (bookings). Shows upcoming and past meetings with invitee details, status, and timing. Default: upcoming events from now.",
+    "List scheduled Calendly bookings (meetings). Default: upcoming events from now, sorted soonest first. Shows event name, date/time, duration, meeting link, invitee count, and event UUID. Use cal_get_event_details with the UUID for invitee details and booking form responses.",
     {
       status: z.enum(["active", "canceled"]).optional().default("active").describe("Filter by status: 'active' (default) or 'canceled'"),
       count: z.number().optional().default(20).describe("Max results (default 20, max 100)"),
@@ -195,7 +195,7 @@ export function registerCalendlyTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "cal_get_event_details",
-    "Get detailed information about a specific Calendly event, including invitee responses to booking form questions (name, email, reason, source, phone).",
+    "Get full details of a Calendly event by UUID (from cal_list_bookings). Returns date, time, location, join URL, cancellation info, and all invitee details including booking form responses (name, email, reason, source, phone). Use this to see WHO booked and WHY.",
     {
       event_uuid: z.string().describe("Event UUID (from cal_list_bookings output)"),
     },
@@ -283,7 +283,7 @@ export function registerCalendlyTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "cal_get_availability",
-    "List available event types (booking pages) for Antonio. Shows active scheduling links, duration, and description.",
+    "List active Calendly event types (booking pages) for Antonio. Returns scheduling URLs, durations, and descriptions. Use this to find the correct booking link to share with a client or to check which event types are currently active.",
     {},
     async () => {
       try {

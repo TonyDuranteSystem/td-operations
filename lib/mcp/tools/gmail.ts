@@ -229,7 +229,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_search",
-    "Search emails in a Gmail mailbox. Default: support@tonydurante.us. Use as_user to switch (e.g. 'antonio.durante@tonydurante.us'). Uses Gmail search syntax: from:, to:, subject:, has:attachment, is:unread, after:, before:, label:.",
+    "Search emails in Gmail. Default mailbox: support@tonydurante.us. Use as_user='antonio.durante@tonydurante.us' for Antonio's personal inbox. Supports Gmail search syntax: from:, to:, subject:, has:attachment, is:unread, after:YYYY/MM/DD, before:, label:, in:anywhere. Returns message IDs, subjects, senders, dates, and snippets. Use gmail_read with the message ID to get the full email body.",
     {
       query: z.string().describe("Gmail search query (e.g. 'from:client@example.com', 'subject:invoice is:unread', 'after:2026/01/01 has:attachment')"),
       max_results: z.number().optional().default(15).describe("Max results (default 15, max 50)"),
@@ -289,7 +289,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_read",
-    "Read the full content of an email by its message ID (from gmail_search results). Returns subject, from, to, date, and body text.",
+    "Read the full content of a single email by message ID (from gmail_search results). Returns subject, from, to, CC, date, labels, and decoded body text. Use gmail_read_thread instead if you need the entire conversation.",
     {
       message_id: z.string().describe("Gmail message ID (from gmail_search results)"),
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
@@ -336,7 +336,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_read_thread",
-    "Read an entire email thread (conversation) by thread ID. Shows all messages in chronological order.",
+    "Read an entire email thread (conversation) by thread ID (from gmail_search results). Returns all messages in chronological order with sender, date, and body text. Use this to see the full back-and-forth of a conversation.",
     {
       thread_id: z.string().describe("Gmail thread ID (from gmail_search results)"),
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
@@ -384,7 +384,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_draft",
-    "Create an email draft in a Gmail mailbox. Default: support@tonydurante.us. The draft can be reviewed and sent manually from Gmail. Does NOT send the email.",
+    "Create an email draft in Gmail (does NOT send). Default mailbox: support@tonydurante.us. The draft is saved and must be reviewed and sent manually from Gmail. Supports reply threading via reply_to_message_id. For immediate sending, use email_send (Postmark) instead.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -470,7 +470,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_labels",
-    "List all Gmail labels (folders/categories) for a Gmail mailbox. Default: support@tonydurante.us.",
+    "List all Gmail labels (folders and categories) with unread counts. Default mailbox: support@tonydurante.us. Shows system labels (INBOX, SENT, etc.) and custom labels with IDs. Use label IDs with gmail_search (e.g. 'label:MyLabel').",
     {
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
     },

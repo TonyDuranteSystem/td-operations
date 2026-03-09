@@ -19,7 +19,7 @@ export function registerSqlTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "execute_sql",
-    "Execute a raw SQL query on the Supabase PostgreSQL database. Supports SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER. Returns JSON array of rows for SELECT, or error details. Use for any operation not covered by dedicated CRM/doc/drive tools.",
+    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic.",
     {
       query: z.string().describe("SQL query to execute. For SELECT: returns rows as JSON array. For mutations: wrap in a CTE that returns affected rows, e.g. WITH updated AS (UPDATE ... RETURNING *) SELECT * FROM updated"),
     },

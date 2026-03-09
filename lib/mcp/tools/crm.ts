@@ -16,7 +16,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_accounts",
-    "Search client company accounts by name, state, status, or entity type. Returns account details including company name, EIN, state, formation date, services bundle, and client health.",
+    "Search CRM accounts by name, status, state, or entity type. Use this to find client companies. Returns account ID, company name, EIN, status (Active/Inactive/Lead/Prospect), entity type (LLC/Corporation/Individual/Partnership), state, and client health. For full client details, use crm_get_client_summary after finding the account.",
     {
       query: z.string().optional().describe("Search text (matches company name, case-insensitive)"),
       state: z.string().optional().describe("State of formation (e.g., Wyoming, Delaware, Florida, New Mexico)"),
@@ -56,7 +56,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_contacts",
-    "Search contacts by name, email, phone, or citizenship. Returns contact details including ITIN, passport status, language preference.",
+    "Search CRM contacts by name, email, or phone. Use this to find people associated with accounts. Returns contact ID, name, email, phone, ITIN, citizenship, passport status, and language preference. For full account context, use crm_get_client_summary after finding the linked account.",
     {
       query: z.string().optional().describe("Search text (matches name, email, or phone)"),
       citizenship: z.string().optional().describe("Citizenship filter"),
@@ -94,7 +94,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_payments",
-    "Search payments by status, account, currency, date range, or amount. Returns payment details with linked company name.",
+    "Search payment records by status, account, currency, date range, or amount. Returns payment ID, amount, date, type, status (paid/pending/overdue/cancelled), currency, and linked company name. Use this to check payment history or outstanding balances for a specific client.",
     {
       status: z.string().optional().describe("Payment status: paid, pending, overdue, cancelled, partial"),
       account_id: z.string().optional().describe("Filter by account UUID"),
@@ -153,7 +153,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_services",
-    "Search services by type, status, or account. Returns service details including progress (current_step/total_steps), SLA dates, and blocking status.",
+    "Search service delivery records by type, status, or account. Returns service ID, type (LLC Formation/ITIN/EIN/Tax Return/Registered Agent), status, progress (current_step/total_steps), SLA dates, and blocking status. Use this to check active services or blocked deliveries.",
     {
       service_type: z.string().optional().describe("Service type (e.g., LLC Formation, ITIN, Registered Agent, Tax Return, EIN)"),
       status: z.string().optional().describe("Service status"),
@@ -190,7 +190,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_tasks",
-    "Search tasks by status, priority, assignee, or category. Returns task details with linked company name.",
+    "Search tasks/tickets by status, priority, assignee, or category. Returns task ID, title, description, status (todo/in_progress/done/blocked), priority (urgente/normale/bassa), due date, assignee, and linked company name. Use this for task management and tracking work items.",
     {
       status: z.string().optional().describe("Task status (e.g., todo, in_progress, done, blocked)"),
       priority: z.string().optional().describe("Priority (urgente, normale, bassa)"),
@@ -229,7 +229,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_deals",
-    "Search deals/opportunities by stage, type, or account. Returns deal pipeline data.",
+    "Search deals/opportunities by stage, type, or account. Returns deal ID, name, stage, value, deal type, and linked company. Use this to check the sales pipeline or find deals for a specific client.",
     {
       stage: z.string().optional().describe("Deal stage"),
       deal_type: z.string().optional().describe("Deal type"),
@@ -264,7 +264,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_get_client_summary",
-    "Get a complete summary of a client: account details, contacts, services, payments, deals, and tasks. Use this for a full client overview.",
+    "Get a complete 360° view of a CRM account in one call: account details, contacts, services, payments, deals, tasks, and documents. Use this FIRST when asked about any specific client. Accepts account UUID or company name (fuzzy match). This is the primary tool for client-related questions — prefer it over individual search tools.",
     {
       account_id: z.string().optional().describe("Account UUID (use this if you have it)"),
       company_name: z.string().optional().describe("Company name search (use this if you don't have the ID)"),
@@ -372,7 +372,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_dashboard_stats",
-    "Get a complete operational snapshot of the business: account counts by status/type/state, service pipeline, payment totals (invoiced/paid/outstanding), document stats, and task overview. No parameters — returns everything.",
+    "Get CRM dashboard metrics for the entire business: account counts by status/type/state, service pipeline, payment totals (invoiced/paid/outstanding), document stats, deal pipeline, and task overview. Use this for reporting and overview questions. NOT for individual client queries — use crm_get_client_summary instead.",
     {},
     async () => {
       try {
@@ -531,10 +531,44 @@ export function registerCrmTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // crm_update_record — Update any CRM record by UUID
+  // ═══════════════════════════════════════
+  server.tool(
+    "crm_update_record",
+    "Update any CRM record (account, contact, service, payment, task, deal) by UUID. Provide the table name, record ID, and fields to update. Only specified fields are changed — all others remain untouched. Returns the updated record. Use crm_search_* or crm_get_client_summary FIRST to find the record ID.",
+    {
+      table: z.enum(["accounts", "contacts", "services", "payments", "tasks", "deals"]).describe("CRM table to update"),
+      id: z.string().uuid().describe("Record UUID to update (from crm_search_* or crm_get_client_summary)"),
+      updates: z.record(z.string(), z.any()).describe("Fields to update as key-value pairs (e.g. {status: 'Active', phone: '+1234567890'})"),
+    },
+    async ({ table, id, updates }) => {
+      try {
+        const { data, error } = await supabaseAdmin
+          .from(table)
+          .update({ ...updates, updated_at: new Date().toISOString() })
+          .eq("id", id)
+          .select("*")
+          .single()
+
+        if (error) throw error
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}`,
+          }],
+        }
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `❌ crm_update_record error: ${err.message}` }] }
+      }
+    }
+  )
+
   // ─── crm_sync_airtable ───────────────────────────────────────────────
   server.tool(
     "crm_sync_airtable",
-    "One-way sync from Supabase (source of truth) to Airtable. Pushes account data: company info, EIN, filing, address, status, dates, services, payments. Only updates accounts that have an airtable_id link.",
+    "Sync CRM data from Supabase to Airtable (one-way push). Updates accounts that have an airtable_id link. Use this when Airtable needs to reflect latest CRM changes. Supports dry_run mode to preview without writing.",
     {
       dry_run: z.boolean().optional().default(false).describe("If true, count records without actually updating Airtable"),
       limit: z.number().optional().default(0).describe("Max accounts to sync (0 = all)"),

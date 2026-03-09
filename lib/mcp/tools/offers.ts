@@ -17,7 +17,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_list",
-    "List client offers/proposals with optional filters. Returns token, client name, status, dates, payment type.",
+    "List client offers/proposals with optional filters by status (draft/sent/viewed/signed/completed/expired) and language. Returns token, client name, status, dates, payment type, and view count. Use offer_get with a token to see full offer details.",
     {
       status: z.string().optional().describe("Filter by status: draft, sent, viewed, signed, completed, expired"),
       language: z.enum(["en", "it"]).optional().describe("Filter by language"),
@@ -54,7 +54,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_get",
-    "Get complete offer details by token. Returns all fields including services, costs, intro text, payment links, and bank details.",
+    "Get complete offer details by token (e.g. 'mario-rossi-2026'). Returns all fields: services, cost summary, intro text, payment links, bank details, strategy, next steps, and signed contract status. Also returns the public URL (offerte.tonydurante.us/?t={token}).",
     {
       token: z.string().describe("Offer token (e.g. 'hamid-oumoumen-2026')"),
     },
@@ -97,7 +97,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_create",
-    "Create a new client offer in Supabase. The token must be unique (format: firstname-lastname-year). Returns the offer URL. IMPORTANT: Set language to match the client's language (en or it).",
+    "Create a new client offer/proposal in Supabase. Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Returns the public URL at offerte.tonydurante.us/?t={token}. Status starts as 'draft' — use offer_update to set status='sent' when ready.",
     {
       token: z.string().describe("Unique token (e.g. 'mario-rossi-2026')"),
       client_name: z.string().describe("Client full name"),
@@ -168,7 +168,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_update",
-    "Update one or more fields of an existing offer by token. Only provided fields are updated.",
+    "Update one or more fields of an existing offer by token. Only provided fields are changed — all others remain untouched. Common updates: status changes (draft→sent→signed), adding payment_links or bank_details, updating services or costs. Use offer_get first to review current values.",
     {
       token: z.string().describe("Offer token to update"),
       updates: z.record(z.string(), z.any()).describe("Object with fields to update (e.g. {status: 'sent', client_email: 'new@email.com'})"),

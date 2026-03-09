@@ -78,7 +78,7 @@ export function registerClassifyTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "classify_document",
-    "Classify a document from Google Drive. Automatically extracts text (via direct download or OCR) and runs 40+ classification rules to determine document type and category. Returns: document type, category (Company/Contacts/Tax/Banking/Correspondence), suggested folder, and confidence level.",
+    "Classify a Google Drive document by auto-extracting text (OCR or direct) and running 40+ rules. Returns document type (W-9, SS-4, Tax Return, etc.), category (Company/Contacts/Tax/Banking/Correspondence), suggested folder, and confidence. For the full pipeline (OCR + classify + store in Supabase), use doc_process_file instead.",
     {
       file_id: z.string().describe("Google Drive file ID to classify"),
     },
@@ -136,7 +136,7 @@ export function registerClassifyTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "classify_text",
-    "Classify a document from raw text content (no file download needed). Useful when you already have the text extracted. Pass the text as pages array or single string.",
+    "Classify a document from raw text content when you already have the text available. Runs the same 40+ classification rules as classify_document. No file download needed — useful when text was already extracted via OCR or other processing.",
     {
       text: z.string().describe("Document text content. For multi-page documents, separate pages with '\\n---PAGE---\\n'"),
       filename: z.string().optional().describe("Optional filename for fallback classification"),
@@ -188,7 +188,7 @@ export function registerClassifyTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "classify_list_rules",
-    "List all document classification rules with their patterns, categories, and scopes. Useful for understanding what document types can be detected and for debugging classification results.",
+    "List all 40+ document classification rules with their patterns, categories, and scopes. Use this to understand what document types can be automatically detected or to debug why a document was classified incorrectly.",
     {
       category: z.number().optional().describe("Filter by category (1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence)"),
     },

@@ -15,7 +15,7 @@ export function registerDocaiTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "docai_ocr_file",
-    "OCR a file from Google Drive using Google Document AI. Extracts text from PDFs and images (scanned documents, photos, etc.). Returns full text + per-page breakdown. Supports: PDF, TIFF, GIF, JPEG, PNG, BMP, WEBP. Max file size: 15MB.",
+    "Extract text from a PDF or image on Google Drive using Google Document AI OCR. Returns full text + per-page breakdown. Supports: PDF, TIFF, GIF, JPEG, PNG, BMP, WEBP. Max 15MB. Use this when you need raw text from scanned documents. For the full processing pipeline (OCR + classify + store), use doc_process_file instead.",
     {
       file_id: z.string().describe("Google Drive file ID of the document to OCR"),
       max_chars: z.number().optional().default(20000).describe("Maximum characters to return (default 20000). Full text is always processed; this limits the response."),

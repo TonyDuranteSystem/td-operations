@@ -16,7 +16,7 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_list_invoices",
-    "List invoices from QuickBooks. Optionally filter by customer name, status (Open/Paid/Overdue), or date range. Returns invoice number, customer, amount, balance, due date, and status.",
+    "List invoices from QuickBooks Online. Filter by customer name, status (Open/Paid/Overdue), or date range. Returns invoice number, customer, amount, balance due, due date, and status. Also shows aggregate totals. For CRM payment data, use crm_search_payments instead.",
     {
       customer_name: z.string().optional().describe("Filter by customer display name (partial match)"),
       status: z.enum(["Open", "Paid", "Overdue"]).optional().describe("Invoice status filter"),
@@ -104,7 +104,7 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_search_customers",
-    "Search QuickBooks customers by name, email, or company. Returns customer ID, display name, email, phone, balance, currency, and active status.",
+    "Search QuickBooks Online customers by name, email, or company. Returns customer ID, display name, email, phone, balance, currency, and active status. For CRM contacts, use crm_search_contacts instead — QuickBooks customers are for invoicing only.",
     {
       query: z.string().optional().describe("Search text (matches display name, company name, or email)"),
       active_only: z.boolean().optional().default(true).describe("Only return active customers (default true)"),
@@ -159,7 +159,7 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_list_payments",
-    "List payments received in QuickBooks. Optionally filter by customer name or date range. Returns payment amount, date, method, and linked invoice.",
+    "List payments received in QuickBooks Online. Filter by customer name or date range. Returns payment amount, date, method, memo, and unapplied amount. Also shows aggregate total received. For CRM payment records, use crm_search_payments instead.",
     {
       customer_name: z.string().optional().describe("Filter by customer name"),
       start_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
@@ -219,7 +219,7 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_get_company_info",
-    "Get QuickBooks company info and connection status. Returns company name, country, fiscal year, and token expiry status.",
+    "Get QuickBooks company info (name, country, fiscal year, email, phone) and OAuth2 connection health (access/refresh token expiry and remaining time). Use this to verify QuickBooks is connected before running other qb_* tools.",
     {},
     async () => {
       try {
@@ -278,7 +278,7 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_create_invoice",
-    "Create a new invoice in QuickBooks. Automatically finds or creates the customer. Returns the created invoice with ID and doc number.",
+    "Create a new invoice in QuickBooks Online. Automatically finds the customer by name or creates a new QB customer if not found. Provide line items with description, amount, and optional quantity. Returns the created invoice with ID, doc number, and total. Use qb_search_customers first to verify the customer name.",
     {
       customer_name: z.string().describe("Customer display name (exact match or will be created)"),
       customer_email: z.string().optional().describe("Customer email (used if creating new customer)"),
@@ -328,7 +328,7 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_token_status",
-    "Check the health of the QuickBooks OAuth2 connection. Returns access token and refresh token expiry times, and whether refresh is needed.",
+    "Check QuickBooks OAuth2 token health. Returns access token validity (minutes remaining), refresh token validity (days remaining), and warnings if refresh token is expiring soon. If status is 'disconnected', re-authorize at /api/qb/authorize.",
     {},
     async () => {
       try {
