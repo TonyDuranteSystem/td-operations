@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
+  MessageSquare,
   ClipboardList,
   FileText,
   Building2,
@@ -19,13 +20,14 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
 const navigation = [
+  { name: 'Inbox', href: '/inbox', icon: MessageSquare },
   { name: 'Task Board', href: '/tasks', icon: ClipboardList },
   { name: 'Tax Returns', href: '/tax-returns', icon: FileText },
   { name: 'Accounts', href: '/accounts', icon: Building2 },
   { name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
   { name: 'Services', href: '/services', icon: Cog },
   { name: 'Payments', href: '/payments', icon: CreditCard },
-  { name: 'Calendario', href: '/calendar', icon: Calendar },
+  { name: 'Calendar', href: '/calendar', icon: Calendar },
 ]
 
 export function Sidebar({ user }: { user: { email?: string } }) {

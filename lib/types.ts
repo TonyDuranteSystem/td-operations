@@ -171,3 +171,58 @@ export interface AccountListItem {
   service_count: number
   payment_overdue: number
 }
+
+// ─── Inbox Types ─────────────────────────────────────────
+
+export type InboxChannel = 'whatsapp' | 'telegram' | 'gmail'
+
+export interface InboxConversation {
+  id: string
+  channel: InboxChannel
+  name: string
+  preview: string
+  unread: number
+  lastMessageAt: string
+  accountId?: string | null
+  contactId?: string | null
+  // Gmail-specific
+  subject?: string
+}
+
+export interface InboxMessage {
+  id: string
+  direction: 'inbound' | 'outbound'
+  sender: string
+  content: string
+  type: string
+  status: string
+  createdAt: string
+  metadata?: Record<string, unknown>
+}
+
+export interface InboxStats {
+  whatsapp: number
+  telegram: number
+  gmail: number
+  total: number
+}
+
+export interface GmailThread {
+  id: string
+  subject: string
+  snippet: string
+  from: string
+  lastDate: string
+  unread: boolean
+  messageCount: number
+}
+
+export interface GmailMessageDetail {
+  id: string
+  from: string
+  to: string
+  subject: string
+  body: string
+  date: string
+  labelIds: string[]
+}
