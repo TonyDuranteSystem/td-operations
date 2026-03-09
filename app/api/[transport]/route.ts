@@ -8,7 +8,9 @@
  *   GET  /api/sse   — Legacy SSE transport
  *   POST /api/message — Legacy SSE message endpoint
  *
- * Auth: Bearer token in Authorization header (TD_MCP_API_KEY)
+ * Auth: Two modes supported:
+ *   1. Bearer token (TD_MCP_API_KEY) — for Claude Code / direct API access
+ *   2. OAuth 2.1 access token — for Claude.ai custom connector
  *
  * Tools registered:
  *   execute_sql — Raw SQL queries on Supabase PostgreSQL
@@ -84,8 +86,13 @@ const handler = createMcpHandler(
 )
 
 // ─── Auth Middleware ──────────────────────────────────────
-// Simple Bearer token check against TD_MCP_API_KEY env var.
-// All Claude clients send: Authorization: Bearer <key>
+// Supports two auth methods:
+// 1. Static Bearer token (TD_MCP_API_KEY) — Claude Code, direct API
+// 2. OAuth 2.1 access token — Claude.ai custom connector
+//
+// Priority: check static key first (fast), then OAuth token (DB lookup)
+
+import { validateAccessToken } from "@/lib/oauth"
 
 function withAuth(
   mcpHandler: (req: Request) => Promise<Response>
@@ -106,14 +113,30 @@ function withAuth(
     }
 
     const authHeader = req.headers.get("Authorization")
-    if (!authHeader || authHeader !== `Bearer ${apiKey}`) {
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify({ error: "Unauthorized", error_description: "Bearer token required" }),
         { status: 401, headers: { "Content-Type": "application/json" } }
       )
     }
 
-    return mcpHandler(req)
+    const token = authHeader.slice(7)
+
+    // Method 1: Static API key (Claude Code)
+    if (token === apiKey) {
+      return mcpHandler(req)
+    }
+
+    // Method 2: OAuth access token (Claude.ai)
+    const oauthResult = await validateAccessToken(token)
+    if (oauthResult.valid) {
+      return mcpHandler(req)
+    }
+
+    return new Response(
+      JSON.stringify({ error: "Unauthorized", error_description: "Invalid or expired token" }),
+      { status: 401, headers: { "Content-Type": "application/json" } }
+    )
   }
 }
 
