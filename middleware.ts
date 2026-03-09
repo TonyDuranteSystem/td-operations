@@ -46,6 +46,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/message') &&
     !request.nextUrl.pathname.startsWith('/api/sync-drive') &&
     !request.nextUrl.pathname.startsWith('/api/sync-airtable') &&
+    !request.nextUrl.pathname.startsWith('/api/sync-hubspot') &&
     !request.nextUrl.pathname.startsWith('/offer') &&
     !request.nextUrl.pathname.startsWith('/contract-template') &&
     !request.nextUrl.pathname.startsWith('/.well-known') &&

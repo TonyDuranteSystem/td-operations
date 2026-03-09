@@ -20,7 +20,7 @@ export const SERVICE_STATUS = [
 ] as const
 
 export const DEAL_STAGE = [
-  'Initial Consultation', 'Offer Sent', 'Negotiation', 'Agreement Signed', 'Closed Won', 'Closed Lost',
+  'Initial Consultation', 'Offer Sent', 'Negotiation', 'Agreement Signed', 'Paid', 'Closed Won', 'Closed Lost',
 ] as const
 
 export const LEAD_STATUS = [
