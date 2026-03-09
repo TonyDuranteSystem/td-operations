@@ -11,6 +11,7 @@
  * Auth: Bearer token in Authorization header (TD_MCP_API_KEY)
  *
  * Tools registered:
+ *   execute_sql — Raw SQL queries on Supabase PostgreSQL
  *   crm_*      — Supabase CRM queries (accounts, contacts, payments, services, deals, tasks)
  *   qb_*       — QuickBooks Online (invoices, customers, payments, company info)
  *   email_*    — Postmark transactional email (send, track opens/clicks, stats)
@@ -21,6 +22,10 @@
  *   cal_*      — Calendly (list bookings, event details, availability)
  *   doc_*      — Document Intelligence (process, search, list, stats)
  *   storage_*  — Supabase Storage (list, read, write, delete, move files)
+ *   msg_*      — Messaging Hub (inbox, groups, search, send, channels)
+ *   offer_*    — Client offers (create, get, update, list)
+ *   sysdoc_*   — System documentation (read, list, update)
+ *   kb_*       — Knowledge base (search, get, create, update articles & responses)
  *
  * Deploy: Vercel serverless function (Pro plan, 60s timeout)
  */
@@ -36,6 +41,11 @@ import { registerClassifyTools } from "@/lib/mcp/tools/classify"
 import { registerCalendlyTools } from "@/lib/mcp/tools/calendly"
 import { registerDocTools } from "@/lib/mcp/tools/doc"
 import { registerStorageTools } from "@/lib/mcp/tools/storage"
+import { registerSqlTools } from "@/lib/mcp/tools/sql"
+import { registerMessagingTools } from "@/lib/mcp/tools/messaging"
+import { registerOfferTools } from "@/lib/mcp/tools/offers"
+import { registerSysdocTools } from "@/lib/mcp/tools/sysdocs"
+import { registerKnowledgeTools } from "@/lib/mcp/tools/knowledge"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
 export const maxDuration = 60
@@ -54,6 +64,11 @@ const handler = createMcpHandler(
     registerCalendlyTools(server)
     registerDocTools(server)
     registerStorageTools(server)
+    registerSqlTools(server)
+    registerMessagingTools(server)
+    registerOfferTools(server)
+    registerSysdocTools(server)
+    registerKnowledgeTools(server)
   },
   {
     serverInfo: {
