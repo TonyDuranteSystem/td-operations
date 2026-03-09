@@ -2,7 +2,7 @@
 const nextConfig = {
   async rewrites() {
     return [
-      // Legacy td-offers URLs: offerte.tonydurante.us/?t=TOKEN → /offer/TOKEN
+      // Legacy td-offers URLs: offers domain /?t=TOKEN → /offer/TOKEN
       // These are handled by Vercel redirects in vercel.json
     ]
   },
