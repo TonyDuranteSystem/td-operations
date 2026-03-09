@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tony Durante LLC — Contract Signing</title>
+<script src="https://cdn.jsdelivr.net/npm/signature_pad@4.2.0/dist/signature_pad.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:wght@400;600;700&display=swap');
+  :root{--primary:#1a1a2e;--accent:#c8a45a;--text:#2d2d2d;--light:#f8f7f4;--border:#d4d0c8;--muted:#6b6b6b;--green:#2d8a4e;--red:#c0392b}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Source Serif 4',Georgia,serif;font-size:11pt;line-height:1.6;color:var(--text);background:#fff;max-width:8.5in;margin:0 auto;padding:40px 24px}
+
+  /* Loading */
+  .loading{text-align:center;padding:100px 20px}
+  .loading .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .error-box{max-width:500px;margin:80px auto;text-align:center;padding:40px;background:var(--light);border-radius:12px}
+  .error-box h2{color:var(--red);margin-bottom:12px}
+
+  /* Contract styles */
+  .contract-header{text-align:center;padding-bottom:20px;border-bottom:3px solid var(--primary);margin-bottom:28px}
+  .contract-header img{max-height:55px;margin-bottom:10px}
+  .contract-header h1{font-family:'Inter',sans-serif;font-size:18pt;font-weight:700;color:var(--primary);letter-spacing:1px;text-transform:uppercase;margin-bottom:2px}
+  .contract-header .subtitle{font-family:'Inter',sans-serif;font-size:10pt;color:var(--muted);font-weight:500}
+
+  .part-divider{text-align:center;margin:36px 0 24px}
+  .part-divider h2{font-family:'Inter',sans-serif;font-size:14pt;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:2px;padding:12px 0;border-top:3px solid var(--primary);border-bottom:1px solid var(--border)}
+
+  .key-terms{width:100%;border-collapse:collapse;margin:20px 0;font-size:10pt}
+  .key-terms caption{font-family:'Inter',sans-serif;font-weight:700;font-size:11pt;text-align:left;padding-bottom:6px;color:var(--primary)}
+  .key-terms th,.key-terms td{padding:8px 12px;text-align:left;border:1px solid var(--border)}
+  .key-terms th{background:var(--light);font-family:'Inter',sans-serif;font-weight:600;font-size:9.5pt;width:35%;color:var(--primary)}
+
+  .section{margin:24px 0}
+  .section h3{font-family:'Inter',sans-serif;font-size:11pt;font-weight:700;color:var(--primary);margin-bottom:8px;padding-bottom:3px;border-bottom:1px solid var(--border)}
+  .section p,.section li{margin-bottom:6px;text-align:justify;font-size:10.5pt}
+  .section ol,.section ul{margin-left:20px;margin-bottom:10px}
+  .subsection{margin:12px 0}
+  .subsection h4{font-family:'Inter',sans-serif;font-size:10pt;font-weight:600;color:var(--text);margin-bottom:4px}
+
+  /* Editable form fields */
+  .client-form{width:100%;border-collapse:collapse;margin:20px 0}
+  .client-form th,.client-form td{padding:6px 12px;text-align:left;border:1px solid var(--border);font-size:10pt}
+  .client-form th{background:var(--light);font-family:'Inter',sans-serif;font-weight:600;width:30%;color:var(--primary)}
+  .client-form input{width:100%;border:none;background:transparent;font-family:inherit;font-size:10pt;padding:4px 0;outline:none;color:var(--text)}
+  .client-form input:focus{background:#fffde8}
+  .client-form input::placeholder{color:var(--accent);font-style:italic}
+  .client-form .prefilled{color:var(--text);font-weight:500}
+  .client-form .required-field{background:#fff8f0}
+
+  /* Signature pad */
+  .sig-section{margin-top:40px;page-break-inside:avoid}
+  .sig-section h3{font-family:'Inter',sans-serif;font-size:11pt;font-weight:700;color:var(--primary);margin-bottom:16px;text-align:center}
+  .sig-grid{display:flex;gap:32px;flex-wrap:wrap}
+  .sig-block{flex:1;min-width:280px}
+  .sig-block .sig-label{font-family:'Inter',sans-serif;font-size:8.5pt;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:4px}
+  .sig-canvas-wrap{border:1px solid var(--border);border-radius:6px;background:#fafaf8;position:relative;margin-bottom:4px}
+  .sig-canvas-wrap canvas{width:100%;height:120px;display:block;border-radius:6px}
+  .sig-canvas-wrap .clear-btn{position:absolute;top:4px;right:4px;background:var(--light);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:8pt;cursor:pointer;color:var(--muted)}
+  .sig-canvas-wrap .clear-btn:hover{background:#fff;color:var(--red)}
+  .sig-field{font-size:8.5pt;color:var(--muted);margin-bottom:12px}
+  .sig-static{border-bottom:1px solid var(--text);padding:8px 0;min-height:40px;margin-bottom:4px}
+  .sig-static img{max-height:50px}
+  .sig-date{font-family:'Inter',sans-serif;font-size:9pt;color:var(--text);margin-top:4px}
+
+  /* Exhibit */
+  .exhibit-box{border:2px dashed var(--border);padding:30px;text-align:center;margin:20px 0;min-height:120px;background:var(--light);border-radius:4px;cursor:pointer;transition:border-color .2s}
+  .exhibit-box:hover{border-color:var(--accent)}
+  .exhibit-box p{color:var(--muted);font-style:italic;font-size:10pt}
+  .exhibit-box input[type=file]{display:none}
+  .exhibit-box .uploaded-name{color:var(--green);font-weight:600;font-style:normal}
+
+  /* Action buttons */
+  .action-bar{position:sticky;bottom:0;background:#fff;border-top:2px solid var(--primary);padding:16px 0;text-align:center;z-index:100;margin-top:40px}
+  .action-bar .btn{display:inline-block;padding:14px 40px;border:none;border-radius:8px;font-family:'Inter',sans-serif;font-size:13pt;font-weight:700;cursor:pointer;transition:all .2s}
+  .btn-sign{background:var(--green);color:#fff}
+  .btn-sign:hover{background:#246e3d}
+  .btn-sign:disabled{background:var(--border);color:var(--muted);cursor:not-allowed}
+  .action-bar .status-msg{font-size:10pt;color:var(--muted);margin-top:8px}
+  .action-bar .error-msg{font-size:10pt;color:var(--red);margin-top:8px}
+  .action-bar .success-msg{font-size:10pt;color:var(--green);margin-top:8px;font-weight:600}
+
+  /* Print/PDF */
+  @media print{
+    .action-bar,.clear-btn,.exhibit-box input{display:none!important}
+    body{padding:0;max-width:none}
+    .sig-canvas-wrap{border:none;background:transparent}
+  }
+  .text-center{text-align:center}
+  .text-muted{color:var(--muted)}
+  .text-small{font-size:8.5pt}
+  @media(max-width:600px){body{padding:20px 12px}.sig-grid{flex-direction:column}.action-bar .btn{width:100%;padding:16px}}
+
+  /* Hide contract body initially */
+  #contract-body{display:none}
+
+  /* Field validation */
+  .client-form .field-invalid{background:#fef2f2!important}
+  .client-form .field-invalid input{color:var(--red)}
+  .field-hint{font-size:8pt;color:var(--muted);margin-top:2px;font-style:italic;display:none}
+  .field-invalid .field-hint{display:block;color:var(--red)}
+
+  /* Success state after signing */
+  .success-panel{max-width:540px;margin:60px auto;text-align:center;padding:48px 32px;background:var(--light);border-radius:16px;border:2px solid var(--green)}
+  .success-panel .success-icon{font-size:48pt;margin-bottom:16px}
+  .success-panel h2{font-family:'Inter',sans-serif;color:var(--green);font-size:20pt;margin-bottom:8px}
+  .success-panel p{color:var(--muted);font-size:11pt;margin-bottom:20px}
+  .bank-details-box{background:#fff;border:1px solid var(--border);border-radius:12px;padding:24px;text-align:left;margin:24px 0}
+  .bank-details-box h3{font-family:'Inter',sans-serif;font-size:11pt;color:var(--primary);margin-bottom:16px;text-align:center;text-transform:uppercase;letter-spacing:1px}
+  .bank-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee;font-size:10.5pt}
+  .bank-row:last-child{border-bottom:none}
+  .bank-row .label{color:var(--muted)}
+  .bank-row .value{font-weight:600;font-family:'Inter',monospace;letter-spacing:.5px}
+  .bank-amount{text-align:center;font-size:18pt;font-weight:700;color:var(--primary);margin:16px 0 4px}
+  .bank-ref{text-align:center;font-size:9pt;color:var(--muted);margin-bottom:12px}
+  .success-link{display:inline-block;margin-top:20px;padding:12px 32px;background:var(--primary);color:#fff;text-decoration:none;border-radius:8px;font-family:'Inter',sans-serif;font-weight:600;font-size:10.5pt}
+  .success-link:hover{opacity:.9}
+</style>
+</head>
+<body>
+
+<div id="loading-state" class="loading">
+  <div class="spinner"></div>
+  <p>Caricamento contratto...</p>
+</div>
+
+<div id="error-state" class="error-box" style="display:none">
+  <h2>Errore</h2>
+  <p id="error-msg">Contratto non trovato.</p>
+</div>
+
+<div id="success-state" style="display:none"></div>
+
+<div id="contract-body">
+
+<!-- HEADER -->
+<div class="contract-header">
+  <img src="https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/tony-logos.jpg" alt="Tony Durante LLC">
+  <h1>Master Service Agreement</h1>
+  <div class="subtitle">& Statement of Work</div>
+</div>
+
+<!-- PART 1 — MSA -->
+<div class="part-divider"><h2>Part 1 — Master Service Agreement</h2></div>
+
+<p>This Master Service Agreement ("<strong>Agreement</strong>" or "<strong>MSA</strong>") is entered into as of
+<strong id="v-effective-date"></strong> ("<strong>Effective Date</strong>"), by and between:</p>
+<p style="margin:14px 0"><strong>Tony Durante LLC</strong>, a Florida limited liability company, with principal offices in Largo, Florida ("<strong>Consulting Firm</strong>"), and</p>
+<p style="margin:14px 0">the individual or entity identified below ("<strong>Client</strong>").</p>
+<p>Collectively referred to as the "<strong>Parties</strong>" and individually as a "<strong>Party</strong>".</p>
+
+<!-- KEY TERMS -->
+<table class="key-terms">
+  <caption>Key Terms Summary</caption>
+  <tr><th>Contract Year</th><td id="v-contract-year"></td></tr>
+  <tr><th>LLC Type</th><td id="v-llc-type"></td></tr>
+  <tr><th>Annual Service Fee</th><td id="v-annual-fee"></td></tr>
+  <tr><th>Payment Schedule</th><td id="v-installments"></td></tr>
+  <tr><th>Late Onboarding</th><td>Clients onboarding after January 1 shall pay the full Annual Service Fee for the initial Contract Year, regardless of start date. The fee will not be prorated.</td></tr>
+  <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
+</table>
+
+<!-- CLIENT INFO FORM -->
+<table class="client-form" id="client-form">
+  <caption style="font-family:'Inter',sans-serif;font-weight:700;font-size:11pt;text-align:left;padding-bottom:6px;color:var(--primary)">Client Information</caption>
+  <tr><th>Full Legal Name</th><td><input type="text" id="f-name" placeholder="Enter your full legal name" required></td></tr>
+  <tr><th>Residential Address</th><td><input type="text" id="f-address" placeholder="Street address" required class="required-field"></td></tr>
+  <tr><th>City</th><td><input type="text" id="f-city" placeholder="City" required class="required-field"></td></tr>
+  <tr><th>State / Province</th><td><input type="text" id="f-state" placeholder="State or province" class="required-field"></td></tr>
+  <tr><th>ZIP / Postal Code</th><td class="zip-cell"><input type="text" id="f-zip" placeholder="ZIP or postal code" class="required-field" inputmode="numeric"><div class="field-hint" id="hint-zip">Numbers only (e.g. 33771)</div></td></tr>
+  <tr><th>Country</th><td><input type="text" id="f-country" placeholder="Country" required class="required-field"></td></tr>
+  <tr><th>Email Address</th><td><input type="email" id="f-email" placeholder="Email address" required></td></tr>
+  <tr><th>Phone Number</th><td class="phone-cell"><input type="tel" id="f-phone" placeholder="+1 234 567 8900" required class="required-field"><div class="field-hint" id="hint-phone">Must start with + country code (e.g. +1, +39, +44)</div></td></tr>
+  <tr><th>Nationality</th><td><input type="text" id="f-nationality" placeholder="Nationality" required class="required-field"></td></tr>
+  <tr><th>Passport Number</th><td><input type="text" id="f-passport" placeholder="Passport number" required class="required-field"></td></tr>
+  <tr><th>Passport Expiration</th><td><input type="text" id="f-passport-exp" placeholder="MM/YYYY" required class="required-field"></td></tr>
+</table>
+
+<!-- SECTIONS 1-24 (legal text) -->
+<div id="legal-sections">
+
+<div class="section"><h3>1. Purpose &amp; Structure</h3>
+<p>The Consulting Firm provides professional consulting services related to the formation, management, and ongoing compliance of U.S. Limited Liability Companies ("LLCs") for international entrepreneurs and foreign nationals.</p>
+<p>This MSA governs the general terms and conditions of the business relationship between the Parties. Specific services, deliverables, and fees are set forth in one or more Statements of Work ("SOW") attached hereto and incorporated by reference.</p></div>
+
+<div class="section"><h3>2. Scope of Services</h3>
+<p>The Consulting Firm shall provide the services described in the applicable SOW, which may include but are not limited to:</p>
+<ul><li>LLC formation and state registration</li><li>EIN (Employer Identification Number) application with the IRS</li><li>Registered Agent services</li><li>Business bank account and payment processor setup assistance</li><li>Annual report filing and state compliance</li><li>Mail handling and forwarding from the U.S. business address</li><li>Ongoing administrative and operational support</li></ul>
+<p>Any services not explicitly listed in the SOW are outside the scope of this Agreement and may be subject to additional fees.</p></div>
+
+<div class="section"><h3>3. Client Responsibilities</h3>
+<p>The Client agrees to:</p>
+<ol type="a"><li>Provide accurate, complete, and truthful information as required for LLC formation and ongoing services;</li><li>Respond to requests for information or documentation within five (5) business days;</li><li>Comply with all applicable U.S. federal, state, and local laws, as well as any laws of the Client's country of residence;</li><li>Maintain valid identification documents (passport) throughout the duration of this Agreement;</li><li>Notify the Consulting Firm promptly of any material changes in personal information, contact details, or business structure;</li><li>Not use the LLC or any services provided for illegal, fraudulent, or unethical purposes.</li></ol>
+<p>Failure to meet these responsibilities may result in delays, additional fees, or termination of this Agreement at the Consulting Firm's sole discretion.</p></div>
+
+<div class="section"><h3>4. Communication &amp; Business Hours</h3>
+<div class="subsection"><h4>4.1 Business Hours</h4>
+<p>The Consulting Firm operates <strong>Monday through Friday, 8:00 AM to 3:00 PM Eastern Time (ET)</strong>, excluding U.S. federal holidays ("Business Hours"). Client communications received outside of Business Hours will be addressed on the next business day. The Consulting Firm is not obligated to respond to any communication outside of Business Hours, and any urgency indicated by the Client outside such hours shall not constitute a breach of this Agreement.</p></div>
+<div class="subsection"><h4>4.2 Communication Channels</h4>
+<p>Official communications between the Parties shall be conducted via the following approved channels:</p>
+<ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>WhatsApp:</strong> For quick operational questions and updates</li><li><strong>Telegram:</strong> For quick operational questions and updates</li></ul>
+<p>The Consulting Firm shall use reasonable efforts to respond to Client communications within <strong>two (2) business days</strong>.</p></div>
+<div class="subsection"><h4>4.3 Scheduled Calls</h4>
+<p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong> for matters that cannot be adequately addressed via written communication. Calls must be scheduled in advance during Business Hours.</p>
+<p>Should the Client request a call for matters that can be resolved via written communication, or request calls exceeding reasonable frequency, a fee of <strong>$197.00 per call</strong> shall apply. The Consulting Firm reserves the right to determine, at its sole discretion, whether a call is necessary.</p></div></div>
+
+<div class="section"><h3>5. Fees &amp; Payment</h3>
+<div class="subsection"><h4>5.1 Annual Service Fee</h4><p>The Client shall pay the Annual Service Fee as specified in the Key Terms Summary and the applicable SOW. The fee covers all services described in the SOW for the applicable Contract Year (January 1 through December 31).</p></div>
+<div class="subsection"><h4>5.2 Payment Methods</h4><p>Payments may be made via:</p><ul><li><strong>Credit or debit card</strong> through the Consulting Firm's secure online checkout system;</li><li><strong>Bank wire transfer</strong> to the Consulting Firm's designated bank account.</li></ul><p>Payment instructions and links will be provided by the Consulting Firm at the time of invoicing.</p></div>
+<div class="subsection"><h4>5.3 Payment Schedule</h4><p>The payment schedule shall be as specified in the Key Terms Summary. If payment is to be made in installments, all installment dates and amounts will be detailed in the SOW.</p></div>
+<div class="subsection"><h4>5.4 Late Payment</h4><p>If any payment is not received within <strong>fifteen (15) days</strong> of its due date, a late fee of <strong>1.5% per month</strong> (or the maximum permitted by applicable law, whichever is less) shall accrue on the unpaid balance from the original due date until paid in full.</p><p>The Consulting Firm reserves the right to <strong>suspend all Services</strong> if payment remains outstanding for more than <strong>thirty (30) days</strong> past the due date, without such suspension constituting a breach of this Agreement. Services shall resume within five (5) business days of receipt of all outstanding payments and accrued late fees.</p></div>
+<div class="subsection"><h4>5.5 Refund Policy</h4><p><strong>All fees paid under this Agreement are non-refundable.</strong> No refund shall be issued under any circumstances, including but not limited to early termination, cancellation by the Client, or dissatisfaction with the Services. The Client acknowledges and agrees to this no-refund policy prior to making any payment.</p></div>
+<div class="subsection"><h4>5.6 Additional Fees</h4><p>Services not included in the SOW, government filing fees, third-party costs, and expedited processing requests may incur additional charges. The Client will be notified in advance of any additional fees before they are incurred.</p></div></div>
+
+<div class="section"><h3>6. Third-Party Providers</h3><p>The Consulting Firm may engage third-party service providers to assist in the delivery of certain Services, including but not limited to registered agent services, tax preparation, banking partners, and payment processors. The Consulting Firm shall exercise reasonable care in selecting such providers but shall not be liable for the acts, omissions, or failures of any third-party provider.</p><p>Any fees charged by third-party providers are separate from the Annual Service Fee unless explicitly stated otherwise in the SOW.</p></div>
+
+<div class="section"><h3>7. Mail Handling &amp; Forwarding</h3><p>The Consulting Firm shall receive, scan, and forward mail addressed to the Client's LLC at the U.S. registered business address. Mail will be processed during Business Hours and forwarded digitally via email within two (2) business days of receipt.</p><p>Physical mail forwarding, if requested, shall be subject to actual shipping costs plus a handling fee as determined by the Consulting Firm.</p></div>
+
+<div class="section"><h3>8. Confidentiality</h3><p>Each Party agrees to maintain the confidentiality of all proprietary, financial, and personal information disclosed by the other Party in connection with this Agreement ("Confidential Information"). Neither Party shall disclose, reproduce, or use Confidential Information for any purpose other than the performance of obligations under this Agreement, except:</p><ol type="a"><li>With the prior written consent of the disclosing Party;</li><li>As required by applicable law, regulation, or court order;</li><li>To the extent necessary to engage third-party providers as described in Section 6.</li></ol><p>This confidentiality obligation shall survive the termination or expiration of this Agreement for a period of three (3) years.</p></div>
+
+<div class="section"><h3>9. Data Protection &amp; Privacy</h3><p>The Consulting Firm shall process the Client's personal data solely for the purpose of performing the Services under this Agreement. Personal documents, including but not limited to passport copies and identification documents, shall be stored securely using industry-standard encryption and access controls.</p><p>Personal data shall be retained only for the duration required to perform the Services and comply with applicable legal and regulatory obligations (including but not limited to IRS record-keeping requirements).</p><p>For Clients who are residents of the European Union or the European Economic Area, the processing of personal data is based on contractual necessity under Article 6(1)(b) of the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Such Clients have the right to request access to, correction of, or deletion of their personal data, subject to the Consulting Firm's legal retention obligations.</p></div>
+
+<div class="section"><h3>10. Tax Return Preparation</h3><p>If tax return preparation is included in the applicable SOW, the Consulting Firm shall arrange for the preparation and filing of the LLC's annual U.S. tax return through a qualified third-party tax professional.</p><p>The Client is solely responsible for providing accurate and complete financial records in a timely manner. The Consulting Firm shall not be held liable for penalties, interest, or additional taxes resulting from inaccurate, incomplete, or late information provided by the Client.</p><p>Tax advisory services, personal tax returns, and tax planning are not included unless explicitly stated in the SOW.</p></div>
+
+<div class="section"><h3>11. Contract Year &amp; Renewal</h3><p>The Contract Year runs from <strong>January 1 through December 31</strong> of each calendar year, regardless of the Effective Date of this Agreement.</p><p>This Agreement shall <strong>automatically renew</strong> on January 1 of each subsequent year for additional one-year terms under the same terms and conditions, unless either Party provides written notice of non-renewal no later than <strong>November 1</strong> of the current Contract Year.</p><p>Upon renewal, the Consulting Firm reserves the right to adjust the Annual Service Fee. The Client will be notified of any fee adjustment no later than November 15 of the current Contract Year. If the Client does not agree to the adjusted fee, the Client may decline renewal by providing written notice within fifteen (15) days of receiving the fee adjustment notification.</p><p>Clients onboarding after January 1 of a given Contract Year shall pay the full Annual Service Fee for that initial year. The fee shall not be prorated.</p></div>
+
+<div class="section"><h3>12. Termination</h3>
+<div class="subsection"><h4>12.1 Termination by Client</h4><p>The Client may terminate this Agreement by providing written notice to the Consulting Firm. Termination shall be effective thirty (30) days after receipt of such notice. No refund of fees paid shall be issued upon termination.</p></div>
+<div class="subsection"><h4>12.2 Termination by Consulting Firm</h4><p>The Consulting Firm may terminate this Agreement immediately upon written notice if:</p><ol type="a"><li>The Client breaches any material term of this Agreement and fails to cure such breach within fifteen (15) days of written notice;</li><li>The Client fails to make payment for more than thirty (30) days past the due date;</li><li>The Client engages in illegal, fraudulent, or unethical conduct;</li><li>The Client violates the Client Conduct provisions set forth in Section 13.</li></ol></div>
+<div class="subsection"><h4>12.3 Effect of Termination</h4><p>Upon termination, the Consulting Firm shall cease all Services. The Client shall remain liable for all fees accrued prior to the effective date of termination. Sections 5.5 (Refund Policy), 8 (Confidentiality), 9 (Data Protection), 15 (Limitation of Liability), 16 (Force Majeure), 17 (Indemnification), and 20 (Governing Law) shall survive termination.</p></div></div>
+
+<div class="section"><h3>13. Client Conduct</h3><p>The Client shall conduct all interactions with the Consulting Firm and its staff in a professional and respectful manner. The Consulting Firm reserves the right to terminate this Agreement immediately, without refund, if the Client:</p><ol type="a"><li>Engages in abusive, threatening, or harassing behavior toward the Consulting Firm or its staff;</li><li>Makes repeated unreasonable demands outside the scope of this Agreement;</li><li>Provides false or misleading information;</li><li>Uses the LLC or related services for any illegal purpose.</li></ol></div>
+
+<div class="section"><h3>14. Intellectual Property</h3><p>All templates, processes, methodologies, and systems developed or used by the Consulting Firm remain the exclusive intellectual property of Tony Durante LLC. The Client is granted a limited, non-transferable license to use any deliverables provided solely for the operation of the Client's LLC.</p></div>
+
+<div class="section"><h3>15. Limitation of Liability</h3><p style="text-transform:uppercase;font-size:9.5pt">To the maximum extent permitted by applicable law, the Consulting Firm's total liability arising out of or in connection with this Agreement shall not exceed the total fees paid by the Client under this Agreement during the twelve (12) months preceding the event giving rise to the claim.</p><p style="text-transform:uppercase;font-size:9.5pt">In no event shall the Consulting Firm be liable for any indirect, incidental, special, consequential, or punitive damages, including but not limited to loss of profits, business opportunities, or data, regardless of whether such damages were foreseeable or whether the Consulting Firm was advised of the possibility of such damages.</p></div>
+
+<div class="section"><h3>16. Force Majeure</h3><p>Neither Party shall be liable for any failure or delay in the performance of its obligations under this Agreement if such failure or delay results from circumstances beyond the reasonable control of the affected Party, including but not limited to acts of God, natural disasters, pandemics, government actions or restrictions, war, terrorism, labor disputes, power failures, internet disruptions, or failures of third-party service providers.</p></div>
+
+<div class="section"><h3>17. Indemnification</h3><p>The Client shall indemnify, defend, and hold harmless the Consulting Firm, its members, managers, employees, and agents from and against any and all claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or related to:</p><ol type="a"><li>The Client's breach of this Agreement;</li><li>The Client's violation of any applicable law or regulation;</li><li>Any inaccurate, incomplete, or misleading information provided by the Client;</li><li>The Client's use of the LLC for any unlawful purpose;</li><li>Any third-party claim arising from the Client's business activities.</li></ol></div>
+
+<div class="section"><h3>18. Assignment</h3><p>The Client may not assign, transfer, or delegate this Agreement or any rights or obligations hereunder without the prior written consent of the Consulting Firm. The Consulting Firm may assign this Agreement to any successor entity or affiliate without the Client's consent.</p></div>
+
+<div class="section"><h3>19. Independent Contractor</h3><p>The Consulting Firm is an independent contractor and nothing in this Agreement shall be construed to create an employment, partnership, joint venture, or agency relationship between the Parties. Neither Party has the authority to bind the other or incur obligations on the other's behalf.</p></div>
+
+<div class="section"><h3>20. Governing Law &amp; Dispute Resolution</h3>
+<div class="subsection"><h4>20.1 Governing Law</h4><p>This Agreement shall be governed by and construed in accordance with the laws of the <strong>State of Florida</strong>, United States of America, without regard to its conflict of law provisions.</p></div>
+<div class="subsection"><h4>20.2 Dispute Resolution</h4><p>Any dispute, controversy, or claim arising out of or relating to this Agreement, or the breach, termination, or validity thereof, shall be resolved as follows:</p><ol type="a"><li><strong>Mediation:</strong> The Parties shall first attempt to resolve any dispute through good-faith mediation administered by a mutually agreed-upon mediator in <strong>Pinellas County, Florida</strong>.</li><li><strong>Binding Arbitration:</strong> If mediation fails to resolve the dispute within thirty (30) days, the dispute shall be submitted to binding arbitration in <strong>Pinellas County, Florida</strong>, under the rules of the <strong>American Arbitration Association</strong> (AAA). The arbitrator's decision shall be final and binding on both Parties.</li><li><strong>Attorneys' Fees:</strong> The prevailing Party in any arbitration or legal proceeding shall be entitled to recover reasonable attorneys' fees and costs from the non-prevailing Party.</li></ol></div></div>
+
+<div class="section"><h3>21. Electronic Signatures</h3><p>The Parties agree that this Agreement and any amendments hereto may be executed by electronic signature, which shall be considered as valid and binding as an original handwritten signature. Each Party consents to the use of electronic signatures and agrees that electronic signatures on this Agreement are enforceable under the <strong>U.S. Electronic Signatures in Global and National Commerce (ESIGN) Act</strong> (15 U.S.C. &sect; 7001 et seq.) and the <strong>Uniform Electronic Transactions Act (UETA)</strong> as adopted by the State of Florida (Fla. Stat. &sect; 668.50).</p></div>
+
+<div class="section"><h3>22. Entire Agreement</h3><p>This Agreement, together with all SOWs and exhibits attached hereto, constitutes the entire agreement between the Parties and supersedes all prior and contemporaneous agreements, representations, warranties, and understandings, whether written or oral, relating to the subject matter hereof.</p><p>No amendment or modification of this Agreement shall be effective unless made in writing and signed by both Parties.</p></div>
+
+<div class="section"><h3>23. Notices</h3><p>All formal notices, requests, demands, and other communications required or permitted under this Agreement shall be in writing and shall be deemed duly given when:</p><ol type="a"><li>Sent via email to the addresses specified below, with confirmation of receipt; or</li><li>Sent by certified mail, return receipt requested, to the physical addresses specified below.</li></ol><p style="margin-top:10px"><strong>Communications via WhatsApp or Telegram do not constitute formal legal notice</strong> under this Agreement.</p>
+<table class="key-terms" style="margin-top:12px"><tr><th>Consulting Firm</th><td>Tony Durante LLC<br>10225 Ulmerton Road, Suite 3D<br>Largo, FL 33771<br>Email: support@tonydurante.us</td></tr><tr><th>Client</th><td id="v-client-notice"></td></tr></table></div>
+
+<div class="section"><h3>24. Severability</h3><p>If any provision of this Agreement is held to be invalid, illegal, or unenforceable by a court of competent jurisdiction, such provision shall be modified to the minimum extent necessary to make it valid and enforceable, or if modification is not possible, shall be severed from this Agreement. The remaining provisions shall continue in full force and effect.</p></div>
+
+</div><!-- end legal-sections -->
+
+<!-- EXHIBIT A -->
+<div class="section" style="margin-top:36px">
+  <h3>Exhibit A &mdash; Client Identification</h3>
+  <p>The Client shall provide a clear, legible copy of a valid government-issued passport.</p>
+  <div class="exhibit-box" id="passport-upload" onclick="document.getElementById('passport-file').click()">
+    <input type="file" id="passport-file" accept="image/*,.pdf">
+    <p id="passport-label">Click to upload your passport copy</p>
+  </div>
+</div>
+
+<!-- MSA SIGNATURES -->
+<div class="sig-section">
+  <h3>Master Service Agreement &mdash; Signatures</h3>
+  <p class="text-center text-muted" style="margin-bottom:16px;font-size:9.5pt">By signing below, the Parties acknowledge that they have read, understood, and agree to be bound by the terms and conditions of this Master Service Agreement.</p>
+  <div class="sig-grid">
+    <div class="sig-block">
+      <div class="sig-label">Consulting Firm</div>
+      <div class="sig-static"><img src="https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/tony-logos.jpg" alt="Tony Durante" style="max-height:40px;opacity:.8"></div>
+      <div class="sig-field">Name: Tony Durante</div>
+      <div class="sig-field">Title: Managing Member</div>
+      <div class="sig-date">Date: <span id="v-sign-date-msa-firm"></span></div>
+    </div>
+    <div class="sig-block">
+      <div class="sig-label">Client</div>
+      <div class="sig-canvas-wrap"><canvas id="sig-msa"></canvas><button class="clear-btn" onclick="clearSig('msa')">Clear</button></div>
+      <div class="sig-field">Name: <span id="v-sig-name-msa"></span></div>
+      <div class="sig-date">Date: <span id="v-sign-date-msa"></span></div>
+    </div>
+  </div>
+</div>
+
+<!-- PART 2 — SOW -->
+<div class="part-divider" style="margin-top:48px"><h2>Part 2 — Statement of Work</h2></div>
+
+<p>This Statement of Work ("SOW") is entered into pursuant to the Master Service Agreement dated <strong id="v-effective-date-sow"></strong> between Tony Durante LLC ("Consulting Firm") and <strong id="v-client-name-sow"></strong> ("Client").</p>
+
+<table class="key-terms" style="margin-top:20px">
+  <caption>SOW Details</caption>
+  <tr><th>Contract Year</th><td id="v-contract-year-sow"></td></tr>
+  <tr><th>LLC Type</th><td id="v-llc-type-sow"></td></tr>
+  <tr><th>Annual Service Fee</th><td id="v-annual-fee-sow"></td></tr>
+</table>
+
+<div class="section"><h3>Included Services</h3>
+<p>The following services are included in the Annual Service Fee:</p>
+<div id="v-services-list"></div></div>
+
+<div class="section"><h3>Estimated Timeline</h3>
+<table class="key-terms"><tr><th>LLC Formation</th><td>2-4 weeks (state processing)</td></tr><tr><th>EIN Issuance</th><td>1-6 weeks (IRS processing)</td></tr><tr><th>Bank Account</th><td>2-6 weeks (bank approval)</td></tr><tr><th>Full Setup</th><td>4-10 weeks from onboarding</td></tr></table>
+<p style="margin-top:10px"><strong>Disclaimer:</strong> The Consulting Firm does not guarantee specific timelines. Processing times are determined by government agencies, financial institutions, and other third-party entities. Delays caused by third-party processing shall not constitute a breach.</p></div>
+
+<div class="section"><h3>Payment Schedule</h3>
+<table class="key-terms"><tr><th>Total Annual Fee</th><td id="v-annual-fee-pay"></td></tr><tr><th>Payment Schedule</th><td id="v-installments-pay"></td></tr></table>
+<p style="margin-top:10px">All payments are subject to the terms set forth in Section 5 of the MSA.</p></div>
+
+<div class="section"><h3>Key Exclusions</h3>
+<ul><li>Personal tax return preparation</li><li>Tax planning and advisory services</li><li>Legal representation or legal advice</li><li>Trademark or intellectual property registration</li><li>Website development or marketing services</li><li>Bookkeeping and accounting services (unless in separate SOW)</li><li>State-specific filings outside of Florida</li><li>Physical mail forwarding (shipping costs apply)</li><li>Rush or expedited processing</li></ul></div>
+
+<!-- SOW SIGNATURES -->
+<div class="sig-section" style="margin-top:40px">
+  <h3>Statement of Work &mdash; Signatures</h3>
+  <p class="text-center text-muted" style="margin-bottom:16px;font-size:9.5pt">By signing below, the Parties acknowledge that they have read, understood, and agree to the terms of this Statement of Work.</p>
+  <div class="sig-grid">
+    <div class="sig-block">
+      <div class="sig-label">Consulting Firm</div>
+      <div class="sig-static"><img src="https://ydzipybqeebtpcvsbtvs.supabase.co/storage/v1/object/public/assets/tony-logos.jpg" alt="Tony Durante" style="max-height:40px;opacity:.8"></div>
+      <div class="sig-field">Name: Tony Durante</div>
+      <div class="sig-field">Title: Managing Member</div>
+      <div class="sig-date">Date: <span id="v-sign-date-sow-firm"></span></div>
+    </div>
+    <div class="sig-block">
+      <div class="sig-label">Client</div>
+      <div class="sig-canvas-wrap"><canvas id="sig-sow"></canvas><button class="clear-btn" onclick="clearSig('sow')">Clear</button></div>
+      <div class="sig-field">Name: <span id="v-sig-name-sow"></span></div>
+      <div class="sig-date">Date: <span id="v-sign-date-sow"></span></div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<div class="text-center" style="margin-top:36px;padding-top:20px;border-top:1px solid var(--border)">
+  <p class="text-muted text-small">Tony Durante LLC &bull; 10225 Ulmerton Road, Suite 3D &bull; Largo, FL 33771</p>
+  <p class="text-muted text-small">support@tonydurante.us &bull; www.tonydurante.us</p>
+</div>
+
+</div><!-- end contract-body -->
+
+<!-- ACTION BAR -->
+<div class="action-bar" id="action-bar" style="display:none">
+  <button class="btn btn-sign" id="btn-sign" onclick="signContract()" disabled>Sign &amp; Submit Contract</button>
+  <div id="status-msg" class="status-msg">Complete all required fields and sign both sections above.</div>
+</div>
+
+<script>
+var SB='https://ydzipybqeebtpcvsbtvs.supabase.co';
+var ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlkemlweWJxZWVidHBjdnNidHZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE3NzQ1OTEsImV4cCI6MjA4NzM1MDU5MX0.Kxq5JQnRupJ-kE6PTz99wwLFKEHJK3sRCPzSyZLjLos';
+var offerData=null;
+var sigPads={};
+
+function s(v){if(!v)return'';var d=document.createElement('div');d.textContent=v;return d.innerHTML;}
+function today(){var d=new Date();return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});}
+
+// Initialize signature pads
+function initSigPads(){
+  ['msa','sow'].forEach(function(id){
+    var canvas=document.getElementById('sig-'+id);
+    if(!canvas)return;
+    var ratio=Math.max(window.devicePixelRatio||1,1);
+    canvas.width=canvas.offsetWidth*ratio;
+    canvas.height=canvas.offsetHeight*ratio;
+    canvas.getContext('2d').scale(ratio,ratio);
+    sigPads[id]=new SignaturePad(canvas,{backgroundColor:'rgba(255,255,255,0)',penColor:'#1a1a2e',minWidth:1,maxWidth:2.5});
+    sigPads[id].addEventListener('endStroke',checkReady);
+  });
+}
+function clearSig(id){if(sigPads[id])sigPads[id].clear();checkReady();}
+
+// Validation helpers
+function isValidPhone(v){
+  if(!v)return false;
+  return /^\+\d[\d\s\-()]{6,20}$/.test(v);
+}
+function isValidZip(v){
+  if(!v)return false;
+  return /^\d{3,10}$/.test(v.replace(/\s/g,''));
+}
+
+// Check if form is ready to submit
+function checkReady(){
+  var name=document.getElementById('f-name').value.trim();
+  var email=document.getElementById('f-email').value.trim();
+  var addr=document.getElementById('f-address').value.trim();
+  var country=document.getElementById('f-country').value.trim();
+  var passport=document.getElementById('f-passport').value.trim();
+  var phone=document.getElementById('f-phone').value.trim();
+  var zip=document.getElementById('f-zip').value.trim();
+  var hasMSA=sigPads.msa&&!sigPads.msa.isEmpty();
+  var hasSOW=sigPads.sow&&!sigPads.sow.isEmpty();
+
+  // Validate phone
+  var phoneOk=!phone||isValidPhone(phone);
+  var phoneCell=document.querySelector('.phone-cell');
+  if(phoneCell){if(!phoneOk){phoneCell.classList.add('field-invalid');}else{phoneCell.classList.remove('field-invalid');}}
+
+  // Validate ZIP
+  var zipOk=!zip||isValidZip(zip);
+  var zipCell=document.querySelector('.zip-cell');
+  if(zipCell){if(!zipOk){zipCell.classList.add('field-invalid');}else{zipCell.classList.remove('field-invalid');}}
+
+  var ready=name&&email&&addr&&country&&passport&&phone&&zip&&hasMSA&&hasSOW&&phoneOk&&zipOk;
+  document.getElementById('btn-sign').disabled=!ready;
+
+  // Update live fields
+  var t=today();
+  ['v-sig-name-msa','v-sig-name-sow'].forEach(function(x){document.getElementById(x).textContent=name||'';});
+  ['v-sign-date-msa','v-sign-date-sow'].forEach(function(x){document.getElementById(x).textContent=t;});
+  ['v-sign-date-msa-firm','v-sign-date-sow-firm'].forEach(function(x){document.getElementById(x).textContent=t;});
+
+  // Update notices
+  var notice=s(name);
+  if(addr)notice+='<br>'+s(addr);
+  var city=document.getElementById('f-city').value.trim();
+  var st=document.getElementById('f-state').value.trim();
+  var zip=document.getElementById('f-zip').value.trim();
+  if(city||st||zip)notice+='<br>'+[s(city),s(st),s(zip)].filter(Boolean).join(', ');
+  if(email)notice+='<br>'+s(email);
+  document.getElementById('v-client-notice').innerHTML=notice;
+  document.getElementById('v-client-name-sow').textContent=name||'[Client Name]';
+
+  if(!ready){
+    var missing=[];
+    if(!name)missing.push('name');if(!email)missing.push('email');if(!phone)missing.push('phone');
+    else if(!phoneOk)missing.push('valid phone (+country code)');
+    if(!addr)missing.push('address');if(!zip)missing.push('ZIP code');
+    else if(!zipOk)missing.push('valid ZIP (numbers only)');
+    if(!country)missing.push('country');if(!passport)missing.push('passport');
+    if(!hasMSA)missing.push('MSA signature');if(!hasSOW)missing.push('SOW signature');
+    document.getElementById('status-msg').textContent='Missing: '+missing.join(', ');
+    document.getElementById('status-msg').className='status-msg';
+  } else {
+    document.getElementById('status-msg').textContent='Ready to sign. Click the button below.';
+    document.getElementById('status-msg').className='status-msg';
+  }
+}
+
+// Passport upload
+document.getElementById('passport-file').addEventListener('change',function(e){
+  if(e.target.files.length>0){
+    document.getElementById('passport-label').innerHTML='<span class="uploaded-name">'+s(e.target.files[0].name)+'</span>';
+  }
+});
+
+// Load offer data
+async function loadOffer(){
+  var params=new URLSearchParams(window.location.search);
+  var token=params.get('t');
+  if(!token){showError('No contract token provided.');return;}
+  try{
+    var resp=await fetch(SB+'/rest/v1/offers?token=eq.'+encodeURIComponent(token)+'&select=*',{
+      headers:{'apikey':ANON,'Authorization':'Bearer '+ANON}
+    });
+    var data=await resp.json();
+    if(!data||data.length===0){showError('Offer not found.');return;}
+    offerData=data[0];
+    populateContract();
+  }catch(e){showError('Error loading contract: '+e.message);}
+}
+
+function showError(msg){
+  document.getElementById('loading-state').style.display='none';
+  document.getElementById('error-state').style.display='block';
+  document.getElementById('error-msg').textContent=msg;
+}
+
+function populateContract(){
+  var o=offerData;
+  var year=new Date().getFullYear();
+  var effDate=today();
+
+  // Key terms
+  document.getElementById('v-effective-date').textContent=effDate;
+  document.getElementById('v-effective-date-sow').textContent=effDate;
+  document.getElementById('v-contract-year').textContent=year+' (January 1 - December 31)';
+  document.getElementById('v-contract-year-sow').textContent=year+' (January 1 - December 31)';
+
+  // Extract from offer data
+  var fee='';var llcType='';var installments='';
+  if(o.riepilogo_costi&&Array.isArray(o.riepilogo_costi)&&o.riepilogo_costi.length>0){
+    var rc=o.riepilogo_costi[0];
+    if(rc.total)fee=rc.total;
+    else if(rc.totale)fee=rc.totale;
+    if(rc.rate)installments=rc.rate;
+    else if(rc.installments)installments=rc.installments;
+  } else if(o.riepilogo_costi&&typeof o.riepilogo_costi==='object'){
+    if(o.riepilogo_costi.totale)fee=o.riepilogo_costi.totale;
+    else if(o.riepilogo_costi.total)fee=o.riepilogo_costi.total;
+  }
+  // Derive fee from servizi if still empty
+  if(!fee&&o.servizi&&Array.isArray(o.servizi)&&o.servizi.length>0){
+    fee=o.servizi[0].price||o.servizi[0].prezzo||'';
+  }
+  // Derive installments from payment_links
+  if(!installments&&o.payment_links&&Array.isArray(o.payment_links)&&o.payment_links.length>0){
+    if(o.payment_links.length===1)installments='Single payment of '+o.payment_links[0].amount;
+    else installments=o.payment_links.length+' installments of '+o.payment_links[0].amount+' each';
+  }
+  if(o.servizi&&Array.isArray(o.servizi)){
+    var svc=o.servizi.find(function(x){var n=(x.nome||x.name||'').toLowerCase();return n.indexOf('llc')>=0;});
+    if(svc)llcType=svc.nome||svc.name;
+  }
+  if(!llcType)llcType='Single-Member LLC (Florida)';
+  if(!fee)fee='As specified in the offer';
+  if(!installments)installments='As specified in the offer';
+
+  document.getElementById('v-llc-type').textContent=llcType;
+  document.getElementById('v-llc-type-sow').textContent=llcType;
+  document.getElementById('v-annual-fee').textContent=fee;
+  document.getElementById('v-annual-fee-sow').textContent=fee;
+  document.getElementById('v-annual-fee-pay').textContent=fee;
+  document.getElementById('v-installments').textContent=installments;
+  document.getElementById('v-installments-pay').textContent=installments;
+
+  // Pre-fill client name if available
+  if(o.client_name)document.getElementById('f-name').value=o.client_name;
+
+  // Services list from offer
+  var servicesHtml='<ol>';
+  if(o.servizi&&Array.isArray(o.servizi)){
+    o.servizi.forEach(function(svc){
+      servicesHtml+='<li><strong>'+s(svc.nome||svc.name||'')+'</strong>';
+      if(svc.descrizione||svc.description)servicesHtml+=' &mdash; '+s(svc.descrizione||svc.description);
+      servicesHtml+='</li>';
+    });
+  } else {
+    servicesHtml+='<li>LLC Formation &amp; State Registration</li><li>EIN Application</li><li>Registered Agent</li><li>U.S. Business Address &amp; Mail Handling</li><li>Banking Assistance</li><li>Payment Processor Setup</li><li>Annual Report Filing</li><li>Ongoing Administrative Support</li>';
+  }
+  servicesHtml+='</ol>';
+  document.getElementById('v-services-list').innerHTML=servicesHtml;
+
+  // Show contract
+  document.getElementById('loading-state').style.display='none';
+  document.getElementById('contract-body').style.display='block';
+  document.getElementById('action-bar').style.display='block';
+
+  // Init signatures and check
+  setTimeout(function(){initSigPads();checkReady();},200);
+}
+
+// Add input listeners for live updates
+document.querySelectorAll('#client-form input').forEach(function(inp){
+  inp.addEventListener('input',checkReady);
+});
+
+// SIGN CONTRACT
+async function signContract(){
+  var btn=document.getElementById('btn-sign');
+  var msg=document.getElementById('status-msg');
+  btn.disabled=true;
+  btn.textContent='Generating PDF...';
+  msg.textContent='Please wait, generating your signed contract...';
+  msg.className='status-msg';
+
+  try{
+    // 1. Freeze form fields for PDF
+    document.querySelectorAll('#client-form input').forEach(function(inp){
+      var td=inp.parentElement;
+      var val=inp.value;
+      td.innerHTML='<span style="font-weight:500">'+s(val)+'</span>';
+    });
+
+    // 2. Replace signature canvases with images for PDF
+    ['msa','sow'].forEach(function(id){
+      var canvas=document.getElementById('sig-'+id);
+      var wrap=canvas.parentElement;
+      var dataUrl=sigPads[id].toDataURL('image/png');
+      wrap.innerHTML='<img src="'+dataUrl+'" style="height:120px;display:block">';
+    });
+
+    // 3. Hide action bar and clear buttons
+    document.getElementById('action-bar').style.display='none';
+    document.querySelectorAll('.clear-btn').forEach(function(b){b.style.display='none';});
+
+    // 4. Generate PDF
+    var element=document.getElementById('contract-body');
+    var opt={
+      margin:[0.5,0.6,0.7,0.6],
+      filename:'Tony_Durante_Contract_'+offerData.token+'.pdf',
+      image:{type:'jpeg',quality:0.95},
+      html2canvas:{scale:2,useCORS:true,letterRendering:true},
+      jsPDF:{unit:'in',format:'letter',orientation:'portrait'},
+      pagebreak:{mode:['avoid-all','css','legacy']}
+    };
+    var pdfBlob=await html2pdf().set(opt).from(element).outputPdf('blob');
+
+    // 5. Upload PDF to Supabase Storage
+    msg.textContent='Uploading signed contract...';
+    var pdfPath=offerData.token+'/contract-signed-'+Date.now()+'.pdf';
+    var upResp=await fetch(SB+'/storage/v1/object/signed-contracts/'+pdfPath,{
+      method:'POST',
+      headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Content-Type':'application/pdf'},
+      body:pdfBlob
+    });
+
+    // 6. Save contract record to Supabase
+    var formData={
+      offer_token:offerData.token,
+      client_name:document.querySelector('[id="f-name"]')?document.getElementById('f-name').value:offerData.client_name,
+      client_email:document.querySelector('#client-form')?'':'',
+      signed_at:new Date().toISOString(),
+      pdf_path:pdfPath,
+      status:'signed'
+    };
+
+    // Collect all form values before they were frozen
+    var fields=['name','email','phone','address','city','state','zip','country','nationality','passport','passport-exp'];
+    var spans=document.querySelectorAll('#client-form span');
+    if(spans.length>=fields.length){
+      for(var i=0;i<fields.length;i++){
+        var key='client_'+fields[i].replace('-','_');
+        formData[key]=spans[i]?spans[i].textContent:'';
+      }
+    }
+
+    await fetch(SB+'/rest/v1/contracts',{
+      method:'POST',
+      headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Content-Type':'application/json','Prefer':'return=minimal'},
+      body:JSON.stringify(formData)
+    });
+
+    // 7. Update offer status (with retry)
+    var patchOk=false;
+    for(var attempt=0;attempt<3&&!patchOk;attempt++){
+      try{
+        var pResp=await fetch(SB+'/rest/v1/offers?token=eq.'+encodeURIComponent(offerData.token),{
+          method:'PATCH',
+          headers:{'apikey':ANON,'Authorization':'Bearer '+ANON,'Content-Type':'application/json','Prefer':'return=minimal'},
+          body:JSON.stringify({status:'signed'})
+        });
+        if(pResp.ok||pResp.status===204)patchOk=true;
+      }catch(pe){console.warn('Offer status patch attempt '+(attempt+1)+' failed',pe);}
+    }
+
+    // 8. Show success based on payment type
+    var ptype=offerData.payment_type||'none';
+
+    if(ptype==='checkout'&&offerData.payment_links&&offerData.payment_links.length>0){
+      // Checkout: redirect to Whop
+      document.getElementById('action-bar').style.display='block';
+      btn.style.display='none';
+      msg.innerHTML='<span class="success-msg">✅ Contract signed! Redirecting to payment...</span>';
+      setTimeout(function(){window.location.href=offerData.payment_links[0].url;},2500);
+
+    } else if(ptype==='bank_transfer'&&offerData.bank_details){
+      // Bank transfer: show details right here
+      var b=offerData.bank_details;
+      var sh='<div class="success-panel"><div class="success-icon">✅</div>';
+      sh+='<h2>Contract Signed Successfully!</h2>';
+      sh+='<p>To activate your services, please complete the bank transfer below.</p>';
+      sh+='<div class="bank-details-box"><h3>Bank Transfer Details</h3>';
+      if(b.beneficiary)sh+='<div class="bank-row"><span class="label">Beneficiary</span><span class="value">'+s(b.beneficiary)+'</span></div>';
+      if(b.iban)sh+='<div class="bank-row"><span class="label">IBAN</span><span class="value">'+s(b.iban)+'</span></div>';
+      if(b.bic)sh+='<div class="bank-row"><span class="label">BIC / SWIFT</span><span class="value">'+s(b.bic)+'</span></div>';
+      if(b.bank_name)sh+='<div class="bank-row"><span class="label">Bank</span><span class="value">'+s(b.bank_name)+'</span></div>';
+      if(b.amount)sh+='<div class="bank-amount">'+s(b.amount)+'</div>';
+      if(b.reference)sh+='<div class="bank-ref">Reference: '+s(b.reference)+'</div>';
+      sh+='</div>';
+      sh+='<p style="font-size:9.5pt;color:var(--muted)">Once payment is received, we will begin working on your LLC immediately.</p>';
+      sh+='<a href="/?t='+encodeURIComponent(offerData.token)+'" class="success-link">← Back to Offer</a>';
+      sh+='</div>';
+      document.getElementById('contract-body').style.display='none';
+      document.getElementById('action-bar').style.display='none';
+      document.getElementById('success-state').innerHTML=sh;
+      document.getElementById('success-state').style.display='block';
+
+    } else {
+      // WhatsApp / none: show success message
+      document.getElementById('action-bar').style.display='block';
+      btn.style.display='none';
+      msg.innerHTML='<span class="success-msg">✅ Contract signed and submitted! Tony Durante will contact you shortly via WhatsApp.</span>';
+    }
+
+  }catch(e){
+    document.getElementById('action-bar').style.display='block';
+    btn.disabled=false;
+    btn.textContent='Sign & Submit Contract';
+    msg.textContent='Error: '+e.message+'. Please try again.';
+    msg.className='error-msg';
+  }
+}
+
+// Boot
+loadOffer();
+</script>
+</body>
+</html>
