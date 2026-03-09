@@ -5,6 +5,37 @@ import type { InboxConversation } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
+// Extract email address from "Name <email>" format
+function extractEmail(from: string): string {
+  const match = from.match(/<([^>]+)>/)
+  return (match ? match[1] : from).toLowerCase().trim()
+}
+
+// Build email→account lookup map
+async function buildEmailLookup(): Promise<
+  Map<string, { accountId: string; accountName: string }>
+> {
+  const lookup = new Map<string, { accountId: string; accountName: string }>()
+
+  const { data: rows } = await supabaseAdmin
+    .from("account_contacts")
+    .select("account_id, account:accounts(company_name), contact:contacts(email, email_2)")
+
+  if (!rows) return lookup
+
+  for (const row of rows) {
+    const acct = row.account as unknown as { company_name: string } | null
+    const contact = row.contact as unknown as { email: string | null; email_2: string | null } | null
+    if (!acct || !contact) continue
+
+    const entry = { accountId: row.account_id, accountName: acct.company_name }
+    if (contact.email) lookup.set(contact.email.toLowerCase(), entry)
+    if (contact.email_2) lookup.set(contact.email_2.toLowerCase(), entry)
+  }
+
+  return lookup
+}
+
 export async function GET(req: NextRequest) {
   try {
     const channel = req.nextUrl.searchParams.get("channel") // whatsapp | telegram | gmail | null (all)
@@ -14,6 +45,10 @@ export async function GET(req: NextRequest) {
     )
 
     const conversations: InboxConversation[] = []
+
+    // Start email lookup in parallel (used later for Gmail matching)
+    const emailLookupPromise =
+      !channel || channel === "gmail" ? buildEmailLookup() : Promise.resolve(new Map())
 
     // ─── WhatsApp + Telegram from Supabase view ──────────
     if (!channel || channel === "whatsapp" || channel === "telegram") {
@@ -61,6 +96,9 @@ export async function GET(req: NextRequest) {
           threads?: Array<{ id: string; snippet: string; historyId: string }>
         }
 
+        // Wait for email lookup to complete
+        const emailLookup = await emailLookupPromise
+
         if (listResult.threads) {
           // Fetch metadata for each thread (first message)
           const threadDetails = await Promise.allSettled(
@@ -86,6 +124,10 @@ export async function GET(req: NextRequest) {
             const lastDate = getHeader(lastMsg?.payload?.headers, "Date")
             const isUnread = lastMsg?.labelIds?.includes("UNREAD") || false
 
+            // Match sender email to CRM account
+            const senderEmail = extractEmail(from)
+            const accountMatch = emailLookup.get(senderEmail)
+
             conversations.push({
               id: `gmail:${thread.id}`,
               channel: "gmail",
@@ -98,6 +140,8 @@ export async function GET(req: NextRequest) {
                     parseInt(lastMsg?.internalDate || "0")
                   ).toISOString(),
               subject,
+              accountId: accountMatch?.accountId ?? null,
+              accountName: accountMatch?.accountName ?? null,
             })
           }
         }

@@ -5,8 +5,9 @@ import Link from 'next/link'
 import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
-  AlertCircle, CheckCircle2, ExternalLink,
+  AlertCircle, CheckCircle2, ExternalLink, MessageSquare,
 } from 'lucide-react'
+import { AccountCommunications } from './account-communications'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
@@ -16,6 +17,7 @@ const TABS = [
   { key: 'servizi', label: 'Servizi', icon: Briefcase },
   { key: 'pagamenti', label: 'Pagamenti', icon: CreditCard },
   { key: 'tax', label: 'Tax Returns', icon: FileText },
+  { key: 'comunicazioni', label: 'Comunicazioni', icon: MessageSquare },
 ]
 
 const SERVICE_STATUS_COLORS: Record<string, string> = {
@@ -164,6 +166,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       )}
       {activeTab === 'tax' && (
         <TaxTab taxReturns={taxReturns} today={today} />
+      )}
+      {activeTab === 'comunicazioni' && (
+        <AccountCommunications accountId={account.id} />
       )}
     </div>
   )

@@ -184,6 +184,7 @@ export interface InboxConversation {
   unread: number
   lastMessageAt: string
   accountId?: string | null
+  accountName?: string | null
   contactId?: string | null
   // Gmail-specific
   subject?: string
