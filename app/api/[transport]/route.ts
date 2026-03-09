@@ -48,6 +48,7 @@ import { registerMessagingTools } from "@/lib/mcp/tools/messaging"
 import { registerOfferTools } from "@/lib/mcp/tools/offers"
 import { registerSysdocTools } from "@/lib/mcp/tools/sysdocs"
 import { registerKnowledgeTools } from "@/lib/mcp/tools/knowledge"
+import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
 export const maxDuration = 60
@@ -73,6 +74,8 @@ const handler = createMcpHandler(
     registerKnowledgeTools(server)
   },
   {
+    capabilities: {},
+    instructions: SERVER_INSTRUCTIONS,
     serverInfo: {
       name: "td-hub",
       version: "1.0.0",
