@@ -324,6 +324,49 @@ export function registerQbTools(server: McpServer) {
   )
 
   // ═══════════════════════════════════════
+  // qb_void_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_void_invoice",
+    "Void or delete an invoice in QuickBooks Online. Void (recommended) keeps the invoice in history but zeroes the balance. Delete removes it completely. Requires the invoice ID (from qb_list_invoices). Use this to cancel incorrect or duplicate invoices.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID (the 'id' field from qb_list_invoices, NOT the doc_number)"),
+      action: z.enum(["void", "delete"]).default("void").describe("'void' (recommended — keeps history) or 'delete' (permanent removal)"),
+    },
+    async ({ invoice_id, action }) => {
+      try {
+        // First, get the invoice to retrieve SyncToken
+        const invoice = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = invoice.Invoice
+
+        if (!inv) {
+          return {
+            content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_id} not found in QuickBooks` }]
+          }
+        }
+
+        const result = await qbApiCall(`/invoice?operation=${action}`, {
+          method: "POST",
+          body: {
+            Id: inv.Id,
+            SyncToken: inv.SyncToken,
+          },
+        })
+
+        const updated = result.Invoice
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Invoice #${inv.DocNumber} (${(inv.CustomerRef as Record<string, unknown>)?.name}) — ${action === "void" ? "VOIDED" : "DELETED"} successfully\nOriginal amount: $${inv.TotalAmt}\nNew balance: $${updated?.Balance ?? 0}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error ${action}ing invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
   // qb_token_status
   // ═══════════════════════════════════════
   server.tool(
