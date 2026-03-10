@@ -289,7 +289,422 @@ export function registerTaxTools(server: McpServer) {
       }
     }
   )
-}
+
+  // ═══════════════════════════════════════
+  // tax_form_create
+  // ═══════════════════════════════════════
+  server.tool(
+    "tax_form_create",
+    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (https://td-operations.vercel.app/tax-form/{token}). Use email_send or email_send_with_template to send the link to the client. Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120).",
+    {
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
+      tax_year: z.number().describe("Tax year (e.g., 2025)"),
+      entity_type: z.enum(["SMLLC", "MMLLC", "Corp"]).describe("Entity type: SMLLC, MMLLC, or Corp"),
+      language: z.enum(["en", "it"]).optional().describe("Form language (auto-detected from contact.language if omitted)"),
+    },
+    async ({ account_id, contact_id, tax_year, entity_type, language }) => {
+      try {
+        // 1. Get account data
+        const { data: account, error: accErr } = await supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, ein_number, formation_date, state_of_formation, physical_address, entity_type, drive_folder_id")
+          .eq("id", account_id)
+          .single()
+        if (accErr || !account) throw new Error(`Account not found: ${accErr?.message || account_id}`)
+
+        // 2. Get contact (primary contact if not specified)
+        let contactQuery = supabaseAdmin.from("contacts").select("id, first_name, last_name, email, phone, citizenship, residency, itin_number, language, full_name")
+        if (contact_id) {
+          contactQuery = contactQuery.eq("id", contact_id)
+        } else {
+          // Find primary contact via account_contacts
+          const { data: ac } = await supabaseAdmin
+            .from("account_contacts")
+            .select("contact_id")
+            .eq("account_id", account_id)
+            .limit(1)
+            .single()
+          if (ac) {
+            contactQuery = contactQuery.eq("id", ac.contact_id)
+          } else {
+            throw new Error("No contact found for this account. Provide contact_id manually.")
+          }
+        }
+        const { data: contact, error: conErr } = await contactQuery.single()
+        if (conErr || !contact) throw new Error(`Contact not found: ${conErr?.message}`)
+
+        // 3. Check documents on file
+        const { data: docs } = await supabaseAdmin
+          .from("documents")
+          .select("document_type_name")
+          .eq("account_id", account_id)
+          .in("document_type_name", ["Articles of Organization", "EIN Letter", "EIN Confirmation Letter"])
+        const hasArticles = docs?.some(d => d.document_type_name === "Articles of Organization") || false
+        const hasEin = docs?.some(d => ["EIN Letter", "EIN Confirmation Letter"].includes(d.document_type_name)) || false
+
+        // 4. Build prefilled data
+        const prefilled: Record<string, unknown> = {
+          // Owner (from contacts)
+          owner_first_name: contact.first_name || "",
+          owner_last_name: contact.last_name || "",
+          owner_email: contact.email || "",
+          owner_phone: contact.phone || "",
+          owner_country: contact.residency || "",
+          owner_tax_residency: contact.citizenship || "",
+          // LLC (from accounts)
+          llc_name: account.company_name || "",
+          ein_number: account.ein_number || "",
+          date_of_incorporation: account.formation_date || "",
+          state_of_incorporation: account.state_of_formation || "",
+        }
+
+        // 5. Generate token
+        const slug = (account.company_name || "form")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 30)
+        const token = `${slug}-${tax_year}`
+
+        // 6. Check for existing submission
+        const { data: existing } = await supabaseAdmin
+          .from("tax_return_submissions")
+          .select("id, token, status")
+          .eq("token", token)
+          .maybeSingle()
+        if (existing) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `⚠️ Form already exists for ${account.company_name} ${tax_year}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/tax-form/${existing.token}`,
+            }],
+          }
+        }
+
+        // 7. Link to tax_returns record (if exists)
+        const { data: taxReturn } = await supabaseAdmin
+          .from("tax_returns")
+          .select("id")
+          .eq("account_id", account_id)
+          .eq("tax_year", tax_year)
+          .maybeSingle()
+
+        // 8. Determine language
+        const formLang = language || (contact.language === "it" ? "it" : "en")
+
+        // 9. Insert
+        const { data: submission, error: insErr } = await supabaseAdmin
+          .from("tax_return_submissions")
+          .insert({
+            token,
+            account_id,
+            contact_id: contact.id,
+            tax_year,
+            entity_type,
+            language: formLang,
+            prefilled_data: prefilled,
+            has_articles_on_file: hasArticles,
+            has_ein_letter_on_file: hasEin,
+            tax_return_id: taxReturn?.id || null,
+            status: "pending",
+          })
+          .select("id, token")
+          .single()
+        if (insErr) throw new Error(insErr.message)
+
+        const url = `https://td-operations.vercel.app/tax-form/${token}`
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Tax form created for ${account.company_name}`,
+              `   Entity: ${entity_type} | Year: ${tax_year} | Lang: ${formLang}`,
+              `   Contact: ${contact.full_name} (${contact.email})`,
+              `   Docs: Articles ${hasArticles ? "✅" : "❌"} | EIN ${hasEin ? "✅" : "❌"}`,
+              `   Token: ${token}`,
+              `   URL: ${url}`,
+              `   ID: ${submission.id}`,
+              "",
+              `Next: Send the URL to the client via email_send or email_send_with_template (template: tax-form-link-${formLang})`,
+            ].join("\n"),
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // tax_form_get
+  // ═══════════════════════════════════════
+  server.tool(
+    "tax_form_get",
+    "Get a tax data collection form by token or by account_id + tax_year. Returns prefilled data, submitted data, status, timestamps, and changed fields. Use this to check form status or review client submissions.",
+    {
+      token: z.string().optional().describe("Form token (e.g., 'df-commerce-2025')"),
+      account_id: z.string().uuid().optional().describe("Account UUID (use with tax_year)"),
+      tax_year: z.number().optional().describe("Tax year (use with account_id)"),
+    },
+    async ({ token, account_id, tax_year }) => {
+      try {
+        let q = supabaseAdmin.from("tax_return_submissions").select("*")
+        if (token) {
+          q = q.eq("token", token)
+        } else if (account_id && tax_year) {
+          q = q.eq("account_id", account_id).eq("tax_year", tax_year)
+        } else {
+          return { content: [{ type: "text" as const, text: "Provide either token OR account_id + tax_year." }] }
+        }
+
+        const { data, error } = await q.maybeSingle()
+        if (error) throw new Error(error.message)
+        if (!data) return { content: [{ type: "text" as const, text: "No form found." }] }
+
+        // Get account name
+        let companyName = ""
+        if (data.account_id) {
+          const { data: acc } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", data.account_id)
+            .single()
+          companyName = acc?.company_name || ""
+        }
+
+        const changedCount = data.changed_fields ? Object.keys(data.changed_fields).length : 0
+
+        const lines = [
+          `📋 Tax Form: ${data.token}`,
+          `   Company: ${companyName}`,
+          `   Entity: ${data.entity_type} | Year: ${data.tax_year} | Lang: ${data.language}`,
+          `   Status: ${data.status}`,
+          `   Docs: Articles ${data.has_articles_on_file ? "✅" : "❌"} | EIN ${data.has_ein_letter_on_file ? "✅" : "❌"}`,
+          `   Confirmation: ${data.confirmation_accepted ? "✅ Accepted" : "⬜ Not accepted"}`,
+          "",
+          `   Created: ${data.created_at}`,
+          data.sent_at ? `   Sent: ${data.sent_at}` : null,
+          data.opened_at ? `   Opened: ${data.opened_at}` : null,
+          data.completed_at ? `   Completed: ${data.completed_at}` : null,
+          data.reviewed_at ? `   Reviewed: ${data.reviewed_at} by ${data.reviewed_by}` : null,
+          "",
+          `   Changed fields: ${changedCount}`,
+        ].filter(Boolean)
+
+        if (changedCount > 0) {
+          lines.push("")
+          lines.push("   🔄 Changes detected:")
+          for (const [key, val] of Object.entries(data.changed_fields as Record<string, { old: unknown; new: unknown }>)) {
+            lines.push(`      ${key}: "${val.old}" → "${val.new}"`)
+          }
+        }
+
+        if (data.upload_paths && (data.upload_paths as string[]).length > 0) {
+          lines.push("")
+          lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
+        }
+
+        lines.push("")
+        lines.push(`   URL: https://td-operations.vercel.app/tax-form/${data.token}`)
+        lines.push(`   ID: ${data.id}`)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // tax_form_review
+  // ═══════════════════════════════════════
+  server.tool(
+    "tax_form_review",
+    "Review a completed tax form submission. Shows diff table of changed fields (pre-filled vs submitted). If apply_changes=true, updates CRM records (contacts/accounts) with client corrections and marks the tax return as Data Received. Always run without apply_changes first to review, then confirm with Antonio before applying.",
+    {
+      token: z.string().describe("Form token to review"),
+      apply_changes: z.boolean().optional().default(false).describe("If true, apply changed fields to CRM and update tax_return status"),
+    },
+    async ({ token, apply_changes }) => {
+      try {
+        const { data: sub, error } = await supabaseAdmin
+          .from("tax_return_submissions")
+          .select("*")
+          .eq("token", token)
+          .single()
+        if (error || !sub) throw new Error(`Form not found: ${token}`)
+
+        if (sub.status !== "completed") {
+          return { content: [{ type: "text" as const, text: `⚠️ Form status is "${sub.status}" — not yet completed by client.` }] }
+        }
+
+        const changes = sub.changed_fields as Record<string, { old: unknown; new: unknown }> | null
+        const changeCount = changes ? Object.keys(changes).length : 0
+
+        // Get company name
+        let companyName = token
+        if (sub.account_id) {
+          const { data: acc } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", sub.account_id)
+            .single()
+          companyName = acc?.company_name || token
+        }
+
+        const lines = [
+          `═══════════════════════════════════════`,
+          `  📋 FORM REVIEW: ${companyName}`,
+          `  ${sub.entity_type} | ${sub.tax_year} | ${sub.language}`,
+          `═══════════════════════════════════════`,
+          "",
+        ]
+
+        if (changeCount === 0) {
+          lines.push("✅ No changes detected — all pre-filled data was confirmed by client.")
+        } else {
+          lines.push(`🔄 ${changeCount} field(s) changed by client:`)
+          lines.push("")
+          lines.push("| Field | Pre-filled | Client Value |")
+          lines.push("|-------|-----------|-------------|")
+          for (const [key, val] of Object.entries(changes!)) {
+            const oldVal = val.old === null || val.old === "" ? "(empty)" : String(val.old)
+            const newVal = String(val.new)
+            lines.push(`| ${key} | ${oldVal} | ${newVal} |`)
+          }
+        }
+
+        // Upload info
+        const uploads = sub.upload_paths as string[] | null
+        if (uploads && uploads.length > 0) {
+          lines.push("")
+          lines.push(`📎 ${uploads.length} file(s) uploaded:`)
+          for (const path of uploads) {
+            lines.push(`   • ${path}`)
+          }
+        }
+
+        lines.push("")
+        lines.push(`Submitted: ${sub.completed_at}`)
+        lines.push(`Confirmation: ${sub.confirmation_accepted ? "✅ Accepted" : "❌ Not accepted"}`)
+
+        if (apply_changes && changeCount > 0) {
+          lines.push("")
+          lines.push("───────────────────────────────────")
+          lines.push("APPLYING CHANGES TO CRM...")
+          lines.push("")
+
+          // Map changed fields back to CRM tables
+          const contactUpdates: Record<string, unknown> = {}
+          const accountUpdates: Record<string, unknown> = {}
+
+          const contactFieldMap: Record<string, string> = {
+            owner_first_name: "first_name",
+            owner_last_name: "last_name",
+            owner_email: "email",
+            owner_phone: "phone",
+            owner_country: "residency",
+            owner_tax_residency: "citizenship",
+          }
+
+          const accountFieldMap: Record<string, string> = {
+            llc_name: "company_name",
+            ein_number: "ein_number",
+            state_of_incorporation: "state_of_formation",
+          }
+
+          for (const [key, val] of Object.entries(changes!)) {
+            if (contactFieldMap[key]) contactUpdates[contactFieldMap[key]] = val.new
+            if (accountFieldMap[key]) accountUpdates[accountFieldMap[key]] = val.new
+          }
+
+          if (sub.contact_id && Object.keys(contactUpdates).length > 0) {
+            const { error: upErr } = await supabaseAdmin
+              .from("contacts")
+              .update({ ...contactUpdates, updated_at: new Date().toISOString() })
+              .eq("id", sub.contact_id)
+            if (upErr) {
+              lines.push(`❌ Contact update failed: ${upErr.message}`)
+            } else {
+              lines.push(`✅ Contact updated: ${Object.keys(contactUpdates).join(", ")}`)
+            }
+          }
+
+          if (sub.account_id && Object.keys(accountUpdates).length > 0) {
+            const { error: upErr } = await supabaseAdmin
+              .from("accounts")
+              .update({ ...accountUpdates, updated_at: new Date().toISOString() })
+              .eq("id", sub.account_id)
+            if (upErr) {
+              lines.push(`❌ Account update failed: ${upErr.message}`)
+            } else {
+              lines.push(`✅ Account updated: ${Object.keys(accountUpdates).join(", ")}`)
+            }
+          }
+
+          // Update tax_returns record
+          if (sub.tax_return_id) {
+            const { error: trErr } = await supabaseAdmin
+              .from("tax_returns")
+              .update({
+                data_received: true,
+                data_received_date: new Date().toISOString().slice(0, 10),
+                status: "Data Received",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", sub.tax_return_id)
+            if (trErr) {
+              lines.push(`❌ Tax return update failed: ${trErr.message}`)
+            } else {
+              lines.push(`✅ Tax return marked as "Data Received"`)
+            }
+          }
+
+          // Mark form as reviewed
+          await supabaseAdmin
+            .from("tax_return_submissions")
+            .update({
+              status: "reviewed",
+              reviewed_at: new Date().toISOString(),
+              reviewed_by: "claude",
+            })
+            .eq("id", sub.id)
+          lines.push(`✅ Form marked as reviewed`)
+        } else if (apply_changes && changeCount === 0) {
+          // Just mark as reviewed
+          await supabaseAdmin
+            .from("tax_return_submissions")
+            .update({
+              status: "reviewed",
+              reviewed_at: new Date().toISOString(),
+              reviewed_by: "claude",
+            })
+            .eq("id", sub.id)
+
+          if (sub.tax_return_id) {
+            await supabaseAdmin
+              .from("tax_returns")
+              .update({
+                data_received: true,
+                data_received_date: new Date().toISOString().slice(0, 10),
+                status: "Data Received",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", sub.tax_return_id)
+          }
+          lines.push("")
+          lines.push(`✅ Form marked as reviewed. Tax return: Data Received.`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+} // end registerTaxTools
 
 function daysSince(dateStr: string): number {
   const d = new Date(dateStr)
