@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 103 tools, data source priority,
+ * This guides Claude on how to use the 105 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -65,7 +65,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection — Key Rules
 
-You have 103 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 105 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
@@ -122,9 +122,12 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - gmail_read/gmail_read_thread: Read messages/threads.
 - gmail_draft: Create draft (does NOT send). For sending, use email_send.
 
-### Email — Outbound (5 tools: email_*)
+### Email — Outbound (7 tools: email_*)
 - email_send: Send via Postmark from any @tonydurante.us address.
+- email_send_with_template: Send using a Postmark template. Available templates: new-formation-info-en, new-formation-info-it (new LLC info request), onboarding-info-en, onboarding-info-it (existing company onboarding). Variable: {{client_name}}.
 - email_get_delivery_status: Check delivery by MessageID.
+- email_list_templates: List all Postmark templates.
+- email_create_template: Create/update Postmark templates with Mustachio variables.
 
 ### Messaging — WhatsApp & Telegram (6 tools: msg_*)
 - msg_inbox: Unified inbox with unread counts.
