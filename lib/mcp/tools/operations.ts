@@ -218,7 +218,7 @@ export function registerOperationsTools(server: McpServer) {
       entity_type: z.string().optional().describe("Entity type (e.g., Single Member LLC, Multi-Member LLC, Corporation)"),
       state_of_formation: z.string().optional().describe("State of formation (e.g., Wyoming, Delaware, Florida)"),
       status: z.string().optional().describe("Account status (default: Active)"),
-      ein: z.string().optional().describe("EIN number"),
+      ein: z.string().optional().describe("EIN number (e.g., 30-1482516)"),
       formation_date: z.string().optional().describe("Formation date (YYYY-MM-DD)"),
       notes: z.string().optional().describe("Account notes"),
     },
@@ -241,7 +241,7 @@ export function registerOperationsTools(server: McpServer) {
           entity_type: entity_type || null,
           state_of_formation: state_of_formation || null,
           status: status || "Active",
-          ein: ein || null,
+          ein_number: ein || null,
           formation_date: formation_date || null,
           notes: notes || null,
         }
