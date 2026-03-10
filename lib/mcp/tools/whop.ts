@@ -51,14 +51,14 @@ export function registerWhopTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "whop_list_payments",
-    "List payments received via Whop. Shows amount, status, customer email, card details, billing address, and linked plan/product. Use this to check if a client has paid. Filter by status (paid/refunded/failed).",
+    "List payments received via Whop. Shows amount, status, customer email, card details, billing address, and linked plan/product. Use this to check if a client has paid. Filter by status (paid/refunded/failed). NOTE: Requires payment:basic:read API key permission — if this fails, use whop_list_memberships instead (shows completed purchases with email).",
     {
       status: z.string().optional().describe("Filter by status: paid, refunded, failed"),
       limit: z.number().optional().default(20).describe("Max results (default 20, max 50)"),
     },
     async ({ status, limit }) => {
       try {
-        let url = `/company/payments?company_id=${COMPANY_ID}&first=${Math.min(limit || 20, 50)}`
+        let url = `/payments?company_id=${COMPANY_ID}&first=${Math.min(limit || 20, 50)}`
         if (status) url += `&status=${status}`
         const data = await whopFetch(url)
         const payments = data.data || []
@@ -99,7 +99,7 @@ export function registerWhopTools(server: McpServer) {
     },
     async ({ limit }) => {
       try {
-        const data = await whopFetch(`/company/plans?company_id=${COMPANY_ID}&first=${Math.min(limit || 20, 50)}`)
+        const data = await whopFetch(`/plans?company_id=${COMPANY_ID}&first=${Math.min(limit || 20, 50)}`)
         const plans = data.data || []
 
         if (plans.length === 0) {
@@ -132,7 +132,7 @@ export function registerWhopTools(server: McpServer) {
     {},
     async () => {
       try {
-        const data = await whopFetch(`/company/products?company_id=${COMPANY_ID}&first=50`)
+        const data = await whopFetch(`/products?company_id=${COMPANY_ID}&first=50`)
         const products = data.data || []
 
         let out = `📦 Found ${products.length} product(s)\n\n`
@@ -178,7 +178,7 @@ export function registerWhopTools(server: McpServer) {
         }
         if (description) body.description = description
 
-        const plan = await whopPost("/company/plans", body)
+        const plan = await whopPost("/plans", body)
 
         let out = `✅ Plan created!\n\n`
         out += `🆔 ${plan.id}\n`
@@ -197,14 +197,14 @@ export function registerWhopTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "whop_list_memberships",
-    "List Whop memberships (client purchases). Shows who bought what, membership status, and license keys. Use this to verify if a client has an active membership after payment.",
+    "List Whop memberships (client purchases). Shows who bought what (email, product, plan), membership status, and join date. PREFERRED way to verify if a client has paid — more reliable than whop_list_payments. Filter by status: completed, active, canceled, expired.",
     {
       status: z.string().optional().describe("Filter: completed, active, canceled, expired"),
       limit: z.number().optional().default(20).describe("Max results (default 20)"),
     },
     async ({ status, limit }) => {
       try {
-        let url = `/company/memberships?company_id=${COMPANY_ID}&first=${Math.min(limit || 20, 50)}`
+        let url = `/memberships?company_id=${COMPANY_ID}&first=${Math.min(limit || 20, 50)}`
         if (status) url += `&status=${status}`
         const data = await whopFetch(url)
         const memberships = data.data || []
