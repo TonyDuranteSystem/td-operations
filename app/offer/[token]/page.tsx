@@ -135,6 +135,7 @@ export default function OfferPage() {
   const searchParams = useSearchParams()
   const token = params.token as string
   const accessCode = searchParams.get('c') || ''
+  const isPreview = searchParams.get('preview') === '1'
 
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -173,13 +174,13 @@ export default function OfferPage() {
       setLang(o.language || 'it')
       setLoading(false)
 
-      // Check if already verified via cookie
-      if (hasVerifiedCookie(token)) {
+      // Check if already verified via cookie OR admin preview with valid access_code
+      if (hasVerifiedCookie(token) || (isPreview && o.access_code && accessCode === o.access_code)) {
         setVerified(true)
       }
 
       // Track view (only once verified or no email gate needed)
-      if (hasVerifiedCookie(token) || !o.client_email) {
+      if (hasVerifiedCookie(token) || !o.client_email || (isPreview && o.access_code && accessCode === o.access_code)) {
         trackView(o)
       }
     } catch {
