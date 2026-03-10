@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { qbApiCall, createInvoice, getActiveToken } from "@/lib/quickbooks"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { getGmailToken } from "@/lib/gmail"
 
 export function registerQbTools(server: McpServer) {
   const regErrors: string[] = []
@@ -500,7 +501,7 @@ export function registerQbTools(server: McpServer) {
   try {
   server.tool(
     "qb_send_invoice",
-    "Send an invoice via email using Postmark. Downloads the invoice PDF from QuickBooks and sends it as an email attachment with bank payment details (USD or EUR based on invoice currency). The customer receives a professional bilingual email from support@tonydurante.us. WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (if needed) → CONFIRM with user → qb_send_invoice. Use email_get_delivery_status with the returned MessageID to track delivery.",
+    "Send an invoice via Gmail API with PDF attachment. Downloads the invoice PDF from QuickBooks and sends it as an email attachment with bank payment details (USD or EUR based on invoice currency). The customer receives a professional bilingual email from support@tonydurante.us. WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (if needed) → CONFIRM with user → qb_send_invoice.",
     {
       invoice_id: z.string().describe("QuickBooks Invoice ID to send"),
       email_to: z.string().describe("Recipient email address"),
@@ -568,47 +569,58 @@ export function registerQbTools(server: McpServer) {
 <p>If you have any questions, please don't hesitate to reach out.</p>
 <p>Best regards,<br><strong>Tony Durante LLC</strong><br>support@tonydurante.us</p>`
 
-        // 5. Send via Postmark with PDF attachment
-        const postmarkToken = process.env.POSTMARK_SERVER_TOKEN
-        if (!postmarkToken) throw new Error("POSTMARK_SERVER_TOKEN not configured")
+        // 5. Build MIME message with PDF attachment and send via Gmail API
+        const pdfFilename = `Invoice-${docNumber}.pdf`
+        const boundary = "----=_Part_" + Date.now()
+        const mime = [
+          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `To: ${email_to}`,
+          `Subject: ${subject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          "Content-Type: text/html; charset=UTF-8",
+          "Content-Transfer-Encoding: 7bit",
+          "",
+          htmlBody,
+          "",
+          `--${boundary}`,
+          `Content-Type: application/pdf; name="${pdfFilename}"`,
+          "Content-Transfer-Encoding: base64",
+          `Content-Disposition: attachment; filename="${pdfFilename}"`,
+          "",
+          pdfBase64,
+          "",
+          `--${boundary}--`,
+        ].join("\r\n")
+        const raw = Buffer.from(mime).toString("base64url")
 
-        const emailRes = await fetch("https://api.postmarkapp.com/email", {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            "X-Postmark-Server-Token": postmarkToken,
-          },
-          body: JSON.stringify({
-            From: "support@tonydurante.us",
-            To: email_to,
-            Subject: subject,
-            HtmlBody: htmlBody,
-            Tag: "invoice",
-            TrackOpens: true,
-            TrackLinks: "HtmlAndText",
-            Attachments: [
-              {
-                Name: `Invoice-${docNumber}.pdf`,
-                Content: pdfBase64,
-                ContentType: "application/pdf",
-              },
-            ],
-          }),
-        })
+        const { token: gmailToken } = await getGmailToken()
+        const sendRes = await fetch(
+          "https://gmail.googleapis.com/gmail/v1/users/support@tonydurante.us/messages/send",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${gmailToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ raw }),
+          }
+        )
 
-        if (!emailRes.ok) {
-          const err = await emailRes.json().catch(() => ({}))
-          throw new Error(`Postmark error ${emailRes.status}: ${(err as Record<string, string>).Message || emailRes.statusText}`)
+        if (!sendRes.ok) {
+          const err = await sendRes.json().catch(() => ({}))
+          throw new Error(`Gmail send error ${sendRes.status}: ${JSON.stringify(err)}`)
         }
 
-        const emailData = await emailRes.json()
+        const gmailResult = (await sendRes.json()) as { id: string; threadId: string }
 
         return {
           content: [
             {
               type: "text" as const,
-              text: `✅ Invoice #${docNumber} sent to ${email_to}\nCustomer: ${customerName}\nTotal: ${currency} ${total}\nDue: ${dueDate}\nPostmark MessageID: ${emailData.MessageID}\nUse email_get_delivery_status('${emailData.MessageID}') to track.`,
+              text: `✅ Invoice #${docNumber} sent to ${email_to}\nCustomer: ${customerName}\nTotal: ${currency} ${total}\nDue: ${dueDate}\nGmail Message ID: ${gmailResult.id}\nThread ID: ${gmailResult.threadId}`,
             },
           ],
         }
