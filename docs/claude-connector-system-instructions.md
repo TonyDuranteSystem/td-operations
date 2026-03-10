@@ -59,7 +59,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection Guide
 
-You have **78 tools** organized into functional groups. **Read each tool's description carefully before calling it** — descriptions contain prerequisites, return values, and cross-references to related tools.
+You have **81 tools** organized into functional groups. **Read each tool's description carefully before calling it** — descriptions contain prerequisites, return values, and cross-references to related tools.
 
 ### CRM — Client Data (10 tools)
 | Tool | When to Use |
@@ -150,13 +150,27 @@ You have **78 tools** organized into functional groups. **Read each tool's descr
 | `cal_get_event_details` | Get full details + invitees for a specific event. |
 | `cal_get_availability` | List active booking pages and scheduling links. |
 
-### Offers — Service Proposals (4 tools)
+### Circleback — Call Summaries (3 tools)
 | Tool | When to Use |
 |------|-------------|
-| `offer_list` | List offers filtered by account, status, or type. |
-| `offer_get` | Get full offer details by token. |
-| `offer_create` | Create a new service offer for a client. |
-| `offer_update` | Update offer fields (e.g., status: draft → sent → signed). |
+| `cb_list_calls` | List call summaries. Filter by lead_id, account_id, date range. |
+| `cb_get_call` | Get full call details: notes, action items, transcript, attendees. |
+| `cb_search_calls` | Search call content by text in meeting name or notes. |
+
+Call summaries arrive automatically via webhook and are auto-linked to leads by matching attendee email.
+
+### Offers — Service Proposals (5 tools)
+| Tool | When to Use |
+|------|-------------|
+| `offer_list` | List offers filtered by status or language. |
+| `offer_get` | Get full offer details by token (includes access_code URL). |
+| `offer_create` | Create a new service offer (starts as draft). All JSONB fields validated. |
+| `offer_update` | Update offer fields (e.g., services, cost_summary, referrer info). |
+| `offer_send` | Approve and send: sets status='sent', creates Gmail draft with offer link. |
+
+**Offer workflow:** create (draft) → review content → offer_send → client views → signs contract → pays.
+**JSONB field names (English):** services, cost_summary, issues, strategy, immediate_actions, next_steps, recurring_costs, future_developments.
+**Referrer tracking:** referrer_name, referrer_type (client/partner), referrer_commission_type, referrer_commission_pct.
 
 ### Knowledge Base — Business Rules (4 tools)
 | Tool | When to Use |

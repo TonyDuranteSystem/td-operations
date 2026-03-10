@@ -48,6 +48,7 @@ import { registerMessagingTools } from "@/lib/mcp/tools/messaging"
 import { registerOfferTools } from "@/lib/mcp/tools/offers"
 import { registerSysdocTools } from "@/lib/mcp/tools/sysdocs"
 import { registerKnowledgeTools } from "@/lib/mcp/tools/knowledge"
+import { registerCirclebackTools } from "@/lib/mcp/tools/circleback"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
@@ -72,6 +73,7 @@ const handler = createMcpHandler(
     registerOfferTools(server)
     registerSysdocTools(server)
     registerKnowledgeTools(server)
+    registerCirclebackTools(server)
   },
   {
     capabilities: {},

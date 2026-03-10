@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -138,22 +138,22 @@ export default function ContractPage() {
     const year = new Date().getFullYear()
     let fee = '', llcType = '', installments = ''
 
-    if (o.riepilogo_costi && Array.isArray(o.riepilogo_costi) && o.riepilogo_costi.length > 0) {
-      const rc = o.riepilogo_costi[0]
-      fee = rc.total || rc.totale || ''
+    if (o.cost_summary && Array.isArray(o.cost_summary) && o.cost_summary.length > 0) {
+      const rc = o.cost_summary[0]
+      fee = rc.total || ''
       installments = rc.rate || rc.installments || ''
     }
-    if (!fee && o.servizi && Array.isArray(o.servizi) && o.servizi.length > 0) {
-      fee = o.servizi[0].price || o.servizi[0].prezzo || ''
+    if (!fee && o.services && Array.isArray(o.services) && o.services.length > 0) {
+      fee = o.services[0].price || ''
     }
     if (!installments && o.payment_links && o.payment_links.length > 0) {
       installments = o.payment_links.length === 1
         ? `Single payment of ${o.payment_links[0].amount}`
         : `${o.payment_links.length} installments of ${o.payment_links[0].amount} each`
     }
-    if (o.servizi && Array.isArray(o.servizi)) {
-      const svc = o.servizi.find(x => ((x.nome || x.name || '').toLowerCase()).includes('llc'))
-      if (svc) llcType = svc.nome || svc.name || ''
+    if (o.services && Array.isArray(o.services)) {
+      const svc = o.services.find(x => (x.name || '').toLowerCase().includes('llc'))
+      if (svc) llcType = svc.name || ''
     }
     if (!llcType) llcType = 'Single-Member LLC (Florida)'
     if (!fee) fee = 'As specified in the offer'
@@ -253,7 +253,7 @@ export default function ContractPage() {
         setStatusType('success')
         setTimeout(() => { window.location.href = offer.payment_links![0].url }, 2500)
       } else if (ptype === 'bank_transfer' && offer.bank_details) {
-        // Show bank details panel
+        // Show bank details panel with wire receipt upload
         const b = offer.bank_details
         const successEl = document.getElementById('success-state')
         if (successEl && contractBodyRef.current) {
@@ -269,11 +269,65 @@ export default function ContractPage() {
           if (b.amount) sh += `<div class="contract-bank-amount">${esc(b.amount)}</div>`
           if (b.reference) sh += `<div class="contract-bank-ref">Reference: ${esc(b.reference)}</div>`
           sh += '</div>'
-          sh += '<p style="font-size:9.5pt;color:var(--c-muted)">Once payment is received, we will begin working on your LLC immediately.</p>'
+          // Wire receipt upload section
+          sh += '<div class="contract-receipt-upload">'
+          sh += '<h3 style="font-size:11pt;margin-bottom:8px;">Upload Wire Transfer Receipt</h3>'
+          sh += '<p style="font-size:9.5pt;color:var(--c-muted);margin-bottom:12px;">Once you complete the transfer, upload the receipt to start your services immediately.</p>'
+          sh += '<div class="contract-receipt-drop" id="receipt-drop" onclick="document.getElementById(\'receipt-input\').click()">'
+          sh += '<input type="file" id="receipt-input" accept="image/*,.pdf" style="display:none" />'
+          sh += '<p id="receipt-label">Click to upload receipt (PDF or image)</p>'
+          sh += '</div>'
+          sh += '<button id="receipt-submit" class="contract-receipt-btn" disabled>Upload Receipt</button>'
+          sh += '<div id="receipt-status" style="font-size:9pt;margin-top:8px;"></div>'
+          sh += '</div>'
+          sh += '<p style="font-size:9.5pt;color:var(--c-muted)">Once payment is received and verified, we will begin working on your LLC immediately.</p>'
           sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">&larr; Back to Offer</a>`
           sh += '</div>'
           successEl.innerHTML = sh
           successEl.style.display = 'block'
+
+          // Wire receipt upload handler
+          const receiptInput = document.getElementById('receipt-input') as HTMLInputElement
+          const receiptBtn = document.getElementById('receipt-submit') as HTMLButtonElement
+          const receiptLabel = document.getElementById('receipt-label')!
+          const receiptStatus = document.getElementById('receipt-status')!
+          let receiptFile: File | null = null
+
+          receiptInput?.addEventListener('change', () => {
+            if (receiptInput.files?.[0]) {
+              receiptFile = receiptInput.files[0]
+              receiptLabel.textContent = receiptFile.name
+              receiptLabel.style.color = 'var(--c-green)'
+              receiptBtn.disabled = false
+            }
+          })
+
+          receiptBtn?.addEventListener('click', async () => {
+            if (!receiptFile) return
+            receiptBtn.disabled = true
+            receiptBtn.textContent = 'Uploading...'
+            receiptStatus.textContent = ''
+            try {
+              const ext = receiptFile.name.split('.').pop() || 'pdf'
+              const path = `${offer.token}/wire-receipt-${Date.now()}.${ext}`
+              const uploadRes = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
+                method: 'POST',
+                headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
+                body: receiptFile
+              })
+              if (!uploadRes.ok) throw new Error('Upload failed')
+              // Update contract record with receipt path
+              await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offer.token)
+              receiptStatus.innerHTML = '<span style="color:var(--c-green);font-weight:600">Receipt uploaded successfully! We will verify your payment shortly.</span>'
+              receiptBtn.textContent = 'Uploaded'
+              const dropEl = document.getElementById('receipt-drop')
+              if (dropEl) dropEl.style.borderColor = 'var(--c-green)'
+            } catch (e: any) {
+              receiptStatus.innerHTML = `<span style="color:var(--c-red)">Upload failed: ${e.message}. Please try again.</span>`
+              receiptBtn.disabled = false
+              receiptBtn.textContent = 'Upload Receipt'
+            }
+          })
         }
       } else {
         setStatusMsg('Contract signed and submitted! Tony Durante will contact you shortly via WhatsApp.')
@@ -307,8 +361,8 @@ export default function ContractPage() {
   ].filter(Boolean).join('\n')
 
   // Services list
-  const servicesList = offer.servizi && Array.isArray(offer.servizi)
-    ? offer.servizi.map(svc => ({ name: svc.nome || svc.name || '', desc: svc.descrizione || svc.description || '' }))
+  const servicesList = offer.services && Array.isArray(offer.services)
+    ? offer.services.map(svc => ({ name: svc.name || '', desc: svc.description || '' }))
     : [
         { name: 'LLC Formation & State Registration', desc: '' },
         { name: 'EIN Application', desc: '' },
@@ -330,7 +384,7 @@ export default function ContractPage() {
         {/* HEADER */}
         <div className="contract-header">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={LOGO_URL} alt="Tony Durante LLC" />
+          <img src="/images/logo.jpg" alt="Tony Durante LLC" />
           <h1>Master Service Agreement</h1>
           <div className="contract-subtitle">&amp; Statement of Work</div>
         </div>
@@ -401,7 +455,7 @@ export default function ContractPage() {
             <div className="contract-sig-block">
               <div className="contract-sig-label">Consulting Firm</div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <div className="contract-sig-static"><img src={LOGO_URL} alt="Tony Durante" style={{ maxHeight: 40, opacity: 0.8 }} /></div>
+              <div className="contract-sig-static"><img src="/images/logo.jpg" alt="Tony Durante" style={{ maxHeight: 40, opacity: 0.8 }} /></div>
               <div className="contract-sig-field">Name: Tony Durante</div>
               <div className="contract-sig-field">Title: Managing Member</div>
               <div className="contract-sig-date">Date: {today()}</div>
@@ -485,7 +539,7 @@ export default function ContractPage() {
             <div className="contract-sig-block">
               <div className="contract-sig-label">Consulting Firm</div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <div className="contract-sig-static"><img src={LOGO_URL} alt="Tony Durante" style={{ maxHeight: 40, opacity: 0.8 }} /></div>
+              <div className="contract-sig-static"><img src="/images/logo.jpg" alt="Tony Durante" style={{ maxHeight: 40, opacity: 0.8 }} /></div>
               <div className="contract-sig-field">Name: Tony Durante</div>
               <div className="contract-sig-field">Title: Managing Member</div>
               <div className="contract-sig-date">Date: {today()}</div>
@@ -702,6 +756,15 @@ function ContractStyles() {
       .contract-bank-amount { text-align:center; font-size:18pt; font-weight:700; color:var(--c-primary); margin:16px 0 4px; }
       .contract-bank-ref { text-align:center; font-size:9pt; color:var(--c-muted); margin-bottom:12px; }
       .contract-success-link { display:inline-block; margin-top:20px; padding:12px 32px; background:var(--c-primary); color:#fff; text-decoration:none; border-radius:8px; font-family:'Inter',sans-serif; font-weight:600; font-size:10.5pt; }
+
+      .contract-receipt-upload { margin:24px 0; padding:20px; background:#fff; border:1px solid var(--c-border); border-radius:12px; text-align:center; }
+      .contract-receipt-upload h3 { font-family:'Inter',sans-serif; color:var(--c-primary); border-bottom:none; }
+      .contract-receipt-drop { border:2px dashed var(--c-border); padding:24px; border-radius:8px; cursor:pointer; transition:border-color .2s; margin-bottom:12px; }
+      .contract-receipt-drop:hover { border-color:var(--c-accent); }
+      .contract-receipt-drop p { color:var(--c-muted); font-style:italic; font-size:10pt; margin:0; }
+      .contract-receipt-btn { display:inline-block; padding:10px 28px; background:var(--c-green); color:#fff; border:none; border-radius:6px; font-family:'Inter',sans-serif; font-weight:600; font-size:10pt; cursor:pointer; transition:background .2s; }
+      .contract-receipt-btn:hover { background:#246e3d; }
+      .contract-receipt-btn:disabled { background:var(--c-border); color:var(--c-muted); cursor:not-allowed; }
 
       .contract-text-center { text-align:center; }
       .contract-text-muted { color:var(--c-muted); }

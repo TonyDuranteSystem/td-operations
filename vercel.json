@@ -16,6 +16,14 @@
   "rewrites": [
     {
       "source": "/",
+      "has": [
+        { "type": "query", "key": "t", "value": "(?<token>.*)" },
+        { "type": "query", "key": "c", "value": "(?<code>.*)" }
+      ],
+      "destination": "/offer/:token?c=:code"
+    },
+    {
+      "source": "/",
       "has": [{ "type": "query", "key": "t", "value": "(?<token>.*)" }],
       "destination": "/offer/:token"
     }

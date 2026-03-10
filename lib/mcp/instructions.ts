@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 78 tools, data source priority,
+ * This guides Claude on how to use the 81 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -65,7 +65,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection — Key Rules
 
-You have 78 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 81 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM (10 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
@@ -108,7 +108,8 @@ You have 78 tools in functional groups. Read each tool's description carefully �
 
 ### Other Groups
 - cal_*: Calendly bookings and availability (3 tools).
-- offer_*: Service proposals — create, list, update (4 tools).
+- cb_*: Circleback call summaries — list, get details, search (3 tools). Data arrives via webhook, auto-linked to leads by attendee email.
+- offer_*: Service proposals — create, list, get, update, send (5 tools). All JSONB fields use English names (services, cost_summary, issues, strategy, etc.). Workflow: create (draft) → review → offer_send (creates Gmail draft) → client views → signs → pays.
 - kb_*: Knowledge base — ALWAYS search kb_search before answering business/pricing questions (4 tools).
 - storage_*: Supabase Storage files, mirrored to Drive (5 tools).
 - sysdoc_*: System documentation — list, read, create, update (4 tools). Key docs: session-context (lean quick-ref), project-state (milestones), tech-stack (architecture). Use sysdoc_create for session logs.

@@ -5,9 +5,10 @@ export async function middleware(request: NextRequest) {
   // Legacy rewrite: /?t=TOKEN → /offer/TOKEN (must happen before auth check)
   if (request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('t')) {
     const token = request.nextUrl.searchParams.get('t')
+    const code = request.nextUrl.searchParams.get('c')
     const url = request.nextUrl.clone()
     url.pathname = `/offer/${token}`
-    url.search = ''
+    url.search = code ? `c=${code}` : ''
     return NextResponse.rewrite(url)
   }
 
@@ -47,6 +48,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/sync-drive') &&
     !request.nextUrl.pathname.startsWith('/api/sync-airtable') &&
     !request.nextUrl.pathname.startsWith('/api/sync-hubspot') &&
+    !request.nextUrl.pathname.startsWith('/api/webhooks') &&
     !request.nextUrl.pathname.startsWith('/offer') &&
     !request.nextUrl.pathname.startsWith('/contract-template') &&
     !request.nextUrl.pathname.startsWith('/.well-known') &&

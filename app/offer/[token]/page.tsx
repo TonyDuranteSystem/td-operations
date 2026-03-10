@@ -1,34 +1,152 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
-import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { useEffect, useState, useCallback } from 'react'
+import { useParams, useSearchParams } from 'next/navigation'
+import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 
-function formatDate(d: string) {
+// ─── Bilingual Labels ───────────────────────────────────────
+
+const LABELS = {
+  en: {
+    title: 'Consulting Proposal',
+    subtitle: 'Business Consulting',
+    preparedFor: 'Prepared for',
+    date: 'Date',
+    issues: 'Issues Identified',
+    issuesIntro: 'During our consultation, the following situations emerged that require priority attention:',
+    immediateActions: 'Recommended Immediate Actions',
+    strategy: 'Our Strategy',
+    services: 'Proposed Services',
+    servicesIntro: 'Based on your situation, you can choose between the following options.',
+    recommended: 'RECOMMENDED',
+    includes: 'INCLUDES:',
+    costSummary: 'Cost Summary',
+    total: 'Total',
+    recurringCosts: 'Annual Costs',
+    futureDevelopments: 'Future Developments',
+    futureDevelopmentsIntro: 'Once operational with the new structure, we can discuss next steps:',
+    nextSteps: 'Next Steps',
+    readyToStart: 'Ready to Start?',
+    contractSigned: 'Contract signed successfully!',
+    proceedPayment: 'Proceed with payment to start the collaboration.',
+    proceedWire: 'Proceed with the wire transfer to start the collaboration.',
+    reviewAndSign: 'Review and sign the contract to confirm the collaboration.',
+    acceptAndSign: 'Accept & Sign Contract',
+    afterSignature: 'After signing you will be guided to payment',
+    questions: 'Have questions? Contact us before proceeding.',
+    contactWhatsApp: 'Contact us on WhatsApp',
+    paymentSecure: 'Secure and encrypted transaction',
+    paymentNote: 'Secure payment via credit card, Apple Pay or Bancontact',
+    bankDetails: 'Bank Details',
+    beneficiary: 'Beneficiary',
+    iban: 'IBAN',
+    bic: 'BIC/SWIFT',
+    bank: 'Bank',
+    reference: 'Reference',
+    expired: 'Offer Expired',
+    expiredMessage: 'This offer is no longer available. Contact Tony Durante for a new proposal.',
+    invalidLink: 'Invalid Link',
+    invalidLinkMessage: 'This link does not contain a valid reference.',
+    notFound: 'Offer Not Found',
+    loading: 'Loading offer...',
+    emailGateTitle: 'Verify Your Identity',
+    emailGateMessage: 'Enter the email address associated with this proposal to view it.',
+    emailGateButton: 'View Proposal',
+    emailGateError: 'The email address does not match. Please try again.',
+    emailPlaceholder: 'your@email.com',
+    contactPayment: 'Contact us on WhatsApp to proceed with payment.',
+  },
+  it: {
+    title: 'Offerta Consulenziale',
+    subtitle: 'Business Consulting',
+    preparedFor: 'Preparata per',
+    date: 'Data',
+    issues: 'Criticità Identificate',
+    issuesIntro: 'Durante la nostra call sono emerse alcune situazioni da risolvere con priorità:',
+    immediateActions: 'Azioni Immediate Consigliate',
+    strategy: 'La Strategia',
+    services: 'Servizi Proposti',
+    servicesIntro: 'In base alla vostra situazione, potete scegliere tra le opzioni seguenti.',
+    recommended: 'CONSIGLIATO',
+    includes: 'INCLUDE:',
+    costSummary: 'Riepilogo Costi',
+    total: 'Totale',
+    recurringCosts: 'Costi Annuali',
+    futureDevelopments: 'Sviluppi Futuri',
+    futureDevelopmentsIntro: 'Una volta operativi con la nuova struttura, possiamo ragionare su passi successivi:',
+    nextSteps: 'Prossimi Passi',
+    readyToStart: 'Pronto a Partire?',
+    contractSigned: 'Contratto firmato con successo!',
+    proceedPayment: 'Procedi con il pagamento per avviare la collaborazione.',
+    proceedWire: 'Procedi con il bonifico bancario per avviare la collaborazione.',
+    reviewAndSign: 'Rivedi e firma il contratto per confermare la collaborazione.',
+    acceptAndSign: 'Accetta e Firma Contratto',
+    afterSignature: 'Dopo la firma verrai guidato al pagamento',
+    questions: 'Hai domande? Contattaci prima di procedere.',
+    contactWhatsApp: 'Contattaci su WhatsApp',
+    paymentSecure: 'Transazione protetta e crittografata',
+    paymentNote: 'Pagamento sicuro tramite carta di credito, Apple Pay o Bancontact',
+    bankDetails: 'Coordinate Bancarie',
+    beneficiary: 'Beneficiario',
+    iban: 'IBAN',
+    bic: 'BIC/SWIFT',
+    bank: 'Banca',
+    reference: 'Causale',
+    expired: 'Offerta Scaduta',
+    expiredMessage: 'Questa offerta non è più disponibile. Contatta Tony Durante per una nuova proposta.',
+    invalidLink: 'Link non valido',
+    invalidLinkMessage: 'Questo link non contiene un riferimento valido.',
+    notFound: 'Offerta non trovata',
+    loading: 'Caricamento offerta...',
+    emailGateTitle: 'Verifica la tua identità',
+    emailGateMessage: 'Inserisci l\'indirizzo email associato a questa proposta per visualizzarla.',
+    emailGateButton: 'Visualizza Proposta',
+    emailGateError: 'L\'indirizzo email non corrisponde. Riprova.',
+    emailPlaceholder: 'tua@email.com',
+    contactPayment: 'Contattaci su WhatsApp per procedere con il pagamento.',
+  },
+}
+
+// ─── Helpers ────────────────────────────────────────────────
+
+function formatDate(d: string, lang: 'en' | 'it') {
   const date = new Date(d)
-  const months = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre']
+  const monthsEn = ['January','February','March','April','May','June','July','August','September','October','November','December']
+  const monthsIt = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre']
+  const months = lang === 'en' ? monthsEn : monthsIt
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`
 }
 
+const COOKIE_NAME = 'offer_verified'
+
+function setVerifiedCookie(token: string) {
+  document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
+}
+
+function hasVerifiedCookie(token: string): boolean {
+  return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
+}
+
+// ─── Component ──────────────────────────────────────────────
+
 export default function OfferPage() {
   const params = useParams()
+  const searchParams = useSearchParams()
   const token = params.token as string
+  const accessCode = searchParams.get('c') || ''
+
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [verified, setVerified] = useState(false)
+  const [emailInput, setEmailInput] = useState('')
+  const [emailError, setEmailError] = useState(false)
+  const [lang, setLang] = useState<'en' | 'it'>('it')
 
-  useEffect(() => {
-    if (!token) { setError('Link non valido'); setLoading(false); return }
-    loadOffer()
-    // Prevent copy/print
-    const handler = (e: Event) => e.preventDefault()
-    document.addEventListener('contextmenu', handler)
-    return () => document.removeEventListener('contextmenu', handler)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
+  const L = LABELS[lang]
 
-  async function loadOffer() {
+  const loadOffer = useCallback(async () => {
     try {
       const { data, error: err } = await supabasePublic
         .from('offers')
@@ -36,47 +154,135 @@ export default function OfferPage() {
         .eq('token', token)
         .single()
 
-      if (err || !data) { setError('Offerta non trovata'); setLoading(false); return }
+      if (err || !data) { setError('not_found'); setLoading(false); return }
 
       let o = data as Offer
+
+      // Check access code
+      if (o.access_code && accessCode && o.access_code !== accessCode) {
+        setError('not_found')
+        setLoading(false)
+        return
+      }
+
       if (o.expires_at && new Date(o.expires_at) < new Date()) {
         o = { ...o, status: 'expired' }
       }
-      setOffer(o)
-      setLoading(false)
-      document.title = `Offerta per ${o.client_name} — Tony Durante LLC`
 
-      // Track view
-      supabasePublic
-        .from('offers')
-        .update({
-          view_count: (o.view_count || 0) + 1,
-          viewed_at: new Date().toISOString(),
-          status: o.status === 'draft' ? 'viewed' : o.status
-        })
-        .eq('id', o.id)
-        .then(() => {})
+      setOffer(o)
+      setLang(o.language || 'it')
+      setLoading(false)
+
+      // Check if already verified via cookie
+      if (hasVerifiedCookie(token)) {
+        setVerified(true)
+      }
+
+      // Track view (only once verified or no email gate needed)
+      if (hasVerifiedCookie(token) || !o.client_email) {
+        trackView(o)
+      }
     } catch {
-      setError('Impossibile caricare l\'offerta. Riprova più tardi.')
+      setError('load_error')
       setLoading(false)
     }
+  }, [token, accessCode])
+
+  function trackView(o: Offer) {
+    supabasePublic
+      .from('offers')
+      .update({
+        view_count: (o.view_count || 0) + 1,
+        viewed_at: new Date().toISOString(),
+        status: o.status === 'draft' || o.status === 'sent' ? 'viewed' : o.status,
+      })
+      .eq('id', o.id)
+      .then(() => {})
   }
+
+  function handleEmailVerify(e: React.FormEvent) {
+    e.preventDefault()
+    if (!offer) return
+    if (emailInput.toLowerCase().trim() === (offer.client_email || '').toLowerCase().trim()) {
+      setVerified(true)
+      setEmailError(false)
+      setVerifiedCookie(token)
+      trackView(offer)
+    } else {
+      setEmailError(true)
+    }
+  }
+
+  useEffect(() => {
+    if (!token) { setError('invalid_link'); setLoading(false); return }
+    loadOffer()
+    // Prevent copy/print
+    const handler = (e: Event) => e.preventDefault()
+    document.addEventListener('contextmenu', handler)
+    return () => document.removeEventListener('contextmenu', handler)
+  }, [token, loadOffer])
+
+  // Set document title and lang
+  useEffect(() => {
+    if (offer) {
+      document.title = lang === 'en'
+        ? `Proposal for ${offer.client_name} — Tony Durante LLC`
+        : `Offerta per ${offer.client_name} — Tony Durante LLC`
+      document.documentElement.lang = lang
+    }
+  }, [offer, lang])
 
   if (loading) return (
     <>
       <OfferStyles />
-      <div className="offer-loading"><div className="offer-loading-spinner" /><span>Caricamento offerta...</span></div>
+      <div className="offer-loading"><div className="offer-loading-spinner" /><span>{L.loading}</span></div>
     </>
   )
 
-  if (error) return (
-    <>
-      <OfferStyles />
-      <div className="offer-error-page"><div><h1>{error === 'Link non valido' ? 'Link non valido' : 'Offerta non trovata'}</h1><p>{error === 'Link non valido' ? 'Questo link non contiene un riferimento valido.' : error}</p></div></div>
-    </>
-  )
+  if (error) {
+    const errorL = LABELS[lang]
+    return (
+      <>
+        <OfferStyles />
+        <div className="offer-error-page"><div>
+          <h1>{error === 'invalid_link' ? errorL.invalidLink : errorL.notFound}</h1>
+          <p>{error === 'invalid_link' ? errorL.invalidLinkMessage : errorL.notFound}</p>
+        </div></div>
+      </>
+    )
+  }
 
   if (!offer) return null
+
+  // Email verification gate
+  if (!verified && offer.client_email) {
+    return (
+      <>
+        <OfferStyles />
+        <div className="offer-gate">
+          <div className="offer-gate-box">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/logo.jpg" alt="Tony Durante LLC" className="offer-gate-logo" />
+            <h2>{L.emailGateTitle}</h2>
+            <p>{L.emailGateMessage}</p>
+            <form onSubmit={handleEmailVerify}>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(e) => { setEmailInput(e.target.value); setEmailError(false) }}
+                placeholder={L.emailPlaceholder}
+                className={`offer-gate-input${emailError ? ' offer-gate-input-error' : ''}`}
+                required
+                autoFocus
+              />
+              {emailError && <div className="offer-gate-error-msg">{L.emailGateError}</div>}
+              <button type="submit" className="offer-gate-btn">{L.emailGateButton}</button>
+            </form>
+          </div>
+        </div>
+      </>
+    )
+  }
 
   const o = offer
   const isSigned = o.status === 'signed' || o.status === 'completed'
@@ -89,8 +295,8 @@ export default function OfferPage() {
       {o.status === 'expired' && (
         <div className="offer-expired-overlay">
           <div className="offer-expired-box">
-            <h2>Offerta Scaduta</h2>
-            <p>Questa offerta non è più disponibile. Contatta Tony Durante per una nuova proposta.</p>
+            <h2>{L.expired}</h2>
+            <p>{L.expiredMessage}</p>
           </div>
         </div>
       )}
@@ -98,15 +304,15 @@ export default function OfferPage() {
       <div className="offer-container">
         <div className="offer-header-bar">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={LOGO_URL} alt="Tony Durante LLC" className="offer-logo-img" />
+          <img src="/images/logo.jpg" alt="Tony Durante LLC" className="offer-logo-img" />
         </div>
 
         <div className="offer-hero">
-          <div className="offer-hero-label">Business Consulting</div>
-          <h1>Offerta Consulenziale</h1>
+          <div className="offer-hero-label">{L.subtitle}</div>
+          <h1>{L.title}</h1>
           <div className="offer-hero-meta">
-            <div><div className="offer-hero-meta-item">Preparata per</div><div className="offer-hero-meta-value">{o.client_name || ''}</div></div>
-            <div><div className="offer-hero-meta-item">Data</div><div className="offer-hero-meta-value">{formatDate(o.offer_date)}</div></div>
+            <div><div className="offer-hero-meta-item">{L.preparedFor}</div><div className="offer-hero-meta-value">{o.client_name || ''}</div></div>
+            <div><div className="offer-hero-meta-item">{L.date}</div><div className="offer-hero-meta-value">{formatDate(o.offer_date, lang)}</div></div>
           </div>
           <div className="offer-hero-line" />
         </div>
@@ -120,32 +326,32 @@ export default function OfferPage() {
             </div>
           )}
 
-          {/* Criticita */}
-          {o.criticita && o.criticita.length > 0 && (
+          {/* Issues */}
+          {o.issues && o.issues.length > 0 && (
             <div className="offer-section offer-criticita-box">
-              <div className="offer-section-title" style={{ color: 'var(--offer-red)' }}>Criticità Identificate</div>
-              <p style={{ marginBottom: 16, fontSize: 15 }}>Durante la nostra call sono emerse alcune situazioni da risolvere con priorità:</p>
-              {o.criticita.map((c, i) => (
+              <div className="offer-section-title" style={{ color: 'var(--offer-red)' }}>{L.issues}</div>
+              <p style={{ marginBottom: 16, fontSize: 15 }}>{L.issuesIntro}</p>
+              {o.issues.map((c, i) => (
                 <div key={i} className="offer-criticita-item"><strong>{c.title}:</strong> {c.description}</div>
               ))}
             </div>
           )}
 
-          {/* Azioni Immediate */}
-          {o.azioni_immediate && o.azioni_immediate.length > 0 && (
+          {/* Immediate Actions */}
+          {o.immediate_actions && o.immediate_actions.length > 0 && (
             <div className="offer-section offer-azioni-box">
-              <div className="offer-section-title" style={{ color: 'var(--offer-green)' }}>Azioni Immediate Consigliate</div>
-              {o.azioni_immediate.map((a, i) => (
+              <div className="offer-section-title" style={{ color: 'var(--offer-green)' }}>{L.immediateActions}</div>
+              {o.immediate_actions.map((a, i) => (
                 <div key={i} className="offer-azione-item">&rarr; <strong>{a.title}</strong> {a.text || a.description}</div>
               ))}
             </div>
           )}
 
-          {/* Strategia */}
-          {o.strategia && o.strategia.length > 0 && (
+          {/* Strategy */}
+          {o.strategy && o.strategy.length > 0 && (
             <div className="offer-section">
-              <div className="offer-section-title">La Strategia</div>
-              {o.strategia.map((st, i) => (
+              <div className="offer-section-title">{L.strategy}</div>
+              {o.strategy.map((st, i) => (
                 <div key={i} className="offer-strategia-step">
                   <div className="offer-step-number">{st.step_number}</div>
                   <div className="offer-step-content"><h3>{st.title}</h3><p>{st.description}</p></div>
@@ -154,24 +360,24 @@ export default function OfferPage() {
             </div>
           )}
 
-          {/* Servizi */}
-          {((o.servizi && o.servizi.length > 0) || (o.servizi_aggiuntivi && o.servizi_aggiuntivi.length > 0)) && (
+          {/* Services */}
+          {((o.services && o.services.length > 0) || (o.additional_services && o.additional_services.length > 0)) && (
             <div className="offer-section">
-              <div className="offer-section-title">Servizi Proposti</div>
-              {o.servizi && o.servizi.length > 1 && (
-                <p style={{ marginBottom: 20, fontSize: 15, color: '#6b7280' }}>In base alla vostra situazione, potete scegliere tra le opzioni seguenti.</p>
+              <div className="offer-section-title">{L.services}</div>
+              {o.services && o.services.length > 1 && (
+                <p style={{ marginBottom: 20, fontSize: 15, color: '#6b7280' }}>{L.servicesIntro}</p>
               )}
               <div className="offer-servizi-grid">
-                {o.servizi?.map((sv, i) => (
+                {o.services?.map((sv, i) => (
                   <div key={i} className={`offer-servizio-card${sv.recommended ? ' offer-recommended' : ''}`}>
-                    {sv.recommended && <div className="offer-badge-recommended">CONSIGLIATO</div>}
-                    <h3>{sv.name || sv.nome}</h3>
-                    <div className="offer-price">{sv.price || sv.prezzo}</div>
+                    {sv.recommended && <div className="offer-badge-recommended">{L.recommended}</div>}
+                    <h3>{sv.name}</h3>
+                    <div className="offer-price">{sv.price}</div>
                     <div className="offer-price-label">{sv.price_label || ''}</div>
-                    <p>{sv.description || sv.descrizione}</p>
+                    <p>{sv.description}</p>
                     {sv.includes && sv.includes.length > 0 && (
                       <>
-                        <div className="offer-includes-label">INCLUDE:</div>
+                        <div className="offer-includes-label">{L.includes}</div>
                         <ul className="offer-includes-list">
                           {sv.includes.map((inc, j) => <li key={j}>&#10003; {inc}</li>)}
                         </ul>
@@ -179,15 +385,15 @@ export default function OfferPage() {
                     )}
                   </div>
                 ))}
-                {o.servizi_aggiuntivi?.map((sv, i) => (
+                {o.additional_services?.map((sv, i) => (
                   <div key={`addon-${i}`} className="offer-servizio-card offer-addon">
-                    <h3>{sv.name || sv.nome}</h3>
-                    <div className="offer-price">{sv.price || sv.prezzo}</div>
+                    <h3>{sv.name}</h3>
+                    <div className="offer-price">{sv.price}</div>
                     <div className="offer-price-label">{sv.price_label || ''}</div>
-                    <p>{sv.description || sv.descrizione}</p>
+                    <p>{sv.description}</p>
                     {sv.includes && sv.includes.length > 0 && (
                       <>
-                        <div className="offer-includes-label">INCLUDE:</div>
+                        <div className="offer-includes-label">{L.includes}</div>
                         <ul className="offer-includes-list">
                           {sv.includes.map((inc, j) => <li key={j}>&#10003; {inc}</li>)}
                         </ul>
@@ -199,24 +405,25 @@ export default function OfferPage() {
             </div>
           )}
 
-          {/* Riepilogo Costi */}
-          {((o.riepilogo_costi && o.riepilogo_costi.length > 0) || (o.costi_annuali && o.costi_annuali.length > 0)) && (
+          {/* Cost Summary */}
+          {((o.cost_summary && o.cost_summary.length > 0) || (o.recurring_costs && o.recurring_costs.length > 0)) && (
             <div className="offer-section">
-              <div className="offer-section-title">Riepilogo Costi</div>
+              <div className="offer-section-title">{L.costSummary}</div>
               <div className="offer-riepilogo-box">
-                {o.riepilogo_costi?.map((r, i) => (
+                {o.cost_summary?.map((r, i) => (
                   <div key={i} className="offer-riepilogo-section">
                     <h4>{r.label}</h4>
                     <div className="offer-riepilogo-line" />
                     {r.items?.map((item, j) => (
                       <div key={j} className="offer-riepilogo-row"><span>{item.name}</span><span className="offer-riepilogo-price">{item.price}</span></div>
                     ))}
-                    <div className="offer-riepilogo-total"><span>{r.total_label || 'Totale'}</span><span>{r.total || r.totale}</span></div>
+                    <div className="offer-riepilogo-total"><span>{r.total_label || L.total}</span><span>{r.total}</span></div>
                   </div>
                 ))}
-                {o.costi_annuali && o.costi_annuali.length > 0 && (
+                {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
-                    {o.costi_annuali.map((c, i) => (
+                    <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
+                    {o.recurring_costs.map((c, i) => (
                       <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{c.price}</span></div>
                     ))}
                   </div>
@@ -225,24 +432,24 @@ export default function OfferPage() {
             </div>
           )}
 
-          {/* Sviluppi Futuri */}
-          {o.sviluppi_futuri && o.sviluppi_futuri.length > 0 && (
+          {/* Future Developments */}
+          {o.future_developments && o.future_developments.length > 0 && (
             <div className="offer-section">
-              <div className="offer-section-title">Sviluppi Futuri</div>
+              <div className="offer-section-title">{L.futureDevelopments}</div>
               <div className="offer-sviluppi-box">
-                <p style={{ marginBottom: 12, fontSize: 15 }}>Una volta operativi con la nuova struttura, possiamo ragionare su passi successivi:</p>
-                {o.sviluppi_futuri.map((sv, i) => (
+                <p style={{ marginBottom: 12, fontSize: 15 }}>{L.futureDevelopmentsIntro}</p>
+                {o.future_developments.map((sv, i) => (
                   <div key={i} className="offer-sviluppo-item">&rarr; {sv.text}</div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Prossimi Passi */}
-          {o.prossimi_passi && o.prossimi_passi.length > 0 && (
+          {/* Next Steps */}
+          {o.next_steps && o.next_steps.length > 0 && (
             <div className="offer-section">
-              <div className="offer-section-title">Prossimi Passi</div>
-              {o.prossimi_passi.map((p, i) => (
+              <div className="offer-section-title">{L.nextSteps}</div>
+              {o.next_steps.map((p, i) => (
                 <div key={i} className="offer-passo-step">
                   <div className="offer-passo-number">{p.step_number}</div>
                   <div className="offer-passo-content"><h4>{p.title}</h4><p>{p.description}</p></div>
@@ -253,51 +460,51 @@ export default function OfferPage() {
 
           {/* CTA */}
           <div className="offer-cta-box">
-            <h2>Pronto a Partire?</h2>
+            <h2>{L.readyToStart}</h2>
 
             {isSigned ? (
               <>
-                <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; Contratto firmato con successo!</p>
+                <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>
                 {ptype === 'checkout' && o.payment_links && o.payment_links.length > 0 ? (
                   <>
-                    <p style={{ opacity: 0.9, marginBottom: 20 }}>Procedi con il pagamento per avviare la collaborazione.</p>
+                    <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedPayment}</p>
                     <div className="offer-payment-buttons">
                       {o.payment_links.map((pl, i) => (
                         <a key={i} href={pl.url} target="_blank" rel="noopener noreferrer" className="offer-payment-btn">{pl.label} &mdash; {pl.amount}</a>
                       ))}
                     </div>
-                    <div className="offer-payment-note">Pagamento sicuro tramite carta di credito, Apple Pay o Bancontact</div>
-                    <div className="offer-payment-secure">&#128274; Transazione protetta e crittografata</div>
+                    <div className="offer-payment-note">{L.paymentNote}</div>
+                    <div className="offer-payment-secure">&#128274; {L.paymentSecure}</div>
                   </>
                 ) : ptype === 'bank_transfer' && o.bank_details ? (
                   <>
-                    <p style={{ opacity: 0.9, marginBottom: 20 }}>Procedi con il bonifico bancario per avviare la collaborazione.</p>
+                    <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedWire}</p>
                     <div className="offer-bank-box">
-                      <div className="offer-bank-title">Coordinate Bancarie</div>
-                      {o.bank_details.beneficiary && <div className="offer-bank-row"><span className="offer-bank-label">Beneficiario</span><span className="offer-bank-value">{o.bank_details.beneficiary}</span></div>}
-                      {o.bank_details.iban && <div className="offer-bank-row"><span className="offer-bank-label">IBAN</span><span className="offer-bank-value">{o.bank_details.iban}</span></div>}
-                      {o.bank_details.bic && <div className="offer-bank-row"><span className="offer-bank-label">BIC/SWIFT</span><span className="offer-bank-value">{o.bank_details.bic}</span></div>}
-                      {o.bank_details.bank_name && <div className="offer-bank-row"><span className="offer-bank-label">Banca</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>}
+                      <div className="offer-bank-title">{L.bankDetails}</div>
+                      {o.bank_details.beneficiary && <div className="offer-bank-row"><span className="offer-bank-label">{L.beneficiary}</span><span className="offer-bank-value">{o.bank_details.beneficiary}</span></div>}
+                      {o.bank_details.iban && <div className="offer-bank-row"><span className="offer-bank-label">{L.iban}</span><span className="offer-bank-value">{o.bank_details.iban}</span></div>}
+                      {o.bank_details.bic && <div className="offer-bank-row"><span className="offer-bank-label">{L.bic}</span><span className="offer-bank-value">{o.bank_details.bic}</span></div>}
+                      {o.bank_details.bank_name && <div className="offer-bank-row"><span className="offer-bank-label">{L.bank}</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>}
                       {o.bank_details.amount && <div className="offer-bank-amount">{o.bank_details.amount}</div>}
-                      {o.bank_details.reference && <div className="offer-bank-ref">Causale: {o.bank_details.reference}</div>}
+                      {o.bank_details.reference && <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>}
                     </div>
                   </>
                 ) : (
-                  <p style={{ opacity: 0.9 }}>Contattaci su WhatsApp per procedere con il pagamento.</p>
+                  <p style={{ opacity: 0.9 }}>{L.contactPayment}</p>
                 )}
                 <div className="offer-payment-section">
-                  <p style={{ opacity: 0.8, marginBottom: 12 }}>Hai domande?</p>
-                  <a href="https://wa.me/17273187027" className="offer-cta-button">Contattaci su WhatsApp</a>
+                  <p style={{ opacity: 0.8, marginBottom: 12 }}>{L.questions}</p>
+                  <a href="https://wa.me/17273187027" className="offer-cta-button">{L.contactWhatsApp}</a>
                 </div>
               </>
             ) : (
               <>
-                <p>Rivedi e firma il contratto per confermare la collaborazione.</p>
-                <a href={`/offer/${encodeURIComponent(token)}/contract`} className="offer-accept-btn">&#9997;&#65039; Accetta e Firma Contratto</a>
-                <div className="offer-payment-note" style={{ marginTop: 16 }}>Dopo la firma verrai guidato al pagamento</div>
+                <p>{L.reviewAndSign}</p>
+                <a href={`/offer/${encodeURIComponent(token)}/contract`} className="offer-accept-btn">&#9997;&#65039; {L.acceptAndSign}</a>
+                <div className="offer-payment-note" style={{ marginTop: 16 }}>{L.afterSignature}</div>
                 <div className="offer-payment-section">
-                  <p style={{ opacity: 0.8, marginBottom: 12 }}>Hai domande? Contattaci prima di procedere.</p>
-                  <a href="https://wa.me/17273187027" className="offer-cta-button">Contattaci su WhatsApp</a>
+                  <p style={{ opacity: 0.8, marginBottom: 12 }}>{L.questions}</p>
+                  <a href="https://wa.me/17273187027" className="offer-cta-button">{L.contactWhatsApp}</a>
                 </div>
               </>
             )}
@@ -325,7 +532,6 @@ export default function OfferPage() {
 function OfferStyles() {
   return (
     <style jsx global>{`
-      /* Reset Tailwind interference for offer pages */
       body { background: #f7f8fa !important; color: #374151 !important; font-family: 'Source Sans 3', -apple-system, sans-serif !important; line-height: 1.7 !important; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
       @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
       @media print { body { display: none !important; } }
@@ -336,6 +542,19 @@ function OfferStyles() {
         --offer-gray-300: #d1d5db; --offer-gray-500: #6b7280; --offer-gray-700: #374151; --offer-green: #059669;
         --offer-green-bg: #ecfdf5; --offer-green-border: #a7f3d0; --offer-white: #fff;
       }
+
+      /* Email verification gate */
+      .offer-gate { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+      .offer-gate-box { background: #fff; padding: 48px; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; max-width: 440px; width: 100%; }
+      .offer-gate-logo { height: 48px; margin-bottom: 24px; }
+      .offer-gate-box h2 { font-family: 'Playfair Display', serif; font-size: 24px; color: var(--offer-blue); margin-bottom: 8px; }
+      .offer-gate-box p { font-size: 15px; color: var(--offer-gray-500); margin-bottom: 24px; line-height: 1.6; }
+      .offer-gate-input { width: 100%; padding: 14px 16px; border: 2px solid var(--offer-gray-200); border-radius: 8px; font-size: 16px; outline: none; transition: border-color .2s; box-sizing: border-box; }
+      .offer-gate-input:focus { border-color: var(--offer-blue); }
+      .offer-gate-input-error { border-color: var(--offer-red) !important; }
+      .offer-gate-error-msg { color: var(--offer-red); font-size: 14px; margin-top: 8px; }
+      .offer-gate-btn { display: block; width: 100%; margin-top: 16px; padding: 14px; background: var(--offer-blue); color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background .2s; }
+      .offer-gate-btn:hover { background: #162d4a; }
 
       .offer-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-size: 18px; color: var(--offer-gray-500); }
       .offer-loading-spinner { width: 40px; height: 40px; border: 3px solid var(--offer-gray-200); border-top-color: var(--offer-red); border-radius: 50%; animation: offer-spin 1s linear infinite; margin-bottom: 16px; }
@@ -425,7 +644,6 @@ function OfferStyles() {
       .offer-accept-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(30,58,95,.45); }
 
       .offer-payment-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.2); }
-      .offer-payment-label { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; opacity: .7; margin-bottom: 16px; }
       .offer-payment-buttons { display: flex; flex-direction: column; gap: 12px; align-items: center; }
       .offer-payment-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: #fff; padding: 16px 48px; border-radius: 10px; font-weight: 700; font-size: 17px; text-decoration: none; transition: transform .2s, box-shadow .2s; min-width: 320px; box-shadow: 0 4px 14px rgba(34,197,94,.3); }
       .offer-payment-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(34,197,94,.4); }
@@ -459,6 +677,7 @@ function OfferStyles() {
         .offer-hero-meta { flex-direction: column; gap: 16px; }
         .offer-payment-btn { min-width: auto; width: 100%; padding: 14px 24px; }
         .offer-bank-box { padding: 20px 16px; }
+        .offer-gate-box { padding: 32px 24px; }
       }
     `}</style>
   )
