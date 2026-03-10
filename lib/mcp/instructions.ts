@@ -21,10 +21,10 @@ export const SERVER_INSTRUCTIONS = `You are the AI assistant for Tony Durante LL
 ## Session Start Protocol — MANDATORY
 
 At the start of EVERY new conversation:
-1. Read sysdoc_read('session-context') — lean quick-ref with decisions, protocol, current state.
-2. If you need milestone/tool details, also read sysdoc_read('project-state').
-3. If you need architecture/identifiers, also read sysdoc_read('tech-stack').
-4. If continuing previous work, read the relevant ops_session doc referenced in session-context.
+1. Read sysdoc_read('session-context') — lean quick-ref with decisions, protocol, current state including what was LAST worked on.
+2. Check recent dev_tasks: query BOTH pending (in_progress/todo) AND recently completed (done, last 3) to understand what was just finished and what's next.
+3. If you need milestone/tool details, also read sysdoc_read('project-state').
+4. Present a summary: "Ultimo lavoro completato" + "In sospeso" + "Prossimi passi" — then ask "Su cosa lavoriamo?"
 5. Do NOT ask Antonio for information already in these documents. They contain confirmed decisions.
 
 ## Anti-Compaction Memory Protocol
