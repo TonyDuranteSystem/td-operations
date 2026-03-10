@@ -10,6 +10,7 @@ import { qbApiCall, createInvoice, getActiveToken } from "@/lib/quickbooks"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export function registerQbTools(server: McpServer) {
+  const regErrors: string[] = []
 
   // ═══════════════════════════════════════
   // qb_list_invoices
@@ -342,12 +343,13 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   // qb_void_invoice
   // ═══════════════════════════════════════
+  try {
   server.tool(
     "qb_void_invoice",
     "Void or delete an invoice in QuickBooks Online. Void (recommended) keeps the invoice in history but zeroes the balance. Delete removes it completely. Requires the invoice ID (from qb_list_invoices). Use this to cancel incorrect or duplicate invoices.",
     {
       invoice_id: z.string().describe("QuickBooks Invoice ID (the 'id' field from qb_list_invoices, NOT the doc_number)"),
-      action: z.enum(["void", "delete"]).default("void").describe("'void' (recommended — keeps history) or 'delete' (permanent removal)"),
+      action: z.enum(["void", "delete"]).optional().default("void").describe("'void' (recommended — keeps history) or 'delete' (permanent removal)"),
     },
     async ({ invoice_id, action }) => {
       try {
@@ -381,10 +383,12 @@ export function registerQbTools(server: McpServer) {
       }
     }
   )
+  } catch (e) { regErrors.push(`qb_void_invoice: ${(e as Error).message}`) }
 
   // ═══════════════════════════════════════
   // qb_get_invoice
   // ═══════════════════════════════════════
+  try {
   server.tool(
     "qb_get_invoice",
     "Get full details of a single QuickBooks invoice by ID. Returns ALL fields: line items, customer memo, footer, custom fields, email status, payment info, tax details. Use this to inspect invoices before sending or to check payment instructions. Use qb_list_invoices first to find the invoice ID.",
@@ -488,10 +492,12 @@ export function registerQbTools(server: McpServer) {
       }
     }
   )
+  } catch (e) { regErrors.push(`qb_get_invoice: ${(e as Error).message}`) }
 
   // ═══════════════════════════════════════
   // qb_send_invoice
   // ═══════════════════════════════════════
+  try {
   server.tool(
     "qb_send_invoice",
     "Send an invoice via email using Postmark. Downloads the invoice PDF from QuickBooks and sends it as an email attachment with bank payment details (USD or EUR based on invoice currency). The customer receives a professional bilingual email from support@tonydurante.us. WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (if needed) → CONFIRM with user → qb_send_invoice. Use email_get_delivery_status with the returned MessageID to track delivery.",
@@ -611,10 +617,12 @@ export function registerQbTools(server: McpServer) {
       }
     }
   )
+  } catch (e) { regErrors.push(`qb_send_invoice: ${(e as Error).message}`) }
 
   // ═══════════════════════════════════════
   // qb_update_invoice
   // ═══════════════════════════════════════
+  try {
   server.tool(
     "qb_update_invoice",
     "Update an existing QuickBooks invoice. Can modify customer memo (payment instructions visible to customer), private note, due date, or email address. Use qb_get_invoice first to review current values. Requires a sparse update — only provided fields are changed, all others remain.",
@@ -678,6 +686,7 @@ export function registerQbTools(server: McpServer) {
       }
     }
   )
+  } catch (e) { regErrors.push(`qb_update_invoice: ${(e as Error).message}`) }
 
   // ═══════════════════════════════════════
   // qb_token_status
@@ -738,5 +747,22 @@ export function registerQbTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: `Error checking token status: ${(err as Error).message}` }] }
       }
     }
+  )
+
+  // Temporary debug tool — remove after fixing registration issue
+  if (regErrors.length > 0) {
+    console.error("[QB] Registration errors:", regErrors)
+  }
+  console.log(`[QB] Registration complete. Errors: ${regErrors.length}`)
+
+  server.tool(
+    "qb_debug_registration",
+    "Debug: shows QB tool registration errors",
+    {},
+    async () => ({
+      content: [{ type: "text" as const, text: regErrors.length > 0
+        ? `Registration errors:\n${regErrors.join("\n")}`
+        : "All QB tools registered successfully" }]
+    })
   )
 }
