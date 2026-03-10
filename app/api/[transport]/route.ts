@@ -60,7 +60,9 @@ import { registerLeadTools } from "@/lib/mcp/tools/leads"
 import { registerTaxTools } from "@/lib/mcp/tools/tax"
 import { registerDeadlineTools } from "@/lib/mcp/tools/deadlines"
 import { registerOperationsTools } from "@/lib/mcp/tools/operations"
+import { registerCheckpointTools } from "@/lib/mcp/tools/checkpoint"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
+import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
 export const maxDuration = 60
@@ -68,7 +70,12 @@ export const maxDuration = 60
 // ─── MCP Server ──────────────────────────────────────────
 const handler = createMcpHandler(
   (server) => {
+    // Add reminder middleware BEFORE registering tools
+    // Wraps every tool handler to inject checkpoint reminders
+    addReminderMiddleware(server)
+
     // Register all tool groups
+    registerCheckpointTools(server)
     registerCrmTools(server)
     registerQbTools(server)
     registerEmailTools(server)

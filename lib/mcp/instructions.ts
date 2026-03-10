@@ -31,11 +31,11 @@ At the start of EVERY new conversation:
 
 Context compaction can cause loss of work progress. Follow these rules to prevent data loss:
 
-### Checkpoint Rule — SAVE IMMEDIATELY
-Save IMMEDIATELY after EVERY significant action. NOT every 3-5 actions — AFTER EACH ONE.
+### Checkpoint Rule — USE session_checkpoint
+Call session_checkpoint after EVERY significant action. This is a ONE-CALL save — no SQL needed.
 A "significant action" = any CRM change, document processed, decision made, config change, or task completed.
-- For OPERATIONAL work: use sysdoc_update on the active ops_session doc, or sysdoc_create a new one (doc_type='ops_session', slug='ops-YYYY-MM-DD-topic').
-- For DEVELOPMENT discussions: note key decisions in the conversation — the dev environment handles its own checkpoints via dev_tasks.
+- session_checkpoint({summary: "what you did", next_steps: "what's pending"}) — saves instantly.
+- The system will remind you automatically after 5 tool calls without saving. Do NOT ignore these reminders.
 - REASON: Context can be compacted at ANY moment without warning. If you haven't saved, ALL progress is lost.
 
 ### What to checkpoint
@@ -173,6 +173,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - kb_*: Knowledge base — ALWAYS search kb_search before answering business/pricing questions (4 tools).
 - storage_*: Supabase Storage files, mirrored to Drive (5 tools).
 - sysdoc_*: System documentation — list, read, create, update (4 tools). Key docs: session-context (lean quick-ref), project-state (milestones), tech-stack (architecture). Use sysdoc_create for session logs.
+- session_checkpoint: ONE-CALL save for session progress. Saves summary + next_steps, resets reminder counter. Use after every significant action.
 - execute_sql: LAST RESORT — raw SQL. Prefer dedicated tools.
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).
@@ -187,7 +188,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 6. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 7. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
 8. QB ≠ CRM: QuickBooks = invoicing. CRM = operational data. Separate systems.
-9. Session logging: For long or complex sessions, create an ops_session doc with sysdoc_create to preserve progress.
+9. Checkpointing: Use session_checkpoint after every significant action. The system reminds you automatically — do NOT ignore reminders.
 10. Task Overview: ALWAYS use task_tracker (ONE call). NEVER use multiple crm_search_tasks calls. task_tracker returns everything grouped by priority.
 11. Tax Overview: ALWAYS use tax_tracker (ONE call). NEVER use multiple tax_search calls. tax_tracker returns a complete visual dashboard.
 12. Deadline Overview: ALWAYS use deadline_upcoming (ONE call). Returns overdue + this week + upcoming in one response.
