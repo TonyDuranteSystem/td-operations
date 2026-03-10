@@ -49,20 +49,23 @@ export async function POST(req: NextRequest) {
 
     const payload = JSON.parse(body)
 
-    // Extract fields from Circleback payload
+    // Extract fields from Circleback payload (camelCase from API)
     const {
-      id: circleback_id,
-      title: meeting_name,
+      id,
+      name: meeting_name,
       duration,
-      meeting_url,
-      recording_url,
+      url: meeting_url,
+      recordingUrl: recording_url,
       attendees = [],
       notes,
-      action_items = [],
+      actionItems = [],
       transcript = [],
       tags = [],
-      ical_uid,
+      icalUid: ical_uid,
     } = payload
+
+    // Circleback sends id as number, our column is TEXT
+    const circleback_id = String(id)
 
     // Try to match attendee email to a lead
     let lead_id: string | null = null
@@ -85,15 +88,23 @@ export async function POST(req: NextRequest) {
           lead_id = leads[0].id
         }
 
-        // Also try matching against contacts → accounts
-        const { data: contacts } = await supabase
+        // Also try matching against contacts → account_contacts → accounts
+        const { data: matchedContacts } = await supabase
           .from('contacts')
-          .select('id, account_id')
+          .select('id')
           .in('email', attendeeEmails)
           .limit(1)
 
-        if (contacts && contacts.length > 0 && contacts[0].account_id) {
-          account_id = contacts[0].account_id
+        if (matchedContacts && matchedContacts.length > 0) {
+          const { data: link } = await supabase
+            .from('account_contacts')
+            .select('account_id')
+            .eq('contact_id', matchedContacts[0].id)
+            .limit(1)
+
+          if (link && link.length > 0) {
+            account_id = link[0].account_id
+          }
         }
       }
     }
@@ -102,12 +113,12 @@ export async function POST(req: NextRequest) {
     const record = {
       circleback_id,
       meeting_name,
-      duration_seconds: duration,
+      duration_seconds: duration != null ? Math.round(Number(duration)) : null,
       meeting_url,
       recording_url,
       attendees,
       notes: typeof notes === 'string' ? notes : JSON.stringify(notes),
-      action_items,
+      action_items: actionItems,
       transcript,
       tags: Array.isArray(tags) ? tags : [],
       ical_uid,
@@ -123,7 +134,11 @@ export async function POST(req: NextRequest) {
 
     if (error) {
       console.error('Circleback webhook: DB insert error', error)
-      return NextResponse.json({ error: 'Database error' }, { status: 500 })
+      console.error('Circleback webhook: record keys', Object.keys(record))
+      console.error('Circleback webhook: duration type', typeof duration, duration)
+      console.error('Circleback webhook: circleback_id type', typeof circleback_id, circleback_id)
+      console.error('Circleback webhook: tags', JSON.stringify(tags))
+      return NextResponse.json({ error: 'Database error', details: error.message, code: error.code, hint: error.hint }, { status: 500 })
     }
 
     return NextResponse.json({ ok: true, lead_id, account_id })
