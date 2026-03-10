@@ -71,6 +71,9 @@ export interface BankDetails {
   iban?: string
   bic?: string
   bank_name?: string
+  bank_address?: string
+  account_number?: string
+  routing_number?: string
   amount?: string
   reference?: string
 }

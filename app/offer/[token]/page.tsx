@@ -43,6 +43,9 @@ const LABELS = {
     iban: 'IBAN',
     bic: 'BIC/SWIFT',
     bank: 'Bank',
+    accountNumber: 'Account Number',
+    routingNumber: 'Routing Number',
+    bankAddress: 'Address',
     reference: 'Reference',
     expired: 'Offer Expired',
     expiredMessage: 'This offer is no longer available. Contact Tony Durante for a new proposal.',
@@ -92,6 +95,9 @@ const LABELS = {
     iban: 'IBAN',
     bic: 'BIC/SWIFT',
     bank: 'Banca',
+    accountNumber: 'Numero Conto',
+    routingNumber: 'Routing Number',
+    bankAddress: 'Indirizzo',
     reference: 'Causale',
     expired: 'Offerta Scaduta',
     expiredMessage: 'Questa offerta non è più disponibile. Contatta Tony Durante per una nuova proposta.',
@@ -491,7 +497,10 @@ export default function OfferPage() {
                       {o.bank_details.beneficiary && <div className="offer-bank-row"><span className="offer-bank-label">{L.beneficiary}</span><span className="offer-bank-value">{o.bank_details.beneficiary}</span></div>}
                       {o.bank_details.iban && <div className="offer-bank-row"><span className="offer-bank-label">{L.iban}</span><span className="offer-bank-value">{o.bank_details.iban}</span></div>}
                       {o.bank_details.bic && <div className="offer-bank-row"><span className="offer-bank-label">{L.bic}</span><span className="offer-bank-value">{o.bank_details.bic}</span></div>}
+                      {o.bank_details.account_number && <div className="offer-bank-row"><span className="offer-bank-label">{L.accountNumber}</span><span className="offer-bank-value">{o.bank_details.account_number}</span></div>}
+                      {o.bank_details.routing_number && <div className="offer-bank-row"><span className="offer-bank-label">{L.routingNumber}</span><span className="offer-bank-value">{o.bank_details.routing_number}</span></div>}
                       {o.bank_details.bank_name && <div className="offer-bank-row"><span className="offer-bank-label">{L.bank}</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>}
+                      {o.bank_details.bank_address && <div className="offer-bank-row"><span className="offer-bank-label">{L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address}</span></div>}
                       {o.bank_details.amount && <div className="offer-bank-amount">{o.bank_details.amount}</div>}
                       {o.bank_details.reference && <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>}
                     </div>
