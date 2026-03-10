@@ -20,33 +20,12 @@
         {
           "type": "query",
           "key": "t",
-          "value": "(?P<token>.*)"
+          "value": "(?<token>.*)"
         },
         {
           "type": "query",
           "key": "c",
-          "value": "(?P<code>.*)"
-        },
-        {
-          "type": "query",
-          "key": "preview",
-          "value": "(?P<preview>.*)"
-        }
-      ],
-      "destination": "/offer/:token?c=:code&preview=:preview"
-    },
-    {
-      "source": "/",
-      "has": [
-        {
-          "type": "query",
-          "key": "t",
-          "value": "(?P<token>.*)"
-        },
-        {
-          "type": "query",
-          "key": "c",
-          "value": "(?P<code>.*)"
+          "value": "(?<code>.*)"
         }
       ],
       "destination": "/offer/:token?c=:code"
@@ -57,7 +36,7 @@
         {
           "type": "query",
           "key": "t",
-          "value": "(?P<token>.*)"
+          "value": "(?<token>.*)"
         }
       ],
       "destination": "/offer/:token"
