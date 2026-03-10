@@ -80,7 +80,7 @@ export function registerDeadlineTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "deadline_upcoming",
-    "Show upcoming and overdue deadlines in a visual dashboard. Color-coded: 🔴 overdue, 🟠 due within 7 days, 🟡 due within 30 days. Perfect for daily briefings. Shows counts by type and lists individual items needing attention.",
+    "PREFERRED tool for deadline overviews — use this ONE tool instead of multiple deadline_search calls. Show upcoming and overdue deadlines in a visual dashboard. Color-coded: 🔴 overdue, 🟠 due within 7 days, 🟡 due within 30 days. Display results as markdown tables directly in chat — NEVER create files (docx/pdf/xlsx). Use for daily briefings.",
     {
       days_ahead: z.number().optional().default(30).describe("Show deadlines within N days from today (default 30)"),
       assigned_to: z.string().optional().describe("Filter by assignee"),

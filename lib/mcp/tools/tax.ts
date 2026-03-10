@@ -104,7 +104,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_tracker",
-    "Visual tax season dashboard with color-coded progress bars, status counts, and deadline alerts. Shows at-a-glance progress for the entire tax season or filtered by return type. Use this for daily briefings and season monitoring.",
+    "PREFERRED tool for tax return overviews — use this ONE tool instead of multiple tax_search calls. Visual tax season dashboard with color-coded progress bars, status counts, and deadline alerts. Display results as markdown tables directly in chat — NEVER create files (docx/pdf/xlsx). Use for daily briefings and season monitoring.",
     {
       tax_year: z.number().optional().describe("Tax year (default: current year)"),
       return_type: z.string().optional().describe("Filter by return type: 1065, 1120-S, 1040NR"),
