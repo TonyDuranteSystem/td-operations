@@ -69,7 +69,6 @@ export async function POST(req: NextRequest) {
 
     // Try to match attendee email to a lead
     let lead_id: string | null = null
-    let account_id: string | null = null
 
     if (attendees.length > 0) {
       const attendeeEmails = attendees
@@ -77,7 +76,6 @@ export async function POST(req: NextRequest) {
         .filter(Boolean)
 
       if (attendeeEmails.length > 0) {
-        // Match against leads table
         const { data: leads } = await supabase
           .from('leads')
           .select('id')
@@ -86,25 +84,6 @@ export async function POST(req: NextRequest) {
 
         if (leads && leads.length > 0) {
           lead_id = leads[0].id
-        }
-
-        // Also try matching against contacts → account_contacts → accounts
-        const { data: matchedContacts } = await supabase
-          .from('contacts')
-          .select('id')
-          .in('email', attendeeEmails)
-          .limit(1)
-
-        if (matchedContacts && matchedContacts.length > 0) {
-          const { data: link } = await supabase
-            .from('account_contacts')
-            .select('account_id')
-            .eq('contact_id', matchedContacts[0].id)
-            .limit(1)
-
-          if (link && link.length > 0) {
-            account_id = link[0].account_id
-          }
         }
       }
     }
@@ -123,7 +102,6 @@ export async function POST(req: NextRequest) {
       tags: Array.isArray(tags) ? tags : [],
       ical_uid,
       lead_id,
-      account_id,
       raw_payload: payload,
       updated_at: new Date().toISOString(),
     }
@@ -141,7 +119,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Database error', details: error.message, code: error.code, hint: error.hint }, { status: 500 })
     }
 
-    return NextResponse.json({ ok: true, lead_id, account_id })
+    return NextResponse.json({ ok: true, lead_id })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('Circleback webhook error:', msg)
