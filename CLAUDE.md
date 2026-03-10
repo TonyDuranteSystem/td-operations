@@ -10,6 +10,14 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 - **Vercel** = Hosting (Pro plan, 60s timeout)
 - **GitHub** = `TonyDuranteSystem/td-operations` (auto-deploy on push)
 
+## Session Start — AUTOMATIC
+When Antonio says "riprendiamo", "dove eravamo", "continua", "resume", or starts a new session:
+1. `sysdoc_read('session-context')` — system state
+2. `SELECT * FROM dev_tasks WHERE status IN ('in_progress','todo') ORDER BY updated_at DESC LIMIT 10` — active work
+3. Check `git status` and recent commits — code state
+4. Present a summary: "Ecco dove eravamo: [task list + status]" — then ask what to work on
+Do this AUTOMATICALLY without Antonio having to explain what was being worked on.
+
 ## Critical Code Rules
 
 ### MCP Tools (78 tools in 15 files under `lib/mcp/tools/`)
@@ -40,15 +48,25 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 
 ## Anti-Compaction Protocol — MANDATORY
 
-### CRITICAL: Save Work or Lose It
-Every session MUST save its progress. If you don't, the next session starts from zero.
-Failure to checkpoint has already caused 2+ hours of lost recovery time. DO NOT REPEAT THIS.
+### WHY THIS EXISTS
+When the conversation gets long, Claude compresses old messages (compaction).
+After compaction, ALL context is lost unless it was saved to Supabase FIRST.
+This has already caused 2+ hours of lost recovery time. It WILL happen again if you don't save.
 
-### Checkpoint Rule — MANDATORY, NOT OPTIONAL
+### Rule: Save IMMEDIATELY after EVERY significant action
+NOT every 3-5 actions. NOT at end of session. AFTER EACH ONE.
+A "significant action" = any commit, deploy, DB change, config change, tool fix, or decision made.
+
 You MUST create/update a `dev_tasks` record via `execute_sql`:
+- **IMMEDIATELY AFTER** each significant action (commit, fix, discovery, decision)
 - **BEFORE** any `git push` or deploy
-- **AFTER** completing any significant work (feature, bug fix, tool added, config change)
 - **AT END** of every session, even if work is incomplete
+
+### Rule: Delegate heavy work to subagents
+Subagents write results to Supabase BEFORE returning to chat.
+This keeps the main conversation light and compaction-resistant.
+Use agent templates in `.claude/agents/` for batch ops, audits, reports.
+Pattern: agent writes to DB → returns max 10-15 line summary to chat.
 
 How to write to dev_tasks:
 ```sql

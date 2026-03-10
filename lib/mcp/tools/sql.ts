@@ -52,6 +52,16 @@ export function registerSqlTools(server: McpServer) {
           }
         }
 
+        // Handle mutation success response (non-array)
+        if (data && typeof data === "object" && !Array.isArray(data) && data.success) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `✅ ${data.message || "Query executed successfully"} (${elapsed}ms)`,
+            }],
+          }
+        }
+
         const rows = Array.isArray(data) ? data : []
         const rowCount = rows.length
 

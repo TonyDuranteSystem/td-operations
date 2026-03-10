@@ -31,10 +31,12 @@ At the start of EVERY new conversation:
 
 Context compaction can cause loss of work progress. Follow these rules to prevent data loss:
 
-### Checkpoint Rule
-After every 3-5 significant actions (tool calls that change data, process documents, or produce analysis), write a checkpoint:
+### Checkpoint Rule — SAVE IMMEDIATELY
+Save IMMEDIATELY after EVERY significant action. NOT every 3-5 actions — AFTER EACH ONE.
+A "significant action" = any CRM change, document processed, decision made, config change, or task completed.
 - For OPERATIONAL work: use sysdoc_update on the active ops_session doc, or sysdoc_create a new one (doc_type='ops_session', slug='ops-YYYY-MM-DD-topic').
 - For DEVELOPMENT discussions: note key decisions in the conversation — the dev environment handles its own checkpoints via dev_tasks.
+- REASON: Context can be compacted at ANY moment without warning. If you haven't saved, ALL progress is lost.
 
 ### What to checkpoint
 - Actions completed and their results (concise, not raw output)
@@ -62,6 +64,27 @@ For tasks that process many records (mass document processing, bulk updates, aud
 3. QuickBooks (via qb_* tools) = Invoicing and payment records. Use for financial data.
 4. Gmail (via gmail_* tools) = Email communications. Default mailbox: support@tonydurante.us.
 5. Airtable (via crm_sync_airtable) = Legacy data only. Use as fallback when Supabase data is incomplete.
+
+## Common Workflows — Follow These, Don't Improvise
+
+### New LLC Onboarding (documents received)
+1. crm_search_accounts(company_name) — check if account exists
+2. If NOT found: crm_create_account(company_name, entity_type, state, ein, formation_date) — creates account
+3. crm_search_contacts(name) — find the contact
+4. If contact NOT linked: crm_update_record(accounts, id, {contact updates}) or crm_create_contact with account_id
+5. drive_search(company_name) — find Drive folder
+6. Upload documents if needed: drive_upload_file for PDFs/images
+7. doc_bulk_process(account_id) — classify and store all documents
+
+### Client Lookup (any question about a client)
+1. crm_get_client_summary(company_name) — ONE call, gets everything (account + contacts + services + payments + tasks + docs)
+2. Do NOT chain crm_search_accounts → crm_search_contacts → crm_search_services separately. Use crm_get_client_summary.
+
+### When a Tool Fails
+- Do NOT retry the same tool 5+ times with different params.
+- Check the error message. If it's a schema issue, report it and move on.
+- Use crm_create_task to create a task for Antonio with the details.
+- Max 2 retries, then fallback.
 
 ## Tool Selection — Key Rules
 
