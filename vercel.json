@@ -17,21 +17,62 @@
     {
       "source": "/",
       "has": [
-        { "type": "query", "key": "t", "value": "(?<token>.*)" },
-        { "type": "query", "key": "c", "value": "(?<code>.*)" }
+        {
+          "type": "query",
+          "key": "t",
+          "value": "(?P<token>.*)"
+        },
+        {
+          "type": "query",
+          "key": "c",
+          "value": "(?P<code>.*)"
+        },
+        {
+          "type": "query",
+          "key": "preview",
+          "value": "(?P<preview>.*)"
+        }
+      ],
+      "destination": "/offer/:token?c=:code&preview=:preview"
+    },
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "query",
+          "key": "t",
+          "value": "(?P<token>.*)"
+        },
+        {
+          "type": "query",
+          "key": "c",
+          "value": "(?P<code>.*)"
+        }
       ],
       "destination": "/offer/:token?c=:code"
     },
     {
       "source": "/",
-      "has": [{ "type": "query", "key": "t", "value": "(?<token>.*)" }],
+      "has": [
+        {
+          "type": "query",
+          "key": "t",
+          "value": "(?P<token>.*)"
+        }
+      ],
       "destination": "/offer/:token"
     }
   ],
   "redirects": [
     {
       "source": "/contract.html",
-      "has": [{ "type": "query", "key": "t", "value": "(?<token>.*)" }],
+      "has": [
+        {
+          "type": "query",
+          "key": "t",
+          "value": "(?<token>.*)"
+        }
+      ],
       "destination": "/offer/:token/contract",
       "permanent": true
     },
