@@ -14,7 +14,14 @@
  *
  * Tools registered:
  *   execute_sql — Raw SQL queries on Supabase PostgreSQL
- *   crm_*      — Supabase CRM queries (accounts, contacts, payments, services, deals, tasks)
+ *   crm_*      — Supabase CRM queries (accounts, contacts, payments, services, deals, tasks, create)
+ *   lead_*     — Lead pipeline (search, get, create, update)
+ *   tax_*      — Tax returns (search, tracker dashboard, update)
+ *   deadline_* — Compliance deadlines (search, upcoming dashboard, update)
+ *   task_tracker — Visual task board with priority/status/assignee breakdown
+ *   sd_*       — Service delivery pipeline (search, pipeline view)
+ *   conv_*     — Conversation history (log, search)
+ *   sop_*      — Standard Operating Procedures (search, get)
  *   qb_*       — QuickBooks Online (invoices, customers, payments, company info)
  *   email_*    — Postmark transactional email (send, track opens/clicks, stats)
  *   drive_*    — Google Drive (search, list, upload, read, create folder, move)
@@ -49,6 +56,10 @@ import { registerOfferTools } from "@/lib/mcp/tools/offers"
 import { registerSysdocTools } from "@/lib/mcp/tools/sysdocs"
 import { registerKnowledgeTools } from "@/lib/mcp/tools/knowledge"
 import { registerCirclebackTools } from "@/lib/mcp/tools/circleback"
+import { registerLeadTools } from "@/lib/mcp/tools/leads"
+import { registerTaxTools } from "@/lib/mcp/tools/tax"
+import { registerDeadlineTools } from "@/lib/mcp/tools/deadlines"
+import { registerOperationsTools } from "@/lib/mcp/tools/operations"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 
 // Vercel Pro: 60s function timeout (required for DocAI, QB operations)
@@ -74,6 +85,10 @@ const handler = createMcpHandler(
     registerSysdocTools(server)
     registerKnowledgeTools(server)
     registerCirclebackTools(server)
+    registerLeadTools(server)
+    registerTaxTools(server)
+    registerDeadlineTools(server)
+    registerOperationsTools(server)
   },
   {
     capabilities: {},

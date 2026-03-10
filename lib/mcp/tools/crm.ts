@@ -538,7 +538,7 @@ export function registerCrmTools(server: McpServer) {
     "crm_update_record",
     "Update any CRM record (account, contact, service, payment, task, deal) by UUID. Provide the table name, record ID, and fields to update. Only specified fields are changed — all others remain untouched. Returns the updated record. Use crm_search_* or crm_get_client_summary FIRST to find the record ID.",
     {
-      table: z.enum(["accounts", "contacts", "services", "payments", "tasks", "deals"]).describe("CRM table to update"),
+      table: z.enum(["accounts", "contacts", "services", "payments", "tasks", "deals", "leads", "deadlines", "tax_returns", "conversations", "service_deliveries"]).describe("CRM table to update"),
       id: z.string().uuid().describe("Record UUID to update (from crm_search_* or crm_get_client_summary)"),
       updates: z.record(z.string(), z.any()).describe("Fields to update as key-value pairs (e.g. {status: 'Active', phone: '+1234567890'})"),
     },

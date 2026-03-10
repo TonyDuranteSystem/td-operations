@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 81 tools, data source priority,
+ * This guides Claude on how to use the 103 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -65,14 +65,43 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection — Key Rules
 
-You have 81 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 103 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
-### CRM (10 tools)
+### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
 - crm_search_accounts/contacts/services/payments/tasks/deals: Search when you don't have the account ID.
-- crm_update_record: ALWAYS use this to update CRM data. NEVER use execute_sql for updates.
+- crm_create_account: Create a new account (company/LLC). Checks for duplicates.
+- crm_create_contact: Create a new contact (person). Auto-links to account if account_id provided.
+- crm_create_task: Create a new task/ticket with priority, category, assignee.
+- crm_update_record: ALWAYS use this to update CRM data. Supports: accounts, contacts, services, payments, tasks, deals, leads, deadlines, tax_returns, conversations, service_deliveries. NEVER use execute_sql for updates.
 - crm_dashboard_stats: Aggregate stats (counts, revenue, tasks).
 - crm_sync_airtable: Pull legacy Airtable data. Use only when CRM data is missing.
+
+### Leads (4 tools: lead_*)
+- lead_search: Search leads by name, status, source, channel. Visual output grouped by status with icons.
+- lead_get: Full lead detail with linked call summaries and offer data.
+- lead_create: Create new lead with duplicate check (email/phone). Use after Calendly calls or referrals.
+- lead_update: Update lead status, notes, offer fields.
+IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT crm_search_deals.
+
+### Tax Returns (3 tools: tax_*)
+- tax_search: Search by year, status, type, account. Shows workflow progress (✅ Paid → Link → Data → India → Filed).
+- tax_tracker: 📊 VISUAL DASHBOARD — color-coded progress bars, status counts by return type, overdue alerts. Use for daily briefings.
+- tax_update: Update status, dates, india_status.
+
+### Deadlines (3 tools: deadline_*)
+- deadline_search: Search by type, status, state, date range, assignee.
+- deadline_upcoming: 📅 VISUAL DASHBOARD — overdue (🔴), this week (🟠), upcoming (🟡). Use for daily briefings.
+- deadline_update: Update status, filed_date, confirmation_number.
+
+### Tasks & Operations (10 tools)
+- task_tracker: 📋 VISUAL TASK BOARD — priority sections (🔴 Urgent, 🟠 High, 🔵 Normal), assignee breakdown, overdue alerts. Use for daily briefings.
+- conv_log: Log a client conversation after handling WhatsApp/email/call.
+- conv_search: Search conversation history by account, channel, date, text.
+- sop_search: Search Standard Operating Procedures by title or service type.
+- sop_get: Get full SOP content by ID.
+- sd_search: Search service delivery pipeline (detailed execution steps).
+- sd_pipeline: Visual pipeline summary — Kanban-style counts by stage for a service type.
 
 ### Documents (13 tools: doc_*)
 - doc_bulk_process: PREFERRED for processing a client's docs — auto-resolves folder from account_id.
@@ -119,9 +148,10 @@ You have 81 tools in functional groups. Read each tool's description carefully �
 
 ## Critical Decision Rules
 
-1. CRM Updates: ALWAYS crm_update_record. NEVER execute_sql for writes.
+1. CRM Updates: ALWAYS crm_update_record. NEVER execute_sql for writes. Supports 11 tables including leads, deadlines, tax_returns.
 2. Client Lookup: START with crm_get_client_summary (returns everything in one call).
-3. Business Rules: ALWAYS kb_search before answering pricing/services/procedures questions.
+3. Lead Queries: lead_search for leads, NOT crm_search_deals. Deals ≠ Leads.
+4. Business Rules: ALWAYS kb_search before answering pricing/services/procedures questions.
 4. Sending Email: email_send (Postmark). Reading Email: gmail_search + gmail_read.
 5. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 6. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
