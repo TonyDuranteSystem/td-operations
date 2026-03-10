@@ -14,7 +14,7 @@ export function registerOperationsTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "task_tracker",
-    "Visual task board with color-coded priorities, status counts, assignee breakdown, and overdue alerts. Shows the full picture of what needs doing. Use crm_search_tasks for filtered list, this for the dashboard overview.",
+    "PREFERRED tool for task overviews — use this ONE tool instead of multiple crm_search_tasks calls. Returns ALL open tasks grouped by priority (urgent/high/normal) with assignee breakdown and overdue alerts. Display results as markdown tables directly in chat — NEVER create files (docx/pdf/xlsx). Format: 🔴 URGENT table, 🔄 IN PROGRESS table, 🔵 NORMAL table.",
     {
       assigned_to: z.string().optional().describe("Filter by assignee name"),
       category: z.string().optional().describe("Filter by category"),
