@@ -30,9 +30,8 @@ export function registerQbTools(server: McpServer) {
         let sql = "SELECT * FROM Invoice"
         const conditions: string[] = []
 
-        if (customer_name) {
-          conditions.push(`CustomerRef.name LIKE '%${customer_name.replace(/'/g, "\\''")}%'`)
-        }
+        // Note: QB Query Language doesn't support CustomerRef.name for Invoice
+        // Filter by customer name in memory after fetching results
 
         if (start_date) {
           conditions.push(`TxnDate >= '${start_date}'`)
@@ -51,6 +50,15 @@ export function registerQbTools(server: McpServer) {
         const result = await qbApiCall(`/query?query=${query}`)
 
         let invoices = result.QueryResponse?.Invoice || []
+
+        // Filter by customer name in memory (QB Query doesn't support CustomerRef.name on Invoice)
+        if (customer_name) {
+          const search = customer_name.toLowerCase()
+          invoices = invoices.filter((inv: Record<string, unknown>) => {
+            const name = ((inv.CustomerRef as Record<string, unknown>)?.name as string) || ""
+            return name.toLowerCase().includes(search)
+          })
+        }
 
         // Filter by status in memory (QB doesn't have a direct status field in query)
         if (status) {
@@ -171,9 +179,8 @@ export function registerQbTools(server: McpServer) {
         let sql = "SELECT * FROM Payment"
         const conditions: string[] = []
 
-        if (customer_name) {
-          conditions.push(`CustomerRef.name LIKE '%${customer_name.replace(/'/g, "\\''")}%'`)
-        }
+        // Note: QB Query Language doesn't support CustomerRef.name for Payment
+        // Filter by customer name in memory after fetching results
         if (start_date) {
           conditions.push(`TxnDate >= '${start_date}'`)
         }
@@ -190,7 +197,16 @@ export function registerQbTools(server: McpServer) {
         const encodedQuery = encodeURIComponent(sql)
         const result = await qbApiCall(`/query?query=${encodedQuery}`)
 
-        const payments = result.QueryResponse?.Payment || []
+        let payments = result.QueryResponse?.Payment || []
+
+        // Filter by customer name in memory
+        if (customer_name) {
+          const search = customer_name.toLowerCase()
+          payments = payments.filter((p: Record<string, unknown>) => {
+            const name = ((p.CustomerRef as Record<string, unknown>)?.name as string) || ""
+            return name.toLowerCase().includes(search)
+          })
+        }
 
         const formatted = payments.map((p: Record<string, unknown>) => ({
           id: p.Id,
@@ -362,6 +378,217 @@ export function registerQbTools(server: McpServer) {
         }
       } catch (err) {
         return { content: [{ type: "text" as const, text: `❌ Error ${action}ing invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_get_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_get_invoice",
+    "Get full details of a single QuickBooks invoice by ID. Returns ALL fields: line items, customer memo, footer, custom fields, email status, payment info, tax details. Use this to inspect invoices before sending or to check payment instructions. Use qb_list_invoices first to find the invoice ID.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID (the 'id' field from qb_list_invoices)"),
+    },
+    async ({ invoice_id }) => {
+      try {
+        const result = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = result.Invoice
+
+        if (!inv) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_id} not found` }] }
+        }
+
+        // Extract all relevant fields
+        const output = {
+          id: inv.Id,
+          doc_number: inv.DocNumber,
+          sync_token: inv.SyncToken,
+          customer: {
+            id: inv.CustomerRef?.value,
+            name: inv.CustomerRef?.name,
+          },
+          dates: {
+            txn_date: inv.TxnDate,
+            due_date: inv.DueDate,
+            ship_date: inv.ShipDate,
+          },
+          amounts: {
+            total: inv.TotalAmt,
+            balance: inv.Balance,
+            home_total: inv.HomeTotalAmt,
+            home_balance: inv.HomeBalance,
+            deposit: inv.Deposit,
+          },
+          currency: inv.CurrencyRef?.value || "USD",
+          exchange_rate: inv.ExchangeRate,
+          email: {
+            status: inv.EmailStatus,
+            bill_email: inv.BillEmail?.Address,
+            bill_email_cc: inv.BillEmailCc?.Address,
+            bill_email_bcc: inv.BillEmailBcc?.Address,
+          },
+          addresses: {
+            billing: inv.BillAddr ? {
+              line1: inv.BillAddr.Line1,
+              city: inv.BillAddr.City,
+              state: inv.BillAddr.CountrySubDivisionCode,
+              postal: inv.BillAddr.PostalCode,
+              country: inv.BillAddr.Country,
+            } : null,
+            shipping: inv.ShipAddr ? {
+              line1: inv.ShipAddr.Line1,
+              city: inv.ShipAddr.City,
+              state: inv.ShipAddr.CountrySubDivisionCode,
+              postal: inv.ShipAddr.PostalCode,
+              country: inv.ShipAddr.Country,
+            } : null,
+          },
+          line_items: (inv.Line || [])
+            .filter((l: Record<string, unknown>) => l.DetailType !== "SubTotalLineDetail")
+            .map((l: Record<string, unknown>) => ({
+              id: l.Id,
+              description: l.Description,
+              amount: l.Amount,
+              detail_type: l.DetailType,
+              ...(l.SalesItemLineDetail ? {
+                qty: (l.SalesItemLineDetail as Record<string, unknown>).Qty,
+                unit_price: (l.SalesItemLineDetail as Record<string, unknown>).UnitPrice,
+                item: ((l.SalesItemLineDetail as Record<string, unknown>).ItemRef as Record<string, unknown>)?.name,
+              } : {}),
+            })),
+          customer_memo: inv.CustomerMemo?.value || null,
+          private_note: inv.PrivateNote || null,
+          footer: inv.PrintStatus === "NeedToPrint" ? "(needs printing)" : null,
+          custom_fields: inv.CustomField?.filter((f: Record<string, unknown>) => f.StringValue) || [],
+          tax: inv.TxnTaxDetail ? {
+            total_tax: inv.TxnTaxDetail.TotalTax,
+            lines: inv.TxnTaxDetail.TaxLine,
+          } : null,
+          payment_method: inv.PaymentMethodRef?.name || null,
+          deposit_to_account: inv.DepositToAccountRef?.name || null,
+          print_status: inv.PrintStatus,
+          apply_tax_after_discount: inv.ApplyTaxAfterDiscount,
+          allow_online_payment: inv.AllowOnlinePayment,
+          allow_online_credit_card: inv.AllowOnlineCreditCardPayment,
+          allow_online_ach: inv.AllowOnlineACHPayment,
+          status: inv.Balance === 0
+            ? "Paid"
+            : new Date(inv.DueDate) < new Date()
+              ? "Overdue"
+              : "Open",
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error getting invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_send_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_send_invoice",
+    "Send an invoice via email through QuickBooks Online. The customer receives a professional email with a link to view/pay the invoice. Use qb_get_invoice first to review the invoice before sending. Requires the invoice ID (from qb_list_invoices or qb_create_invoice). Optionally override the recipient email.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID to send"),
+      email_to: z.string().optional().describe("Override recipient email (if different from customer's email on file)"),
+    },
+    async ({ invoice_id, email_to }) => {
+      try {
+        // Build the send endpoint
+        let endpoint = `/invoice/${invoice_id}/send`
+        if (email_to) {
+          endpoint += `?sendTo=${encodeURIComponent(email_to)}`
+        }
+
+        const result = await qbApiCall(endpoint, { method: "POST" })
+        const inv = result.Invoice
+
+        if (!inv) {
+          return { content: [{ type: "text" as const, text: `❌ Failed to send invoice ${invoice_id}` }] }
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Invoice #${inv.DocNumber} sent to ${inv.BillEmail?.Address || email_to || "customer email on file"}\nCustomer: ${inv.CustomerRef?.name}\nTotal: $${inv.TotalAmt}\nEmail status: ${inv.EmailStatus}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error sending invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_update_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_update_invoice",
+    "Update an existing QuickBooks invoice. Can modify customer memo (payment instructions visible to customer), private note, due date, or email address. Use qb_get_invoice first to review current values. Requires a sparse update — only provided fields are changed, all others remain.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID to update"),
+      customer_memo: z.string().optional().describe("Message visible to customer on the invoice (e.g., bank details, payment instructions)"),
+      private_note: z.string().optional().describe("Internal note (not visible to customer)"),
+      due_date: z.string().optional().describe("New due date (YYYY-MM-DD)"),
+      bill_email: z.string().optional().describe("Update customer email address for this invoice"),
+    },
+    async ({ invoice_id, customer_memo, private_note, due_date, bill_email }) => {
+      try {
+        // First, get the current invoice for SyncToken and existing data
+        const current = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = current.Invoice
+
+        if (!inv) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_id} not found` }] }
+        }
+
+        // Build sparse update — QB requires Id, SyncToken, and changed fields
+        const update: Record<string, unknown> = {
+          Id: inv.Id,
+          SyncToken: inv.SyncToken,
+          sparse: true,
+        }
+
+        if (customer_memo !== undefined) {
+          update.CustomerMemo = { value: customer_memo }
+        }
+        if (private_note !== undefined) {
+          update.PrivateNote = private_note
+        }
+        if (due_date !== undefined) {
+          update.DueDate = due_date
+        }
+        if (bill_email !== undefined) {
+          update.BillEmail = { Address: bill_email }
+        }
+
+        const result = await qbApiCall(`/invoice`, {
+          method: "POST",
+          body: update,
+        })
+
+        const updated = result.Invoice
+        const changes: string[] = []
+        if (customer_memo !== undefined) changes.push("customer memo")
+        if (private_note !== undefined) changes.push("private note")
+        if (due_date !== undefined) changes.push("due date")
+        if (bill_email !== undefined) changes.push("bill email")
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Invoice #${updated.DocNumber} updated — changed: ${changes.join(", ")}\nCustomer: ${updated.CustomerRef?.name}\nMemo: ${updated.CustomerMemo?.value || "(none)"}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error updating invoice: ${(err as Error).message}` }] }
       }
     }
   )
