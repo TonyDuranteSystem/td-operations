@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You just finished responding. CHECK: Did you make any significant changes this turn (code edits, git operations, CRM updates, config changes, decisions, or task completions)? If YES — you MUST save progress NOW by running execute_sql to INSERT or UPDATE dev_tasks with what was done, files changed, and what is PENDING. If NO significant changes (just reading, answering questions, or minor exploration) — respond with {\"decision\": \"no_save_needed\"}. NEVER skip saving after significant work. Antonio should NEVER have to remind you.",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "CRITICAL: Context compaction is about to happen. You MUST save all current work to Supabase NOW before context is lost. Run execute_sql to INSERT or UPDATE dev_tasks with: (1) what was done this session, (2) current state of any in-progress work, (3) files changed, (4) commits made, (5) what is PENDING. Also update session-context via sysdoc_update if any system-level state changed. This is your LAST CHANCE to save before context is compressed.",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Session starting. Follow CLAUDE.md Session Start protocol: (1) sysdoc_read('session-context'), (2) query dev_tasks for BOTH pending work (status in_progress/todo) AND recently completed (status done, ORDER BY updated_at DESC LIMIT 3) so you know what was JUST done, (3) git status + recent commits. Present: 'Ultimo lavoro completato' + 'In sospeso' + 'Prossimi passi' (from progress_log PENDING of most recent task). Then ask 'Su cosa lavoriamo?'",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

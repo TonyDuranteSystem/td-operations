@@ -40,4 +40,5 @@ next-env.d.ts
 # Claude
 .claude/
 !.claude/agents/
+!.claude/settings.json
 .vercel
