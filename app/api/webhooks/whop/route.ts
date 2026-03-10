@@ -155,13 +155,16 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   // 3. Create payment record in CRM
   const paymentRecord: Record<string, unknown> = {
     amount: total,
-    currency,
-    payment_date: paidAt ? paidAt.split("T")[0] : new Date().toISOString().split("T")[0],
+    amount_paid: total,
+    amount_currency: currency === "USD" ? "USD" : "EUR",
+    paid_date: paidAt ? paidAt.split("T")[0] : new Date().toISOString().split("T")[0],
     status: "paid",
-    payment_type: "Whop",
-    notes: `Whop payment ${paymentId} for ${productTitle || "unknown product"}. Client: ${clientName || email || "unknown"}.`,
+    payment_method: "Whop",
+    description: `${productTitle || "Whop payment"} — ${clientName || email || "unknown"}`,
+    notes: `Whop payment ${paymentId}. Product: ${productTitle || "N/A"}.`,
   }
   if (accountId) paymentRecord.account_id = accountId
+  if (contactId) paymentRecord.contact_id = contactId
 
   const { error: payErr } = await supabase.from("payments").insert(paymentRecord)
   if (payErr) {
