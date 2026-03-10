@@ -258,6 +258,26 @@ export async function qbApiCall(
 }
 
 /**
+ * Get the next sequential DocNumber (INV-XXXXXX format)
+ * Queries QB for the highest existing DocNumber and increments
+ */
+async function getNextDocNumber(): Promise<string> {
+  const query = encodeURIComponent(
+    "SELECT DocNumber FROM Invoice WHERE DocNumber LIKE 'INV-%' ORDERBY DocNumber DESC MAXRESULTS 1"
+  )
+  const result = await qbApiCall(`/query?query=${query}`)
+  const invoices = result.QueryResponse?.Invoice || []
+
+  if (invoices.length > 0) {
+    const lastDoc = invoices[0].DocNumber as string
+    const numPart = parseInt(lastDoc.replace('INV-', ''), 10)
+    return `INV-${String(numPart + 1).padStart(6, '0')}`
+  }
+
+  return 'INV-000001'
+}
+
+/**
  * Create an invoice in QuickBooks
  */
 export async function createInvoice(params: {
@@ -301,6 +321,9 @@ export async function createInvoice(params: {
   if (params.memo) {
     invoice.PrivateNote = params.memo
   }
+
+  // Auto-assign sequential DocNumber
+  invoice.DocNumber = await getNextDocNumber()
 
   // Create the invoice
   return qbApiCall('/invoice', {
