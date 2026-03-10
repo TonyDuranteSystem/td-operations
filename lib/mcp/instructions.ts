@@ -166,7 +166,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - qb_get_invoice: Full invoice details — line items, memo, payment instructions, email status. Use BEFORE sending.
 - qb_create_invoice: Create invoice (auto-finds/creates QB customer). Does NOT send — review first.
 - qb_update_invoice: Update customer memo (payment instructions), due date, email. Use to add bank details.
-- qb_send_invoice: Send invoice via email through QB. Customer receives professional email with view/pay link.
+- qb_send_invoice: Download PDF from QB + send via Postmark with bank details (USD Relay / EUR Wise). Language param: en or it. Returns Postmark MessageID for tracking.
 - qb_void_invoice: Void or delete incorrect invoices. Void = keeps history, delete = permanent.
 - qb_search_customers: Find QB customers by name/email.
 - qb_token_status: Check connection health first if QB tools fail.

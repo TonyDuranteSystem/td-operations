@@ -274,7 +274,7 @@ export async function createInvoice(params: {
   // First, find or create the customer
   const customerRef = await findOrCreateCustomer(params.customerName, params.customerEmail)
 
-  // Build the invoice object
+  // Build the invoice object — online payments always disabled (we send via Postmark with bank details)
   const invoice: Record<string, unknown> = {
     CustomerRef: {
       value: customerRef.id,
@@ -290,6 +290,8 @@ export async function createInvoice(params: {
       },
       LineNum: index + 1,
     })),
+    AllowOnlineCreditCardPayment: false,
+    AllowOnlineACHPayment: false,
   }
 
   if (params.dueDate) {

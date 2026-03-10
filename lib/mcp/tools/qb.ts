@@ -494,31 +494,117 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_send_invoice",
-    "Send an invoice via email through QuickBooks Online. The customer receives a professional email with a link to view/pay the invoice. Use qb_get_invoice first to review the invoice before sending. Requires the invoice ID (from qb_list_invoices or qb_create_invoice). Optionally override the recipient email.",
+    "Send an invoice via email using Postmark. Downloads the invoice PDF from QuickBooks and sends it as an email attachment with bank payment details (USD or EUR based on invoice currency). The customer receives a professional bilingual email from support@tonydurante.us. WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (if needed) → CONFIRM with user → qb_send_invoice. Use email_get_delivery_status with the returned MessageID to track delivery.",
     {
       invoice_id: z.string().describe("QuickBooks Invoice ID to send"),
-      email_to: z.string().optional().describe("Override recipient email (if different from customer's email on file)"),
+      email_to: z.string().describe("Recipient email address"),
+      language: z.enum(["en", "it"]).optional().default("en").describe("Email language: 'en' (default) or 'it' for Italian"),
     },
-    async ({ invoice_id, email_to }) => {
+    async ({ invoice_id, email_to, language }) => {
       try {
-        // Build the send endpoint
-        let endpoint = `/invoice/${invoice_id}/send`
-        if (email_to) {
-          endpoint += `?sendTo=${encodeURIComponent(email_to)}`
-        }
-
-        const result = await qbApiCall(endpoint, { method: "POST" })
-        const inv = result.Invoice
-
+        // 1. Get invoice details from QB
+        const invResult = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = invResult.Invoice
         if (!inv) {
-          return { content: [{ type: "text" as const, text: `❌ Failed to send invoice ${invoice_id}` }] }
+          return { content: [{ type: "text" as const, text: `❌ Invoice ${invoice_id} not found` }] }
         }
+
+        // 2. Download invoice PDF from QB
+        const accessToken = await getActiveToken()
+        const realmId = process.env.QB_REALM_ID!
+        const pdfRes = await fetch(
+          `https://quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoice_id}/pdf`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/pdf",
+            },
+          }
+        )
+        if (!pdfRes.ok) throw new Error(`PDF download failed: ${pdfRes.status}`)
+        const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer())
+        const pdfBase64 = pdfBuffer.toString("base64")
+
+        // 3. Bank details based on invoice currency
+        const currency = (inv.CurrencyRef?.value as string) || "USD"
+        const bankSection =
+          currency === "EUR"
+            ? "Banca: Banking Circle (via Wise)\nIBAN: DK8989000023658198\nBIC/SWIFT: SXPYDKKK\nBeneficiario: Tony Durante LLC"
+            : "Bank: Relay Financial\nRouting Number: 064208588\nAccount Number: 200000306770\nBeneficiary: Tony Durante LLC"
+
+        // 4. Build email content
+        const customerName = (inv.CustomerRef?.name as string) || "Customer"
+        const docNumber = inv.DocNumber || inv.Id
+        const total = inv.TotalAmt
+        const dueDate = inv.DueDate
+
+        const subject =
+          language === "it"
+            ? `Fattura #${docNumber} — Tony Durante LLC`
+            : `Invoice #${docNumber} — Tony Durante LLC`
+
+        const htmlBody =
+          language === "it"
+            ? `<p>Gentile ${customerName},</p>
+<p>In allegato trova la fattura <strong>#${docNumber}</strong> per un importo di <strong>${currency} ${total}</strong>.</p>
+<p><strong>Scadenza:</strong> ${dueDate}</p>
+<p><strong>Modalità di pagamento — Bonifico bancario:</strong></p>
+<pre style="background:#f5f5f5;padding:12px;border-radius:4px;">${bankSection}</pre>
+<p>Causale: Invoice #${docNumber}</p>
+<p>Per qualsiasi domanda, non esiti a contattarci.</p>
+<p>Cordiali saluti,<br><strong>Tony Durante LLC</strong><br>support@tonydurante.us</p>`
+            : `<p>Dear ${customerName},</p>
+<p>Please find attached invoice <strong>#${docNumber}</strong> for <strong>${currency} ${total}</strong>.</p>
+<p><strong>Due date:</strong> ${dueDate}</p>
+<p><strong>Payment method — Wire Transfer:</strong></p>
+<pre style="background:#f5f5f5;padding:12px;border-radius:4px;">${bankSection}</pre>
+<p>Reference: Invoice #${docNumber}</p>
+<p>If you have any questions, please don't hesitate to reach out.</p>
+<p>Best regards,<br><strong>Tony Durante LLC</strong><br>support@tonydurante.us</p>`
+
+        // 5. Send via Postmark with PDF attachment
+        const postmarkToken = process.env.POSTMARK_SERVER_TOKEN
+        if (!postmarkToken) throw new Error("POSTMARK_SERVER_TOKEN not configured")
+
+        const emailRes = await fetch("https://api.postmarkapp.com/email", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-Postmark-Server-Token": postmarkToken,
+          },
+          body: JSON.stringify({
+            From: "support@tonydurante.us",
+            To: email_to,
+            Subject: subject,
+            HtmlBody: htmlBody,
+            Tag: "invoice",
+            TrackOpens: true,
+            TrackLinks: "HtmlAndText",
+            Attachments: [
+              {
+                Name: `Invoice-${docNumber}.pdf`,
+                Content: pdfBase64,
+                ContentType: "application/pdf",
+              },
+            ],
+          }),
+        })
+
+        if (!emailRes.ok) {
+          const err = await emailRes.json().catch(() => ({}))
+          throw new Error(`Postmark error ${emailRes.status}: ${(err as Record<string, string>).Message || emailRes.statusText}`)
+        }
+
+        const emailData = await emailRes.json()
 
         return {
-          content: [{
-            type: "text" as const,
-            text: `✅ Invoice #${inv.DocNumber} sent to ${inv.BillEmail?.Address || email_to || "customer email on file"}\nCustomer: ${inv.CustomerRef?.name}\nTotal: $${inv.TotalAmt}\nEmail status: ${inv.EmailStatus}`,
-          }]
+          content: [
+            {
+              type: "text" as const,
+              text: `✅ Invoice #${docNumber} sent to ${email_to}\nCustomer: ${customerName}\nTotal: ${currency} ${total}\nDue: ${dueDate}\nPostmark MessageID: ${emailData.MessageID}\nUse email_get_delivery_status('${emailData.MessageID}') to track.`,
+            },
+          ],
         }
       } catch (err) {
         return { content: [{ type: "text" as const, text: `❌ Error sending invoice: ${(err as Error).message}` }] }
