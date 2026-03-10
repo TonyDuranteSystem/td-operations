@@ -302,6 +302,126 @@ export function registerEmailTools(server: McpServer) {
   )
 
   // ═══════════════════════════════════════
+  // email_list_templates
+  // ═══════════════════════════════════════
+  server.tool(
+    "email_list_templates",
+    "List all Postmark email templates. Returns template ID, alias, name, subject, and active status. Use this to discover available templates before sending with email_send_with_template.",
+    {},
+    async () => {
+      try {
+        const result = await postmarkGet("/templates?count=100&offset=0") as {
+          TotalCount: number
+          Templates: Array<{
+            TemplateId: number
+            Alias: string
+            Name: string
+            Subject: string
+            Active: boolean
+            TemplateType: string
+          }>
+        }
+
+        if (!result.Templates || result.Templates.length === 0) {
+          return { content: [{ type: "text" as const, text: "📭 No templates found." }] }
+        }
+
+        const lines = [`📄 ${result.TotalCount} templates found`, ""]
+        for (const t of result.Templates) {
+          const status = t.Active ? "✅" : "❌"
+          lines.push(`${status} ${t.Name}`)
+          lines.push(`   Alias: ${t.Alias || "(none)"} | ID: ${t.TemplateId} | Type: ${t.TemplateType}`)
+          if (t.Subject) lines.push(`   Subject: ${t.Subject}`)
+          lines.push("")
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `❌ List templates failed: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // email_create_template
+  // ═══════════════════════════════════════
+  server.tool(
+    "email_create_template",
+    "Create or update a Postmark email template. Use alias for easy reference with email_send_with_template. Supports Mustachio syntax for variables: {{variable_name}}. If a template with the same alias exists, use the template_id parameter to update it instead.",
+    {
+      name: z.string().describe("Template display name"),
+      alias: z.string().optional().describe("Unique alias for use with email_send_with_template (e.g. 'new-formation-info-en')"),
+      subject: z.string().describe("Email subject (supports {{variables}})"),
+      html_body: z.string().describe("HTML email body (supports {{variables}})"),
+      text_body: z.string().optional().describe("Plain text fallback (auto-generated from HTML if omitted)"),
+      template_id: z.number().optional().describe("If provided, UPDATE existing template instead of creating new"),
+    },
+    async ({ name, alias, subject, html_body, text_body, template_id }) => {
+      try {
+        const plainText = text_body || html_body
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/p>/gi, "\n\n")
+          .replace(/<\/li>/gi, "\n")
+          .replace(/<\/h[1-6]>/gi, "\n\n")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim()
+
+        const payload: Record<string, unknown> = {
+          Name: name,
+          Subject: subject,
+          HtmlBody: html_body,
+          TextBody: plainText,
+          TemplateType: "Standard",
+        }
+        if (alias) payload.Alias = alias
+
+        let result: Record<string, unknown>
+        if (template_id) {
+          // PUT to update existing template
+          const token = process.env.POSTMARK_SERVER_TOKEN
+          if (!token) throw new Error("POSTMARK_SERVER_TOKEN not configured")
+          const res = await fetch(`${POSTMARK_API}/templates/${template_id}`, {
+            method: "PUT",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json",
+              "X-Postmark-Server-Token": token,
+            },
+            body: JSON.stringify(payload),
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            throw new Error(`Postmark API error ${res.status}: ${(err as Record<string, string>).Message || res.statusText}`)
+          }
+          result = await res.json() as Record<string, unknown>
+        } else {
+          result = await postmark("/templates", payload) as Record<string, unknown>
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              template_id ? "✅ Template updated" : "✅ Template created",
+              `📄 Name: ${name}`,
+              `🏷️ Alias: ${alias || "(none)"}`,
+              `🆔 TemplateId: ${result.TemplateId}`,
+              `📋 Subject: ${subject}`,
+            ].join("\n"),
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `❌ Template creation failed: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
   // email_get_stats
   // ═══════════════════════════════════════
   server.tool(
