@@ -18,6 +18,47 @@ function esc(v: string) {
   return d.innerHTML
 }
 
+const CL = {
+  en: {
+    signing: 'Generating PDF...',
+    redirecting: 'Contract signed! Redirecting to payment...',
+    successTitle: 'Contract Signed Successfully!',
+    successActivate: 'To activate your services, please complete the bank transfer below.',
+    bankTitle: 'Bank Transfer Details',
+    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', reference: 'Reference',
+    receiptTitle: 'Upload Wire Transfer Receipt',
+    receiptDesc: 'Once you complete the transfer, upload the receipt to start your services immediately.',
+    receiptLabel: 'Click to upload receipt (PDF or image)',
+    receiptBtn: 'Upload Receipt',
+    receiptUploading: 'Uploading...',
+    receiptDone: 'Receipt uploaded successfully! We will verify your payment shortly.',
+    receiptFail: 'Upload failed',
+    afterPayment: 'Once payment is received and verified, we will begin working on your LLC immediately.',
+    backToOffer: '&larr; Back to Offer',
+    signed: 'Contract signed and submitted! Tony Durante will contact you shortly via WhatsApp.',
+    uploaded: 'Uploaded',
+  },
+  it: {
+    signing: 'Generazione PDF...',
+    redirecting: 'Contratto firmato! Reindirizzamento al pagamento...',
+    successTitle: 'Contratto Firmato con Successo!',
+    successActivate: 'Per attivare i servizi, completa il bonifico bancario qui sotto.',
+    bankTitle: 'Coordinate Bancarie',
+    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', reference: 'Causale',
+    receiptTitle: 'Carica Ricevuta Bonifico',
+    receiptDesc: 'Una volta completato il bonifico, carica la ricevuta per avviare i servizi immediatamente.',
+    receiptLabel: 'Clicca per caricare la ricevuta (PDF o immagine)',
+    receiptBtn: 'Carica Ricevuta',
+    receiptUploading: 'Caricamento...',
+    receiptDone: 'Ricevuta caricata con successo! Verificheremo il pagamento a breve.',
+    receiptFail: 'Caricamento fallito',
+    afterPayment: 'Una volta ricevuto e verificato il pagamento, inizieremo subito a lavorare sulla tua LLC.',
+    backToOffer: '&larr; Torna all&#39;Offerta',
+    signed: 'Contratto firmato e inviato! Tony Durante ti contatterà a breve via WhatsApp.',
+    uploaded: 'Caricata',
+  },
+}
+
 interface FormData {
   name: string; email: string; phone: string; address: string; city: string
   state: string; zip: string; country: string; nationality: string; passport: string
@@ -165,7 +206,8 @@ export default function ContractPage() {
   async function signContract() {
     if (!offer || signing) return
     setSigning(true)
-    setStatusMsg('Generating PDF...')
+    const cl = CL[offer.language || 'en']
+    setStatusMsg(cl.signing)
     setStatusType('info')
 
     try {
@@ -249,7 +291,7 @@ export default function ContractPage() {
       // Post-sign behavior
       const ptype = offer.payment_type || 'none'
       if (ptype === 'checkout' && offer.payment_links && offer.payment_links.length > 0) {
-        setStatusMsg('Contract signed! Redirecting to payment...')
+        setStatusMsg(cl.redirecting)
         setStatusType('success')
         setTimeout(() => { window.location.href = offer.payment_links![0].url }, 2500)
       } else if (ptype === 'bank_transfer' && offer.bank_details) {
@@ -259,29 +301,29 @@ export default function ContractPage() {
         if (successEl && contractBodyRef.current) {
           contractBodyRef.current.style.display = 'none'
           let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
-          sh += '<h2>Contract Signed Successfully!</h2>'
-          sh += '<p>To activate your services, please complete the bank transfer below.</p>'
-          sh += '<div class="contract-bank-details-box"><h3>Bank Transfer Details</h3>'
-          if (b.beneficiary) sh += `<div class="contract-bank-row"><span class="contract-bank-label">Beneficiary</span><span class="contract-bank-value">${esc(b.beneficiary)}</span></div>`
-          if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">IBAN</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
-          if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">BIC / SWIFT</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
-          if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">Bank</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
+          sh += `<h2>${cl.successTitle}</h2>`
+          sh += `<p>${cl.successActivate}</p>`
+          sh += `<div class="contract-bank-details-box"><h3>${cl.bankTitle}</h3>`
+          if (b.beneficiary) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.beneficiary}</span><span class="contract-bank-value">${esc(b.beneficiary)}</span></div>`
+          if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.iban}</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
+          if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bic}</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
+          if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bank}</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
           if (b.amount) sh += `<div class="contract-bank-amount">${esc(b.amount)}</div>`
-          if (b.reference) sh += `<div class="contract-bank-ref">Reference: ${esc(b.reference)}</div>`
+          if (b.reference) sh += `<div class="contract-bank-ref">${cl.reference}: ${esc(b.reference)}</div>`
           sh += '</div>'
           // Wire receipt upload section
           sh += '<div class="contract-receipt-upload">'
-          sh += '<h3 style="font-size:11pt;margin-bottom:8px;">Upload Wire Transfer Receipt</h3>'
-          sh += '<p style="font-size:9.5pt;color:var(--c-muted);margin-bottom:12px;">Once you complete the transfer, upload the receipt to start your services immediately.</p>'
+          sh += `<h3 style="font-size:11pt;margin-bottom:8px;">${cl.receiptTitle}</h3>`
+          sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-bottom:12px;">${cl.receiptDesc}</p>`
           sh += '<div class="contract-receipt-drop" id="receipt-drop" onclick="document.getElementById(\'receipt-input\').click()">'
           sh += '<input type="file" id="receipt-input" accept="image/*,.pdf" style="display:none" />'
-          sh += '<p id="receipt-label">Click to upload receipt (PDF or image)</p>'
+          sh += `<p id="receipt-label">${cl.receiptLabel}</p>`
           sh += '</div>'
-          sh += '<button id="receipt-submit" class="contract-receipt-btn" disabled>Upload Receipt</button>'
+          sh += `<button id="receipt-submit" class="contract-receipt-btn" disabled>${cl.receiptBtn}</button>`
           sh += '<div id="receipt-status" style="font-size:9pt;margin-top:8px;"></div>'
           sh += '</div>'
-          sh += '<p style="font-size:9.5pt;color:var(--c-muted)">Once payment is received and verified, we will begin working on your LLC immediately.</p>'
-          sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">&larr; Back to Offer</a>`
+          sh += `<p style="font-size:9.5pt;color:var(--c-muted)">${cl.afterPayment}</p>`
+          sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
           sh += '</div>'
           successEl.innerHTML = sh
           successEl.style.display = 'block'
@@ -305,7 +347,7 @@ export default function ContractPage() {
           receiptBtn?.addEventListener('click', async () => {
             if (!receiptFile) return
             receiptBtn.disabled = true
-            receiptBtn.textContent = 'Uploading...'
+            receiptBtn.textContent = cl.receiptUploading
             receiptStatus.textContent = ''
             try {
               const ext = receiptFile.name.split('.').pop() || 'pdf'
@@ -315,22 +357,22 @@ export default function ContractPage() {
                 headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
                 body: receiptFile
               })
-              if (!uploadRes.ok) throw new Error('Upload failed')
+              if (!uploadRes.ok) throw new Error(cl.receiptFail)
               // Update contract record with receipt path
               await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offer.token)
-              receiptStatus.innerHTML = '<span style="color:var(--c-green);font-weight:600">Receipt uploaded successfully! We will verify your payment shortly.</span>'
-              receiptBtn.textContent = 'Uploaded'
+              receiptStatus.innerHTML = `<span style="color:var(--c-green);font-weight:600">${cl.receiptDone}</span>`
+              receiptBtn.textContent = cl.uploaded
               const dropEl = document.getElementById('receipt-drop')
               if (dropEl) dropEl.style.borderColor = 'var(--c-green)'
             } catch (e: any) {
-              receiptStatus.innerHTML = `<span style="color:var(--c-red)">Upload failed: ${e.message}. Please try again.</span>`
+              receiptStatus.innerHTML = `<span style="color:var(--c-red)">${cl.receiptFail}: ${e.message}</span>`
               receiptBtn.disabled = false
-              receiptBtn.textContent = 'Upload Receipt'
+              receiptBtn.textContent = cl.receiptBtn
             }
           })
         }
       } else {
-        setStatusMsg('Contract signed and submitted! Tony Durante will contact you shortly via WhatsApp.')
+        setStatusMsg(cl.signed)
         setStatusType('success')
       }
     } catch (e: any) {
@@ -343,8 +385,8 @@ export default function ContractPage() {
     }
   }
 
-  if (loading) return <><ContractStyles /><div className="contract-loading"><div className="contract-spinner" /><p>Caricamento contratto...</p></div></>
-  if (error) return <><ContractStyles /><div className="contract-error-box"><h2>Errore</h2><p>{error}</p></div></>
+  if (loading) return <><ContractStyles /><div className="contract-loading"><div className="contract-spinner" /><p>Loading contract...</p></div></>
+  if (error) return <><ContractStyles /><div className="contract-error-box"><h2>Error</h2><p>{error}</p></div></>
   if (!offer) return null
 
   const { fee, llcType, installments, year } = getContractData()
