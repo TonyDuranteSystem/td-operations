@@ -38,30 +38,56 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 - OAuth2 tokens in `qb_tokens` table, auto-refresh
 - Realm: `13845050572680403`
 
-## Anti-Compaction Protocol (for development sessions)
+## Anti-Compaction Protocol — MANDATORY
 
-### Checkpoint Rule
-After completing significant work blocks (feature implemented, bug fixed, tool added):
-1. Update the relevant `dev_tasks` record with progress_log entry
-2. If the task doesn't exist yet, create one
-3. Format: `[{"date": "YYYY-MM-DD", "action": "What was done", "result": "Concise outcome"}]`
+### CRITICAL: Save Work or Lose It
+Every session MUST save its progress. If you don't, the next session starts from zero.
+Failure to checkpoint has already caused 2+ hours of lost recovery time. DO NOT REPEAT THIS.
+
+### Checkpoint Rule — MANDATORY, NOT OPTIONAL
+You MUST create/update a `dev_tasks` record via `execute_sql`:
+- **BEFORE** any `git push` or deploy
+- **AFTER** completing any significant work (feature, bug fix, tool added, config change)
+- **AT END** of every session, even if work is incomplete
+
+How to write to dev_tasks:
+```sql
+INSERT INTO dev_tasks (title, status, priority, progress_log)
+VALUES ('Title', 'in_progress', 'high',
+'[{"date":"YYYY-MM-DD","action":"What","result":"Outcome"}]')
+RETURNING id;
+```
+To update existing:
+```sql
+UPDATE dev_tasks
+SET progress_log = '[updated JSON array]', status = 'done', updated_at = now()
+WHERE id = 'uuid';
+```
+
+### What to save in progress_log
+- What was built/changed (files, tools, DB changes)
+- What was deployed (commit hash)
+- What is PENDING (next steps, blockers, decisions needed)
+- Any credentials or config added (reference, not values)
 
 ### Recovery after compaction
-If context compacts mid-session:
-1. Read this file (CLAUDE.md) — you're reading it now
-2. Check `dev_tasks` on Supabase for active tasks: status='in_progress'
-3. Read the task's `progress_log` to understand what was done
-4. Resume from last checkpoint
+1. Read this file (CLAUDE.md)
+2. `SELECT * FROM dev_tasks WHERE status = 'in_progress' ORDER BY updated_at DESC`
+3. Read progress_log to understand what was done
+4. `sysdoc_read('session-context')` for system state
+5. Resume from last checkpoint
 
-### Subagent pattern (for heavy operations)
-Use `.claude/agents/` templates when spawning agents for batch processing, audits, or reports.
-Key rule: agent writes results to Supabase BEFORE returning. Chat gets only a compact summary.
-Available templates: `batch-processor.md`, `data-auditor.md`, `report-generator.md`, `client-onboarding.md`, `communication-triage.md`.
+### For operational work (non-dev)
+Use `sysdoc_create` with slug `ops-YYYY-MM-DD-topic` to log what was done.
+
+### Subagent pattern
+Use `.claude/agents/` templates for batch processing, audits, reports.
+Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summary.
 
 ### Key tables for dev context
 - `dev_tasks` — Issue tracker for development work (NOT client tasks)
-- `system_docs` — Session context (lean), project-state (milestones), tech-stack (architecture)
-- `knowledge_articles` — Business rules (57 articles)
+- `system_docs` — Session context, project-state, tech-stack
+- `knowledge_articles` — Business rules (59 articles)
 
 ## Business Rules
 All business rules live on Supabase in `knowledge_articles` (57) and `sop_runbooks` (14).

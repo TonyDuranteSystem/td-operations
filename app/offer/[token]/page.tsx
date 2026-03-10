@@ -466,7 +466,7 @@ export default function OfferPage() {
             {isSigned ? (
               <>
                 <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>
-                {ptype === 'checkout' && o.payment_links && o.payment_links.length > 0 ? (
+                {o.payment_links && o.payment_links.length > 0 && (
                   <>
                     <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedPayment}</p>
                     <div className="offer-payment-buttons">
@@ -477,9 +477,15 @@ export default function OfferPage() {
                     <div className="offer-payment-note">{L.paymentNote}</div>
                     <div className="offer-payment-secure">&#128274; {L.paymentSecure}</div>
                   </>
-                ) : ptype === 'bank_transfer' && o.bank_details ? (
+                )}
+                {o.bank_details && (
                   <>
-                    <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedWire}</p>
+                    <div style={{ marginTop: o.payment_links && o.payment_links.length > 0 ? 32 : 0 }}>
+                      {o.payment_links && o.payment_links.length > 0
+                        ? <p style={{ opacity: 0.9, marginBottom: 20, fontSize: 15 }}>{lang === 'it' ? 'Oppure tramite bonifico bancario:' : 'Or via bank transfer:'}</p>
+                        : <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedWire}</p>
+                      }
+                    </div>
                     <div className="offer-bank-box">
                       <div className="offer-bank-title">{L.bankDetails}</div>
                       {o.bank_details.beneficiary && <div className="offer-bank-row"><span className="offer-bank-label">{L.beneficiary}</span><span className="offer-bank-value">{o.bank_details.beneficiary}</span></div>}
@@ -490,7 +496,8 @@ export default function OfferPage() {
                       {o.bank_details.reference && <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>}
                     </div>
                   </>
-                ) : (
+                )}
+                {!o.payment_links?.length && !o.bank_details && (
                   <p style={{ opacity: 0.9 }}>{L.contactPayment}</p>
                 )}
                 <div className="offer-payment-section">
