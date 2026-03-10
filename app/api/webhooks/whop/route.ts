@@ -222,37 +222,55 @@ export async function POST(req: NextRequest) {
     }
 
     const payload = JSON.parse(body)
-    const eventType = payload.type as string
-    const data = payload.data as Record<string, unknown>
+    // Whop v1 uses underscores (payment_succeeded), normalize to support both formats
+    const rawEventType = (payload.type || payload.event) as string
+    const eventType = rawEventType?.replace(/\./g, "_") // normalize dots to underscores
+    const data = (payload.data || payload) as Record<string, unknown>
 
-    console.log(`[whop-webhook] Received event: ${eventType}`)
+    console.log(`[whop-webhook] Received event: ${rawEventType} (normalized: ${eventType})`)
 
     switch (eventType) {
-      case "payment.succeeded":
+      case "payment_succeeded":
         await handlePaymentSucceeded(data)
         break
 
-      case "payment.failed":
+      case "payment_failed":
         console.log("[whop-webhook] Payment failed:", data)
         await supabase.from("webhook_events").insert({
           source: "whop",
-          event_type: "payment.failed",
+          event_type: "payment_failed",
           external_id: (data.id as string) || "unknown",
           payload: data,
         })
         break
 
-      case "membership.activated":
-      case "membership.deactivated":
+      case "payment_created":
+      case "payment_pending":
+        console.log(`[whop-webhook] ${eventType}:`, data)
+        await supabase.from("webhook_events").insert({
+          source: "whop",
+          event_type: eventType,
+          external_id: (data.id as string) || "unknown",
+          payload: data,
+        })
+        break
+
+      case "membership_activated":
+      case "membership_deactivated":
         await handleMembershipEvent(eventType, data)
+        break
+
+      case "invoice_paid":
+        // Invoice paid is also a payment signal — handle like payment_succeeded
+        await handlePaymentSucceeded(data)
         break
 
       default:
         console.log(`[whop-webhook] Unhandled event: ${eventType}`)
         await supabase.from("webhook_events").insert({
           source: "whop",
-          event_type: eventType,
-          external_id: "unknown",
+          event_type: eventType || "unknown",
+          external_id: (data.id as string) || "unknown",
           payload: data,
         })
     }
