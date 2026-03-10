@@ -59,6 +59,8 @@ const LABELS = {
     emailGateError: 'The email address does not match. Please try again.',
     emailPlaceholder: 'your@email.com',
     contactPayment: 'Contact us on WhatsApp to proceed with payment.',
+    payByCard: 'Pay by Card',
+    payByTransfer: 'Bank Transfer',
   },
   it: {
     title: 'Offerta Consulenziale',
@@ -111,6 +113,8 @@ const LABELS = {
     emailGateError: 'L\'indirizzo email non corrisponde. Riprova.',
     emailPlaceholder: 'tua@email.com',
     contactPayment: 'Contattaci su WhatsApp per procedere con il pagamento.',
+    payByCard: 'Paga con Carta',
+    payByTransfer: 'Bonifico Bancario',
   },
 }
 
@@ -122,6 +126,14 @@ function formatDate(d: string, lang: 'en' | 'it') {
   const monthsIt = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre']
   const months = lang === 'en' ? monthsEn : monthsIt
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`
+}
+
+function calcSurcharge(amountStr: string, pct: number = 5): string {
+  const currency = amountStr.match(/^[^0-9]*/)?.[0] || '$'
+  const num = parseFloat(amountStr.replace(/[^0-9.]/g, ''))
+  if (isNaN(num)) return amountStr
+  const total = Math.round(num * (1 + pct / 100))
+  return `${currency}${total.toLocaleString()}`
 }
 
 const COOKIE_NAME = 'offer_verified'
@@ -180,13 +192,13 @@ export default function OfferPage() {
       setLang(o.language || 'it')
       setLoading(false)
 
-      // Check if already verified via cookie OR admin preview with valid access_code
-      if (hasVerifiedCookie(token) || (isPreview && o.access_code && accessCode === o.access_code)) {
+      // Check if already verified via cookie OR admin preview
+      if (hasVerifiedCookie(token) || isPreview) {
         setVerified(true)
       }
 
       // Track view (only once verified or no email gate needed)
-      if (hasVerifiedCookie(token) || !o.client_email || (isPreview && o.access_code && accessCode === o.access_code)) {
+      if (hasVerifiedCookie(token) || !o.client_email || isPreview) {
         trackView(o)
       }
     } catch {
@@ -469,62 +481,54 @@ export default function OfferPage() {
           <div className="offer-cta-box">
             <h2>{L.readyToStart}</h2>
 
-            {isSigned ? (
-              <>
-                <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>
-                {o.payment_links && o.payment_links.length > 0 && (
+            {isSigned && <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>}
+
+            {/* Payment Info — informational only, no buttons */}
+            {(o.payment_links?.length || o.bank_details) && (
+              <div className="offer-pay-info">
+                {o.payment_links?.length && o.bank_details ? (
                   <>
-                    <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedPayment}</p>
-                    <div className="offer-payment-buttons">
-                      {o.payment_links.map((pl, i) => (
-                        <a key={i} href={pl.url} target="_blank" rel="noopener noreferrer" className="offer-payment-btn">{pl.label} &mdash; {pl.amount}</a>
-                      ))}
+                    <div className="offer-pay-info-row">
+                      <span>&#128179; {L.payByCard}</span>
+                      <span className="offer-pay-info-price">{o.payment_links[0].amount} <span className="offer-surcharge-tag">+5%</span></span>
                     </div>
-                    <div className="offer-payment-note">{L.paymentNote}</div>
-                    <div className="offer-payment-secure">&#128274; {L.paymentSecure}</div>
-                  </>
-                )}
-                {o.bank_details && (
-                  <>
-                    <div style={{ marginTop: o.payment_links && o.payment_links.length > 0 ? 32 : 0 }}>
-                      {o.payment_links && o.payment_links.length > 0
-                        ? <p style={{ opacity: 0.9, marginBottom: 20, fontSize: 15 }}>{lang === 'it' ? 'Oppure tramite bonifico bancario:' : 'Or via bank transfer:'}</p>
-                        : <p style={{ opacity: 0.9, marginBottom: 20 }}>{L.proceedWire}</p>
-                      }
-                    </div>
-                    <div className="offer-bank-box">
-                      <div className="offer-bank-title">{L.bankDetails}</div>
-                      {o.bank_details.beneficiary && <div className="offer-bank-row"><span className="offer-bank-label">{L.beneficiary}</span><span className="offer-bank-value">{o.bank_details.beneficiary}</span></div>}
-                      {o.bank_details.iban && <div className="offer-bank-row"><span className="offer-bank-label">{L.iban}</span><span className="offer-bank-value">{o.bank_details.iban}</span></div>}
-                      {o.bank_details.bic && <div className="offer-bank-row"><span className="offer-bank-label">{L.bic}</span><span className="offer-bank-value">{o.bank_details.bic}</span></div>}
-                      {o.bank_details.account_number && <div className="offer-bank-row"><span className="offer-bank-label">{L.accountNumber}</span><span className="offer-bank-value">{o.bank_details.account_number}</span></div>}
-                      {o.bank_details.routing_number && <div className="offer-bank-row"><span className="offer-bank-label">{L.routingNumber}</span><span className="offer-bank-value">{o.bank_details.routing_number}</span></div>}
-                      {o.bank_details.bank_name && <div className="offer-bank-row"><span className="offer-bank-label">{L.bank}</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>}
-                      {o.bank_details.bank_address && <div className="offer-bank-row"><span className="offer-bank-label">{L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address}</span></div>}
-                      {o.bank_details.amount && <div className="offer-bank-amount">{o.bank_details.amount}</div>}
-                      {o.bank_details.reference && <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>}
+                    <div className="offer-pay-info-or">{lang === 'it' ? 'oppure' : 'or'}</div>
+                    <div className="offer-pay-info-row">
+                      <span>&#127974; {L.payByTransfer}</span>
+                      <span className="offer-pay-info-price">{o.bank_details.amount}</span>
                     </div>
                   </>
-                )}
-                {!o.payment_links?.length && !o.bank_details && (
-                  <p style={{ opacity: 0.9 }}>{L.contactPayment}</p>
-                )}
-                <div className="offer-payment-section">
-                  <p style={{ opacity: 0.8, marginBottom: 12 }}>{L.questions}</p>
-                  <a href="https://wa.me/17273187027" className="offer-cta-button">{L.contactWhatsApp}</a>
-                </div>
-              </>
-            ) : (
-              <>
-                <p>{L.reviewAndSign}</p>
-                <a href={`/offer/${encodeURIComponent(token)}/contract`} className="offer-accept-btn">&#9997;&#65039; {L.acceptAndSign}</a>
-                <div className="offer-payment-note" style={{ marginTop: 16 }}>{L.afterSignature}</div>
-                <div className="offer-payment-section">
-                  <p style={{ opacity: 0.8, marginBottom: 12 }}>{L.questions}</p>
-                  <a href="https://wa.me/17273187027" className="offer-cta-button">{L.contactWhatsApp}</a>
-                </div>
-              </>
+                ) : o.payment_links?.length ? (
+                  <div className="offer-pay-info-row">
+                    <span>&#128179; {L.payByCard}</span>
+                    <span className="offer-pay-info-price">{o.payment_links[0].amount}</span>
+                  </div>
+                ) : o.bank_details ? (
+                  <div className="offer-pay-info-row">
+                    <span>&#127974; {L.payByTransfer}</span>
+                    <span className="offer-pay-info-price">{o.bank_details.amount}</span>
+                  </div>
+                ) : null}
+                <p className="offer-pay-info-note">{lang === 'it' ? 'Sceglierai il metodo di pagamento dopo la firma del contratto.' : 'You will choose your payment method after signing the contract.'}</p>
+              </div>
             )}
+
+            {!o.payment_links?.length && !o.bank_details && (
+              <p style={{ opacity: 0.9 }}>{L.contactPayment}</p>
+            )}
+
+            {/* Contract signing */}
+            {!isSigned && (
+              <div className="offer-contract-cta">
+                <a href={`/offer/${encodeURIComponent(token)}/contract`} className="offer-accept-btn">&#9997;&#65039; {L.acceptAndSign}</a>
+              </div>
+            )}
+
+            {/* WhatsApp */}
+            <div className="offer-payment-section">
+              <p style={{ opacity: 0.8, marginBottom: 12 }}>{L.questions}</p>
+              <a href="https://wa.me/17273187027" className="offer-cta-button">{L.contactWhatsApp}</a>
+            </div>
           </div>
         </div>
 
@@ -666,6 +670,14 @@ function OfferStyles() {
       .offer-payment-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(34,197,94,.4); }
       .offer-payment-note { font-size: 13px; opacity: .7; margin-top: 12px; }
       .offer-payment-secure { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; font-size: 12px; opacity: .5; }
+
+      .offer-pay-info { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15); border-radius: 12px; padding: 20px 28px; margin-bottom: 20px; }
+      .offer-pay-info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-size: 16px; font-weight: 600; }
+      .offer-pay-info-price { font-family: 'Source Code Pro', monospace; font-weight: 700; font-size: 18px; }
+      .offer-pay-info-or { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: 2px; opacity: .5; padding: 4px 0; }
+      .offer-pay-info-note { text-align: center; font-size: 12px; opacity: .55; margin: 12px 0 0; font-style: italic; }
+      .offer-surcharge-tag { display: inline-block; background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.3); padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; margin-left: 8px; vertical-align: middle; }
+      .offer-contract-cta { margin-top: 32px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.2); }
 
       .offer-bank-box { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25); border-radius: 12px; padding: 24px 32px; text-align: left; margin: 20px auto 0; max-width: 440px; }
       .offer-bank-title { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; opacity: .6; margin-bottom: 12px; text-align: center; }

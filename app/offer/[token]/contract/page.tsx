@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 
@@ -24,8 +24,14 @@ const CL = {
     redirecting: 'Contract signed! Redirecting to payment...',
     successTitle: 'Contract Signed Successfully!',
     successActivate: 'To activate your services, please complete the bank transfer below.',
+    choosePayment: 'Choose how you want to pay:',
+    payByCard: 'Pay by Card',
+    payByTransfer: 'Bank Transfer',
+    cardSurcharge: 'A 5% processing fee applies to card payments.',
+    orSeparator: 'OR',
     bankTitle: 'Bank Transfer Details',
     beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', reference: 'Reference',
+    accountNumber: 'Account Number', routingNumber: 'Routing Number',
     receiptTitle: 'Upload Wire Transfer Receipt',
     receiptDesc: 'Once you complete the transfer, upload the receipt to start your services immediately.',
     receiptLabel: 'Click to upload receipt (PDF or image)',
@@ -43,8 +49,14 @@ const CL = {
     redirecting: 'Contratto firmato! Reindirizzamento al pagamento...',
     successTitle: 'Contratto Firmato con Successo!',
     successActivate: 'Per attivare i servizi, completa il bonifico bancario qui sotto.',
+    choosePayment: 'Scegli come pagare:',
+    payByCard: 'Paga con Carta',
+    payByTransfer: 'Bonifico Bancario',
+    cardSurcharge: 'Il pagamento con carta prevede una maggiorazione del 5%.',
+    orSeparator: 'OPPURE',
     bankTitle: 'Coordinate Bancarie',
     beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', reference: 'Causale',
+    accountNumber: 'Numero Conto', routingNumber: 'Routing Number',
     receiptTitle: 'Carica Ricevuta Bonifico',
     receiptDesc: 'Una volta completato il bonifico, carica la ricevuta per avviare i servizi immediatamente.',
     receiptLabel: 'Clicca per caricare la ricevuta (PDF o immagine)',
@@ -65,10 +77,107 @@ interface FormData {
   passport_exp: string
 }
 
+function CheckoutPreview({ offer, cl, hasCard, hasBank, token }: { offer: Offer; cl: typeof CL['en']; hasCard: boolean; hasBank: boolean; token: string }) {
+  const [showBank, setShowBank] = useState(false)
+  const receiptInputRef = useRef<HTMLInputElement>(null)
+  const [receiptFile, setReceiptFile] = useState<File | null>(null)
+  const [uploadStatus, setUploadStatus] = useState<string>('')
+  const [uploading, setUploading] = useState(false)
+
+  async function handleUpload() {
+    if (!receiptFile) return
+    setUploading(true)
+    setUploadStatus('')
+    try {
+      const ext = receiptFile.name.split('.').pop() || 'pdf'
+      const path = `${token}/wire-receipt-${Date.now()}.${ext}`
+      const res = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
+        method: 'POST',
+        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
+        body: receiptFile
+      })
+      if (!res.ok) throw new Error(cl.receiptFail)
+      await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', token)
+      setUploadStatus('success')
+    } catch {
+      setUploadStatus('error')
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 540, margin: '40px auto', padding: '0 20px', fontFamily: "'Inter','Helvetica Neue',sans-serif" }}>
+      <div className="contract-success-panel">
+        <div className="contract-success-icon">&#10004;</div>
+        <h2 style={{ color: 'var(--c-green)', fontSize: '18pt', marginBottom: 8 }}>{cl.successTitle}</h2>
+        <p style={{ fontSize: '12pt', marginBottom: 28, color: 'var(--c-muted)' }}>{cl.choosePayment}</p>
+
+        {!showBank && (
+          <div>
+            {hasCard && (
+              <a href={offer.payment_links![0].url} className="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer" style={{ marginBottom: hasBank ? 0 : 16 }}>
+                <span className="ps-choice-icon">&#128179;</span>
+                <span className="ps-choice-label">{cl.payByCard}</span>
+                <span className="ps-choice-price">{offer.payment_links![0].amount}</span>
+                {hasBank && <span className="ps-choice-badge">+5%</span>}
+              </a>
+            )}
+            {hasCard && hasBank && (
+              <div className="post-sign-divider"><span>{cl.orSeparator}</span></div>
+            )}
+            {hasBank && (
+              <button onClick={() => setShowBank(true)} className="ps-choice-btn ps-choice-bank" type="button">
+                <span className="ps-choice-icon">&#127974;</span>
+                <span className="ps-choice-label">{cl.payByTransfer}</span>
+                <span className="ps-choice-price">{offer.bank_details!.amount || ''}</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {showBank && hasBank && (
+          <div className="post-sign-option">
+            <div className="post-sign-option-label">&#127974; {cl.payByTransfer}</div>
+            {offer.bank_details!.amount && <div className="post-sign-bank-amount">{offer.bank_details!.amount}</div>}
+            <div className="contract-bank-details-box">
+              <h3>{cl.bankTitle}</h3>
+              {offer.bank_details!.beneficiary && <div className="contract-bank-row"><span className="contract-bank-label">{cl.beneficiary}</span><span className="contract-bank-value">{offer.bank_details!.beneficiary}</span></div>}
+              {offer.bank_details!.account_number && <div className="contract-bank-row"><span className="contract-bank-label">{cl.accountNumber}</span><span className="contract-bank-value">{offer.bank_details!.account_number}</span></div>}
+              {offer.bank_details!.routing_number && <div className="contract-bank-row"><span className="contract-bank-label">{cl.routingNumber}</span><span className="contract-bank-value">{offer.bank_details!.routing_number}</span></div>}
+              {offer.bank_details!.iban && <div className="contract-bank-row"><span className="contract-bank-label">{cl.iban}</span><span className="contract-bank-value">{offer.bank_details!.iban}</span></div>}
+              {offer.bank_details!.bic && <div className="contract-bank-row"><span className="contract-bank-label">{cl.bic}</span><span className="contract-bank-value">{offer.bank_details!.bic}</span></div>}
+              {offer.bank_details!.bank_name && <div className="contract-bank-row"><span className="contract-bank-label">{cl.bank}</span><span className="contract-bank-value">{offer.bank_details!.bank_name}</span></div>}
+              {offer.bank_details!.reference && <div className="contract-bank-ref">{cl.reference}: {offer.bank_details!.reference}</div>}
+            </div>
+            <div className="contract-receipt-upload">
+              <h3 style={{ fontSize: '11pt', marginBottom: 8 }}>{cl.receiptTitle}</h3>
+              <p style={{ fontSize: '9.5pt', color: 'var(--c-muted)', marginBottom: 12 }}>{cl.receiptDesc}</p>
+              <div className="contract-receipt-drop" onClick={() => receiptInputRef.current?.click()} style={{ cursor: 'pointer' }}>
+                <input ref={receiptInputRef} type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={e => { if (e.target.files?.[0]) setReceiptFile(e.target.files[0]) }} />
+                <p style={{ color: receiptFile ? 'var(--c-green)' : 'var(--c-muted)' }}>{receiptFile ? receiptFile.name : cl.receiptLabel}</p>
+              </div>
+              <button className="contract-receipt-btn" disabled={!receiptFile || uploading} onClick={handleUpload}>
+                {uploading ? cl.receiptUploading : uploadStatus === 'success' ? cl.uploaded : cl.receiptBtn}
+              </button>
+              {uploadStatus === 'success' && <p style={{ fontSize: '9pt', color: 'var(--c-green)', fontWeight: 600, marginTop: 8 }}>{cl.receiptDone}</p>}
+              {uploadStatus === 'error' && <p style={{ fontSize: '9pt', color: 'var(--c-red)', marginTop: 8 }}>{cl.receiptFail}</p>}
+            </div>
+          </div>
+        )}
+
+        <p style={{ fontSize: '9.5pt', color: 'var(--c-muted)', marginTop: 24 }}>{cl.afterPayment}</p>
+        <a href={`/offer/${encodeURIComponent(token)}`} className="contract-success-link" dangerouslySetInnerHTML={{ __html: cl.backToOffer }} />
+      </div>
+    </div>
+  )
+}
+
 export default function ContractPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const token = params.token as string
+  const isCheckoutPreview = searchParams.get('checkout') === '1'
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -179,18 +288,19 @@ export default function ContractPage() {
     const year = new Date().getFullYear()
     let fee = '', llcType = '', installments = ''
 
+    // Pick the recommended service first, fallback to last
+    if (o.services && Array.isArray(o.services) && o.services.length > 0) {
+      const rec = o.services.find(x => x.recommended) || o.services[o.services.length - 1]
+      fee = rec.price || ''
+    }
+    // Override with matching cost_summary if available (prefer "recommended" label)
     if (o.cost_summary && Array.isArray(o.cost_summary) && o.cost_summary.length > 0) {
-      const rc = o.cost_summary[0]
-      fee = rc.total || ''
+      const rc = o.cost_summary.find(x => /recommended/i.test(x.label || '')) || o.cost_summary[o.cost_summary.length - 1]
+      if (rc.total) fee = rc.total
       installments = rc.rate || rc.installments || ''
     }
-    if (!fee && o.services && Array.isArray(o.services) && o.services.length > 0) {
-      fee = o.services[0].price || ''
-    }
-    if (!installments && o.payment_links && o.payment_links.length > 0) {
-      installments = o.payment_links.length === 1
-        ? `Single payment of ${o.payment_links[0].amount}`
-        : `${o.payment_links.length} installments of ${o.payment_links[0].amount} each`
+    if (!installments && fee) {
+      installments = `Single payment of ${fee}`
     }
     if (o.services && Array.isArray(o.services)) {
       const svc = o.services.find(x => (x.name || '').toLowerCase().includes('llc'))
@@ -288,30 +398,59 @@ export default function ContractPage() {
         } catch { /* retry */ }
       }
 
-      // Post-sign behavior
-      const ptype = offer.payment_type || 'none'
-      if (ptype === 'checkout' && offer.payment_links && offer.payment_links.length > 0) {
-        setStatusMsg(cl.redirecting)
-        setStatusType('success')
-        setTimeout(() => { window.location.href = offer.payment_links![0].url }, 2500)
-      } else if (ptype === 'bank_transfer' && offer.bank_details) {
-        // Show bank details panel with wire receipt upload
-        const b = offer.bank_details
-        const successEl = document.getElementById('success-state')
-        if (successEl && contractBodyRef.current) {
-          contractBodyRef.current.style.display = 'none'
-          let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
-          sh += `<h2>${cl.successTitle}</h2>`
-          sh += `<p>${cl.successActivate}</p>`
+      // Post-sign behavior — show payment choice buttons
+      const hasCard = offer.payment_links && offer.payment_links.length > 0
+      const hasBank = !!offer.bank_details
+      const successEl = document.getElementById('success-state')
+
+      if ((hasCard || hasBank) && successEl && contractBodyRef.current) {
+        contractBodyRef.current.style.display = 'none'
+        let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
+        sh += `<h2>${cl.successTitle}</h2>`
+        sh += `<p style="font-size:12pt;margin-bottom:28px;">${cl.choosePayment}</p>`
+
+        // ── Choice buttons ──
+        sh += '<div id="payment-choice">'
+        if (hasCard) {
+          const pl = offer.payment_links![0]
+          sh += `<a href="${esc(pl.url)}" class="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer">`
+          sh += `<span class="ps-choice-icon">&#128179;</span>`
+          sh += `<span class="ps-choice-label">${cl.payByCard}</span>`
+          sh += `<span class="ps-choice-price">${esc(pl.amount)}</span>`
+          if (hasBank) sh += `<span class="ps-choice-badge">+5%</span>`
+          sh += '</a>'
+        }
+
+        if (hasCard && hasBank) {
+          sh += `<div class="post-sign-divider"><span>${cl.orSeparator}</span></div>`
+        }
+
+        if (hasBank) {
+          sh += `<button id="choose-bank" class="ps-choice-btn ps-choice-bank" type="button">`
+          sh += `<span class="ps-choice-icon">&#127974;</span>`
+          sh += `<span class="ps-choice-label">${cl.payByTransfer}</span>`
+          sh += `<span class="ps-choice-price">${esc(offer.bank_details!.amount || '')}</span>`
+          sh += '</button>'
+        }
+        sh += '</div>'
+
+        // ── Bank details panel (hidden until chosen) ──
+        if (hasBank) {
+          const b = offer.bank_details!
+          sh += '<div id="bank-panel" style="display:none;">'
+          sh += `<div class="post-sign-option">`
+          sh += `<div class="post-sign-option-label">&#127974; ${cl.payByTransfer}</div>`
+          if (b.amount) sh += `<div class="post-sign-bank-amount">${esc(b.amount)}</div>`
           sh += `<div class="contract-bank-details-box"><h3>${cl.bankTitle}</h3>`
           if (b.beneficiary) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.beneficiary}</span><span class="contract-bank-value">${esc(b.beneficiary)}</span></div>`
+          if (b.account_number) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.accountNumber}</span><span class="contract-bank-value">${esc(b.account_number)}</span></div>`
+          if (b.routing_number) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.routingNumber}</span><span class="contract-bank-value">${esc(b.routing_number)}</span></div>`
           if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.iban}</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
           if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bic}</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
           if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bank}</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
-          if (b.amount) sh += `<div class="contract-bank-amount">${esc(b.amount)}</div>`
           if (b.reference) sh += `<div class="contract-bank-ref">${cl.reference}: ${esc(b.reference)}</div>`
           sh += '</div>'
-          // Wire receipt upload section
+          // Wire receipt upload
           sh += '<div class="contract-receipt-upload">'
           sh += `<h3 style="font-size:11pt;margin-bottom:8px;">${cl.receiptTitle}</h3>`
           sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-bottom:12px;">${cl.receiptDesc}</p>`
@@ -322,11 +461,24 @@ export default function ContractPage() {
           sh += `<button id="receipt-submit" class="contract-receipt-btn" disabled>${cl.receiptBtn}</button>`
           sh += '<div id="receipt-status" style="font-size:9pt;margin-top:8px;"></div>'
           sh += '</div>'
-          sh += `<p style="font-size:9.5pt;color:var(--c-muted)">${cl.afterPayment}</p>`
-          sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
           sh += '</div>'
-          successEl.innerHTML = sh
-          successEl.style.display = 'block'
+          sh += '</div>'
+        }
+
+        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${cl.afterPayment}</p>`
+        sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
+        sh += '</div>'
+        successEl.innerHTML = sh
+        successEl.style.display = 'block'
+
+        // Bank choice click handler — show bank panel, hide choice buttons
+        if (hasBank) {
+          document.getElementById('choose-bank')?.addEventListener('click', () => {
+            const choiceEl = document.getElementById('payment-choice')
+            const bankEl = document.getElementById('bank-panel')
+            if (choiceEl) choiceEl.style.display = 'none'
+            if (bankEl) bankEl.style.display = 'block'
+          })
 
           // Wire receipt upload handler
           const receiptInput = document.getElementById('receipt-input') as HTMLInputElement
@@ -358,7 +510,6 @@ export default function ContractPage() {
                 body: receiptFile
               })
               if (!uploadRes.ok) throw new Error(cl.receiptFail)
-              // Update contract record with receipt path
               await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offer.token)
               receiptStatus.innerHTML = `<span style="color:var(--c-green);font-weight:600">${cl.receiptDone}</span>`
               receiptBtn.textContent = cl.uploaded
@@ -388,6 +539,19 @@ export default function ContractPage() {
   if (loading) return <><ContractStyles /><div className="contract-loading"><div className="contract-spinner" /><p>Loading contract...</p></div></>
   if (error) return <><ContractStyles /><div className="contract-error-box"><h2>Error</h2><p>{error}</p></div></>
   if (!offer) return null
+
+  // Checkout preview mode — show payment choice directly
+  if (isCheckoutPreview && offer) {
+    const cl = CL[offer.language === 'it' ? 'it' : 'en']
+    const hasCard = offer.payment_links && offer.payment_links.length > 0
+    const hasBank = !!offer.bank_details
+    return (
+      <>
+        <ContractStyles />
+        <CheckoutPreview offer={offer} cl={cl} hasCard={!!hasCard} hasBank={hasBank} token={token} />
+      </>
+    )
+  }
 
   const { fee, llcType, installments, year } = getContractData()
   const effDate = today()
@@ -807,6 +971,22 @@ function ContractStyles() {
       .contract-receipt-btn { display:inline-block; padding:10px 28px; background:var(--c-green); color:#fff; border:none; border-radius:6px; font-family:'Inter',sans-serif; font-weight:600; font-size:10pt; cursor:pointer; transition:background .2s; }
       .contract-receipt-btn:hover { background:#246e3d; }
       .contract-receipt-btn:disabled { background:var(--c-border); color:var(--c-muted); cursor:not-allowed; }
+
+      /* Choice buttons */
+      .ps-choice-btn { display:flex; align-items:center; gap:16px; width:100%; padding:20px 24px; border-radius:14px; border:2px solid var(--c-border); background:#fff; text-decoration:none; color:var(--c-primary); cursor:pointer; transition:border-color .2s, box-shadow .2s; font-family:'Inter',sans-serif; }
+      .ps-choice-btn:hover { border-color:var(--c-green); box-shadow:0 4px 16px rgba(34,197,94,.15); }
+      .ps-choice-icon { font-size:24pt; flex-shrink:0; }
+      .ps-choice-label { font-size:13pt; font-weight:700; flex:1; text-align:left; }
+      .ps-choice-price { font-size:14pt; font-weight:800; font-family:'Source Code Pro','Courier New',monospace; }
+      .ps-choice-badge { display:inline-block; background:var(--c-accent); color:#fff; padding:2px 10px; border-radius:20px; font-size:9pt; font-weight:700; margin-left:4px; }
+      .ps-choice-card { border-color:var(--c-green); background:linear-gradient(135deg,#f0fdf4,#fff); }
+
+      .post-sign-option { background:#fff; border:1px solid var(--c-border); border-radius:14px; padding:28px 24px; margin-bottom:8px; text-align:center; }
+      .post-sign-option-label { font-family:'Inter',sans-serif; font-size:16pt; font-weight:700; margin-bottom:16px; color:var(--c-primary); }
+      .post-sign-divider { display:flex; align-items:center; gap:16px; margin:16px 0; }
+      .post-sign-divider::before, .post-sign-divider::after { content:''; flex:1; height:1px; background:var(--c-border); }
+      .post-sign-divider span { font-family:'Inter',sans-serif; font-size:10pt; font-weight:700; letter-spacing:3px; color:var(--c-muted); }
+      .post-sign-bank-amount { font-size:22pt; font-weight:800; color:var(--c-primary); margin-bottom:16px; }
 
       .contract-text-center { text-align:center; }
       .contract-text-muted { color:var(--c-muted); }

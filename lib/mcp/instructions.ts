@@ -88,7 +88,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection — Key Rules
 
-You have 108 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 113 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
@@ -176,6 +176,7 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 - cal_*: Calendly bookings and availability (3 tools).
 - cb_*: Circleback call summaries — list, get details, search (3 tools). Data arrives via webhook, auto-linked to leads by attendee email.
 - offer_*: Service proposals — create, list, get, update, send (5 tools). All JSONB fields use English names (services, cost_summary, issues, strategy, etc.). Workflow: create (draft) → review → offer_send (creates Gmail draft) → client views → signs → pays.
+- whop_*: Whop payment gateway — list payments (check if client paid), list plans (checkout links), list products, create plans, list memberships (5 tools). Use whop_list_payments to verify client payments instead of checking the browser.
 - kb_*: Knowledge base — ALWAYS search kb_search before answering business/pricing questions (4 tools).
 - storage_*: Supabase Storage files, mirrored to Drive (5 tools).
 - sysdoc_*: System documentation — list, read, create, update (4 tools). Key docs: session-context (lean quick-ref), project-state (milestones), tech-stack (architecture). Use sysdoc_create for session logs.
