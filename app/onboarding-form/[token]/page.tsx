@@ -479,6 +479,8 @@ export default function OnboardingFormPage() {
               <div><strong>{L.state_of_formation}:</strong> {String(formData.state_of_formation || '—')}</div>
               <div><strong>{L.formation_date}:</strong> {String(formData.formation_date || '—')}</div>
               {formData.ein ? <div><strong>{L.ein}:</strong> {String(formData.ein)}</div> : null}
+              {formData.tax_return_previous_year_filed ? <div><strong>{L.tax_return_previous_year_filed}:</strong> {String(formData.tax_return_previous_year_filed)}</div> : null}
+              {formData.tax_return_current_year_filed ? <div><strong>{L.tax_return_current_year_filed}:</strong> {String(formData.tax_return_current_year_filed)}</div> : null}
               <div><strong>{lang === 'en' ? 'Entity Type' : 'Tipo'}:</strong> {submission.entity_type}</div>
             </div>
           </div>

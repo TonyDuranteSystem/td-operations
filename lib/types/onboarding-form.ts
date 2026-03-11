@@ -99,6 +99,8 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'filing_id', type: 'text', required: false, step: 2 },
   { key: 'business_purpose', type: 'textarea', required: true, step: 2 },
   { key: 'registered_agent', type: 'text', required: false, step: 2 },
+  { key: 'tax_return_previous_year_filed', type: 'select', required: true, step: 2, options: ['Yes', 'No', 'Not sure'] },
+  { key: 'tax_return_current_year_filed', type: 'select', required: true, step: 2, options: ['Yes', 'No', 'Not sure'] },
 
   // ═══════════════════════════════════════
   // STEP 3: Additional Members (MMLLC only)
@@ -183,6 +185,8 @@ export const LABELS = {
     filing_id: 'State Filing ID (if available)',
     business_purpose: 'Business Activity / Purpose',
     registered_agent: 'Current Registered Agent (if any)',
+    tax_return_previous_year_filed: 'Have you filed the tax return for the previous year (2024)?',
+    tax_return_current_year_filed: 'Have you filed the tax return for the current year (2025)?',
 
     // Step 3
     step3Title: 'Additional Members',
@@ -275,6 +279,8 @@ export const LABELS = {
     filing_id: 'Filing ID Statale (se disponibile)',
     business_purpose: 'Attività / Scopo della Società',
     registered_agent: 'Registered Agent Attuale (se presente)',
+    tax_return_previous_year_filed: 'Hai presentato la dichiarazione dei redditi per l\'anno precedente (2024)?',
+    tax_return_current_year_filed: 'Hai presentato la dichiarazione dei redditi per l\'anno corrente (2025)?',
 
     // Step 3
     step3Title: 'Membri Aggiuntivi',
@@ -383,6 +389,14 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   registered_agent: {
     en: 'The name of your current registered agent, if you have one. We will handle the change of agent.',
     it: 'Il nome del tuo registered agent attuale, se ne hai uno. Gestiremo noi il cambio agente.',
+  },
+  tax_return_previous_year_filed: {
+    en: 'Has your LLC filed a US tax return (Form 1120, 5472, or 1065) for the previous tax year? Select "Not sure" if you don\'t know.',
+    it: 'La tua LLC ha presentato la dichiarazione dei redditi USA (Form 1120, 5472, o 1065) per l\'anno fiscale precedente? Seleziona "Non sono sicuro" se non sai.',
+  },
+  tax_return_current_year_filed: {
+    en: 'Has your LLC filed a US tax return for the current tax year? Select "Not sure" if you don\'t know.',
+    it: 'La tua LLC ha presentato la dichiarazione dei redditi USA per l\'anno fiscale corrente? Seleziona "Non sono sicuro" se non sai.',
   },
   passportUpload: {
     en: 'Upload a clear scan or photo of your passport\'s data page.',
