@@ -3,7 +3,7 @@
  *
  * Receives payment and membership events from Whop via Standard Webhooks.
  * Verifies signature, then:
- *   - payment.succeeded → lookup client by email, update CRM payment, send email with form link
+ *   - payment.succeeded → lookup client by email, create CRM payment, set lead to "Paid", create follow-up task
  *   - membership.activated → log membership activation
  *   - membership.deactivated → log deactivation
  *
@@ -171,11 +171,11 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     console.error("[whop-webhook] Failed to create payment:", payErr.message)
   }
 
-  // 4. Update lead status if found
+  // 4. Update lead status to "Paid" (conversion happens after onboarding review)
   if (leadId) {
     await supabase
       .from("leads")
-      .update({ status: "Converted", updated_at: new Date().toISOString() })
+      .update({ status: "Paid", updated_at: new Date().toISOString() })
       .eq("id", leadId)
   }
 
