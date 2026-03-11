@@ -60,9 +60,13 @@ const STATE_CODE_MAP: Record<string, string> = {
   "north dakota": "nd",
 }
 
+// HubSpot state_of_formation dropdown only has: wy, fl, de, nm, other
+const HUBSPOT_ALLOWED_STATES = new Set(["wy", "fl", "de", "nm"])
+
 function stateToCode(state: string): string {
   const code = STATE_CODE_MAP[state.toLowerCase()]
-  return code || "other"
+  if (!code) return "other"
+  return HUBSPOT_ALLOWED_STATES.has(code) ? code : "other"
 }
 
 function getToken(): string {
