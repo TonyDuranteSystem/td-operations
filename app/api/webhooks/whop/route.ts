@@ -50,15 +50,25 @@ async function verifyStandardWebhook(
   // Standard Webhooks: sign "msgId.timestamp.body"
   const toSign = `${webhookId}.${webhookTimestamp}.${body}`
 
-  // Secret from Whop starts with "ws_" prefix — strip it and base64-decode
-  const secretBase64 = secret.startsWith("whsec_")
+  // Secret from Whop: "whsec_" prefix = base64, "ws_" prefix = hex
+  const secretRaw = secret.startsWith("whsec_")
     ? secret.slice(6)
     : secret.startsWith("ws_")
       ? secret.slice(3)
       : secret
 
-  // Decode base64 secret
-  const secretBytes = Uint8Array.from(atob(secretBase64), c => c.charCodeAt(0))
+  // Detect encoding: hex strings are all [0-9a-f], base64 has uppercase/+/=
+  const isHex = /^[0-9a-f]+$/i.test(secretRaw) && secretRaw.length % 2 === 0
+  let secretBytes: ArrayBuffer
+  if (isHex) {
+    // Hex decode
+    const arr = new Uint8Array(secretRaw.match(/.{2}/g)!.map(b => parseInt(b, 16)))
+    secretBytes = arr.buffer as ArrayBuffer
+  } else {
+    // Base64 decode
+    const arr = Uint8Array.from(atob(secretRaw), c => c.charCodeAt(0))
+    secretBytes = arr.buffer as ArrayBuffer
+  }
 
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(
