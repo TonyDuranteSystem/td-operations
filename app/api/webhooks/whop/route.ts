@@ -50,27 +50,20 @@ async function verifyStandardWebhook(
   // Standard Webhooks: sign "msgId.timestamp.body"
   const toSign = `${webhookId}.${webhookTimestamp}.${body}`
 
-  // Secret from Whop: "whsec_" prefix = base64, "ws_" prefix = hex
-  const secretRaw = secret.startsWith("whsec_")
-    ? secret.slice(6)
-    : secret.startsWith("ws_")
-      ? secret.slice(3)
-      : secret
-
-  // Detect encoding: hex strings are all [0-9a-f], base64 has uppercase/+/=
-  const isHex = /^[0-9a-f]+$/i.test(secretRaw) && secretRaw.length % 2 === 0
+  // Per Whop docs: the SDK does btoa(WHOP_WEBHOOK_SECRET) then Standard Webhooks
+  // base64-decodes it back → HMAC key = raw UTF-8 bytes of the entire env var string
+  // For whsec_ prefix: strip prefix, base64-decode the remainder
+  // See: https://docs.whop.com/developer/guides/webhooks
+  const encoder = new TextEncoder()
   let secretBytes: ArrayBuffer
-  if (isHex) {
-    // Hex decode
-    const arr = new Uint8Array(secretRaw.match(/.{2}/g)!.map(b => parseInt(b, 16)))
+  if (secret.startsWith("whsec_")) {
+    // Standard Webhooks format: base64-encoded after prefix
+    const arr = Uint8Array.from(atob(secret.slice(6)), c => c.charCodeAt(0))
     secretBytes = arr.buffer as ArrayBuffer
   } else {
-    // Base64 decode
-    const arr = Uint8Array.from(atob(secretRaw), c => c.charCodeAt(0))
-    secretBytes = arr.buffer as ArrayBuffer
+    // Whop ws_ format: use raw string bytes as HMAC key (per Whop SDK: btoa(secret) → atob → bytes)
+    secretBytes = encoder.encode(secret).buffer as ArrayBuffer
   }
-
-  const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(
     "raw",
     secretBytes,
