@@ -495,21 +495,25 @@ export function registerGmailTools(server: McpServer) {
       contact_id: z.string().optional().describe("Link to CRM contact UUID for tracking"),
       lead_id: z.string().optional().describe("Link to CRM lead UUID for tracking"),
       tag: z.string().optional().describe("Tag for categorizing (e.g. 'onboarding', 'invoice', 'support')"),
-      drive_file_id: z.string().optional().describe("Google Drive file ID to attach. The file is downloaded automatically and attached to the email. Use drive_search or drive_list_folder to find the file ID first."),
-      drive_file_ids: z.array(z.string()).optional().describe("Multiple Google Drive file IDs to attach (for programmatic use). Prefer drive_file_id for single files."),
+      drive_file_id: z.string().optional().describe("Google Drive file ID to attach (1st file). The file is downloaded automatically and attached to the email. Use drive_search or drive_list_folder to find the file ID."),
+      drive_file_id_2: z.string().optional().describe("Google Drive file ID for a 2nd attachment (optional)."),
+      drive_file_id_3: z.string().optional().describe("Google Drive file ID for a 3rd attachment (optional)."),
+      drive_file_ids: z.array(z.string()).optional().describe("Multiple Google Drive file IDs to attach (for programmatic use). Prefer drive_file_id params for Claude.ai."),
       attachments: z.array(z.object({
         filename: z.string().describe("File name with extension (e.g. 'Invoice-INV-001364.pdf')"),
         content: z.string().describe("Base64-encoded file content"),
         content_type: z.string().optional().default("application/pdf").describe("MIME type (default: application/pdf)"),
       })).optional().describe("File attachments (base64-encoded). For Drive files, use drive_file_id instead."),
     },
-    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, drive_file_id, drive_file_ids, attachments }) => {
+    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, drive_file_id, drive_file_id_2, drive_file_id_3, drive_file_ids, attachments }) => {
       try {
         const fromEmail = as_user || DEFAULT_EMAIL()
 
-        // Merge single drive_file_id into drive_file_ids array
+        // Merge all drive_file_id* params into a single array
         const allDriveIds = [...(drive_file_ids || [])]
         if (drive_file_id) allDriveIds.push(drive_file_id)
+        if (drive_file_id_2) allDriveIds.push(drive_file_id_2)
+        if (drive_file_id_3) allDriveIds.push(drive_file_id_3)
 
         // Download Drive files and merge with manual attachments
         const allAttachments = [...(attachments || [])]
