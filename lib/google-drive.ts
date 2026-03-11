@@ -574,6 +574,31 @@ export async function uploadBinaryToDrive(
 }
 
 /**
+ * Download file as binary Buffer (for attachments, PDFs, images).
+ * Returns { buffer, mimeType, fileName }
+ */
+export async function downloadFileBinary(fileId: string): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
+  const token = await getAccessToken()
+  const meta = (await getFileMetadata(fileId)) as { mimeType: string; name: string }
+
+  const url = `${DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  if (!res.ok) {
+    throw new Error(`Drive binary download ${res.status}: ${res.statusText}`)
+  }
+
+  const arrayBuffer = await res.arrayBuffer()
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    mimeType: meta.mimeType,
+    fileName: meta.name,
+  }
+}
+
+/**
  * Download file content (text-based files only)
  */
 export async function downloadFileContent(fileId: string): Promise<string> {

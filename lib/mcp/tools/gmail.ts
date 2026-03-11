@@ -470,7 +470,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_send",
-    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body, file attachments (base64-encoded), and professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. For invoices: download PDF via QB API, base64-encode it, and pass as attachment.",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_ids to attach files from Google Drive (preferred — just pass the file IDs). Alternatively use attachments[] for raw base64 content. Drive files are downloaded and attached automatically.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -490,11 +490,32 @@ export function registerGmailTools(server: McpServer) {
         filename: z.string().describe("File name with extension (e.g. 'Invoice-INV-001364.pdf')"),
         content: z.string().describe("Base64-encoded file content"),
         content_type: z.string().optional().default("application/pdf").describe("MIME type (default: application/pdf)"),
-      })).optional().describe("File attachments (base64-encoded). Each needs filename, content (base64), and optional content_type."),
+      })).optional().describe("File attachments (base64-encoded). Use drive_file_ids instead when files are on Google Drive."),
+      drive_file_ids: z.array(z.string()).optional().describe("Google Drive file IDs to attach. Files are downloaded automatically and attached to the email. PREFERRED method — just pass the Drive file ID(s) from drive_search or drive_list_folder."),
     },
-    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, attachments }) => {
+    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, attachments, drive_file_ids }) => {
       try {
         const fromEmail = as_user || DEFAULT_EMAIL()
+
+        // Download Drive files and merge with manual attachments
+        const allAttachments = [...(attachments || [])]
+        if (drive_file_ids && drive_file_ids.length > 0) {
+          const { downloadFileBinary } = await import("@/lib/google-drive")
+          for (const fileId of drive_file_ids) {
+            try {
+              const { buffer, mimeType, fileName } = await downloadFileBinary(fileId)
+              allAttachments.push({
+                filename: fileName,
+                content: buffer.toString("base64"),
+                content_type: mimeType || "application/octet-stream",
+              })
+            } catch (err) {
+              return {
+                content: [{ type: "text" as const, text: `❌ Failed to download Drive file ${fileId}: ${err instanceof Error ? err.message : String(err)}` }],
+              }
+            }
+          }
+        }
 
         // Generate tracking ID
         const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -529,7 +550,7 @@ export function registerGmailTools(server: McpServer) {
           .trim()
 
         // Build MIME message
-        const hasAttachments = attachments && attachments.length > 0
+        const hasAttachments = allAttachments.length > 0
         const outerBoundary = `boundary_${Date.now()}`
         const altBoundary = `alt_boundary_${Date.now()}`
 
@@ -600,7 +621,7 @@ export function registerGmailTools(server: McpServer) {
           mimeParts.push(`--${altBoundary}--`)
 
           // Append each attachment
-          for (const att of attachments!) {
+          for (const att of allAttachments) {
             const ct = att.content_type || "application/pdf"
             mimeParts.push("")
             mimeParts.push(`--${outerBoundary}`)
@@ -680,7 +701,7 @@ export function registerGmailTools(server: McpServer) {
               `📨 Thread ID: ${result.threadId}`,
               track_opens !== false ? `👁️ Open tracking: enabled (${trackingId})` : null,
               tag ? `🏷️ Tag: ${tag}` : null,
-              hasAttachments ? `📎 Attachments: ${attachments!.map(a => a.filename).join(", ")}` : null,
+              hasAttachments ? `📎 Attachments: ${allAttachments.map(a => a.filename).join(", ")}` : null,
               "",
               "Email appears in Gmail Sent folder. Client replies will thread automatically.",
             ].filter(Boolean).join("\n"),
