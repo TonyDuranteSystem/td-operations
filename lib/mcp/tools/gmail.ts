@@ -525,10 +525,15 @@ export function registerGmailTools(server: McpServer) {
 
         // Build MIME multipart message (text + html)
         const boundary = `boundary_${Date.now()}`
+        // RFC 2047: encode subject as base64 if it contains non-ASCII chars
+        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+        const encodedSubject = hasNonAscii
+          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+          : subject
         const mimeHeaders = [
           `From: Tony Durante LLC <${fromEmail}>`,
           `To: ${to}`,
-          `Subject: ${subject}`,
+          `Subject: ${encodedSubject}`,
         ]
         if (cc) mimeHeaders.push(`Cc: ${cc}`)
         if (bcc) mimeHeaders.push(`Bcc: ${bcc}`)
