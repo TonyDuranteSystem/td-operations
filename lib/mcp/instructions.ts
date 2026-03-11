@@ -143,7 +143,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - drive_list_folder: Browse folder contents. Root: 0AOLZHXSfKUMHUk9PVA.
 - drive_read_file: Read text files. For PDFs/images, use docai_ocr_file instead.
 - drive_upload: Create/overwrite a TEXT file on Drive.
-- drive_upload_file: Upload BINARY files (PDF, images, docs) from Gmail attachments or URLs. Max ~4MB.
+- drive_upload_file: Upload BINARY files (PDF, images, docs) from Gmail attachments, URLs, or Supabase Storage (onboarding-uploads bucket). Max ~4MB.
 
 ### Gmail (8 tools: gmail_*) — PRIMARY EMAIL SYSTEM
 - gmail_send: 📧 PRIMARY — Send email directly via Gmail API. Appears in Sent folder, supports threading (reply_to_message_id), HTML body, open tracking via pixel. Use this for ALL client emails. Supports as_user for different mailboxes.

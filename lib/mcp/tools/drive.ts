@@ -19,6 +19,7 @@ import {
   uploadBinaryToDrive,
 } from "@/lib/google-drive"
 import { getGmailAttachment } from "@/lib/gmail"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -395,9 +396,9 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_upload_file",
-    "Upload a binary file (PDF, image, etc.) to Google Drive from Gmail attachments or external URLs. Use this for ANY non-text file that drive_upload cannot handle. Workflow for Gmail: 1) gmail_read to get message_id + attachment details, 2) call this with source='gmail'. Workflow for URL: call with source='url' and the direct download link. Max file size: ~4MB.",
+    "Upload a binary file (PDF, image, etc.) to Google Drive from Gmail attachments, external URLs, or Supabase Storage. Use this for ANY non-text file that drive_upload cannot handle. Workflow for Gmail: 1) gmail_read to get message_id + attachment details, 2) call this with source='gmail'. Workflow for URL: call with source='url' and the direct download link. Workflow for Supabase Storage: call with source='supabase_storage' and storage_path (path inside the bucket, e.g. '{token}/passport_owner_file.pdf'). Default bucket: onboarding-uploads. Max file size: ~4MB.",
     {
-      source: z.enum(["gmail", "url"]).describe("Where to get the file: 'gmail' = Gmail attachment, 'url' = download from URL"),
+      source: z.enum(["gmail", "url", "supabase_storage"]).describe("Where to get the file: 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = Supabase Storage bucket"),
       folder_id: z.string().describe("Target Google Drive folder ID"),
       filename: z.string().optional().describe("Override filename (optional — auto-detected from source if omitted)"),
       // Gmail source params
@@ -405,8 +406,11 @@ export function registerDriveTools(server: McpServer) {
       attachment_id: z.string().optional().describe("Gmail attachment ID from message parts (required when source='gmail')"),
       // URL source params
       url: z.string().optional().describe("Direct download URL (required when source='url')"),
+      // Supabase Storage source params
+      storage_path: z.string().optional().describe("File path inside the Supabase Storage bucket (required when source='supabase_storage'). E.g. '{token}/passport_owner_file.pdf'"),
+      storage_bucket: z.string().optional().describe("Supabase Storage bucket name (default: 'onboarding-uploads'). Only needed if file is in a different bucket."),
     },
-    async ({ source, folder_id, filename, message_id, attachment_id, url }) => {
+    async ({ source, folder_id, filename, message_id, attachment_id, url, storage_path, storage_bucket }) => {
       try {
         let fileData: Buffer
         let finalFilename: string
@@ -479,9 +483,37 @@ export function registerDriveTools(server: McpServer) {
 
           mimeType = res.headers.get("content-type") || guessMimeType(finalFilename)
 
+        } else if (source === "supabase_storage") {
+          // ── Supabase Storage Download ──
+          if (!storage_path) {
+            return {
+              content: [{ type: "text" as const, text: "❌ storage_path is required when source='supabase_storage'. Provide the file path inside the bucket (e.g. '{token}/passport_owner_file.pdf')." }],
+            }
+          }
+
+          const bucket = storage_bucket || "onboarding-uploads"
+          const cleanPath = storage_path.replace(/^\/+/, "")
+
+          const { data: blob, error: dlErr } = await supabaseAdmin.storage
+            .from(bucket)
+            .download(cleanPath)
+
+          if (dlErr || !blob) {
+            return {
+              content: [{ type: "text" as const, text: `❌ Failed to download from Supabase Storage (${bucket}/${cleanPath}): ${dlErr?.message || "no data returned"}` }],
+            }
+          }
+
+          const arrayBuffer = await blob.arrayBuffer()
+          fileData = Buffer.from(arrayBuffer)
+
+          // Derive filename from storage path if not provided
+          finalFilename = filename || cleanPath.split("/").pop() || `storage-file-${Date.now()}`
+          mimeType = blob.type || guessMimeType(finalFilename)
+
         } else {
           return {
-            content: [{ type: "text" as const, text: "❌ Invalid source. Use 'gmail' or 'url'." }],
+            content: [{ type: "text" as const, text: "❌ Invalid source. Use 'gmail', 'url', or 'supabase_storage'." }],
           }
         }
 
