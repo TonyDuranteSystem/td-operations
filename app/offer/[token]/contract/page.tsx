@@ -205,6 +205,14 @@ export default function ContractPage() {
       const { data, error: err } = await supabasePublic.from('offers').select('*').eq('token', token).single()
       if (err || !data) { setError('Offer not found.'); setLoading(false); return }
       const o = data as Offer
+      // Safeguard: parse JSONB fields that may be stored as strings
+      const jsonFields = ['issues', 'immediate_actions', 'strategy', 'services', 'additional_services', 'cost_summary', 'recurring_costs', 'future_developments', 'next_steps', 'payment_links'] as const
+      for (const f of jsonFields) {
+        const val = (o as any)[f]
+        if (typeof val === 'string') {
+          try { (o as any)[f] = JSON.parse(val) } catch { (o as any)[f] = [] }
+        }
+      }
       setOffer(o)
       setForm(f => ({ ...f, name: o.client_name || '' }))
       setLoading(false)

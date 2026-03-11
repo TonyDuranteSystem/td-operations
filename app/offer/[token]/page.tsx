@@ -177,6 +177,15 @@ export default function OfferPage() {
 
       let o = data as Offer
 
+      // Safeguard: parse JSONB fields that may be stored as strings
+      const jsonFields = ['issues', 'immediate_actions', 'strategy', 'services', 'additional_services', 'cost_summary', 'recurring_costs', 'future_developments', 'next_steps', 'payment_links'] as const
+      for (const f of jsonFields) {
+        const val = (o as any)[f]
+        if (typeof val === 'string') {
+          try { (o as any)[f] = JSON.parse(val) } catch { (o as any)[f] = [] }
+        }
+      }
+
       // Check access code
       if (o.access_code && accessCode && o.access_code !== accessCode) {
         setError('not_found')
