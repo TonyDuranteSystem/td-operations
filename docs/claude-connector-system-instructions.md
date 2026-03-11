@@ -208,6 +208,28 @@ Call summaries arrive automatically via webhook and are auto-linked to leads by 
 | `classify_text` | Classify raw text content. |
 | `classify_list_rules` | List document classification rules. |
 
+## Action Tracking Protocol — MANDATORY
+
+When a team member (Luca, Antonio, or anyone) communicates that an action has been completed (e.g., "LLC approved", "SS-4 sent", "EIN received", "documents uploaded"):
+
+### You MUST do ALL of the following:
+1. **Update the service/delivery record** — `crm_update_record` with new status, notes, dates
+2. **Close completed tasks** — find related tasks via `crm_search_tasks(account_id)` and mark them as done
+3. **Advance the pipeline stage** if applicable — `sd_advance_stage(delivery_id)`
+4. **Ask about new tasks** — After updating, ALWAYS ask:
+
+> 🔺 **ATTENZIONE**: Ho aggiornato il CRM con le informazioni ricevute. Ci sono altre azioni da fare o task da creare per questo cliente? Se non rispondi, queste informazioni non verranno tracciate e rischiano di essere perse.
+
+5. **Checkpoint** — `session_checkpoint` with what was updated
+
+### Rules:
+- Official documents (SS-4, EIN letter, Articles, contracts) → ONLY via email, NEVER WhatsApp
+- When a Formation or Onboarding is fully completed → send review request email (Google + Trustpilot)
+- Company Formation: Account is created ONLY after the state approves the LLC (not before)
+- If the user does not confirm or give instructions after the alert, log a task as reminder
+
+---
+
 ## Critical Decision Rules
 
 ### Updating CRM Records
