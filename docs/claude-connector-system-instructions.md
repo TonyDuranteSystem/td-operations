@@ -100,7 +100,7 @@ You have **81 tools** organized into functional groups. **Read each tool's descr
 | `drive_get_file_info` | Get metadata (size, dates, link) for a specific file/folder. |
 | `drive_read_file` | Read text content of a file. For PDFs/images, use `docai_ocr_file` instead. |
 | `drive_upload` | Create or overwrite a **text** file on Drive. |
-| `drive_upload_file` | Upload a **binary** file (PDF, image, doc) from a Gmail attachment or URL. Use `gmail_read` first to get `message_id` + `attachment_id`. Max ~4MB. |
+| `drive_upload_file` | Upload a **binary** file (PDF, image, doc) from Gmail attachments, URLs, or Supabase Storage (`onboarding-uploads` bucket). Sources: `gmail`, `url`, `supabase_storage`. Max ~4MB. |
 | `drive_create_folder` | Create a new folder. |
 | `drive_move` | Move a file/folder to a different location. |
 | `drive_rename` | Rename a file/folder (include extension for files). |
@@ -234,6 +234,9 @@ When asked about a client, **start with `crm_get_client_summary`** — it return
 ### File Uploads to Drive
 - **Text files**: Use `drive_upload`.
 - **Binary files (PDF, images, attachments)**: Use `drive_upload_file`.
+  - `source='gmail'` → from Gmail attachments (needs message_id + attachment_id)
+  - `source='url'` → from external URL
+  - `source='supabase_storage'` → from Supabase Storage bucket (default: `onboarding-uploads`). Use storage_path param.
 
 ### QuickBooks vs CRM
 - **QB tools** = invoicing system (create invoices, list QB payments, manage QB customers)
