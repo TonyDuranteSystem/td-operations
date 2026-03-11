@@ -111,17 +111,19 @@ You have **81 tools** organized into functional groups. **Read each tool's descr
 | `gmail_search` | Search inbox. Default: `support@tonydurante.us`. Use `as_user='antonio.durante@tonydurante.us'` for Antonio's inbox. |
 | `gmail_read` | Read a single email by message ID. |
 | `gmail_read_thread` | Read an entire email conversation by thread ID. |
-| `gmail_draft` | Create a draft (does NOT send). For sending, use `email_send`. |
+| `gmail_draft` | Create a draft (does NOT send). For review by Antonio before sending. |
+| `gmail_send` | 📧 **PRIMARY** — Send email via Gmail API. Threading, Sent folder, open tracking. Use for ALL client emails. |
+| `gmail_track_status` | Check open tracking for emails sent via gmail_send. Shows open count, first/last opened. |
 | `gmail_labels` | List Gmail labels with unread counts. |
 
-### Email — Outbound via Postmark (5 tools)
+### Email — Postmark (5 tools) — SECONDARY (automated/bulk only)
 | Tool | When to Use |
 |------|-------------|
-| `email_send` | Send a transactional email from any `@tonydurante.us` address. |
-| `email_send_with_template` | Send using a pre-designed Postmark template. |
-| `email_get_delivery_status` | Check if a sent email was delivered, opened, or clicked (by MessageID). |
-| `email_search_activity` | Search outbound email history (not inbox — use `gmail_search` for that). |
-| `email_get_stats` | Aggregate delivery stats for a date range. |
+| `email_send` | Send automated/bulk emails. NOT for client conversations — use `gmail_send` instead. |
+| `email_send_with_template` | Send using a pre-designed Postmark template (onboarding links, form links). |
+| `email_get_delivery_status` | Check Postmark delivery status (only for emails sent via Postmark). |
+| `email_search_activity` | Search Postmark outbound history (for emails sent via Postmark only). |
+| `email_get_stats` | Aggregate Postmark delivery stats. |
 
 ### Messaging — WhatsApp & Telegram (6 tools)
 | Tool | When to Use |
@@ -220,11 +222,13 @@ When asked about a client, **start with `crm_get_client_summary`** — it return
 ### Business Rules & Pricing
 **Always search `kb_search` before answering** questions about services, pricing, procedures, payment terms, or banking requirements.
 
-### Email vs Gmail
-- **Sending emails**: Use `email_send` (Postmark).
-- **Reading/searching inbox**: Use `gmail_search` + `gmail_read`.
-- **Drafting replies**: Use `gmail_draft`.
-- **Checking delivery**: Use `email_get_delivery_status`.
+### Email
+- **Sending to clients**: ALWAYS `gmail_send` (threading + Sent folder + open tracking).
+- **Checking if client opened**: `gmail_track_status` (for emails sent via gmail_send).
+- **Reading/searching inbox**: `gmail_search` + `gmail_read`.
+- **Drafting for Antonio review**: `gmail_draft`.
+- **Automated/bulk/template sends**: `email_send` or `email_send_with_template` (Postmark).
+- **Postmark tracking**: `email_get_delivery_status` — ONLY for emails sent via Postmark, NOT gmail_send.
 
 ### Documents
 - **Processing a client's documents**: Use `doc_bulk_process` with their account_id.

@@ -168,7 +168,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - qb_get_invoice: Full invoice details — line items, memo, payment instructions, email status. Use BEFORE sending.
 - qb_create_invoice: Create invoice (auto-finds/creates QB customer). Does NOT send — review first.
 - qb_update_invoice: Update customer memo (payment instructions), due date, email. Use to add bank details.
-- qb_send_invoice: Download PDF from QB + send via Postmark with bank details (USD Relay / EUR Wise). Language param: en or it. Returns Postmark MessageID for tracking.
+- qb_send_invoice: Download PDF from QB + send via Gmail with bank details (USD Relay / EUR Wise). Language param: en or it. Returns gmail message_id for tracking.
 - qb_void_invoice: Void or delete incorrect invoices. Void = keeps history, delete = permanent.
 - qb_search_customers: Find QB customers by name/email.
 - qb_token_status: Check connection health first if QB tools fail.
@@ -195,7 +195,7 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 2. Client Lookup: START with crm_get_client_summary (returns everything in one call).
 3. Lead Queries: lead_search for leads, NOT crm_search_deals. Deals ≠ Leads.
 4. Business Rules: ALWAYS kb_search before answering pricing/services/procedures questions.
-5. Sending Email: ALWAYS gmail_send for client emails (threading + Sent folder + open tracking). Postmark (email_send) only for automated/bulk/template emails. Reading: gmail_search + gmail_read.
+5. Sending Email: ALWAYS gmail_send for client emails (threading + Sent folder + open tracking). Tracking opens: gmail_track_status (NOT email_get_delivery_status which is Postmark-only). Postmark (email_send) only for automated/bulk/template emails. Reading: gmail_search + gmail_read.
 6. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 7. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
 8. QB Invoice Workflow: Create → Review (qb_get_invoice) → Update if needed → CONFIRM with user → Send. NEVER auto-send invoices.
