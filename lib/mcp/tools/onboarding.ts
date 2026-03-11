@@ -7,6 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { createFolder, uploadBinaryToDrive } from "@/lib/google-drive"
 
 export function registerOnboardingTools(server: McpServer) {
 
@@ -234,7 +235,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_review",
-    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
+    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, creates Drive folder (Companies/{State}/{Company}/), copies uploaded documents from Supabase Storage to Drive, sets drive_folder_id on account, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
     {
       token: z.string().describe("Form token to review"),
       apply_changes: z.boolean().optional().default(false).describe("If true, apply changes to CRM"),
@@ -486,9 +487,81 @@ export function registerOnboardingTools(server: McpServer) {
             }
           }
 
-          // ─── 4. DRIVE FOLDER placeholder ───
+          // ─── 4. DRIVE FOLDER + DOCUMENT COPY ───
+          let driveFolderId: string | null = null
           if (companyName && stateOfFormation) {
-            lines.push(`⚠️ Drive folder creation: use drive_create_folder to create Clients/${stateOfFormation}/${companyName}/ and update account.drive_folder_id`)
+            try {
+              // Map state name to Drive folder ID (TD Clients / Companies / {State})
+              const stateFolderMap: Record<string, string> = {
+                "New Mexico": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
+                "NM": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
+                "Wyoming": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
+                "WY": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
+                "Delaware": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
+                "DE": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
+                "Florida": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
+                "FL": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
+              }
+              const companiesRootId = "1Z32I4pDzX4enwqJQzolbFw7fK94ISuCb"
+
+              const parentFolderId = stateFolderMap[stateOfFormation] || null
+
+              if (!parentFolderId) {
+                // State not in map — create under Companies root and warn
+                lines.push(`⚠️ State "${stateOfFormation}" not in folder map — creating under Companies root`)
+                const newStateFolder = await createFolder(companiesRootId, stateOfFormation) as { id: string; name: string }
+                const companyFolder = await createFolder(newStateFolder.id, companyName) as { id: string; name: string }
+                driveFolderId = companyFolder.id
+                lines.push(`✅ Created Drive folders: Companies/${stateOfFormation}/${companyName}/ (${driveFolderId})`)
+              } else {
+                const companyFolder = await createFolder(parentFolderId, companyName) as { id: string; name: string }
+                driveFolderId = companyFolder.id
+                lines.push(`✅ Created Drive folder: Companies/${stateOfFormation}/${companyName}/ (${driveFolderId})`)
+              }
+
+              // Set drive_folder_id on account
+              if (accountId && driveFolderId) {
+                const { error: driveErr } = await supabaseAdmin
+                  .from("accounts")
+                  .update({ drive_folder_id: driveFolderId })
+                  .eq("id", accountId)
+                if (driveErr) {
+                  lines.push(`❌ Failed to set drive_folder_id: ${driveErr.message}`)
+                } else {
+                  lines.push(`✅ Account drive_folder_id set to ${driveFolderId}`)
+                }
+              }
+
+              // Copy uploaded documents from Supabase Storage → Drive
+              const uploads = sub.upload_paths as string[] | null
+              if (uploads && uploads.length > 0 && driveFolderId) {
+                for (const filePath of uploads) {
+                  try {
+                    const cleanPath = filePath.replace(/^\/+/, "")
+                    const { data: blob, error: dlErr } = await supabaseAdmin.storage
+                      .from("onboarding-uploads")
+                      .download(cleanPath)
+
+                    if (dlErr || !blob) {
+                      lines.push(`❌ Download failed (${cleanPath}): ${dlErr?.message || "no data"}`)
+                      continue
+                    }
+
+                    const arrayBuffer = await blob.arrayBuffer()
+                    const fileData = Buffer.from(arrayBuffer)
+                    const fileName = cleanPath.split("/").pop() || `file-${Date.now()}`
+                    const mimeType = blob.type || "application/pdf"
+
+                    const result = await uploadBinaryToDrive(fileName, fileData, mimeType, driveFolderId) as { id: string; name: string }
+                    lines.push(`✅ Copied to Drive: ${result.name} (${result.id})`)
+                  } catch (e) {
+                    lines.push(`❌ Copy failed (${filePath}): ${e instanceof Error ? e.message : String(e)}`)
+                  }
+                }
+              }
+            } catch (e) {
+              lines.push(`❌ Drive folder step failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
           }
 
           // ─── 5. CREATE FOLLOW-UP TASKS ───
@@ -659,8 +732,9 @@ export function registerOnboardingTools(server: McpServer) {
           lines.push(`   Contact: ${contactId || "FAILED"}`)
           lines.push(`   Account: ${accountId || "FAILED"}`)
           lines.push(`   Company: ${companyName || "(unknown)"}`)
-          if (companyName && stateOfFormation) {
-            lines.push(`   Next: create Drive folder and update account.drive_folder_id`)
+          lines.push(`   Drive folder: ${driveFolderId || "NOT CREATED"}`)
+          if (driveFolderId) {
+            lines.push(`   Drive link: https://drive.google.com/drive/folders/${driveFolderId}`)
           }
         }
 
