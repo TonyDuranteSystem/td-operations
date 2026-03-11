@@ -63,6 +63,7 @@ import { registerOperationsTools } from "@/lib/mcp/tools/operations"
 import { registerCheckpointTools } from "@/lib/mcp/tools/checkpoint"
 import { registerWhopTools } from "@/lib/mcp/tools/whop"
 import { registerFormationTools } from "@/lib/mcp/tools/formation"
+import { registerOnboardingTools } from "@/lib/mcp/tools/onboarding"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -100,6 +101,7 @@ const handler = createMcpHandler(
     registerOperationsTools(server)
     registerWhopTools(server)
     registerFormationTools(server)
+    registerOnboardingTools(server)
   },
   {
     capabilities: {},

@@ -52,6 +52,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/offer') &&
     !request.nextUrl.pathname.startsWith('/tax-form') &&
     !request.nextUrl.pathname.startsWith('/formation-form') &&
+    !request.nextUrl.pathname.startsWith('/onboarding-form') &&
     !request.nextUrl.pathname.startsWith('/contract-template') &&
     !request.nextUrl.pathname.startsWith('/.well-known') &&
     !request.nextUrl.pathname.startsWith('/oauth')
