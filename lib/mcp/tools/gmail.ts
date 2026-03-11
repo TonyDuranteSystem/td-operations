@@ -470,7 +470,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_send",
-    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking.",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body, file attachments (base64-encoded), and professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. For invoices: download PDF via QB API, base64-encode it, and pass as attachment.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -486,8 +486,13 @@ export function registerGmailTools(server: McpServer) {
       contact_id: z.string().optional().describe("Link to CRM contact UUID for tracking"),
       lead_id: z.string().optional().describe("Link to CRM lead UUID for tracking"),
       tag: z.string().optional().describe("Tag for categorizing (e.g. 'onboarding', 'invoice', 'support')"),
+      attachments: z.array(z.object({
+        filename: z.string().describe("File name with extension (e.g. 'Invoice-INV-001364.pdf')"),
+        content: z.string().describe("Base64-encoded file content"),
+        content_type: z.string().optional().default("application/pdf").describe("MIME type (default: application/pdf)"),
+      })).optional().describe("File attachments (base64-encoded). Each needs filename, content (base64), and optional content_type."),
     },
-    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag }) => {
+    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, attachments }) => {
       try {
         const fromEmail = as_user || DEFAULT_EMAIL()
 
@@ -523,8 +528,11 @@ export function registerGmailTools(server: McpServer) {
           .replace(/\n{3,}/g, "\n\n")
           .trim()
 
-        // Build MIME multipart message (text + html)
-        const boundary = `boundary_${Date.now()}`
+        // Build MIME message
+        const hasAttachments = attachments && attachments.length > 0
+        const outerBoundary = `boundary_${Date.now()}`
+        const altBoundary = `alt_boundary_${Date.now()}`
+
         // RFC 2047: encode subject as base64 if it contains non-ASCII chars
         const hasNonAscii = /[^\x00-\x7F]/.test(subject)
         const encodedSubject = hasNonAscii
@@ -539,7 +547,14 @@ export function registerGmailTools(server: McpServer) {
         if (bcc) mimeHeaders.push(`Bcc: ${bcc}`)
         if (reply_to) mimeHeaders.push(`Reply-To: ${reply_to}`)
         mimeHeaders.push("MIME-Version: 1.0")
-        mimeHeaders.push(`Content-Type: multipart/alternative; boundary="${boundary}"`)
+
+        // If attachments: multipart/mixed wrapping multipart/alternative + attachments
+        // If no attachments: multipart/alternative (text + html)
+        if (hasAttachments) {
+          mimeHeaders.push(`Content-Type: multipart/mixed; boundary="${outerBoundary}"`)
+        } else {
+          mimeHeaders.push(`Content-Type: multipart/alternative; boundary="${outerBoundary}"`)
+        }
 
         // Threading headers
         let threadId: string | undefined
@@ -563,23 +578,58 @@ export function registerGmailTools(server: McpServer) {
           mimeHeaders.push(`X-Tag: ${tag}`)
         }
 
-        const mimeBody = [
-          mimeHeaders.join("\r\n"),
-          "",
-          `--${boundary}`,
-          "Content-Type: text/plain; charset=utf-8",
-          "Content-Transfer-Encoding: base64",
-          "",
-          Buffer.from(plainText).toString("base64"),
-          "",
-          `--${boundary}`,
-          "Content-Type: text/html; charset=utf-8",
-          "Content-Transfer-Encoding: base64",
-          "",
-          Buffer.from(htmlBody).toString("base64"),
-          "",
-          `--${boundary}--`,
-        ].join("\r\n")
+        const mimeParts: string[] = [mimeHeaders.join("\r\n"), ""]
+
+        if (hasAttachments) {
+          // multipart/mixed → first part is multipart/alternative (body)
+          mimeParts.push(`--${outerBoundary}`)
+          mimeParts.push(`Content-Type: multipart/alternative; boundary="${altBoundary}"`)
+          mimeParts.push("")
+          mimeParts.push(`--${altBoundary}`)
+          mimeParts.push("Content-Type: text/plain; charset=utf-8")
+          mimeParts.push("Content-Transfer-Encoding: base64")
+          mimeParts.push("")
+          mimeParts.push(Buffer.from(plainText).toString("base64"))
+          mimeParts.push("")
+          mimeParts.push(`--${altBoundary}`)
+          mimeParts.push("Content-Type: text/html; charset=utf-8")
+          mimeParts.push("Content-Transfer-Encoding: base64")
+          mimeParts.push("")
+          mimeParts.push(Buffer.from(htmlBody).toString("base64"))
+          mimeParts.push("")
+          mimeParts.push(`--${altBoundary}--`)
+
+          // Append each attachment
+          for (const att of attachments!) {
+            const ct = att.content_type || "application/pdf"
+            mimeParts.push("")
+            mimeParts.push(`--${outerBoundary}`)
+            mimeParts.push(`Content-Type: ${ct}; name="${att.filename}"`)
+            mimeParts.push("Content-Transfer-Encoding: base64")
+            mimeParts.push(`Content-Disposition: attachment; filename="${att.filename}"`)
+            mimeParts.push("")
+            mimeParts.push(att.content)
+          }
+          mimeParts.push("")
+          mimeParts.push(`--${outerBoundary}--`)
+        } else {
+          // No attachments — simple multipart/alternative
+          mimeParts.push(`--${outerBoundary}`)
+          mimeParts.push("Content-Type: text/plain; charset=utf-8")
+          mimeParts.push("Content-Transfer-Encoding: base64")
+          mimeParts.push("")
+          mimeParts.push(Buffer.from(plainText).toString("base64"))
+          mimeParts.push("")
+          mimeParts.push(`--${outerBoundary}`)
+          mimeParts.push("Content-Type: text/html; charset=utf-8")
+          mimeParts.push("Content-Transfer-Encoding: base64")
+          mimeParts.push("")
+          mimeParts.push(Buffer.from(htmlBody).toString("base64"))
+          mimeParts.push("")
+          mimeParts.push(`--${outerBoundary}--`)
+        }
+
+        const mimeBody = mimeParts.join("\r\n")
 
         const encodedRaw = Buffer.from(mimeBody).toString("base64url")
 
@@ -630,6 +680,7 @@ export function registerGmailTools(server: McpServer) {
               `📨 Thread ID: ${result.threadId}`,
               track_opens !== false ? `👁️ Open tracking: enabled (${trackingId})` : null,
               tag ? `🏷️ Tag: ${tag}` : null,
+              hasAttachments ? `📎 Attachments: ${attachments!.map(a => a.filename).join(", ")}` : null,
               "",
               "Email appears in Gmail Sent folder. Client replies will thread automatically.",
             ].filter(Boolean).join("\n"),
