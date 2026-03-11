@@ -145,21 +145,19 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - drive_upload: Create/overwrite a TEXT file on Drive.
 - drive_upload_file: Upload BINARY files (PDF, images, docs) from Gmail attachments or URLs. Max ~4MB.
 
-### Gmail (5 tools: gmail_*)
+### Gmail (8 tools: gmail_*) — PRIMARY EMAIL SYSTEM
+- gmail_send: 📧 PRIMARY — Send email directly via Gmail API. Appears in Sent folder, supports threading (reply_to_message_id), HTML body, open tracking via pixel. Use this for ALL client emails. Supports as_user for different mailboxes.
 - gmail_search: Search inbox. Default: support@tonydurante.us. Use as_user for Antonio's inbox.
 - gmail_read/gmail_read_thread: Read messages/threads.
-- gmail_draft: Create draft (does NOT send). Only use for drafts that Antonio needs to review before sending.
-- Gmail is for READING/SEARCHING email only. For SENDING, ALWAYS use email_send (Postmark).
+- gmail_draft: Create draft (does NOT send). Only for drafts that Antonio needs to review.
+- gmail_track_status: Check open tracking for emails sent via gmail_send. Shows open count, first/last opened.
+- RULE: For client emails, ALWAYS use gmail_send (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
 
-### Email — Outbound via Postmark (7 tools: email_*) — DEFAULT FOR ALL EMAIL SENDING
-- email_send: 📧 DEFAULT — Send email via Postmark from any @tonydurante.us address. Supports HTML, CC/BCC, reply-to, open/click tracking. Use this for ALL outbound emails (client communications, follow-ups, notifications, etc.).
-- email_send_with_template: Send using a Postmark template for consistent branding. Available templates: new-formation-info-en, new-formation-info-it (new LLC info request), onboarding-info-en, onboarding-info-it (existing company onboarding), tax-form-link-en, tax-form-link-it (tax form data collection link). Variables: {{client_name}}, {{company_name}}, {{tax_year}}, {{form_url}}.
-- email_get_delivery_status: Check delivery/opens/clicks by MessageID.
-- email_search_activity: Search recent outbound email activity. Filter by recipient, subject, or tag.
-- email_get_stats: Aggregate delivery statistics (sent, opened, clicked, bounced).
-- email_list_templates: List all Postmark templates.
-- email_create_template: Create/update Postmark templates with Mustachio variables.
-- RULE: NEVER use gmail_draft when the intent is to send an email. Use email_send directly. gmail_draft is ONLY for cases where Antonio explicitly asks for a draft to review.
+### Email — Postmark (7 tools: email_*) — SECONDARY (automated/bulk only)
+- email_send: Send via Postmark. Use ONLY for automated notifications, bulk emails, or template-based sends where threading is not needed.
+- email_send_with_template: Template-based sends (formation info, onboarding, tax form links).
+- email_get_delivery_status / email_search_activity / email_get_stats: Postmark tracking.
+- email_list_templates / email_create_template: Template management.
 
 ### Messaging — WhatsApp & Telegram (6 tools: msg_*)
 - msg_inbox: Unified inbox with unread counts.
@@ -197,7 +195,7 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 2. Client Lookup: START with crm_get_client_summary (returns everything in one call).
 3. Lead Queries: lead_search for leads, NOT crm_search_deals. Deals ≠ Leads.
 4. Business Rules: ALWAYS kb_search before answering pricing/services/procedures questions.
-5. Sending Email: ALWAYS email_send or email_send_with_template (Postmark). NEVER gmail_draft for sending. Reading Email: gmail_search + gmail_read. Postmark is the ONLY approved outbound email system.
+5. Sending Email: ALWAYS gmail_send for client emails (threading + Sent folder + open tracking). Postmark (email_send) only for automated/bulk/template emails. Reading: gmail_search + gmail_read.
 6. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 7. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
 8. QB Invoice Workflow: Create → Review (qb_get_invoice) → Update if needed → CONFIRM with user → Send. NEVER auto-send invoices.

@@ -466,6 +466,229 @@ export function registerGmailTools(server: McpServer) {
   )
 
   // ═══════════════════════════════════════
+  // gmail_send
+  // ═══════════════════════════════════════
+  server.tool(
+    "gmail_send",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking.",
+    {
+      to: z.string().describe("Recipient email address"),
+      subject: z.string().describe("Email subject line"),
+      body_html: z.string().describe("HTML email body (supports rich formatting)"),
+      body_text: z.string().optional().describe("Plain text fallback (auto-generated from HTML if omitted)"),
+      cc: z.string().optional().describe("CC recipient(s), comma-separated"),
+      bcc: z.string().optional().describe("BCC recipient(s), comma-separated"),
+      reply_to: z.string().optional().describe("Reply-To address (defaults to From)"),
+      reply_to_message_id: z.string().optional().describe("Gmail message ID to reply to (creates thread)"),
+      as_user: z.string().optional().describe("Send as (default: support@tonydurante.us)"),
+      track_opens: z.boolean().optional().default(true).describe("Inject open tracking pixel (default: true)"),
+      account_id: z.string().optional().describe("Link to CRM account UUID for tracking"),
+      contact_id: z.string().optional().describe("Link to CRM contact UUID for tracking"),
+      lead_id: z.string().optional().describe("Link to CRM lead UUID for tracking"),
+      tag: z.string().optional().describe("Tag for categorizing (e.g. 'onboarding', 'invoice', 'support')"),
+    },
+    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag }) => {
+      try {
+        const fromEmail = as_user || DEFAULT_EMAIL()
+
+        // Generate tracking ID
+        const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+        // Inject tracking pixel if enabled
+        let htmlBody = body_html
+        if (track_opens !== false) {
+          const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
+          // Insert pixel before closing </body> or at end
+          if (htmlBody.includes("</body>")) {
+            htmlBody = htmlBody.replace("</body>", `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" /></body>`)
+          } else {
+            htmlBody += `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+          }
+        }
+
+        // Generate plain text from HTML if not provided
+        const plainText = body_text || htmlBody
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/p>/gi, "\n\n")
+          .replace(/<\/div>/gi, "\n")
+          .replace(/<\/li>/gi, "\n")
+          .replace(/<li>/gi, "• ")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/\n{3,}/g, "\n\n")
+          .trim()
+
+        // Build MIME multipart message (text + html)
+        const boundary = `boundary_${Date.now()}`
+        const mimeHeaders = [
+          `From: Tony Durante LLC <${fromEmail}>`,
+          `To: ${to}`,
+          `Subject: ${subject}`,
+        ]
+        if (cc) mimeHeaders.push(`Cc: ${cc}`)
+        if (bcc) mimeHeaders.push(`Bcc: ${bcc}`)
+        if (reply_to) mimeHeaders.push(`Reply-To: ${reply_to}`)
+        mimeHeaders.push("MIME-Version: 1.0")
+        mimeHeaders.push(`Content-Type: multipart/alternative; boundary="${boundary}"`)
+
+        // Threading headers
+        let threadId: string | undefined
+        if (reply_to_message_id) {
+          const original = await gmailGet(`/messages/${reply_to_message_id}`, {
+            format: "metadata",
+            metadataHeaders: "Message-ID,References",
+          }, as_user) as GmailMessage
+
+          const originalMsgId = getHeader(original.payload.headers, "Message-ID")
+          const references = getHeader(original.payload.headers, "References")
+
+          if (originalMsgId) {
+            mimeHeaders.push(`In-Reply-To: ${originalMsgId}`)
+            mimeHeaders.push(`References: ${references ? references + " " : ""}${originalMsgId}`)
+          }
+          threadId = original.threadId
+        }
+
+        if (tag) {
+          mimeHeaders.push(`X-Tag: ${tag}`)
+        }
+
+        const mimeBody = [
+          mimeHeaders.join("\r\n"),
+          "",
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(plainText).toString("base64"),
+          "",
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(htmlBody).toString("base64"),
+          "",
+          `--${boundary}--`,
+        ].join("\r\n")
+
+        const encodedRaw = Buffer.from(mimeBody).toString("base64url")
+
+        const sendPayload: Record<string, unknown> = {
+          raw: encodedRaw,
+        }
+        if (threadId) {
+          sendPayload.threadId = threadId
+        }
+
+        // Send via Gmail API
+        const result = await gmailPost("/messages/send", sendPayload, as_user) as {
+          id: string
+          threadId: string
+          labelIds: string[]
+        }
+
+        // Save tracking record
+        if (track_opens !== false) {
+          const { createClient } = await import("@supabase/supabase-js")
+          const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+          )
+          await supabase.from("email_tracking").insert({
+            tracking_id: trackingId,
+            gmail_message_id: result.id,
+            gmail_thread_id: result.threadId,
+            recipient: to,
+            subject,
+            from_email: fromEmail,
+            account_id: account_id || null,
+            contact_id: contact_id || null,
+            lead_id: lead_id || null,
+          })
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              "✅ Email sent via Gmail",
+              "",
+              `📧 To: ${to}`,
+              `📋 Subject: ${subject}`,
+              cc ? `📋 CC: ${cc}` : null,
+              `🆔 Message ID: ${result.id}`,
+              `📨 Thread ID: ${result.threadId}`,
+              track_opens !== false ? `👁️ Open tracking: enabled (${trackingId})` : null,
+              tag ? `🏷️ Tag: ${tag}` : null,
+              "",
+              "Email appears in Gmail Sent folder. Client replies will thread automatically.",
+            ].filter(Boolean).join("\n"),
+          }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Gmail send failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // gmail_track_status
+  // ═══════════════════════════════════════
+  server.tool(
+    "gmail_track_status",
+    "Check open tracking status for emails sent via gmail_send. Search by recipient email, tracking_id, or list recent tracked emails. Shows open count, first/last opened time.",
+    {
+      recipient: z.string().optional().describe("Filter by recipient email"),
+      tracking_id: z.string().optional().describe("Specific tracking ID"),
+      limit: z.number().optional().default(20).describe("Max results (default 20)"),
+    },
+    async ({ recipient, tracking_id, limit }) => {
+      try {
+        const { createClient } = await import("@supabase/supabase-js")
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY!
+        )
+
+        let q = supabase
+          .from("email_tracking")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(limit || 20)
+
+        if (tracking_id) q = q.eq("tracking_id", tracking_id)
+        if (recipient) q = q.eq("recipient", recipient)
+
+        const { data, error } = await q
+        if (error) throw new Error(error.message)
+        if (!data || data.length === 0) {
+          return { content: [{ type: "text" as const, text: "📭 No tracked emails found." }] }
+        }
+
+        const lines = [`📊 Email Tracking (${data.length} results)`, ""]
+        for (const t of data) {
+          const status = t.opened ? `✅ Opened ${t.open_count}x` : "📭 Not opened"
+          const opened = t.first_opened_at ? ` | First: ${new Date(t.first_opened_at).toLocaleString()}` : ""
+          lines.push(`${status} | ${t.recipient} | ${t.subject}${opened}`)
+          lines.push(`   Sent: ${new Date(t.created_at).toLocaleString()} | ID: ${t.tracking_id}`)
+          lines.push("")
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `❌ Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
   // gmail_labels
   // ═══════════════════════════════════════
   server.tool(

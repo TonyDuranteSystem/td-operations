@@ -49,6 +49,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/sync-airtable') &&
     !request.nextUrl.pathname.startsWith('/api/sync-hubspot') &&
     !request.nextUrl.pathname.startsWith('/api/webhooks') &&
+    !request.nextUrl.pathname.startsWith('/api/track') &&
     !request.nextUrl.pathname.startsWith('/offer') &&
     !request.nextUrl.pathname.startsWith('/tax-form') &&
     !request.nextUrl.pathname.startsWith('/formation-form') &&
