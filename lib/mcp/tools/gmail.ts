@@ -479,7 +479,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_send",
-    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_ids to attach files from Google Drive (preferred — just pass the file IDs). Alternatively use attachments[] for raw base64 content. Drive files are downloaded and attached automatically.",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array).",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -495,22 +495,27 @@ export function registerGmailTools(server: McpServer) {
       contact_id: z.string().optional().describe("Link to CRM contact UUID for tracking"),
       lead_id: z.string().optional().describe("Link to CRM lead UUID for tracking"),
       tag: z.string().optional().describe("Tag for categorizing (e.g. 'onboarding', 'invoice', 'support')"),
+      drive_file_id: z.string().optional().describe("Google Drive file ID to attach. The file is downloaded automatically and attached to the email. Use drive_search or drive_list_folder to find the file ID first."),
+      drive_file_ids: z.array(z.string()).optional().describe("Multiple Google Drive file IDs to attach (for programmatic use). Prefer drive_file_id for single files."),
       attachments: z.array(z.object({
         filename: z.string().describe("File name with extension (e.g. 'Invoice-INV-001364.pdf')"),
         content: z.string().describe("Base64-encoded file content"),
         content_type: z.string().optional().default("application/pdf").describe("MIME type (default: application/pdf)"),
-      })).optional().describe("File attachments (base64-encoded). Use drive_file_ids instead when files are on Google Drive."),
-      drive_file_ids: z.array(z.string()).optional().describe("Google Drive file IDs to attach. Files are downloaded automatically and attached to the email. PREFERRED method — just pass the Drive file ID(s) from drive_search or drive_list_folder."),
+      })).optional().describe("File attachments (base64-encoded). For Drive files, use drive_file_id instead."),
     },
-    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, attachments, drive_file_ids }) => {
+    async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, drive_file_id, drive_file_ids, attachments }) => {
       try {
         const fromEmail = as_user || DEFAULT_EMAIL()
 
+        // Merge single drive_file_id into drive_file_ids array
+        const allDriveIds = [...(drive_file_ids || [])]
+        if (drive_file_id) allDriveIds.push(drive_file_id)
+
         // Download Drive files and merge with manual attachments
         const allAttachments = [...(attachments || [])]
-        if (drive_file_ids && drive_file_ids.length > 0) {
+        if (allDriveIds.length > 0) {
           const { downloadFileBinary } = await import("@/lib/google-drive")
-          for (const fileId of drive_file_ids) {
+          for (const fileId of allDriveIds) {
             try {
               const { buffer, mimeType, fileName } = await downloadFileBinary(fileId)
               allAttachments.push({
