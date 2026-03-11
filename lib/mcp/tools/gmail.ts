@@ -1,9 +1,9 @@
 /**
- * Gmail MCP Tools
- * Search, read, and draft emails via Gmail API.
+ * Gmail MCP Tools (8 tools)
+ * Search, read, draft, send emails via Gmail API with open tracking.
  * Uses the same SA with DWD as Drive (impersonates support@tonydurante.us).
  *
- * Scopes: gmail.readonly, gmail.compose, gmail.modify
+ * Scopes: gmail.readonly, gmail.compose, gmail.modify, gmail.send
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
