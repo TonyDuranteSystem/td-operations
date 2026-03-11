@@ -234,7 +234,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_review",
-    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, updates CRM: Contact (address, DOB, nationality, ITIN), Account (company_name, EIN, state, formation_date), marks lead as Converted, and sets form as reviewed. Always run without apply_changes first to review.",
+    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
     {
       token: z.string().describe("Form token to review"),
       apply_changes: z.boolean().optional().default(false).describe("If true, apply changes to CRM"),
@@ -268,14 +268,14 @@ export function registerOnboardingTools(server: McpServer) {
 
         const lines = [
           `═══════════════════════════════════════`,
-          `  📋 ONBOARDING FORM REVIEW: ${leadName}`,
+          `  ONBOARDING FORM REVIEW: ${leadName}`,
           `  ${sub.entity_type} | ${sub.state} | ${sub.language}`,
           `═══════════════════════════════════════`,
           "",
         ]
 
         // Show submitted data summary
-        lines.push("👤 Owner:")
+        lines.push("OWNER:")
         lines.push(`   Name: ${submitted.owner_first_name || ""} ${submitted.owner_last_name || ""}`)
         lines.push(`   Email: ${submitted.owner_email || ""}`)
         lines.push(`   Phone: ${submitted.owner_phone || ""}`)
@@ -286,7 +286,7 @@ export function registerOnboardingTools(server: McpServer) {
         if (submitted.owner_itin_issue_date) lines.push(`   ITIN Issue Date: ${submitted.owner_itin_issue_date}`)
 
         lines.push("")
-        lines.push("🏢 Company:")
+        lines.push("COMPANY:")
         lines.push(`   Name: ${submitted.company_name || ""}`)
         lines.push(`   State: ${submitted.state_of_formation || ""}`)
         lines.push(`   Formed: ${submitted.formation_date || ""}`)
@@ -299,18 +299,24 @@ export function registerOnboardingTools(server: McpServer) {
         const members = submitted.additional_members as Record<string, string>[] | undefined
         if (members && members.length > 0) {
           lines.push("")
-          lines.push(`👥 Additional Members (${members.length}):`)
+          lines.push(`ADDITIONAL MEMBERS (${members.length}):`)
           for (const m of members) {
-            lines.push(`   • ${m.member_first_name || ""} ${m.member_last_name || ""} — ${m.member_ownership_pct || "?"}% (${m.member_email || ""})`)
+            lines.push(`   - ${m.member_first_name || ""} ${m.member_last_name || ""} — ${m.member_ownership_pct || "?"}% (${m.member_email || ""})`)
           }
         }
+
+        // Tax return status from submitted data
+        lines.push("")
+        lines.push("TAX STATUS:")
+        lines.push(`   Previous year filed: ${submitted.tax_return_previous_year_filed || "(not answered)"}`)
+        lines.push(`   Current year filed: ${submitted.tax_return_current_year_filed || "(not answered)"}`)
 
         lines.push("")
 
         if (changeCount === 0) {
-          lines.push("✅ No changes detected — all pre-filled data was confirmed.")
+          lines.push("No changes detected — all pre-filled data was confirmed.")
         } else {
-          lines.push(`🔄 ${changeCount} field(s) changed from pre-filled:`)
+          lines.push(`${changeCount} field(s) changed from pre-filled:`)
           lines.push("")
           lines.push("| Field | Pre-filled | Client Value |")
           lines.push("|-------|-----------|-------------|")
@@ -324,9 +330,9 @@ export function registerOnboardingTools(server: McpServer) {
         const uploads = sub.upload_paths as string[] | null
         if (uploads && uploads.length > 0) {
           lines.push("")
-          lines.push(`📎 ${uploads.length} file(s) uploaded:`)
+          lines.push(`${uploads.length} file(s) uploaded:`)
           for (const path of uploads) {
-            lines.push(`   • ${path}`)
+            lines.push(`   - ${path}`)
           }
         }
 
@@ -336,79 +342,326 @@ export function registerOnboardingTools(server: McpServer) {
         if (apply_changes) {
           lines.push("")
           lines.push("───────────────────────────────────")
-          lines.push("APPLYING CHANGES TO CRM...")
+          lines.push("APPLYING CHANGES — FULL CRM SETUP")
+          lines.push("───────────────────────────────────")
           lines.push("")
 
-          // Update contact
-          if (sub.contact_id) {
-            const contactUpdates: Record<string, unknown> = {}
-            if (submitted.owner_first_name) contactUpdates.first_name = submitted.owner_first_name
-            if (submitted.owner_last_name) contactUpdates.last_name = submitted.owner_last_name
-            if (submitted.owner_email) contactUpdates.email = submitted.owner_email
-            if (submitted.owner_phone) contactUpdates.phone = submitted.owner_phone
-            if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
-            if (submitted.owner_country) contactUpdates.residency = submitted.owner_country
-            if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
-            if (submitted.owner_itin) contactUpdates.itin = submitted.owner_itin
-            if (submitted.owner_itin_issue_date) contactUpdates.itin_issue_date = submitted.owner_itin_issue_date
-            contactUpdates.updated_at = new Date().toISOString()
+          const now = new Date().toISOString()
+          const today = now.slice(0, 10)
+          const entityTypeMapped = sub.entity_type === "SMLLC" ? "Single Member LLC" : "Multi Member LLC"
+          const companyName = String(submitted.company_name || "").trim()
+          const stateOfFormation = String(submitted.state_of_formation || sub.state || "").trim()
+          let contactId: string | null = sub.contact_id || null
+          let accountId: string | null = sub.account_id || null
 
-            const { error: upErr } = await supabaseAdmin
-              .from("contacts")
-              .update(contactUpdates)
-              .eq("id", sub.contact_id)
-            if (upErr) {
-              lines.push(`❌ Contact update failed: ${upErr.message}`)
+          // ─── 1. CONTACT: find/create/update ───
+          try {
+            // Try to find existing contact by ID or email
+            if (!contactId && submitted.owner_email) {
+              const { data: existingContact } = await supabaseAdmin
+                .from("contacts")
+                .select("id")
+                .eq("email", String(submitted.owner_email))
+                .maybeSingle()
+              if (existingContact) contactId = existingContact.id
+            }
+
+            const ownerFullName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ").trim()
+            const contactFields: Record<string, unknown> = {}
+            if (submitted.owner_first_name) contactFields.first_name = submitted.owner_first_name
+            if (submitted.owner_last_name) contactFields.last_name = submitted.owner_last_name
+            if (ownerFullName) contactFields.full_name = ownerFullName
+            if (submitted.owner_email) contactFields.email = submitted.owner_email
+            if (submitted.owner_phone) contactFields.phone = submitted.owner_phone
+            if (submitted.owner_nationality) contactFields.citizenship = submitted.owner_nationality
+            if (submitted.owner_country) contactFields.residency = submitted.owner_country
+            if (submitted.owner_dob) contactFields.date_of_birth = submitted.owner_dob
+            if (submitted.owner_itin) contactFields.itin_number = submitted.owner_itin
+            if (submitted.owner_itin_issue_date) contactFields.itin_issue_date = submitted.owner_itin_issue_date
+            contactFields.updated_at = now
+
+            if (contactId) {
+              // UPDATE existing contact
+              const { error: upErr } = await supabaseAdmin
+                .from("contacts")
+                .update(contactFields)
+                .eq("id", contactId)
+              if (upErr) {
+                lines.push(`❌ Contact update failed: ${upErr.message}`)
+              } else {
+                lines.push(`✅ Contact updated (${contactId}): ${Object.keys(contactFields).filter(k => k !== "updated_at").join(", ")}`)
+              }
             } else {
-              lines.push(`✅ Contact updated: ${Object.keys(contactUpdates).filter(k => k !== "updated_at").join(", ")}`)
+              // CREATE new contact
+              if (!ownerFullName) throw new Error("Cannot create contact: owner name is empty")
+              const { data: newContact, error: createErr } = await supabaseAdmin
+                .from("contacts")
+                .insert({ ...contactFields, status: "Active" })
+                .select("id")
+                .single()
+              if (createErr || !newContact) {
+                lines.push(`❌ Contact creation failed: ${createErr?.message || "unknown error"}`)
+              } else {
+                contactId = newContact.id
+                lines.push(`✅ Contact CREATED (${contactId}): ${ownerFullName}`)
+              }
+            }
+          } catch (e) {
+            lines.push(`❌ Contact step failed: ${e instanceof Error ? e.message : String(e)}`)
+          }
+
+          // ─── 2. ACCOUNT: find/create/update ───
+          try {
+            if (!accountId && companyName) {
+              const { data: existingAcct } = await supabaseAdmin
+                .from("accounts")
+                .select("id")
+                .ilike("company_name", companyName)
+                .maybeSingle()
+              if (existingAcct) accountId = existingAcct.id
+            }
+
+            const acctFields: Record<string, unknown> = {}
+            if (companyName) acctFields.company_name = companyName
+            if (submitted.ein) acctFields.ein_number = submitted.ein
+            if (stateOfFormation) acctFields.state_of_formation = stateOfFormation
+            if (submitted.formation_date) acctFields.formation_date = submitted.formation_date
+            if (submitted.filing_id) acctFields.filing_id = submitted.filing_id
+            acctFields.entity_type = entityTypeMapped
+            acctFields.updated_at = now
+
+            if (accountId) {
+              // UPDATE existing account
+              const { error: acctErr } = await supabaseAdmin
+                .from("accounts")
+                .update(acctFields)
+                .eq("id", accountId)
+              if (acctErr) {
+                lines.push(`❌ Account update failed: ${acctErr.message}`)
+              } else {
+                lines.push(`✅ Account updated (${accountId}): ${Object.keys(acctFields).filter(k => k !== "updated_at").join(", ")}`)
+              }
+            } else {
+              // CREATE new account
+              if (!companyName) throw new Error("Cannot create account: company name is empty")
+              const { data: newAcct, error: acctCreateErr } = await supabaseAdmin
+                .from("accounts")
+                .insert({ ...acctFields, status: "Active" })
+                .select("id")
+                .single()
+              if (acctCreateErr || !newAcct) {
+                lines.push(`❌ Account creation failed: ${acctCreateErr?.message || "unknown error"}`)
+              } else {
+                accountId = newAcct.id
+                lines.push(`✅ Account CREATED (${accountId}): ${companyName}`)
+              }
+            }
+          } catch (e) {
+            lines.push(`❌ Account step failed: ${e instanceof Error ? e.message : String(e)}`)
+          }
+
+          // ─── 3. LINK Contact <-> Account ───
+          if (contactId && accountId) {
+            try {
+              const { data: existingLink } = await supabaseAdmin
+                .from("account_contacts")
+                .select("account_id")
+                .eq("account_id", accountId)
+                .eq("contact_id", contactId)
+                .maybeSingle()
+              if (existingLink) {
+                lines.push(`✅ Contact-Account link already exists`)
+              } else {
+                const { error: linkErr } = await supabaseAdmin
+                  .from("account_contacts")
+                  .insert({ account_id: accountId, contact_id: contactId, role: "Owner" })
+                if (linkErr) {
+                  lines.push(`❌ Contact-Account link failed: ${linkErr.message}`)
+                } else {
+                  lines.push(`✅ Contact linked to Account (role: Owner)`)
+                }
+              }
+            } catch (e) {
+              lines.push(`❌ Link step failed: ${e instanceof Error ? e.message : String(e)}`)
             }
           }
 
-          // Update or create account
-          if (sub.account_id) {
-            const acctUpdates: Record<string, unknown> = {}
-            if (submitted.company_name) acctUpdates.company_name = submitted.company_name
-            if (submitted.ein) acctUpdates.ein = submitted.ein
-            if (submitted.state_of_formation) acctUpdates.state_of_formation = submitted.state_of_formation
-            if (submitted.formation_date) acctUpdates.formation_date = submitted.formation_date
-            if (submitted.filing_id) acctUpdates.filing_id = submitted.filing_id
-            acctUpdates.entity_type = sub.entity_type === "SMLLC" ? "Single Member LLC" : "Multi-Member LLC"
-            acctUpdates.updated_at = new Date().toISOString()
+          // ─── 4. DRIVE FOLDER placeholder ───
+          if (companyName && stateOfFormation) {
+            lines.push(`⚠️ Drive folder creation: use drive_create_folder to create Clients/${stateOfFormation}/${companyName}/ and update account.drive_folder_id`)
+          }
 
-            const { error: acctErr } = await supabaseAdmin
-              .from("accounts")
-              .update(acctUpdates)
-              .eq("id", sub.account_id)
-            if (acctErr) {
-              lines.push(`❌ Account update failed: ${acctErr.message}`)
-            } else {
-              lines.push(`✅ Account updated: ${Object.keys(acctUpdates).filter(k => k !== "updated_at").join(", ")}`)
+          // ─── 5. CREATE FOLLOW-UP TASKS ───
+          if (accountId && companyName) {
+            const taskDefs = [
+              { title: `Create WhatsApp group — ${companyName}`, assigned_to: "Luca", category: "Client Communication" as const, priority: "High" as const },
+              { title: `Prepare and send lease agreement — ${companyName}`, assigned_to: "Antonio", category: "Document" as const, priority: "High" as const },
+              { title: `Registered Agent change — ${companyName}`, assigned_to: "Luca", category: "Formation" as const, priority: "High" as const },
+            ]
+            for (const td of taskDefs) {
+              try {
+                const { error: taskErr } = await supabaseAdmin
+                  .from("tasks")
+                  .insert({
+                    task_title: td.title,
+                    assigned_to: td.assigned_to,
+                    category: td.category,
+                    priority: td.priority,
+                    status: "To Do",
+                    account_id: accountId,
+                    created_by: "claude",
+                  })
+                if (taskErr) {
+                  lines.push(`❌ Task creation failed (${td.title}): ${taskErr.message}`)
+                } else {
+                  lines.push(`✅ Task created: "${td.title}" → ${td.assigned_to}`)
+                }
+              } catch (e) {
+                lines.push(`❌ Task creation error (${td.title}): ${e instanceof Error ? e.message : String(e)}`)
+              }
+            }
+          } else {
+            lines.push(`⚠️ Skipped task creation: missing account_id or company_name`)
+          }
+
+          // ─── 6. CHECK TAX RETURN STATUS ───
+          if (accountId && companyName) {
+            const returnType = sub.entity_type === "MMLLC" ? "MMLLC" : "SMLLC"
+            const currentYear = new Date().getFullYear()
+            const previousYear = currentYear - 1
+
+            // SMLLC deadline is April 15, MMLLC is March 15
+            const deadlineMonth = returnType === "MMLLC" ? "03" : "04"
+            const deadlineDay = "15"
+
+            const taxChecks: Array<{ year: number; field: string; label: string }> = [
+              { year: previousYear, field: "tax_return_previous_year_filed", label: "Previous year" },
+              { year: currentYear, field: "tax_return_current_year_filed", label: "Current year" },
+            ]
+
+            for (const tc of taxChecks) {
+              const fieldValue = String(submitted[tc.field] || "").toLowerCase()
+              if (fieldValue === "no" || fieldValue === "not sure") {
+                try {
+                  // Check if tax return already exists
+                  const { data: existingTR } = await supabaseAdmin
+                    .from("tax_returns")
+                    .select("id")
+                    .eq("account_id", accountId)
+                    .eq("tax_year", tc.year)
+                    .maybeSingle()
+                  if (existingTR) {
+                    lines.push(`✅ Tax return ${tc.year} already exists (${existingTR.id})`)
+                  } else {
+                    const deadline = `${tc.year + 1}-${deadlineMonth}-${deadlineDay}`
+                    const { error: trErr } = await supabaseAdmin
+                      .from("tax_returns")
+                      .insert({
+                        account_id: accountId,
+                        company_name: companyName,
+                        return_type: returnType,
+                        tax_year: tc.year,
+                        deadline,
+                        status: "Not Invoiced",
+                      })
+                    if (trErr) {
+                      lines.push(`❌ Tax return ${tc.year} creation failed: ${trErr.message}`)
+                    } else {
+                      lines.push(`✅ Tax return ${tc.year} created (${returnType}, status: Not Invoiced, deadline: ${deadline})`)
+                    }
+                  }
+                } catch (e) {
+                  lines.push(`❌ Tax return ${tc.year} error: ${e instanceof Error ? e.message : String(e)}`)
+                }
+              } else {
+                lines.push(`✅ Tax return ${tc.year}: client says "${submitted[tc.field] || "N/A"}" — no action needed`)
+              }
             }
           }
 
-          // Update lead status
+          // ─── 7. SET PORTAL FIELDS on account ───
+          if (accountId) {
+            try {
+              const { error: portalErr } = await supabaseAdmin
+                .from("accounts")
+                .update({ portal_account: true, portal_created_date: today })
+                .eq("id", accountId)
+              if (portalErr) {
+                lines.push(`❌ Portal fields update failed: ${portalErr.message}`)
+              } else {
+                lines.push(`✅ Account portal_account=true, portal_created_date=${today}`)
+              }
+            } catch (e) {
+              lines.push(`❌ Portal fields error: ${e instanceof Error ? e.message : String(e)}`)
+            }
+          }
+
+          // ─── 8. MARK LEAD AS CONVERTED ───
           if (sub.lead_id) {
-            const { error: leadErr } = await supabaseAdmin
-              .from("leads")
-              .update({ status: "Converted", updated_at: new Date().toISOString() })
-              .eq("id", sub.lead_id)
-            if (leadErr) {
-              lines.push(`❌ Lead update failed: ${leadErr.message}`)
-            } else {
-              lines.push(`✅ Lead marked as "Converted"`)
+            try {
+              const { error: leadErr } = await supabaseAdmin
+                .from("leads")
+                .update({ status: "Converted", updated_at: now })
+                .eq("id", sub.lead_id)
+              if (leadErr) {
+                lines.push(`❌ Lead update failed: ${leadErr.message}`)
+              } else {
+                lines.push(`✅ Lead marked as "Converted"`)
+              }
+            } catch (e) {
+              lines.push(`❌ Lead update error: ${e instanceof Error ? e.message : String(e)}`)
             }
           }
 
-          // Mark form as reviewed
-          await supabaseAdmin
-            .from("onboarding_submissions")
-            .update({
-              status: "reviewed",
-              reviewed_at: new Date().toISOString(),
-              reviewed_by: "claude",
-            })
-            .eq("id", sub.id)
-          lines.push(`✅ Form marked as reviewed`)
+          // ─── 9. MARK FORM AS REVIEWED ───
+          try {
+            const { error: formErr } = await supabaseAdmin
+              .from("onboarding_submissions")
+              .update({
+                status: "reviewed",
+                reviewed_at: now,
+                reviewed_by: "claude",
+              })
+              .eq("id", sub.id)
+            if (formErr) {
+              lines.push(`❌ Form review update failed: ${formErr.message}`)
+            } else {
+              lines.push(`✅ Form marked as reviewed`)
+            }
+          } catch (e) {
+            lines.push(`❌ Form review error: ${e instanceof Error ? e.message : String(e)}`)
+          }
+
+          // ─── 10. UPDATE SUBMISSION with created IDs ───
+          try {
+            const subUpdates: Record<string, unknown> = { updated_at: now }
+            if (accountId && !sub.account_id) subUpdates.account_id = accountId
+            if (contactId && !sub.contact_id) subUpdates.contact_id = contactId
+            if (Object.keys(subUpdates).length > 1) {
+              const { error: subErr } = await supabaseAdmin
+                .from("onboarding_submissions")
+                .update(subUpdates)
+                .eq("id", sub.id)
+              if (subErr) {
+                lines.push(`❌ Submission ID link failed: ${subErr.message}`)
+              } else {
+                lines.push(`✅ Submission record updated with account_id/contact_id`)
+              }
+            }
+          } catch (e) {
+            lines.push(`❌ Submission update error: ${e instanceof Error ? e.message : String(e)}`)
+          }
+
+          // Summary
+          lines.push("")
+          lines.push("───────────────────────────────────")
+          lines.push("SUMMARY")
+          lines.push(`   Contact: ${contactId || "FAILED"}`)
+          lines.push(`   Account: ${accountId || "FAILED"}`)
+          lines.push(`   Company: ${companyName || "(unknown)"}`)
+          if (companyName && stateOfFormation) {
+            lines.push(`   Next: create Drive folder and update account.drive_folder_id`)
+          }
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
