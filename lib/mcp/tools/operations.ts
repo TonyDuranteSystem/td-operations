@@ -659,4 +659,236 @@ export function registerOperationsTools(server: McpServer) {
       }
     }
   )
+
+  // ═══════════════════════════════════════
+  // sd_advance_stage
+  // ═══════════════════════════════════════
+  server.tool(
+    "sd_advance_stage",
+    "Advance a service delivery to the next pipeline stage. Automatically creates tasks defined in pipeline_stages.auto_tasks for the new stage. Returns the new stage, created tasks, and any stage that requires_approval. Use sd_search to find the delivery ID first. If skip_tasks=true, advances without creating tasks.",
+    {
+      delivery_id: z.string().uuid().describe("Service delivery UUID"),
+      target_stage: z.string().optional().describe("Specific stage name to advance to (skips intermediate). If omitted, advances to next stage."),
+      skip_tasks: z.boolean().optional().default(false).describe("Skip auto-task creation (default: false)"),
+      notes: z.string().optional().describe("Notes about why this stage was advanced"),
+    },
+    async ({ delivery_id, target_stage, skip_tasks, notes }) => {
+      try {
+        // 1. Get current delivery
+        const { data: delivery, error: dErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("*")
+          .eq("id", delivery_id)
+          .single()
+        if (dErr || !delivery) throw new Error("Service delivery not found")
+
+        // 2. Get pipeline stages for this service type
+        const { data: stages, error: sErr } = await supabaseAdmin
+          .from("pipeline_stages")
+          .select("*")
+          .eq("service_type", delivery.service_type)
+          .order("stage_order")
+        if (sErr || !stages?.length) throw new Error(`No pipeline stages defined for service_type: ${delivery.service_type}`)
+
+        // 3. Determine current and target stage
+        const currentOrder = delivery.stage_order || 0
+        let targetStage: typeof stages[0]
+
+        if (target_stage) {
+          const found = stages.find(s => s.stage_name.toLowerCase() === target_stage.toLowerCase())
+          if (!found) throw new Error(`Stage "${target_stage}" not found. Available: ${stages.map(s => s.stage_name).join(", ")}`)
+          targetStage = found
+        } else {
+          const nextStage = stages.find(s => s.stage_order > currentOrder)
+          if (!nextStage) throw new Error("Already at final stage")
+          targetStage = nextStage
+        }
+
+        // 4. Check if current stage requires approval
+        if (currentOrder > 0) {
+          const currentStageObj = stages.find(s => s.stage_order === currentOrder)
+          if (currentStageObj?.requires_approval) {
+            // Check if there's an open approval task
+            const { data: approvalTasks } = await supabaseAdmin
+              .from("tasks")
+              .select("id, status")
+              .eq("account_id", delivery.account_id)
+              .ilike("task_title", `%quality check%`)
+              .in("status", ["todo", "in_progress"])
+              .limit(1)
+            if (approvalTasks?.length) {
+              return { content: [{ type: "text" as const, text: `⚠️ Current stage "${currentStageObj.stage_name}" requires approval. Complete the approval task first, or use target_stage to force advance.` }] }
+            }
+          }
+        }
+
+        // 5. Build stage history entry
+        const historyEntry = {
+          from_stage: delivery.stage || "New",
+          from_order: currentOrder,
+          to_stage: targetStage.stage_name,
+          to_order: targetStage.stage_order,
+          advanced_at: new Date().toISOString(),
+          notes: notes || null,
+        }
+        const stageHistory = Array.isArray(delivery.stage_history) ? [...delivery.stage_history, historyEntry] : [historyEntry]
+
+        // 6. Update delivery
+        const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
+        const { error: uErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .update({
+            stage: targetStage.stage_name,
+            stage_order: targetStage.stage_order,
+            stage_entered_at: new Date().toISOString(),
+            stage_history: stageHistory,
+            status: isCompleted ? "completed" : "active",
+            ...(isCompleted ? { end_date: new Date().toISOString().split("T")[0] } : {}),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", delivery_id)
+        if (uErr) throw new Error(`Update failed: ${uErr.message}`)
+
+        // 7. Create auto-tasks (unless skipped)
+        const createdTasks: string[] = []
+        if (!skip_tasks && targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
+          for (const taskDef of targetStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
+            const { error: tErr } = await supabaseAdmin
+              .from("tasks")
+              .insert({
+                task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
+                assigned_to: taskDef.assigned_to || "Luca",
+                category: taskDef.category || "Internal",
+                priority: taskDef.priority === "High" ? "urgente" : "normale",
+                description: taskDef.description || `Auto-created by pipeline advance to "${targetStage.stage_name}"`,
+                status: "todo",
+                account_id: delivery.account_id,
+                deal_id: delivery.deal_id,
+                service_id: delivery.id,
+              })
+            if (!tErr) createdTasks.push(taskDef.title)
+          }
+        }
+
+        // 8. Format response
+        const lines = [
+          `✅ Advanced to: **${targetStage.stage_name}** (stage ${targetStage.stage_order}/${stages.length})`,
+          `📋 Service: ${delivery.service_name || delivery.service_type}`,
+          `🔄 From: ${delivery.stage || "New"} → ${targetStage.stage_name}`,
+        ]
+        if (targetStage.sla_days) lines.push(`⏱️ SLA: ${targetStage.sla_days} days`)
+        if (targetStage.requires_approval) lines.push(`🔒 This stage requires approval before advancing`)
+        if (createdTasks.length > 0) {
+          lines.push(`\n📝 Auto-created ${createdTasks.length} tasks:`)
+          for (const t of createdTasks) lines.push(`  • ${t}`)
+        }
+        if (isCompleted) lines.push(`\n🎉 Service delivery marked as COMPLETED`)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // sd_create
+  // ═══════════════════════════════════════
+  server.tool(
+    "sd_create",
+    "Create a new service delivery and initialize it at the first pipeline stage. Auto-creates tasks for the first stage. Use this when starting a new service for a client (LLC Formation, Tax Return, etc.). Returns the created delivery with ID.",
+    {
+      service_type: z.string().describe("Service type: 'Company Formation', 'Tax Return', 'EIN', 'ITIN', 'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address'"),
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      contact_id: z.string().uuid().optional().describe("Primary contact UUID"),
+      deal_id: z.string().uuid().optional().describe("Linked deal UUID"),
+      service_name: z.string().optional().describe("Custom name (defaults to service_type + company name)"),
+      assigned_to: z.string().optional().default("Luca").describe("Assignee (default: Luca)"),
+      amount: z.number().optional().describe("Service amount"),
+      amount_currency: z.string().optional().default("USD").describe("Currency (default: USD)"),
+      notes: z.string().optional(),
+    },
+    async ({ service_type, account_id, contact_id, deal_id, service_name, assigned_to, amount, amount_currency, notes }) => {
+      try {
+        // Get account name for service_name default
+        const { data: account } = await supabaseAdmin
+          .from("accounts")
+          .select("company_name")
+          .eq("id", account_id)
+          .single()
+
+        const name = service_name || `${service_type} — ${account?.company_name || "Unknown"}`
+
+        // Get first pipeline stage
+        const { data: firstStage } = await supabaseAdmin
+          .from("pipeline_stages")
+          .select("*")
+          .eq("service_type", service_type)
+          .order("stage_order")
+          .limit(1)
+          .single()
+
+        // Create delivery
+        const { data: delivery, error: cErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .insert({
+            service_name: name,
+            service_type,
+            pipeline: service_type,
+            stage: firstStage?.stage_name || null,
+            stage_order: firstStage?.stage_order || null,
+            stage_entered_at: new Date().toISOString(),
+            stage_history: firstStage ? [{ to_stage: firstStage.stage_name, to_order: firstStage.stage_order, advanced_at: new Date().toISOString(), notes: "Created" }] : [],
+            account_id,
+            contact_id: contact_id || null,
+            deal_id: deal_id || null,
+            status: "active",
+            start_date: new Date().toISOString().split("T")[0],
+            assigned_to: assigned_to || "Luca",
+            amount: amount || null,
+            amount_currency: amount_currency || "USD",
+            current_step: 1,
+            total_steps: firstStage ? undefined : undefined,
+            notes: notes || null,
+          })
+          .select()
+          .single()
+        if (cErr) throw new Error(cErr.message)
+
+        // Auto-create tasks for first stage
+        const createdTasks: string[] = []
+        if (firstStage?.auto_tasks && Array.isArray(firstStage.auto_tasks)) {
+          for (const taskDef of firstStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string }>) {
+            await supabaseAdmin.from("tasks").insert({
+              task_title: `[${name}] ${taskDef.title}`,
+              assigned_to: taskDef.assigned_to || "Luca",
+              category: taskDef.category || "Internal",
+              priority: taskDef.priority === "High" ? "urgente" : "normale",
+              description: `Auto-created on service delivery creation`,
+              status: "todo",
+              account_id,
+              deal_id: deal_id || null,
+              service_id: delivery?.id,
+            })
+            createdTasks.push(taskDef.title)
+          }
+        }
+
+        const lines = [
+          `✅ Service delivery created`,
+          `📋 ${name}`,
+          `🆔 ${delivery?.id}`,
+          `📊 Stage: ${firstStage?.stage_name || "No pipeline defined"}`,
+        ]
+        if (createdTasks.length > 0) {
+          lines.push(`\n📝 Auto-created ${createdTasks.length} tasks:`)
+          for (const t of createdTasks) lines.push(`  • ${t}`)
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
 }
