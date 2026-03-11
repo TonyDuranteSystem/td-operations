@@ -130,6 +130,8 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - sop_get: Get full SOP content by ID.
 - sd_search: Search service delivery pipeline (detailed execution steps).
 - sd_pipeline: Visual pipeline summary — Kanban-style counts by stage for a service type.
+- sd_advance_stage: Advance a service delivery to the next pipeline stage. Auto-creates tasks from pipeline_stages.auto_tasks. Use sd_search first to find the delivery ID.
+- sd_create: Create a new service delivery at the first pipeline stage. Auto-creates initial tasks. Use when starting LLC Formation, Tax Return, etc.
 
 ### Documents (13 tools: doc_*)
 - doc_bulk_process: PREFERRED for processing a client's docs — auto-resolves folder from account_id.
