@@ -181,6 +181,7 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 - cb_*: Circleback call summaries — list, get details, search (3 tools). Data arrives via webhook, auto-linked to leads by attendee email.
 - offer_*: Service proposals — create, list, get, update, send (5 tools). All JSONB fields use English names (services, cost_summary, issues, strategy, etc.). Workflow: create (draft) → review → offer_send (creates Gmail draft) → client views → signs → pays.
 - whop_*: Whop payment gateway — list payments (check if client paid), list plans (checkout links), list products, create plans, list memberships (5 tools). Use whop_list_payments to verify client payments instead of checking the browser.
+- formation_form_*: LLC formation data collection forms for new clients (3 tools). Workflow: after Whop payment → formation_form_create(lead_id, entity_type, state) → send URL via email_send → client fills form → formation_form_review(token) → apply changes to CRM. Entity type (SMLLC/MMLLC) and state decided during call (default: SMLLC + NM).
 - kb_*: Knowledge base — ALWAYS search kb_search before answering business/pricing questions (4 tools).
 - storage_*: Supabase Storage files, mirrored to Drive (5 tools).
 - sysdoc_*: System documentation — list, read, create, update (4 tools). Key docs: session-context (lean quick-ref), project-state (milestones), tech-stack (architecture). Use sysdoc_create for session logs.
