@@ -9,6 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { SignJWT, importPKCS8 } from "jose"
+import { logAction } from "@/lib/mcp/action-log"
 
 // ─── Configuration ──────────────────────────────────────────
 
@@ -441,6 +442,14 @@ export function registerGmailTools(server: McpServer) {
           message: { id: string; threadId: string }
         }
 
+        logAction({
+          action_type: "create",
+          table_name: "gmail",
+          record_id: result.message.id,
+          summary: `Draft created → ${to}: ${subject}`,
+          details: { to, subject, cc: cc || null, reply_to_message_id: reply_to_message_id || null },
+        })
+
         return {
           content: [{
             type: "text" as const,
@@ -687,6 +696,15 @@ export function registerGmailTools(server: McpServer) {
             lead_id: lead_id || null,
           })
         }
+
+        logAction({
+          action_type: "send",
+          table_name: "gmail",
+          record_id: result.id,
+          account_id: account_id || undefined,
+          summary: `Email sent → ${to}: ${subject}`,
+          details: { to, subject, cc: cc || null, tag: tag || null, has_attachments: hasAttachments, attachment_count: allAttachments.length },
+        })
 
         return {
           content: [{

@@ -9,6 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logAction } from "@/lib/mcp/action-log"
 
 export function registerMessagingTools(server: McpServer) {
 
@@ -187,6 +188,13 @@ export function registerMessagingTools(server: McpServer) {
           }
         }
 
+        logAction({
+          action_type: "send",
+          table_name: "messages",
+          summary: `Sent WhatsApp message to ${chat_id}`,
+          details: { chat_id, channel_id },
+        })
+
         return {
           content: [{
             type: "text" as const,
@@ -234,6 +242,14 @@ export function registerMessagingTools(server: McpServer) {
         } else {
           return { content: [{ type: "text" as const, text: "❌ Provide message_id or group_id" }] }
         }
+
+        logAction({
+          action_type: "update",
+          table_name: "messages",
+          record_id: message_id || group_id,
+          summary: `Marked ${count} message(s) as ${new_status}`,
+          details: { message_id, group_id, new_status },
+        })
 
         return {
           content: [{

@@ -11,6 +11,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logAction } from "@/lib/mcp/action-log"
 
 export function registerKnowledgeTools(server: McpServer) {
 
@@ -140,6 +141,13 @@ export function registerKnowledgeTools(server: McpServer) {
             .select("id, title, category")
             .single()
           if (error) throw error
+          logAction({
+            action_type: "create",
+            table_name: "knowledge_articles",
+            record_id: data.id,
+            summary: `Created KB article: ${data.title}`,
+            details: { category },
+          })
           return { content: [{ type: "text" as const, text: `✅ Article created: ${data.title} (${data.id})` }] }
         } else {
           const { data, error } = await supabaseAdmin
@@ -157,6 +165,13 @@ export function registerKnowledgeTools(server: McpServer) {
             .select("id, title, category")
             .single()
           if (error) throw error
+          logAction({
+            action_type: "create",
+            table_name: "approved_responses",
+            record_id: data.id,
+            summary: `Created KB response: ${data.title}`,
+            details: { category, service_type, language },
+          })
           return { content: [{ type: "text" as const, text: `✅ Response created: ${data.title} (${data.id})` }] }
         }
       } catch (err: any) {
@@ -194,6 +209,14 @@ export function registerKnowledgeTools(server: McpServer) {
           .single()
 
         if (error) throw error
+
+        logAction({
+          action_type: "update",
+          table_name: table,
+          record_id: data.id,
+          summary: `Updated KB ${source}: ${data.title}`,
+          details: { fields: Object.keys(updates) },
+        })
 
         return {
           content: [{

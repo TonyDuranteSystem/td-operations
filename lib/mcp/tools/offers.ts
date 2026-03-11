@@ -12,6 +12,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
+import { logAction } from "@/lib/mcp/action-log"
 
 // ─── JSONB Validation Helpers ───────────────────────────────
 
@@ -337,6 +338,14 @@ export function registerOfferTools(server: McpServer) {
 
         const accessCode = data.access_code || ""
 
+        logAction({
+          action_type: "create",
+          table_name: "offers",
+          record_id: params.token,
+          summary: `Created offer: ${params.client_name} (${params.token})`,
+          details: { language: params.language, payment_type: params.payment_type, lead_id: params.lead_id },
+        })
+
         // If lead_id provided, update lead's offer status
         if (params.lead_id) {
           const offerUrl = `https://offerte.tonydurante.us/?t=${params.token}&c=${accessCode}`
@@ -379,6 +388,14 @@ export function registerOfferTools(server: McpServer) {
           .single()
 
         if (error) throw error
+
+        logAction({
+          action_type: "update",
+          table_name: "offers",
+          record_id: token,
+          summary: `Updated offer: ${data.client_name} (${token})`,
+          details: { fields: Object.keys(updates) },
+        })
 
         return {
           content: [{
@@ -433,6 +450,14 @@ export function registerOfferTools(server: McpServer) {
             .update({ offer_status: "Sent" })
             .eq("id", offer.lead_id)
         }
+
+        logAction({
+          action_type: "send",
+          table_name: "offers",
+          record_id: token,
+          summary: `Sent offer: ${offer.client_name} (${token}) to ${offer.client_email}`,
+          details: { lead_id: offer.lead_id, language: offer.language },
+        })
 
         // Create Gmail draft
         const draftResult = await createOfferDraft(

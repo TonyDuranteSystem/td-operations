@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logAction } from "@/lib/mcp/action-log"
 
 export function registerLeadTools(server: McpServer) {
 
@@ -285,6 +286,14 @@ export function registerLeadTools(server: McpServer) {
 
         if (error) throw new Error(error.message)
 
+        logAction({
+          action_type: "create",
+          table_name: "leads",
+          record_id: data.id,
+          summary: `Created lead: ${data.full_name}`,
+          details: { status: data.status, source, channel },
+        })
+
         return { content: [{ type: "text" as const, text: `✅ Lead created: ${data.full_name}\nStatus: ${data.status}\nID: ${data.id}` }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error creating lead: ${error instanceof Error ? error.message : String(error)}` }] }
@@ -312,6 +321,14 @@ export function registerLeadTools(server: McpServer) {
           .single()
 
         if (error) throw new Error(error.message)
+
+        logAction({
+          action_type: "update",
+          table_name: "leads",
+          record_id: data.id,
+          summary: `Updated lead: ${data.full_name}`,
+          details: { fields: Object.keys(updates), status: data.status },
+        })
 
         return { content: [{ type: "text" as const, text: `✅ Lead updated: ${data.full_name}\nStatus: ${data.status}${data.offer_status ? ` | Offer: ${data.offer_status}` : ""}\nID: ${data.id}` }] }
       } catch (error) {

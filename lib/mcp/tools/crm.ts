@@ -5,6 +5,7 @@
 
 import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
 import { upsertCompany, upsertContact, associateContactToCompany } from "@/lib/hubspot"
+import { logAction } from "@/lib/mcp/action-log"
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
@@ -554,18 +555,15 @@ export function registerCrmTools(server: McpServer) {
 
         if (error) throw error
 
-        // Auto-log to action_log for audit trail
-        try {
-          await supabaseAdmin.from("action_log").insert({
-            actor: "claude.ai",
-            action_type: "update",
-            table_name: table,
-            record_id: id,
-            account_id: table === "accounts" ? id : (data.account_id || null),
-            summary: `Updated ${table}: ${Object.keys(updates).join(", ")}`,
-            details: { fields_changed: Object.keys(updates), new_values: updates },
-          })
-        } catch (_) { /* non-blocking */ }
+        // Audit trail (fire-and-forget)
+        logAction({
+          action_type: "update",
+          table_name: table,
+          record_id: id,
+          account_id: table === "accounts" ? id : (data.account_id || null),
+          summary: `Updated ${table}: ${Object.keys(updates).join(", ")}`,
+          details: { fields_changed: Object.keys(updates), new_values: updates },
+        })
 
         return {
           content: [{

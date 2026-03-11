@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { classifyDocument, classifyByFilename } from "@/lib/classifier"
 import { getFileMetadata, listFolder } from "@/lib/google-drive"
 import { extractTextFromFile } from "@/lib/mcp/tools/classify"
+import { logAction } from "@/lib/mcp/action-log"
 
 // ─── Constants ──────────────────────────────────────────────
 
@@ -222,6 +223,15 @@ export function registerDocTools(server: McpServer) {
         const result = await processFile(file_id, account_id)
 
         if (result.success) {
+          logAction({
+            action_type: "process",
+            table_name: "documents",
+            record_id: file_id,
+            account_id: account_id,
+            summary: `Processed file: ${result.fileName} → ${result.type || "unclassified"}`,
+            details: { type: result.type, category: result.category, confidence: result.confidence, status: result.status },
+          })
+
           const lines = [
             `✅ Processed: ${result.fileName}`,
             "",
@@ -347,6 +357,16 @@ export function registerDocTools(server: McpServer) {
           lines.push(`${icon} ${r.fileName} → ${r.type || r.status}${r.error ? ` (${r.error.slice(0, 80)})` : ""}`)
         }
 
+        if (results.length > 0) {
+          logAction({
+            action_type: "process",
+            table_name: "documents",
+            account_id: account_id,
+            summary: `Batch processed folder ${folder_id}: ${classified} classified, ${unclassified} unclassified, ${errors} errors`,
+            details: { folder_id, total: results.length, classified, unclassified, errors, skipped },
+          })
+        }
+
         return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
       } catch (error) {
         return {
@@ -446,6 +466,16 @@ export function registerDocTools(server: McpServer) {
         for (const r of results) {
           const icon = r.status === "classified" ? "✅" : r.status === "unclassified" ? "⚠️" : "❌"
           lines.push(`${icon} ${r.fileName} → ${r.type || r.status}${r.error ? ` (${r.error.slice(0, 80)})` : ""}`)
+        }
+
+        if (results.length > 0) {
+          logAction({
+            action_type: "process",
+            table_name: "documents",
+            account_id: account_id,
+            summary: `Client folder processed ${folder_id}: ${classified} classified, ${unclassified} unclassified, ${errors} errors`,
+            details: { folder_id, total: results.length, classified, unclassified, errors, skipped, remaining },
+          })
         }
 
         return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
@@ -822,6 +852,13 @@ export function registerDocTools(server: McpServer) {
               })
               .eq("id", m.docId)
           }
+
+          logAction({
+            action_type: "update",
+            table_name: "documents",
+            summary: `Mapped ${matches.length} orphan documents to accounts`,
+            details: { matched: matches.length, no_match: noMatch.length, orphans: orphans.length },
+          })
         }
 
         // 5. Build output
@@ -1099,6 +1136,16 @@ export function registerDocTools(server: McpServer) {
         for (const r of results) {
           const icon = r.status === "classified" ? "✅" : r.status === "unclassified" ? "⚠️" : "❌"
           lines.push(`${icon} ${r.fileName} → ${r.type || r.status}${r.error ? ` (${r.error.slice(0, 80)})` : ""}`)
+        }
+
+        if (results.length > 0) {
+          logAction({
+            action_type: "process",
+            table_name: "documents",
+            account_id: account_id,
+            summary: `Bulk processed ${account.company_name}: ${classified} classified, ${unclassified} unclassified, ${errors} errors`,
+            details: { account_name: account.company_name, total: results.length, classified, unclassified, errors, skipped },
+          })
         }
 
         return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }
@@ -1462,6 +1509,15 @@ export function registerDocTools(server: McpServer) {
           lines.push(`💡 Run again with after_account_id: "${lastProcessedId}" to continue`)
         } else {
           lines.push("", "✅ All accounts processed!")
+        }
+
+        if (totalProcessed > 0) {
+          logAction({
+            action_type: "process",
+            table_name: "documents",
+            summary: `Mass processed ${accResults.length} accounts: ${totalClassified} classified, ${totalUnclassified} unclassified, ${totalErrors} errors`,
+            details: { accounts: accResults.length, totalProcessed, totalClassified, totalUnclassified, totalErrors },
+          })
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

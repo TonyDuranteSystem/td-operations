@@ -6,6 +6,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import { logAction } from "@/lib/mcp/action-log"
 
 const POSTMARK_API = "https://api.postmarkapp.com"
 
@@ -110,6 +111,14 @@ export function registerEmailTools(server: McpServer) {
 
         const result = await postmark("/email", payload) as Record<string, unknown>
 
+        logAction({
+          action_type: "send",
+          table_name: "email_postmark",
+          record_id: result.MessageID as string,
+          summary: `Sent email to ${to}: ${subject}`,
+          details: { tag, from: from || "support@tonydurante.us" },
+        })
+
         return {
           content: [{
             type: "text" as const,
@@ -163,6 +172,14 @@ export function registerEmailTools(server: McpServer) {
         if (tag) payload.Tag = tag
 
         const result = await postmark("/email/withTemplate", payload) as Record<string, unknown>
+
+        logAction({
+          action_type: "send",
+          table_name: "email_postmark",
+          record_id: result.MessageID as string,
+          summary: `Sent template email to ${to}: ${template_alias}`,
+          details: { template_alias, tag },
+        })
 
         return {
           content: [{

@@ -6,6 +6,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import { logAction } from "@/lib/mcp/action-log"
 import {
   searchFiles,
   listFolder,
@@ -270,6 +271,14 @@ export function registerDriveTools(server: McpServer) {
           action = "uploaded"
         }
 
+        logAction({
+          action_type: file_id ? "update" : "create",
+          table_name: "drive",
+          record_id: result.id,
+          summary: `Drive file ${action}: ${result.name}`,
+          details: { folder_id, file_id, mime_type },
+        })
+
         return {
           content: [{
             type: "text" as const,
@@ -305,6 +314,14 @@ export function registerDriveTools(server: McpServer) {
       try {
         const result = (await createFolder(parent_folder_id, folder_name)) as DriveFile
 
+        logAction({
+          action_type: "create",
+          table_name: "drive",
+          record_id: result.id,
+          summary: `Created Drive folder: ${result.name}`,
+          details: { parent_folder_id },
+        })
+
         return {
           content: [{
             type: "text" as const,
@@ -339,6 +356,13 @@ export function registerDriveTools(server: McpServer) {
       try {
         const result = (await moveFile(file_id, new_parent_id)) as DriveFile
 
+        logAction({
+          action_type: "update",
+          table_name: "drive",
+          record_id: file_id,
+          summary: `Moved Drive file: ${result.name} to folder ${new_parent_id}`,
+        })
+
         return {
           content: [{
             type: "text" as const,
@@ -371,6 +395,13 @@ export function registerDriveTools(server: McpServer) {
     async ({ file_id, new_name }) => {
       try {
         const result = (await renameFile(file_id, new_name)) as DriveFile
+
+        logAction({
+          action_type: "update",
+          table_name: "drive",
+          record_id: file_id,
+          summary: `Renamed Drive file to: ${result.name}`,
+        })
 
         return {
           content: [{
@@ -526,6 +557,14 @@ export function registerDriveTools(server: McpServer) {
 
         // Upload to Drive
         const result = (await uploadBinaryToDrive(finalFilename, fileData, mimeType, folder_id)) as DriveFile
+
+        logAction({
+          action_type: "create",
+          table_name: "drive",
+          record_id: result.id,
+          summary: `Uploaded binary file: ${result.name} (${formatSize(fileData.length)})`,
+          details: { source, folder_id, mime_type: mimeType },
+        })
 
         return {
           content: [{

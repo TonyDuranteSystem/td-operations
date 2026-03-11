@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logAction } from "@/lib/mcp/action-log"
 
 export function registerOperationsTools(server: McpServer) {
 
@@ -200,18 +201,14 @@ export function registerOperationsTools(server: McpServer) {
 
         if (error) throw new Error(error.message)
 
-        // Auto-log to action_log
-        try {
-          await supabaseAdmin.from("action_log").insert({
-            actor: "claude.ai",
-            action_type: "create",
-            table_name: "tasks",
-            record_id: data.id,
-            account_id: account_id || null,
-            summary: `Task created: ${task_title} → ${assigned_to}`,
-            details: { task_title, assigned_to, priority: priority || "Normal", category },
-          })
-        } catch (_) { /* non-blocking */ }
+        logAction({
+          action_type: "create",
+          table_name: "tasks",
+          record_id: data.id,
+          account_id: account_id || undefined,
+          summary: `Task created: ${task_title} → ${assigned_to}`,
+          details: { task_title, assigned_to, priority: priority || "Normal", category },
+        })
 
         return { content: [{ type: "text" as const, text: `✅ Task created: ${data.task_title}\nAssigned: ${data.assigned_to} | Priority: ${data.priority} | Due: ${data.due_date || "—"}\nID: ${data.id}` }] }
       } catch (error) {
@@ -266,6 +263,14 @@ export function registerOperationsTools(server: McpServer) {
           .single()
 
         if (error) throw new Error(error.message)
+
+        logAction({
+          action_type: "create",
+          table_name: "accounts",
+          record_id: data.id,
+          summary: `Account created: ${company_name} (${state_of_formation || "no state"})`,
+          details: { company_name, entity_type, state_of_formation, status: status || "Active" },
+        })
 
         return { content: [{ type: "text" as const, text: `✅ Account created: ${data.company_name}\nStatus: ${data.status} | State: ${data.state_of_formation || "—"}\nID: ${data.id}` }] }
       } catch (error) {
@@ -334,6 +339,15 @@ export function registerOperationsTools(server: McpServer) {
             })
         }
 
+        logAction({
+          action_type: "create",
+          table_name: "contacts",
+          record_id: data.id,
+          account_id: account_id || undefined,
+          summary: `Contact created: ${full_name}${account_id ? " (linked to account)" : ""}`,
+          details: { full_name, email, phone, citizenship, account_id },
+        })
+
         const linked = account_id ? ` | Linked to account: ${account_id}` : ""
         return { content: [{ type: "text" as const, text: `✅ Contact created: ${data.full_name}\nEmail: ${data.email || "—"} | Phone: ${data.phone || "—"}${linked}\nID: ${data.id}` }] }
       } catch (error) {
@@ -387,6 +401,15 @@ export function registerOperationsTools(server: McpServer) {
           .single()
 
         if (error) throw new Error(error.message)
+
+        logAction({
+          action_type: "create",
+          table_name: "conversations",
+          record_id: data.id,
+          account_id: account_id || undefined,
+          summary: `Conversation logged: ${topic} (${channel || "no channel"})`,
+          details: { topic, channel, direction, handled_by: handled_by || "Claude", category },
+        })
 
         return { content: [{ type: "text" as const, text: `✅ Conversation logged: ${topic}\nChannel: ${channel || "—"} | Handled by: ${handled_by || "Claude"}\nID: ${data.id}` }] }
       } catch (error) {
@@ -797,18 +820,14 @@ export function registerOperationsTools(server: McpServer) {
         }
         if (isCompleted) lines.push(`\n🎉 Service delivery marked as COMPLETED`)
 
-        // Auto-log to action_log
-        try {
-          await supabaseAdmin.from("action_log").insert({
-            actor: "claude.ai",
-            action_type: "advance_stage",
-            table_name: "service_deliveries",
-            record_id: delivery_id,
-            account_id: delivery.account_id || null,
-            summary: `Stage advanced: ${delivery.stage || "New"} → ${targetStage.stage_name} (${delivery.service_name || delivery.service_type})`,
-            details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, tasks_created: createdTasks, notes },
-          })
-        } catch (_) { /* non-blocking */ }
+        logAction({
+          action_type: "advance",
+          table_name: "service_deliveries",
+          record_id: delivery_id,
+          account_id: delivery.account_id || undefined,
+          summary: `Stage advanced: ${delivery.stage || "New"} → ${targetStage.stage_name} (${delivery.service_name || delivery.service_type})`,
+          details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, tasks_created: createdTasks, notes },
+        })
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
@@ -899,6 +918,15 @@ export function registerOperationsTools(server: McpServer) {
             createdTasks.push(taskDef.title)
           }
         }
+
+        logAction({
+          action_type: "create",
+          table_name: "service_deliveries",
+          record_id: delivery?.id,
+          account_id: account_id,
+          summary: `Service delivery created: ${name} (${service_type})`,
+          details: { service_type, service_name: name, assigned_to, first_stage: firstStage?.stage_name, tasks_created: createdTasks },
+        })
 
         const lines = [
           `✅ Service delivery created`,
