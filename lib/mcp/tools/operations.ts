@@ -200,6 +200,19 @@ export function registerOperationsTools(server: McpServer) {
 
         if (error) throw new Error(error.message)
 
+        // Auto-log to action_log
+        try {
+          await supabaseAdmin.from("action_log").insert({
+            actor: "claude.ai",
+            action_type: "create",
+            table_name: "tasks",
+            record_id: data.id,
+            account_id: account_id || null,
+            summary: `Task created: ${task_title} → ${assigned_to}`,
+            details: { task_title, assigned_to, priority: priority || "Normal", category },
+          })
+        } catch (_) { /* non-blocking */ }
+
         return { content: [{ type: "text" as const, text: `✅ Task created: ${data.task_title}\nAssigned: ${data.assigned_to} | Priority: ${data.priority} | Due: ${data.due_date || "—"}\nID: ${data.id}` }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
@@ -784,6 +797,19 @@ export function registerOperationsTools(server: McpServer) {
         }
         if (isCompleted) lines.push(`\n🎉 Service delivery marked as COMPLETED`)
 
+        // Auto-log to action_log
+        try {
+          await supabaseAdmin.from("action_log").insert({
+            actor: "claude.ai",
+            action_type: "advance_stage",
+            table_name: "service_deliveries",
+            record_id: delivery_id,
+            account_id: delivery.account_id || null,
+            summary: `Stage advanced: ${delivery.stage || "New"} → ${targetStage.stage_name} (${delivery.service_name || delivery.service_type})`,
+            details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, tasks_created: createdTasks, notes },
+          })
+        } catch (_) { /* non-blocking */ }
+
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
@@ -888,6 +914,142 @@ export function registerOperationsTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // audit_crm — Quality audit of Claude.ai sessions
+  // ═══════════════════════════════════════
+  server.tool(
+    "audit_crm",
+    "Run a quality audit on recent Claude.ai activity. Cross-checks session_checkpoints, action_log, tasks, and service_deliveries to find: (1) tasks still open for completed actions, (2) service notes updated without task closure, (3) stage advances without task cleanup, (4) checkpoints without matching action_log entries. Returns a structured report with issues found. Run this 2-3x daily.",
+    {
+      hours_back: z.number().optional().default(8).describe("How many hours back to audit (default: 8)"),
+    },
+    async ({ hours_back }) => {
+      try {
+        const since = new Date(Date.now() - hours_back * 60 * 60 * 1000).toISOString()
+        const issues: string[] = []
+        const ok: string[] = []
+
+        // 1. Get recent checkpoints
+        const { data: checkpoints } = await supabaseAdmin
+          .from("session_checkpoints")
+          .select("*")
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+
+        // 2. Get recent action_log entries
+        const { data: actions } = await supabaseAdmin
+          .from("action_log")
+          .select("*")
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+
+        // 3. Find tasks still open where related service was updated recently
+        const { data: openTasksWithUpdatedServices } = await supabaseAdmin.rpc("exec_sql", {
+          query: `
+            SELECT t.id, t.task_title, t.status, t.account_id, a.company_name,
+                   s.notes as service_notes, s.updated_at as service_updated
+            FROM tasks t
+            JOIN accounts a ON a.id = t.account_id
+            JOIN services s ON s.account_id = t.account_id
+            WHERE t.status IN ('To Do', 'In Progress', 'Waiting')
+              AND s.updated_at >= '${since}'
+              AND t.created_at < s.updated_at
+              AND (
+                t.category IN ('Filing', 'Formation', 'CRM Update', 'Document')
+                OR t.task_title ILIKE '%verificare%'
+                OR t.task_title ILIKE '%check%'
+              )
+            ORDER BY s.updated_at DESC
+            LIMIT 20
+          `
+        })
+
+        // 4. Find active deliveries with stage but open tasks from previous stages
+        const { data: stageOrphans } = await supabaseAdmin.rpc("exec_sql", {
+          query: `
+            SELECT sd.id as delivery_id, sd.service_name, sd.stage, sd.stage_order,
+                   t.id as task_id, t.task_title, t.status as task_status,
+                   a.company_name
+            FROM service_deliveries sd
+            JOIN tasks t ON t.service_id = sd.id
+            JOIN accounts a ON a.id = sd.account_id
+            WHERE sd.status = 'active'
+              AND sd.stage IS NOT NULL
+              AND sd.stage_order > 1
+              AND t.status IN ('To Do', 'In Progress', 'Waiting')
+              AND t.task_title LIKE '[%'
+              AND sd.updated_at >= '${since}'
+            ORDER BY sd.updated_at DESC
+            LIMIT 20
+          `
+        })
+
+        // Build report
+        const lines: string[] = [
+          `📊 **CRM Audit Report** — last ${hours_back} hours`,
+          `⏰ Since: ${new Date(since).toLocaleString("it-IT", { timeZone: "America/New_York" })}`,
+          "",
+          `📝 Checkpoints: ${checkpoints?.length || 0}`,
+          `📋 Actions logged: ${actions?.length || 0}`,
+          "",
+        ]
+
+        // Checkpoint analysis
+        if (checkpoints?.length) {
+          lines.push("### Session Activity")
+          for (const cp of checkpoints.slice(0, 5)) {
+            const time = new Date(cp.created_at).toLocaleString("it-IT", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
+            lines.push(`  ${time} — ${cp.summary.slice(0, 120)}`)
+          }
+          lines.push("")
+        }
+
+        // Issue: tasks open but service updated
+        if (openTasksWithUpdatedServices?.length) {
+          for (const row of openTasksWithUpdatedServices) {
+            issues.push(`⚠️ **${row.company_name}**: Task "${row.task_title}" still ${row.task_status}, but service was updated ${new Date(row.service_updated).toLocaleString("it-IT", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })}`)
+          }
+        }
+
+        // Issue: stage orphan tasks
+        if (stageOrphans?.length) {
+          for (const row of stageOrphans) {
+            issues.push(`⚠️ **${row.company_name}**: Delivery at stage "${row.stage}" but task "${row.task_title}" still ${row.task_status}`)
+          }
+        }
+
+        // Checkpoint without actions
+        if ((checkpoints?.length || 0) > 0 && (actions?.length || 0) === 0) {
+          issues.push(`❌ ${checkpoints!.length} checkpoints saved but 0 actions in action_log — Claude.ai may not be logging actions properly`)
+        }
+
+        // Format issues
+        if (issues.length > 0) {
+          lines.push(`### 🔺 Issues Found (${issues.length})`)
+          for (const issue of issues) lines.push(issue)
+        } else {
+          lines.push("### ✅ No Issues Found")
+          lines.push("All checkpoints, tasks, and service records are consistent.")
+        }
+
+        // Action log summary
+        if (actions?.length) {
+          lines.push("")
+          lines.push("### Action Log Summary")
+          const byType: Record<string, number> = {}
+          for (const a of actions) { byType[a.action_type] = (byType[a.action_type] || 0) + 1 }
+          for (const [type, count] of Object.entries(byType)) {
+            lines.push(`  ${type}: ${count}`)
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Audit error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
     }
   )
