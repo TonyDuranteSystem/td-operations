@@ -73,7 +73,7 @@ export function registerMessagingTools(server: McpServer) {
       try {
         let q = supabaseAdmin
           .from("messages")
-          .select("id, direction, sender_phone, sender_name, content_text, message_type, status, created_at, metadata")
+          .select("id, direction, sender_phone, sender_name, content_text, content_type, status, created_at, metadata")
           .eq("group_id", group_id)
           .order("created_at", { ascending: true })
           .limit(Math.min(limit, 200))
@@ -125,7 +125,7 @@ export function registerMessagingTools(server: McpServer) {
       try {
         let q = supabaseAdmin
           .from("messages")
-          .select("id, group_id, direction, sender_phone, sender_name, content_text, message_type, status, created_at, channel_id")
+          .select("id, group_id, direction, sender_phone, sender_name, content_text, content_type, status, created_at, channel_id")
           .order("created_at", { ascending: false })
           .limit(Math.min(limit || 25, 100))
 
