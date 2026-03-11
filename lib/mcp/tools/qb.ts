@@ -751,4 +751,101 @@ export function registerQbTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // qb_record_payment
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_record_payment",
+    "Record a payment against one or more QuickBooks invoices. This marks the invoice(s) as Paid (balance = 0). Use this for clients who already paid (via Whop, bank transfer, etc.) so the invoice PDF shows 'Paid'. Provide the invoice ID(s) — the tool auto-detects the customer and amount. Optionally specify payment method, date, and reference number. WORKFLOW: qb_create_invoice → qb_record_payment → qb_send_invoice (sends Paid invoice PDF).",
+    {
+      invoice_ids: z.array(z.string()).min(1).describe("QuickBooks Invoice ID(s) to mark as paid (from qb_list_invoices)"),
+      payment_date: z.string().optional().describe("Payment date (YYYY-MM-DD). Defaults to today."),
+      payment_method: z.string().optional().describe("Payment method (e.g., 'Credit Card', 'Bank Transfer', 'Whop')"),
+      reference_number: z.string().optional().describe("Reference/confirmation number for the payment"),
+      memo: z.string().optional().describe("Private memo about the payment"),
+    },
+    async ({ invoice_ids, payment_date, payment_method, reference_number, memo }) => {
+      try {
+        // Fetch all invoices to get customer and amounts
+        const invoices = await Promise.all(
+          invoice_ids.map(async (id) => {
+            const result = await qbApiCall(`/invoice/${id}`)
+            return result.Invoice
+          })
+        )
+
+        // Validate all invoices exist and belong to same customer
+        const missing = invoices.findIndex((inv) => !inv)
+        if (missing >= 0) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_ids[missing]} not found` }] }
+        }
+
+        const customerRef = invoices[0].CustomerRef
+        const allSameCustomer = invoices.every(
+          (inv) => inv.CustomerRef.value === customerRef.value
+        )
+        if (!allSameCustomer) {
+          return { content: [{ type: "text" as const, text: `❌ All invoices must belong to the same customer` }] }
+        }
+
+        // Calculate total amount from invoice balances
+        const totalAmt = invoices.reduce((sum: number, inv: Record<string, unknown>) => sum + ((inv.Balance as number) || 0), 0)
+
+        if (totalAmt === 0) {
+          return { content: [{ type: "text" as const, text: `⚠️ All invoices already fully paid (balance = $0)` }] }
+        }
+
+        // Build payment object
+        const payment: Record<string, unknown> = {
+          CustomerRef: {
+            value: customerRef.value,
+            name: customerRef.name,
+          },
+          TotalAmt: totalAmt,
+          Line: invoices
+            .filter((inv: Record<string, unknown>) => (inv.Balance as number) > 0)
+            .map((inv: Record<string, unknown>) => ({
+              Amount: inv.Balance,
+              LinkedTxn: [{
+                TxnId: inv.Id,
+                TxnType: "Invoice",
+              }],
+            })),
+        }
+
+        if (payment_date) {
+          payment.TxnDate = payment_date
+        }
+
+        if (reference_number) {
+          payment.PaymentRefNum = reference_number
+        }
+
+        if (memo) {
+          payment.PrivateNote = memo
+        }
+
+        // Create the payment
+        const result = await qbApiCall("/payment", {
+          method: "POST",
+          body: payment,
+        })
+
+        const pmt = result.Payment
+        const invoiceList = invoices
+          .map((inv: Record<string, unknown>) => `  • #${inv.DocNumber} — $${inv.Balance} → Paid`)
+          .join("\n")
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Payment recorded — $${pmt.TotalAmt}\nCustomer: ${customerRef.name}\nPayment ID: ${pmt.Id}\nDate: ${pmt.TxnDate}\n${payment_method ? `Method: ${payment_method}\n` : ""}${reference_number ? `Reference: ${reference_number}\n` : ""}\nInvoices paid:\n${invoiceList}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error recording payment: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
 }

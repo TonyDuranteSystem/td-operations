@@ -314,9 +314,8 @@ export async function createInvoice(params: {
     AllowOnlineACHPayment: false,
   }
 
-  if (params.dueDate) {
-    invoice.DueDate = params.dueDate
-  }
+  // Set due date — default to today (Due on receipt) if not specified
+  invoice.DueDate = params.dueDate || new Date().toISOString().split('T')[0]
 
   if (params.memo) {
     invoice.PrivateNote = params.memo
