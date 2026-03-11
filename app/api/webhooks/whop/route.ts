@@ -225,10 +225,21 @@ export async function POST(req: NextRequest) {
     }
 
     const payload = JSON.parse(body)
-    // Whop v1 uses underscores (payment_succeeded), normalize to support both formats
-    const rawEventType = (payload.type || payload.event) as string
+    // Whop Standard Webhooks (v1) uses "type", legacy (v2) uses "action" or "event"
+    const rawEventType = (payload.type || payload.action || payload.event) as string
     const eventType = rawEventType?.replace(/\./g, "_") // normalize dots to underscores
     const data = (payload.data || payload) as Record<string, unknown>
+
+    if (!rawEventType) {
+      console.error("[whop-webhook] No event type found in payload. Keys:", Object.keys(payload).join(", "))
+      await supabase.from("webhook_events").insert({
+        source: "whop",
+        event_type: "unknown_no_type",
+        external_id: (payload.id || data.id || "unknown") as string,
+        payload: payload,
+      })
+      return NextResponse.json({ ok: true, warning: "no event type" })
+    }
 
     console.log(`[whop-webhook] Received event: ${rawEventType} (normalized: ${eventType})`)
 
@@ -260,6 +271,8 @@ export async function POST(req: NextRequest) {
 
       case "membership_activated":
       case "membership_deactivated":
+      case "membership_went_valid":    // legacy v2 format
+      case "membership_went_invalid":  // legacy v2 format
         await handleMembershipEvent(eventType, data)
         break
 
