@@ -608,56 +608,50 @@ export function registerCrmTools(server: McpServer) {
         let associationsCreated = 0
         const errors: string[] = []
 
-        // Process in batches of 10
-        const BATCH = 10
-        for (let i = 0; i < accounts.length; i += BATCH) {
-          const batch = accounts.slice(i, i + BATCH)
+        // Process sequentially — HubSpot has 4 API calls/second rate limit
+        const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-          await Promise.allSettled(
-            batch.map(async (account) => {
-              try {
-                const companyId = await upsertCompany(account)
-                companiesSynced++
+        for (const account of accounts) {
+          try {
+            const companyId = await upsertCompany(account)
+            companiesSynced++
+            await delay(350)
 
-                // Fetch contacts for this account
-                const { data: junctions } = await supabaseAdmin
-                  .from("account_contacts")
-                  .select("contact:contacts(id, full_name, first_name, last_name, email, email_2, phone, citizenship, itin_number, language)")
-                  .eq("account_id", account.id)
+            const { data: junctions } = await supabaseAdmin
+              .from("account_contacts")
+              .select("contact:contacts(id, full_name, first_name, last_name, email, email_2, phone, citizenship, itin_number, language)")
+              .eq("account_id", account.id)
 
-                if (!junctions) return
+            if (!junctions) continue
 
-                for (const j of junctions) {
-                  const contact = j.contact as unknown as {
-                    id: string; full_name: string; first_name: string | null; last_name: string | null
-                    email: string | null; email_2: string | null; phone: string | null
-                    citizenship: string | null; itin_number: string | null; language: string | null
-                  }
-                  if (!contact?.email) continue
-
-                  try {
-                    const contactId = await upsertContact(contact)
-                    if (contactId) {
-                      contactsSynced++
-                      try {
-                        await associateContactToCompany(contactId, companyId)
-                        associationsCreated++
-                      } catch { /* non-fatal */ }
-                    }
-                  } catch (cErr) {
-                    contactsFailed++
-                    errors.push(`Contact ${contact.full_name}: ${cErr instanceof Error ? cErr.message : String(cErr)}`)
-                  }
-                }
-              } catch (err) {
-                companiesFailed++
-                errors.push(`Company ${account.company_name}: ${err instanceof Error ? err.message : String(err)}`)
+            for (const j of junctions) {
+              const contact = j.contact as unknown as {
+                id: string; full_name: string; first_name: string | null; last_name: string | null
+                email: string | null; email_2: string | null; phone: string | null
+                citizenship: string | null; itin_number: string | null; language: string | null
               }
-            })
-          )
+              if (!contact?.email) continue
 
-          if (i + BATCH < accounts.length) {
-            await new Promise((resolve) => setTimeout(resolve, 500))
+              try {
+                const contactId = await upsertContact(contact)
+                if (contactId) {
+                  contactsSynced++
+                  await delay(350)
+                  try {
+                    await associateContactToCompany(contactId, companyId)
+                    associationsCreated++
+                    await delay(200)
+                  } catch { /* non-fatal */ }
+                }
+              } catch (cErr) {
+                contactsFailed++
+                errors.push(`Contact ${contact.full_name}: ${cErr instanceof Error ? cErr.message : String(cErr)}`)
+              }
+            }
+          } catch (err) {
+            companiesFailed++
+            errors.push(`Company ${account.company_name}: ${err instanceof Error ? err.message : String(err)}`)
+            await delay(1000)
           }
         }
 

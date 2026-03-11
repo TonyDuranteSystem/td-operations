@@ -63,78 +63,73 @@ export async function POST(req: NextRequest) {
       errors: [],
     }
 
-    // Process in batches of 10
-    const BATCH_SIZE = 10
-    for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
-      const batch = accounts.slice(i, i + BATCH_SIZE)
+    // Process sequentially — HubSpot free tier has 4 API calls/second limit
+    // Each company = 1 search + 1 upsert + N contact ops, so we process one at a time with delays
+    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-      await Promise.allSettled(
-        batch.map(async (account) => {
+    for (const account of accounts) {
+      try {
+        // 2) Upsert company in HubSpot
+        const companyId = await upsertCompany(account)
+        result.companiesSynced++
+        await delay(350) // respect rate limit
+
+        // 3) Fetch contacts for this account
+        const { data: junctions } = await supabaseAdmin
+          .from("account_contacts")
+          .select(
+            "contact:contacts(id, full_name, first_name, last_name, email, email_2, phone, citizenship, itin_number, language)"
+          )
+          .eq("account_id", account.id)
+
+        if (!junctions) continue
+
+        for (const j of junctions) {
+          const contact = j.contact as unknown as {
+            id: string
+            full_name: string
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+            email_2: string | null
+            phone: string | null
+            citizenship: string | null
+            itin_number: string | null
+            language: string | null
+          }
+
+          if (!contact?.email) continue
+
           try {
-            // 2) Upsert company in HubSpot
-            const companyId = await upsertCompany(account)
-            result.companiesSynced++
+            // 4) Upsert contact
+            const contactId = await upsertContact(contact)
+            if (contactId) {
+              result.contactsSynced++
+              await delay(350)
 
-            // 3) Fetch contacts for this account
-            const { data: junctions } = await supabaseAdmin
-              .from("account_contacts")
-              .select(
-                "contact:contacts(id, full_name, first_name, last_name, email, email_2, phone, citizenship, itin_number, language)"
-              )
-              .eq("account_id", account.id)
-
-            if (!junctions) return
-
-            for (const j of junctions) {
-              const contact = j.contact as unknown as {
-                id: string
-                full_name: string
-                first_name: string | null
-                last_name: string | null
-                email: string | null
-                email_2: string | null
-                phone: string | null
-                citizenship: string | null
-                itin_number: string | null
-                language: string | null
-              }
-
-              if (!contact?.email) continue
-
+              // 5) Associate contact → company
               try {
-                // 4) Upsert contact
-                const contactId = await upsertContact(contact)
-                if (contactId) {
-                  result.contactsSynced++
-
-                  // 5) Associate contact → company
-                  try {
-                    await associateContactToCompany(contactId, companyId)
-                    result.associationsCreated++
-                  } catch (assocErr) {
-                    // Non-fatal
-                    console.warn("Association error:", assocErr)
-                  }
-                }
-              } catch (cErr) {
-                result.contactsFailed++
-                result.errors.push(
-                  `Contact ${contact.full_name} (${contact.email}): ${cErr instanceof Error ? cErr.message : String(cErr)}`
-                )
+                await associateContactToCompany(contactId, companyId)
+                result.associationsCreated++
+                await delay(200)
+              } catch (assocErr) {
+                // Non-fatal
+                console.warn("Association error:", assocErr)
               }
             }
-          } catch (err) {
-            result.companiesFailed++
+          } catch (cErr) {
+            result.contactsFailed++
             result.errors.push(
-              `Company ${account.company_name}: ${err instanceof Error ? err.message : String(err)}`
+              `Contact ${contact.full_name} (${contact.email}): ${cErr instanceof Error ? cErr.message : String(cErr)}`
             )
           }
-        })
-      )
-
-      // Small delay between batches to respect rate limits
-      if (i + BATCH_SIZE < accounts.length) {
-        await new Promise((resolve) => setTimeout(resolve, 500))
+        }
+      } catch (err) {
+        result.companiesFailed++
+        result.errors.push(
+          `Company ${account.company_name}: ${err instanceof Error ? err.message : String(err)}`
+        )
+        await delay(1000) // longer delay after error (might be rate limit)
       }
     }
 
