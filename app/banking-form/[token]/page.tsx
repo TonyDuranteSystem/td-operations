@@ -1,9 +1,8 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
-import { createClient as createAuthClient } from '@/lib/supabase/client'
 import {
   LABELS,
   TOOLTIPS,
@@ -42,6 +41,7 @@ function formatDateTime(d: string, lang: 'en' | 'it') {
 
 export default function BankingFormPage() {
   const params = useParams()
+  const searchParams = useSearchParams()
   const token = params.token as string
 
   const [submission, setSubmission] = useState<BankingSubmission | null>(null)
@@ -68,11 +68,8 @@ export default function BankingFormPage() {
 
   const loadSubmission = useCallback(async () => {
     try {
-      // Check if user has an admin session (logged into dashboard)
-      // Uses SSR browser client which reads auth cookies
-      const authClient = createAuthClient()
-      const { data: { user } } = await authClient.auth.getUser()
-      const adminMode = !!user
+      // Admin preview: ?preview=td on the URL skips email gate
+      const adminMode = searchParams.get('preview') === 'td'
 
       const { data, error: err } = await supabasePublic
         .from('banking_submissions')
