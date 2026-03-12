@@ -332,6 +332,41 @@ export async function createInvoice(params: {
 }
 
 /**
+ * Find a vendor by name, or create one if not found
+ */
+export async function findOrCreateVendor(
+  displayName: string,
+  email?: string
+): Promise<{ id: string; name: string }> {
+  const query = encodeURIComponent(`SELECT * FROM Vendor WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`)
+  const searchResult = await qbApiCall(`/query?query=${query}`)
+
+  if (searchResult.QueryResponse?.Vendor?.length > 0) {
+    const vendor = searchResult.QueryResponse.Vendor[0]
+    return { id: vendor.Id, name: vendor.DisplayName }
+  }
+
+  // Vendor not found — create new one
+  const newVendor: Record<string, unknown> = {
+    DisplayName: displayName,
+  }
+
+  if (email) {
+    newVendor.PrimaryEmailAddr = { Address: email }
+  }
+
+  const result = await qbApiCall('/vendor', {
+    method: 'POST',
+    body: newVendor,
+  })
+
+  return {
+    id: result.Vendor.Id,
+    name: result.Vendor.DisplayName,
+  }
+}
+
+/**
  * Find a customer by name, or create one if not found
  */
 async function findOrCreateCustomer(
