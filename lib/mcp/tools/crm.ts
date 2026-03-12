@@ -16,18 +16,18 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
   // 1. Get the completed task
   const { data: task } = await supabaseAdmin
     .from("tasks")
-    .select("service_id, stage_order, status")
+    .select("delivery_id, stage_order, status")
     .eq("id", taskId)
     .single()
 
-  if (!task?.service_id || task.stage_order == null) return null
+  if (!task?.delivery_id || task.stage_order == null) return null
   if (task.status !== "Done") return null
 
   // 2. Get the service delivery — must be active and at the same stage
   const { data: delivery } = await supabaseAdmin
     .from("service_deliveries")
     .select("id, service_name, service_type, stage, stage_order, stage_history, status, account_id, deal_id")
-    .eq("id", task.service_id)
+    .eq("id", task.delivery_id)
     .single()
 
   if (!delivery || delivery.status !== "active") return null
@@ -49,7 +49,7 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
   const { count } = await supabaseAdmin
     .from("tasks")
     .select("id", { count: "exact", head: true })
-    .eq("service_id", task.service_id)
+    .eq("delivery_id", task.delivery_id)
     .eq("stage_order", task.stage_order)
     .not("status", "in", '("Done","Cancelled")')
 
@@ -111,7 +111,7 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
         status: "To Do",
         account_id: delivery.account_id,
         deal_id: delivery.deal_id,
-        service_id: delivery.id,
+        delivery_id: delivery.id,
         stage_order: nextStage.stage_order,
       })
       if (!tErr) createdTasks.push(taskDef.title)

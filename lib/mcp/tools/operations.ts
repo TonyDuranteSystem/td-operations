@@ -174,11 +174,12 @@ export function registerOperationsTools(server: McpServer) {
       description: z.string().optional().describe("Task description/details"),
       account_id: z.string().uuid().optional().describe("Link to account UUID"),
       deal_id: z.string().uuid().optional().describe("Link to deal UUID"),
-      service_id: z.string().uuid().optional().describe("Link to service UUID"),
+      service_id: z.string().uuid().optional().describe("Link to service UUID (services table)"),
+      delivery_id: z.string().uuid().optional().describe("Link to service delivery UUID (service_deliveries table, for pipeline tracking)"),
       stage_order: z.number().optional().describe("Pipeline stage_order (auto-set by sd_advance_stage, rarely needed manually)"),
       status: z.string().optional().describe("Initial status: To Do (default), In Progress, Waiting"),
     },
-    async ({ task_title, assigned_to, priority, category, due_date, description, account_id, deal_id, service_id, stage_order, status }) => {
+    async ({ task_title, assigned_to, priority, category, due_date, description, account_id, deal_id, service_id, delivery_id, stage_order, status }) => {
       try {
         const insert: Record<string, unknown> = {
           task_title,
@@ -190,6 +191,7 @@ export function registerOperationsTools(server: McpServer) {
           account_id: account_id || null,
           deal_id: deal_id || null,
           service_id: service_id || null,
+          delivery_id: delivery_id || null,
           stage_order: stage_order || null,
           status: status || "To Do",
           created_by: "Claude",
@@ -802,7 +804,7 @@ export function registerOperationsTools(server: McpServer) {
                 status: "To Do",
                 account_id: delivery.account_id,
                 deal_id: delivery.deal_id,
-                service_id: delivery.id,
+                delivery_id: delivery.id,
                 stage_order: targetStage.stage_order,
               })
             if (!tErr) createdTasks.push(taskDef.title)
@@ -916,7 +918,7 @@ export function registerOperationsTools(server: McpServer) {
               status: "To Do",
               account_id,
               deal_id: deal_id || null,
-              service_id: delivery?.id,
+              delivery_id: delivery?.id,
               stage_order: firstStage?.stage_order || null,
             })
             createdTasks.push(taskDef.title)

@@ -314,7 +314,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             status: "To Do",
             account_id,
             created_by: "Claude",
-            service_id: onboardingDeliveryId,
+            delivery_id: onboardingDeliveryId,
             stage_order: 2, // Review & CRM Setup stage
           })
         if (taskErr) {
