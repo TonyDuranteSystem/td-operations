@@ -5,7 +5,7 @@
  * Live at: offerte.tonydurante.us/?t={token}&c={access_code}
  * Contract signing at: offerte.tonydurante.us/offer/{token}/contract
  *
- * Workflow: create (draft) → review → send (Gmail draft) → client views → signs → pays
+ * Workflow: create (draft) → review → send (Gmail send) → client views → signs → pays
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
@@ -13,6 +13,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
+import { safeSend } from "@/lib/mcp/safe-send"
 
 // ─── JSONB Validation Helpers ───────────────────────────────
 
@@ -122,12 +123,13 @@ function validateOfferJsonb(params: Record<string, unknown>): string | null {
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
 
-async function createOfferDraft(
+function buildOfferEmail(
   clientEmail: string,
   clientName: string,
   token: string,
   accessCode: string,
   language: string,
+  trackingPixelUrl?: string,
 ) {
   const offerUrl = `https://offerte.tonydurante.us/?t=${encodeURIComponent(token)}&c=${accessCode}`
 
@@ -135,25 +137,39 @@ async function createOfferDraft(
     ? `Your Proposal from Tony Durante LLC`
     : `La Tua Proposta da Tony Durante LLC`
 
-  const body = language === "en"
+  const htmlBody = language === "en"
+    ? `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+  <p>Dear ${clientName},</p>
+  <p>Thank you for your time during our consultation.</p>
+  <p>Please find your personalized proposal at the following link:</p>
+  <p style="margin: 24px 0;">
+    <a href="${offerUrl}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+      View Your Proposal
+    </a>
+  </p>
+  <p>To view the proposal, you will be asked to verify your email address.</p>
+  <p>If you have any questions, please don't hesitate to reach out.</p>
+  <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
+</div>${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}`
+    : `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+  <p>Gentile ${clientName},</p>
+  <p>Grazie per il tempo dedicato durante la nostra consulenza.</p>
+  <p>Puoi consultare la tua proposta personalizzata al seguente link:</p>
+  <p style="margin: 24px 0;">
+    <a href="${offerUrl}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+      Visualizza la Proposta
+    </a>
+  </p>
+  <p>Per visualizzare la proposta, ti verrà chiesto di verificare il tuo indirizzo email.</p>
+  <p>Per qualsiasi domanda, non esitare a contattarci.</p>
+  <p style="margin-top: 24px;">Cordiali saluti,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
+</div>${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}`
+
+  const plainText = language === "en"
     ? `Dear ${clientName},\n\nThank you for your time during our consultation.\n\nPlease find your personalized proposal at the following link:\n${offerUrl}\n\nTo view the proposal, you will be asked to verify your email address.\n\nIf you have any questions, please don't hesitate to reach out.\n\nBest regards,\nTony Durante LLC\nsupport@tonydurante.us`
     : `Gentile ${clientName},\n\nGrazie per il tempo dedicato durante la nostra consulenza.\n\nPuoi consultare la tua proposta personalizzata al seguente link:\n${offerUrl}\n\nPer visualizzare la proposta, ti verrà chiesto di verificare il tuo indirizzo email.\n\nPer qualsiasi domanda, non esitare a contattarci.\n\nCordiali saluti,\nTony Durante LLC\nsupport@tonydurante.us`
 
-  const headers = [
-    `From: Tony Durante LLC <support@tonydurante.us>`,
-    `To: ${clientEmail}`,
-    `Subject: ${subject}`,
-    `Content-Type: text/plain; charset=UTF-8`,
-  ]
-
-  const raw = headers.join("\r\n") + "\r\n\r\n" + body
-  const encodedRaw = Buffer.from(raw).toString("base64url")
-
-  const result = await gmailPost("/drafts", {
-    message: { raw: encodedRaw },
-  }) as { id: string; message: { id: string } }
-
-  return result
+  return { subject, htmlBody, plainText }
 }
 
 // ─── Tool Registration ──────────────────────────────────────
@@ -411,11 +427,11 @@ export function registerOfferTools(server: McpServer) {
   )
 
   // ═══════════════════════════════════════
-  // offer_send — Approve offer + create Gmail draft
+  // offer_send — Approve offer + send via Gmail (uses safeSend)
   // ═══════════════════════════════════════
   server.tool(
     "offer_send",
-    "Approve an offer and create a Gmail draft to send it. Sets status to 'sent', creates a professional bilingual email draft in support@tonydurante.us with the offer link (including access code). Antonio reviews the draft in Gmail and sends manually. Requires client_email to be set on the offer. Use offer_get to review content before calling this.",
+    `Approve an offer and send the link to the client via Gmail with open tracking. Sets status to 'sent'. Email is sent immediately (NOT a draft). Requires client_email to be set on the offer. Use offer_get to review content before calling this.`,
     {
       token: z.string().describe("Offer token to send"),
     },
@@ -435,20 +451,124 @@ export function registerOfferTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: `❌ Cannot send: client_email is not set on this offer. Update it first with offer_update.` }] }
         }
 
-        // Update status to sent
-        const { error: updateError } = await supabaseAdmin
-          .from("offers")
-          .update({ status: "sent" })
-          .eq("token", token)
+        // Generate tracking ID
+        const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
 
-        if (updateError) throw updateError
+        // Build email
+        const { subject, htmlBody, plainText } = buildOfferEmail(
+          offer.client_email,
+          offer.client_name,
+          token,
+          offer.access_code || "",
+          offer.language || "en",
+          pixelUrl,
+        )
 
-        // Update lead status if linked
-        if (offer.lead_id) {
-          await supabaseAdmin
-            .from("leads")
-            .update({ offer_status: "Sent" })
-            .eq("id", offer.lead_id)
+        // Build MIME multipart/alternative (text + html)
+        const fromEmail = "support@tonydurante.us"
+        const boundary = `boundary_${Date.now()}`
+        const mimeHeaders = [
+          `From: Tony Durante LLC <${fromEmail}>`,
+          `To: ${offer.client_email}`,
+          `Subject: ${subject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        ]
+        const mimeParts = [
+          mimeHeaders.join("\r\n"),
+          "",
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(plainText).toString("base64"),
+          "",
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(htmlBody).toString("base64"),
+          "",
+          `--${boundary}--`,
+        ]
+        const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
+
+        // ─── safeSend: email FIRST, status updates AFTER ───
+        const result = await safeSend<{ id: string; threadId: string }>({
+          // Idempotency: don't send if already sent
+          idempotencyCheck: async () => {
+            if (offer.status === "sent") {
+              const { data: existing } = await supabaseAdmin
+                .from("email_tracking")
+                .select("tracking_id, created_at")
+                .eq("recipient", offer.client_email!)
+                .ilike("subject", `%Proposal%Tony Durante%`)
+                .limit(1)
+              if (existing?.length) {
+                return {
+                  alreadySent: true,
+                  message: [
+                    `⚠️ Offer email already sent for "${token}"`,
+                    ``,
+                    `Tracking: ${existing[0].tracking_id}`,
+                    `Sent at: ${existing[0].created_at}`,
+                    ``,
+                    `Use gmail_track_status to check if the client opened it.`,
+                    `To resend, first use offer_update to set status back to "draft".`,
+                  ].join("\n"),
+                }
+              }
+            }
+            return null
+          },
+
+          // SEND FIRST — actual Gmail send
+          sendFn: async () => {
+            return await gmailPost("/messages/send", {
+              raw: encodedRaw,
+            }) as { id: string; threadId: string }
+          },
+
+          // POST-SEND: status updates + tracking (only after send succeeds)
+          postSendSteps: [
+            {
+              name: "save_tracking",
+              fn: async () => {
+                await supabaseAdmin.from("email_tracking").insert({
+                  tracking_id: trackingId,
+                  recipient: offer.client_email,
+                  subject,
+                  from_email: fromEmail,
+                })
+              },
+            },
+            {
+              name: "update_offer_status",
+              fn: async () => {
+                await supabaseAdmin
+                  .from("offers")
+                  .update({ status: "sent" })
+                  .eq("token", token)
+              },
+            },
+            {
+              name: "update_lead_status",
+              fn: async () => {
+                if (offer.lead_id) {
+                  await supabaseAdmin
+                    .from("leads")
+                    .update({ offer_status: "Sent" })
+                    .eq("id", offer.lead_id)
+                }
+              },
+            },
+          ],
+        })
+
+        // Handle idempotency
+        if (result.alreadySent) {
+          return { content: [{ type: "text" as const, text: result.idempotencyMessage! }] }
         }
 
         logAction({
@@ -456,22 +576,33 @@ export function registerOfferTools(server: McpServer) {
           table_name: "offers",
           record_id: token,
           summary: `Sent offer: ${offer.client_name} (${token}) to ${offer.client_email}`,
-          details: { lead_id: offer.lead_id, language: offer.language },
+          details: {
+            lead_id: offer.lead_id,
+            language: offer.language,
+            gmail_message_id: result.sendResult?.id,
+            tracking_id: trackingId,
+          },
         })
 
-        // Create Gmail draft
-        const draftResult = await createOfferDraft(
-          offer.client_email,
-          offer.client_name,
-          token,
-          offer.access_code || "",
-          offer.language || "en",
-        )
+        const statusLine = result.hasWarnings
+          ? `⚠️ Email sent but some follow-up steps had issues`
+          : `✅ Offer email sent via Gmail`
 
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer ${token} approved and Gmail draft created!\n\n📧 Draft ready in support@tonydurante.us\n   To: ${offer.client_email}\n   Draft ID: ${draftResult.id}\n\n🔗 Offer URL: https://offerte.tonydurante.us/?t=${token}&c=${offer.access_code}\n\nReview the draft in Gmail and send when ready.`,
+            text: [
+              statusLine,
+              ``,
+              `📧 To: ${offer.client_email}`,
+              `📋 Subject: ${subject}`,
+              `🆔 Message ID: ${result.sendResult?.id}`,
+              `👁️ Open tracking: ${trackingId}`,
+              ``,
+              `🔗 Offer URL: https://offerte.tonydurante.us/?t=${token}&c=${offer.access_code}`,
+              ``,
+              result.hasWarnings ? `⚠️ Steps: ${result.steps.map(s => `${s.step}=${s.status}`).join(", ")}` : "",
+            ].filter(Boolean).join("\n"),
           }],
         }
       } catch (err: unknown) {

@@ -68,6 +68,31 @@ Do this AUTOMATICALLY without Antonio having to explain what was being worked on
   if (adminMode) { setIsAdmin(true); setVerified(true); return }
   ```
 
+### Send Operations — safeSend Pattern (MANDATORY)
+Every MCP tool that sends something (email, notification) and updates a DB status MUST use `safeSend()` from `lib/mcp/safe-send.ts`. This enforces:
+1. **Idempotency check** — skip if already sent
+2. **Send FIRST** — actual email/notification before any status update
+3. **Status updates AFTER** — DB updates only after send succeeds
+4. **Multi-step tracking** — each post-send step tracked (ok/error)
+
+**NEVER** update a record's status to "sent" before the actual send operation. If the send fails, the record would be incorrectly marked as sent.
+
+Pattern:
+```typescript
+import { safeSend } from "@/lib/mcp/safe-send"
+
+const result = await safeSend({
+  idempotencyCheck: async () => { /* return { alreadySent: true, message } or null */ },
+  sendFn: async () => { /* actual send — gmailPost, etc. */ },
+  postSendSteps: [
+    { name: "update_status", fn: async () => { /* DB update */ } },
+    { name: "save_tracking", fn: async () => { /* tracking */ } },
+  ],
+})
+```
+
+Tools using this pattern: `lease_send`, `offer_send`. Future send tools MUST follow this.
+
 ## Anti-Compaction Protocol — MANDATORY
 
 ### WHY THIS EXISTS
