@@ -564,11 +564,105 @@ export function registerOnboardingTools(server: McpServer) {
             }
           }
 
-          // ─── 5. CREATE FOLLOW-UP TASKS ───
+          // ─── 5. AUTO-CREATE LEASE AGREEMENT ───
+          if (accountId && companyName && contactId) {
+            try {
+              const year = new Date().getFullYear()
+              // Check if lease already exists for this account + year
+              const { data: existingLease } = await supabaseAdmin
+                .from("lease_agreements")
+                .select("id, token, status")
+                .eq("account_id", accountId)
+                .eq("contract_year", year)
+                .limit(1)
+
+              if (existingLease?.length) {
+                lines.push(`✅ Lease already exists: ${existingLease[0].token} (${existingLease[0].status})`)
+              } else {
+                // Auto-assign next suite number (3D-101, 3D-102, ...)
+                const { data: lastSuite } = await supabaseAdmin
+                  .from("lease_agreements")
+                  .select("suite_number")
+                  .like("suite_number", "3D-%")
+                  .order("suite_number", { ascending: false })
+                  .limit(1)
+
+                let nextNum = 101
+                if (lastSuite?.length) {
+                  const match = lastSuite[0].suite_number.match(/3D-(\d+)/)
+                  if (match) nextNum = parseInt(match[1], 10) + 1
+                }
+                const suiteNumber = `3D-${nextNum}`
+
+                // Fetch contact details for lease
+                const { data: leaseContact } = await supabaseAdmin
+                  .from("contacts")
+                  .select("id, full_name, email, language")
+                  .eq("id", contactId)
+                  .single()
+
+                // Fetch account details
+                const { data: leaseAccount } = await supabaseAdmin
+                  .from("accounts")
+                  .select("id, company_name, ein, state_of_formation")
+                  .eq("id", accountId)
+                  .single()
+
+                if (leaseContact && leaseAccount) {
+                  const today = new Date().toISOString().slice(0, 10)
+                  const companySlug = companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+                  const leaseToken = `${companySlug}-${year}`
+
+                  const { data: newLease, error: leaseErr } = await supabaseAdmin
+                    .from("lease_agreements")
+                    .insert({
+                      token: leaseToken,
+                      account_id: accountId,
+                      contact_id: contactId,
+                      tenant_company: leaseAccount.company_name,
+                      tenant_ein: leaseAccount.ein || null,
+                      tenant_state: leaseAccount.state_of_formation || null,
+                      tenant_contact_name: leaseContact.full_name,
+                      tenant_email: leaseContact.email || null,
+                      premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
+                      suite_number: suiteNumber,
+                      square_feet: 120,
+                      effective_date: today,
+                      term_start_date: today,
+                      term_end_date: `${year}-12-31`,
+                      term_months: 12,
+                      contract_year: year,
+                      monthly_rent: 100,
+                      yearly_rent: 1200,
+                      security_deposit: 150,
+                      language: leaseContact.language?.toLowerCase()?.startsWith('it') ? 'it' : 'en',
+                      status: "draft",
+                    })
+                    .select("id, token, access_code")
+                    .single()
+
+                  if (leaseErr || !newLease) {
+                    lines.push(`❌ Lease auto-creation failed: ${leaseErr?.message || "unknown error"}`)
+                  } else {
+                    const leaseUrl = `https://td-operations.vercel.app/lease/${newLease.token}?c=${newLease.access_code}`
+                    lines.push(`✅ Lease auto-created: Suite ${suiteNumber}, token: ${newLease.token} (draft)`)
+                    lines.push(`   🔗 ${leaseUrl}`)
+                    lines.push(`   ➡️ Use **lease_send('${newLease.token}')** to approve and send to client`)
+                  }
+                } else {
+                  lines.push(`⚠️ Could not fetch contact/account details for lease creation`)
+                }
+              }
+            } catch (e) {
+              lines.push(`❌ Lease auto-creation error: ${e instanceof Error ? e.message : String(e)}`)
+            }
+          }
+
+          // ─── 6. CREATE FOLLOW-UP TASKS ───
           if (accountId && companyName) {
             const taskDefs = [
               { title: `Create WhatsApp group — ${companyName}`, assigned_to: "Luca", category: "Client Communication" as const, priority: "High" as const },
-              { title: `Prepare and send lease agreement — ${companyName}`, assigned_to: "Antonio", category: "Document" as const, priority: "High" as const },
+              { title: `Review and send lease agreement — ${companyName}`, assigned_to: "Antonio", category: "Document" as const, priority: "High" as const },
               { title: `Registered Agent change — ${companyName}`, assigned_to: "Luca", category: "Formation" as const, priority: "High" as const },
             ]
             for (const td of taskDefs) {
@@ -597,7 +691,7 @@ export function registerOnboardingTools(server: McpServer) {
             lines.push(`⚠️ Skipped task creation: missing account_id or company_name`)
           }
 
-          // ─── 6. CHECK TAX RETURN STATUS ───
+          // ─── 7. CHECK TAX RETURN STATUS ───
           if (accountId && companyName) {
             const returnType = sub.entity_type === "MMLLC" ? "MMLLC" : "SMLLC"
             const currentYear = new Date().getFullYear()
@@ -652,7 +746,7 @@ export function registerOnboardingTools(server: McpServer) {
             }
           }
 
-          // ─── 7. SET PORTAL FIELDS on account ───
+          // ─── 8. SET PORTAL FIELDS on account ───
           if (accountId) {
             try {
               const { error: portalErr } = await supabaseAdmin
@@ -669,7 +763,7 @@ export function registerOnboardingTools(server: McpServer) {
             }
           }
 
-          // ─── 8. MARK LEAD AS CONVERTED ───
+          // ─── 9. MARK LEAD AS CONVERTED ───
           if (sub.lead_id) {
             try {
               const { error: leadErr } = await supabaseAdmin
@@ -686,7 +780,7 @@ export function registerOnboardingTools(server: McpServer) {
             }
           }
 
-          // ─── 9. MARK FORM AS REVIEWED ───
+          // ─── 10. MARK FORM AS REVIEWED ───
           try {
             const { error: formErr } = await supabaseAdmin
               .from("onboarding_submissions")
@@ -705,7 +799,7 @@ export function registerOnboardingTools(server: McpServer) {
             lines.push(`❌ Form review error: ${e instanceof Error ? e.message : String(e)}`)
           }
 
-          // ─── 10. UPDATE SUBMISSION with created IDs ───
+          // ─── 11. UPDATE SUBMISSION with created IDs ───
           try {
             const subUpdates: Record<string, unknown> = { updated_at: now }
             if (accountId && !sub.account_id) subUpdates.account_id = accountId
