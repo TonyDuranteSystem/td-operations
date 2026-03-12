@@ -6,11 +6,11 @@
     },
     {
       "path": "/api/sync-drive",
-      "schedule": "0 */6 * * *"
+      "schedule": "15 */6 * * *"
     },
     {
       "path": "/api/sync-airtable",
-      "schedule": "0 */6 * * *"
+      "schedule": "30 */6 * * *"
     }
   ],
   "rewrites": [

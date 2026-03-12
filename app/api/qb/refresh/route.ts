@@ -11,6 +11,8 @@
 //
 // Vercel Cron config: vercel.json → "0 */6 * * *" (every 6 hours)
 
+export const maxDuration = 60
+
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { refreshAccessToken, storeTokens } from '@/lib/quickbooks'
