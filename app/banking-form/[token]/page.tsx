@@ -60,6 +60,7 @@ export default function BankingFormPage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({})
+  const [isAdmin, setIsAdmin] = useState(false)
 
   const L = LABELS[lang]
 
@@ -67,6 +68,10 @@ export default function BankingFormPage() {
 
   const loadSubmission = useCallback(async () => {
     try {
+      // Check if user has an admin session (logged into dashboard)
+      const { data: { user } } = await supabasePublic.auth.getUser()
+      const adminMode = !!user
+
       const { data, error: err } = await supabasePublic
         .from('banking_submissions')
         .select('*')
@@ -81,6 +86,7 @@ export default function BankingFormPage() {
         setSubmission(sub)
         setLang(sub.language || 'en')
         setSubmitted(true)
+        if (adminMode) setIsAdmin(true)
         setLoading(false)
         return
       }
@@ -93,6 +99,13 @@ export default function BankingFormPage() {
       }
 
       setLoading(false)
+
+      // Admin bypass: skip email gate if logged into dashboard
+      if (adminMode) {
+        setIsAdmin(true)
+        setVerified(true)
+        return
+      }
 
       if (hasVerifiedCookie(token)) {
         setVerified(true)
@@ -521,6 +534,15 @@ export default function BankingFormPage() {
             <button className={`tf-lang-btn ${lang === 'it' ? 'tf-lang-active' : ''}`} onClick={() => setLang('it')}>IT</button>
           </div>
         </div>
+
+        {/* Admin Preview Badge */}
+        {isAdmin && (
+          <div style={{ textAlign: 'center', marginBottom: -8 }}>
+            <span style={{ display: 'inline-block', background: '#f59e0b', color: '#fff', padding: '3px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>
+              ADMIN PREVIEW
+            </span>
+          </div>
+        )}
 
         {/* Hero */}
         <div className="tf-hero">
