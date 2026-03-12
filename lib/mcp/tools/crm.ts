@@ -106,9 +106,9 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || "Luca",
         category: taskDef.category || "Internal",
-        priority: taskDef.priority === "High" ? "urgente" : "normale",
+        priority: taskDef.priority || "Normal",
         description: taskDef.description || `Auto-created by pipeline advance to "${nextStage.stage_name}"`,
-        status: "todo",
+        status: "To Do",
         account_id: delivery.account_id,
         deal_id: delivery.deal_id,
         service_id: delivery.id,
@@ -312,10 +312,10 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_tasks",
-    "Search tasks/tickets by status, priority, assignee, or category. Returns task ID, title, description, status (todo/in_progress/done/blocked), priority (urgente/normale/bassa), due date, assignee, and linked company name. Use this for task management and tracking work items.",
+    "Search tasks/tickets by status, priority, assignee, or category. Returns task ID, title, description, status (To Do/In Progress/Done/Waiting), priority (Urgent/High/Normal/Low), due date, assignee, and linked company name. Use this for task management and tracking work items.",
     {
-      status: z.string().optional().describe("Task status (e.g., todo, in_progress, done, blocked)"),
-      priority: z.string().optional().describe("Priority (urgente, normale, bassa)"),
+      status: z.string().optional().describe("Task status (e.g., To Do, In Progress, Done, Waiting)"),
+      priority: z.string().optional().describe("Priority (Urgent, High, Normal, Low)"),
       assigned_to: z.string().optional().describe("Assignee name"),
       category: z.string().optional().describe("Task category"),
       account_id: z.string().optional().describe("Filter by account UUID"),
