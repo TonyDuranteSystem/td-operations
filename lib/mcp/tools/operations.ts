@@ -791,6 +791,7 @@ export function registerOperationsTools(server: McpServer) {
 
         // 7. Create auto-tasks (unless skipped)
         const createdTasks: string[] = []
+        const failedTasks: { title: string; error: string }[] = []
         if (!skip_tasks && targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
           for (const taskDef of targetStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
             const { error: tErr } = await supabaseAdmin
@@ -807,21 +808,32 @@ export function registerOperationsTools(server: McpServer) {
                 delivery_id: delivery.id,
                 stage_order: targetStage.stage_order,
               })
-            if (!tErr) createdTasks.push(taskDef.title)
+            if (tErr) {
+              failedTasks.push({ title: taskDef.title, error: tErr.message })
+            } else {
+              createdTasks.push(taskDef.title)
+            }
           }
         }
 
-        // 8. Format response
+        // 8. Format response with structured status
+        const overallStatus = failedTasks.length > 0 ? "partial" : "success"
+        const statusIcon = failedTasks.length > 0 ? "⚠️" : "✅"
         const lines = [
-          `✅ Advanced to: **${targetStage.stage_name}** (stage ${targetStage.stage_order}/${stages.length})`,
+          `${statusIcon} Advanced to: **${targetStage.stage_name}** (stage ${targetStage.stage_order}/${stages.length})`,
           `📋 Service: ${delivery.service_name || delivery.service_type}`,
           `🔄 From: ${delivery.stage || "New"} → ${targetStage.stage_name}`,
+          `Overall: ${overallStatus}`,
         ]
         if (targetStage.sla_days) lines.push(`⏱️ SLA: ${targetStage.sla_days} days`)
         if (targetStage.requires_approval) lines.push(`🔒 This stage requires approval before advancing`)
         if (createdTasks.length > 0) {
           lines.push(`\n📝 Auto-created ${createdTasks.length} tasks:`)
-          for (const t of createdTasks) lines.push(`  • ${t}`)
+          for (const t of createdTasks) lines.push(`  ✅ ${t}`)
+        }
+        if (failedTasks.length > 0) {
+          lines.push(`\n❌ Failed to create ${failedTasks.length} tasks:`)
+          for (const t of failedTasks) lines.push(`  ❌ ${t.title} — ${t.error}`)
         }
         if (isCompleted) lines.push(`\n🎉 Service delivery marked as COMPLETED`)
 

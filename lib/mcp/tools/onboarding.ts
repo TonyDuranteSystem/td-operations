@@ -532,14 +532,23 @@ export function registerOnboardingTools(server: McpServer) {
             lines.push(`⚠️ Cannot enqueue background job: missing contact_id (${contactId}) or account_id (${accountId})`)
           }
 
-          // Summary
+          // Summary with structured status
+          const hasContact = !!contactId
+          const hasAccount = !!accountId
+          const phase1Status = hasContact && hasAccount ? "success" : (!hasContact && !hasAccount ? "error" : "partial")
+          const overallIcon = phase1Status === "success" ? "✅" : phase1Status === "partial" ? "⚠️" : "❌"
+
           lines.push("")
           lines.push("───────────────────────────────────")
-          lines.push("SUMMARY")
-          lines.push(`   Contact: ${contactId || "FAILED"}`)
-          lines.push(`   Account: ${accountId || "FAILED"}`)
+          lines.push(`${overallIcon} SUMMARY (Phase 1: ${phase1Status})`)
+          lines.push(`   ${hasContact ? "✅" : "❌"} Contact: ${contactId || "FAILED"}`)
+          lines.push(`   ${hasAccount ? "✅" : "❌"} Account: ${accountId || "FAILED"}`)
           lines.push(`   Company: ${companyName || "(unknown)"}`)
-          lines.push(`   Background job: Drive, Lease, Tasks, Tax, Portal, Lead, Form`)
+          if (hasContact && hasAccount) {
+            lines.push(`   ✅ Background job: Drive, Lease, Tasks, Tax, Portal, Lead, Form`)
+          } else {
+            lines.push(`   ❌ Background job NOT enqueued — fix Contact/Account first, then re-run with apply_changes=true`)
+          }
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
