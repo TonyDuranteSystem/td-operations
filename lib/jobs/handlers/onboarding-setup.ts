@@ -172,7 +172,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
         const { data: leaseAccount } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, ein, state_of_formation")
+          .select("id, company_name, ein_number, state_of_formation")
           .eq("id", account_id)
           .single()
 
@@ -187,7 +187,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
               account_id,
               contact_id,
               tenant_company: leaseAccount.company_name,
-              tenant_ein: leaseAccount.ein || null,
+              tenant_ein: leaseAccount.ein_number || null,
               tenant_state: leaseAccount.state_of_formation || null,
               tenant_contact_name: leaseContact.full_name,
               tenant_email: leaseContact.email || null,
@@ -255,7 +255,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             priority: td.priority,
             status: "To Do",
             account_id,
-            created_by: "claude",
+            created_by: "Claude",
           })
         if (taskErr) {
           result.steps.push(step(`task:${td.assigned_to}`, "error", taskErr.message))
