@@ -295,7 +295,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_form_create",
-    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (https://td-operations.vercel.app/tax-form/{token}). Use email_send or email_send_with_template to send the link to the client. Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120).",
+    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (https://td-operations.vercel.app/tax-form/{token}). Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use email_send or email_send_with_template to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
@@ -414,6 +414,7 @@ export function registerTaxTools(server: McpServer) {
         if (insErr) throw new Error(insErr.message)
 
         const url = `https://td-operations.vercel.app/tax-form/${token}`
+        const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
             type: "text" as const,
@@ -423,10 +424,12 @@ export function registerTaxTools(server: McpServer) {
               `   Contact: ${contact.full_name} (${contact.email})`,
               `   Docs: Articles ${hasArticles ? "✅" : "❌"} | EIN ${hasEin ? "✅" : "❌"}`,
               `   Token: ${token}`,
-              `   URL: ${url}`,
               `   ID: ${submission.id}`,
               "",
-              `Next: Send the URL to the client via email_send or email_send_with_template (template: tax-form-link-${formLang})`,
+              `   👁️ Admin Preview: ${adminPreviewUrl}`,
+              `   🔗 Client URL: ${url}`,
+              "",
+              `⚠️ Review the admin preview FIRST, then send the client URL via email_send or email_send_with_template (template: tax-form-link-${formLang})`,
             ].join("\n"),
           }],
         }
@@ -505,8 +508,12 @@ export function registerTaxTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
+        const formUrl = `https://td-operations.vercel.app/tax-form/${data.token}`
+        const adminPreviewUrl = `${formUrl}?preview=td`
+
         lines.push("")
-        lines.push(`   URL: https://td-operations.vercel.app/tax-form/${data.token}`)
+        lines.push(`   👁️ Admin Preview: ${adminPreviewUrl}`)
+        lines.push(`   🔗 Client URL: ${formUrl}`)
         lines.push(`   ID: ${data.id}`)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

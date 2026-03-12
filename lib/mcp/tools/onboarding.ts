@@ -15,7 +15,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_create",
-    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (https://td-operations.vercel.app/onboarding-form/{token}). Use email_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
+    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (https://td-operations.vercel.app/onboarding-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use email_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
     {
       lead_id: z.string().uuid().describe("Lead UUID"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type (default: SMLLC)"),
@@ -132,6 +132,7 @@ export function registerOnboardingTools(server: McpServer) {
         if (insErr) throw new Error(insErr.message)
 
         const url = `https://td-operations.vercel.app/onboarding-form/${token}`
+        const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
             type: "text" as const,
@@ -140,10 +141,12 @@ export function registerOnboardingTools(server: McpServer) {
               `   Entity: ${entity_type || "SMLLC"} | State: ${state || "NM"} | Lang: ${formLang}`,
               `   Lead: ${lead.full_name} (${lead.email})`,
               `   Token: ${token}`,
-              `   URL: ${url}`,
               `   ID: ${submission.id}`,
               "",
-              `Next: Send the URL to the client via email_send`,
+              `   👁️ Admin Preview: ${adminPreviewUrl}`,
+              `   🔗 Client URL: ${url}`,
+              "",
+              `⚠️ Review the admin preview FIRST, then send the client URL via email_send`,
             ].join("\n"),
           }],
         }
@@ -218,8 +221,12 @@ export function registerOnboardingTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
+        const formUrl = `https://td-operations.vercel.app/onboarding-form/${data.token}`
+        const adminPreviewUrl = `${formUrl}?preview=td`
+
         lines.push("")
-        lines.push(`   URL: https://td-operations.vercel.app/onboarding-form/${data.token}`)
+        lines.push(`   👁️ Admin Preview: ${adminPreviewUrl}`)
+        lines.push(`   🔗 Client URL: ${formUrl}`)
         lines.push(`   ID: ${data.id}`)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

@@ -14,7 +14,7 @@ export function registerFormationTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "formation_form_create",
-    "Create a formation data collection form for a new LLC client. Pre-fills owner info from the lead record. Entity type (SMLLC/MMLLC) and state are set as metadata — decided during the call, not by the client. Returns the form URL (https://td-operations.vercel.app/formation-form/{token}). Use email_send to send the link to the client.",
+    "Create a formation data collection form for a new LLC client. Pre-fills owner info from the lead record. Entity type (SMLLC/MMLLC) and state are set as metadata — decided during the call, not by the client. Returns the form URL (https://td-operations.vercel.app/formation-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use email_send to send the link to the client.",
     {
       lead_id: z.string().uuid().describe("Lead UUID — the client who paid for formation"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type decided during call (default: SMLLC)"),
@@ -99,6 +99,7 @@ export function registerFormationTools(server: McpServer) {
         if (insErr) throw new Error(insErr.message)
 
         const url = `https://td-operations.vercel.app/formation-form/${token}`
+        const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
             type: "text" as const,
@@ -107,10 +108,12 @@ export function registerFormationTools(server: McpServer) {
               `   Entity: ${entity_type || "SMLLC"} | State: ${state || "NM"} | Lang: ${formLang}`,
               `   Lead: ${lead.full_name} (${lead.email})`,
               `   Token: ${token}`,
-              `   URL: ${url}`,
               `   ID: ${submission.id}`,
               "",
-              `Next: Send the URL to the client via email_send`,
+              `   👁️ Admin Preview: ${adminPreviewUrl}`,
+              `   🔗 Client URL: ${url}`,
+              "",
+              `⚠️ Review the admin preview FIRST, then send the client URL via email_send`,
             ].join("\n"),
           }],
         }
@@ -186,8 +189,12 @@ export function registerFormationTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
+        const formUrl = `https://td-operations.vercel.app/formation-form/${data.token}`
+        const adminPreviewUrl = `${formUrl}?preview=td`
+
         lines.push("")
-        lines.push(`   URL: https://td-operations.vercel.app/formation-form/${data.token}`)
+        lines.push(`   👁️ Admin Preview: ${adminPreviewUrl}`)
+        lines.push(`   🔗 Client URL: ${formUrl}`)
         lines.push(`   ID: ${data.id}`)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

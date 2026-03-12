@@ -14,7 +14,7 @@ export function registerBankingFormTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "banking_form_create",
-    "Create a Payset EUR banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Use gmail_send or email_send to send the link to the client.",
+    "Create a Payset EUR banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send or email_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
@@ -105,6 +105,7 @@ export function registerBankingFormTools(server: McpServer) {
         if (insErr) throw new Error(insErr.message)
 
         const url = `https://td-operations.vercel.app/banking-form/${token}`
+        const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
             type: "text" as const,
@@ -113,10 +114,12 @@ export function registerBankingFormTools(server: McpServer) {
               `   Contact: ${contact.first_name || ""} ${contact.last_name || ""} (${contact.email || ""})`,
               `   Lang: ${formLang}`,
               `   Token: ${token}`,
-              `   URL: ${url}`,
               `   ID: ${submission.id}`,
               "",
-              `Next: Send the URL to the client via gmail_send or email_send`,
+              `   👁️ Admin Preview: ${adminPreviewUrl}`,
+              `   🔗 Client URL: ${url}`,
+              "",
+              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send or email_send`,
             ].join("\n"),
           }],
         }
@@ -192,8 +195,12 @@ export function registerBankingFormTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
+        const formUrl = `https://td-operations.vercel.app/banking-form/${data.token}`
+        const adminPreviewUrl = `${formUrl}?preview=td`
+
         lines.push("")
-        lines.push(`   URL: https://td-operations.vercel.app/banking-form/${data.token}`)
+        lines.push(`   👁️ Admin Preview: ${adminPreviewUrl}`)
+        lines.push(`   🔗 Client URL: ${formUrl}`)
         lines.push(`   ID: ${data.id}`)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

@@ -33,7 +33,9 @@ Suite number format: "3D-XXX" (e.g. 3D-107). REQUIRED — each client gets a uni
 
 The lease is created as 'draft'. Use lease_send to approve and create the Gmail draft.
 
-Workflow: lease_create → lease_get (review) → lease_send → client views → signs → PDF saved.`,
+Admin preview: append ?preview=td to the lease URL (WITHOUT the ?c= access code) to bypass the email gate. Example: https://td-operations.vercel.app/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before sending.
+
+Workflow: lease_create → lease_get (review with admin preview link) → lease_send → client views → signs → PDF saved.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       suite_number: z.string().describe("Suite number assigned to tenant (e.g. '3D-107'). REQUIRED."),
@@ -154,6 +156,8 @@ Workflow: lease_create → lease_get (review) → lease_send → client views �
           details: { token: lease.token, suite_number: params.suite_number, year },
         })
 
+        const adminPreviewUrl = `${LEASE_BASE_URL}/${lease.token}?preview=td`
+
         const lines = [
           `✅ Lease Agreement created for **${account.company_name}**`,
           ``,
@@ -164,9 +168,10 @@ Workflow: lease_create → lease_get (review) → lease_send → client views �
           `Deposit: $${params.security_deposit ?? 150}`,
           `Status: draft`,
           ``,
-          `🔗 URL: ${leaseUrl}`,
+          `👁️ Admin Preview: ${adminPreviewUrl}`,
+          `🔗 Client URL: ${leaseUrl}`,
           ``,
-          `Next: use **lease_send** to approve and create Gmail draft.`,
+          `⚠️ Review the admin preview FIRST, then use **lease_send** to send to the client.`,
         ]
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -211,6 +216,7 @@ Workflow: lease_create → lease_get (review) → lease_send → client views �
         }
 
         const url = `${LEASE_BASE_URL}/${data.token}?c=${data.access_code}`
+        const adminPreviewUrl = `${LEASE_BASE_URL}/${data.token}?preview=td`
 
         const lines = [
           `📄 **Office Lease Agreement**`,
@@ -236,7 +242,8 @@ Workflow: lease_create → lease_get (review) → lease_send → client views �
           data.signed_at ? `✅ Signed: ${data.signed_at}` : '⏳ Not signed yet',
           data.pdf_storage_path ? `PDF: ${data.pdf_storage_path}` : null,
           ``,
-          `🔗 URL: ${url}`,
+          `👁️ Admin Preview: ${adminPreviewUrl}`,
+          `🔗 Client URL: ${url}`,
         ].filter(Boolean)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
