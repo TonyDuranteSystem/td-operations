@@ -57,6 +57,7 @@ export default function LeasePage() {
   const searchParams = useSearchParams()
   const accessCode = searchParams.get('c') || ''
 
+  const [isAdmin, setIsAdmin] = useState(false)
   const [lease, setLease] = useState<LeaseAgreement | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -76,6 +77,14 @@ export default function LeasePage() {
   // ─── LOAD LEASE ───
   const loadLease = useCallback(async () => {
     if (!token) return
+
+    // Admin preview bypass
+    const adminMode = searchParams.get('preview') === 'td'
+    if (adminMode) {
+      setIsAdmin(true)
+      setVerified(true)
+    }
+
     const { data, error: err } = await supabasePublic
       .from('lease_agreements')
       .select('*')
@@ -88,7 +97,7 @@ export default function LeasePage() {
       return
     }
 
-    if (data.access_code !== accessCode) {
+    if (!adminMode && data.access_code !== accessCode) {
       setError('Invalid link.')
       setLoading(false)
       return
@@ -98,6 +107,8 @@ export default function LeasePage() {
     setSigned(!!data.signed_at)
     setLoading(false)
 
+    if (adminMode) return
+
     // Check email gate cookie
     if (!data.tenant_email) {
       setVerified(true)
@@ -105,7 +116,7 @@ export default function LeasePage() {
       const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`lease_verified_${token}=`))
       if (cookie) setVerified(true)
     }
-  }, [token, accessCode])
+  }, [token, accessCode, searchParams])
 
   useEffect(() => { loadLease() }, [loadLease])
 
@@ -290,6 +301,15 @@ export default function LeasePage() {
         ref={leaseBodyRef}
         style={{ maxWidth: 800, margin: '0 auto', background: '#fff', padding: '48px 56px', boxShadow: '0 1px 12px rgba(0,0,0,0.08)', lineHeight: 1.7, fontSize: 14, color: '#222' }}
       >
+        {/* Admin Preview Badge */}
+        {isAdmin && (
+          <div style={{ textAlign: 'center', marginBottom: -8 }}>
+            <span style={{ display: 'inline-block', background: '#f59e0b', color: '#fff', padding: '3px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>
+              ADMIN PREVIEW
+            </span>
+          </div>
+        )}
+
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 48, marginBottom: 16 }} />

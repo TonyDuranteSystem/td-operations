@@ -193,6 +193,13 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).
 
+## Form Admin Preview — MANDATORY RULE
+All client forms (formation, onboarding, tax, lease, banking, and any future forms) support \`?preview=td\` query parameter:
+- Appending \`?preview=td\` to any form URL skips the email verification gate and shows an "ADMIN PREVIEW" badge
+- **ALWAYS provide the preview link to Antonio for testing BEFORE sending to any client**
+- Never send a form link to a client without Antonio testing it first via preview
+- When building new forms, include the \`?preview=td\` bypass from the start
+
 ## Action Tracking Protocol — MANDATORY
 
 When a team member (Luca, Antonio, or anyone) communicates that an action has been completed (e.g., "LLC approved", "SS-4 sent", "EIN received", "documents uploaded"):

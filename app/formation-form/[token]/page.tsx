@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { LOGO_URL } from '@/lib/supabase/public-client'
 import {
@@ -42,8 +42,10 @@ function formatDateTime(d: string, lang: 'en' | 'it') {
 
 export default function FormationFormPage() {
   const params = useParams()
+  const searchParams = useSearchParams()
   const token = params.token as string
 
+  const [isAdmin, setIsAdmin] = useState(false)
   const [submission, setSubmission] = useState<FormationSubmission | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,6 +72,13 @@ export default function FormationFormPage() {
 
   const loadSubmission = useCallback(async () => {
     try {
+      // Admin preview bypass
+      const adminMode = searchParams.get('preview') === 'td'
+      if (adminMode) {
+        setIsAdmin(true)
+        setVerified(true)
+      }
+
       const { data, error: err } = await supabasePublic
         .from('formation_submissions')
         .select('*')
@@ -97,6 +106,8 @@ export default function FormationFormPage() {
 
       setLoading(false)
 
+      if (adminMode) return
+
       if (hasVerifiedCookie(token)) {
         setVerified(true)
       }
@@ -108,7 +119,7 @@ export default function FormationFormPage() {
       setError('load_error')
       setLoading(false)
     }
-  }, [token])
+  }, [token, searchParams])
 
   function trackOpen(sub: FormationSubmission) {
     if (sub.status === 'pending' || sub.status === 'sent') {
@@ -577,6 +588,15 @@ export default function FormationFormPage() {
             <button className={`tf-lang-btn ${lang === 'it' ? 'tf-lang-active' : ''}`} onClick={() => setLang('it')}>IT</button>
           </div>
         </div>
+
+        {/* Admin Preview Badge */}
+        {isAdmin && (
+          <div style={{ textAlign: 'center', marginBottom: -8 }}>
+            <span style={{ display: 'inline-block', background: '#f59e0b', color: '#fff', padding: '3px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>
+              ADMIN PREVIEW
+            </span>
+          </div>
+        )}
 
         {/* Hero */}
         <div className="tf-hero">

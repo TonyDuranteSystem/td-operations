@@ -53,6 +53,21 @@ Do this AUTOMATICALLY without Antonio having to explain what was being worked on
 - OAuth2 tokens in `qb_tokens` table, auto-refresh
 - Realm: `13845050572680403`
 
+### Forms (Client Data Collection)
+- All forms follow the same pattern: email gate → multi-step form → submit
+- Forms: `formation-form`, `onboarding-form`, `tax-form`, `lease`, `banking-form`
+- **Admin Preview**: Append `?preview=td` to ANY form URL to skip the email gate
+  - Shows an amber "ADMIN PREVIEW" badge at the top
+  - Does NOT trigger `trackOpen` (no false "opened" status in DB)
+  - For lease, also skips access code validation
+- **MANDATORY RULE**: When creating or modifying a form, ALWAYS provide Antonio the `?preview=td` link for testing BEFORE sending to the client. Never send a form to a client without Antonio testing it first.
+- **When building new forms**: Include the `?preview=td` bypass from the start. Pattern:
+  ```
+  const searchParams = useSearchParams()
+  const adminMode = searchParams.get('preview') === 'td'
+  if (adminMode) { setIsAdmin(true); setVerified(true); return }
+  ```
+
 ## Anti-Compaction Protocol — MANDATORY
 
 ### WHY THIS EXISTS
@@ -60,22 +75,19 @@ When the conversation gets long, Claude compresses old messages (compaction).
 After compaction, ALL context is lost unless it was saved to Supabase FIRST.
 This has already caused 2+ hours of lost recovery time. It WILL happen again if you don't save.
 
-### Rule: Save IMMEDIATELY after EVERY significant action
-NOT every 3-5 actions. NOT at end of session. AFTER EACH ONE.
-A "significant action" = any commit, deploy, DB change, config change, tool fix, or decision made.
+### Automatic Protection (hooks in `.claude/settings.json`)
+You have 4 hooks that fire automatically — you don't need to remember, the system reminds you:
+1. **PostToolUse** — Counts every tool call. After 5/10/15 calls without saving, you get a 🟡/🟠/🔴 reminder. Script: `.claude/hooks/checkpoint-counter.sh`. Counter resets when you call `session_checkpoint` or save to `dev_tasks`.
+2. **PreCompact** — Fires BEFORE context compaction. This is your LAST CHANCE to save. Save everything with specific details (files, IDs, values, next steps).
+3. **Stop** — Fires when you finish responding. Checks if you made significant changes and reminds you to save.
+4. **SessionStart** — Fires at session start. Reads `session-context`, queries `dev_tasks`, presents summary.
 
-You MUST create/update a `dev_tasks` record via `execute_sql`:
-- **IMMEDIATELY AFTER** each significant action (commit, fix, discovery, decision)
-- **BEFORE** any `git push` or deploy
-- **AT END** of every session, even if work is incomplete
-
-### Rule: Delegate heavy work to subagents
-Subagents write results to Supabase BEFORE returning to chat.
-This keeps the main conversation light and compaction-resistant.
-Use agent templates in `.claude/agents/` for batch ops, audits, reports.
-Pattern: agent writes to DB → returns max 10-15 line summary to chat.
-
-How to write to dev_tasks:
+### How to save (two methods)
+**PREFERRED — `session_checkpoint` via MCP** (one call, resets PostToolUse counter):
+```
+session_checkpoint({summary: "what you did", next_steps: "what's pending"})
+```
+**FALLBACK — `dev_tasks` via `execute_sql`** (for dev work needing detailed progress_log):
 ```sql
 INSERT INTO dev_tasks (title, status, priority, progress_log)
 VALUES ('Title', 'in_progress', 'high',
@@ -89,18 +101,24 @@ SET progress_log = '[updated JSON array]', status = 'done', updated_at = now()
 WHERE id = 'uuid';
 ```
 
-### What to save in progress_log
+### Rule: Save IMMEDIATELY after EVERY significant action
+NOT every 3-5 actions. NOT at end of session. AFTER EACH ONE.
+A "significant action" = any commit, deploy, DB change, config change, tool fix, or decision made.
+The PostToolUse hook will remind you, but don't wait for the reminder — save proactively.
+
+### What to save
 - What was built/changed (files, tools, DB changes)
 - What was deployed (commit hash)
 - What is PENDING (next steps, blockers, decisions needed)
 - Any credentials or config added (reference, not values)
+- Be SPECIFIC: file paths, line numbers, IDs, exact values — after compaction this is all you have.
 
 ### Recovery after compaction
 1. Read this file (CLAUDE.md)
 2. `SELECT * FROM dev_tasks WHERE status = 'in_progress' ORDER BY updated_at DESC`
 3. Read progress_log to understand what was done
 4. `sysdoc_read('session-context')` for system state
-5. Resume from last checkpoint
+5. Resume from last checkpoint — do NOT ask Antonio to repeat information.
 
 ### For operational work (non-dev)
 Use `sysdoc_create` with slug `ops-YYYY-MM-DD-topic` to log what was done.
@@ -111,8 +129,13 @@ Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summa
 
 ### Key tables for dev context
 - `dev_tasks` — Issue tracker for development work (NOT client tasks)
+- `session_checkpoints` — Quick saves from session_checkpoint tool
+- `action_log` — Automatic audit trail of all MCP write operations
 - `system_docs` — Session context, project-state, tech-stack
 - `knowledge_articles` — Business rules (59 articles)
+
+### Claude.ai equivalent
+For Claude.ai (MCP), the same system exists as middleware in `lib/mcp/reminder.ts` — it injects reminders directly into tool responses after 5/10/15 calls. The `session_checkpoint` MCP tool saves to `session_checkpoints` and resets the counter.
 
 ## Business Rules
 All business rules live on Supabase in `knowledge_articles` (57) and `sop_runbooks` (14).
