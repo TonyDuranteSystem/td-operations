@@ -11,6 +11,126 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
+// ─── Auto-advance pipeline when all stage tasks are Done ─────
+async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
+  // 1. Get the completed task
+  const { data: task } = await supabaseAdmin
+    .from("tasks")
+    .select("service_id, stage_order, status")
+    .eq("id", taskId)
+    .single()
+
+  if (!task?.service_id || task.stage_order == null) return null
+  if (task.status !== "Done") return null
+
+  // 2. Get the service delivery — must be active and at the same stage
+  const { data: delivery } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("id, service_name, service_type, stage, stage_order, stage_history, status, account_id, deal_id")
+    .eq("id", task.service_id)
+    .single()
+
+  if (!delivery || delivery.status !== "active") return null
+  if (delivery.stage_order !== task.stage_order) return null
+
+  // 3. Check pipeline_stage config
+  const { data: currentPipelineStage } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("auto_advance, requires_approval, stage_name")
+    .eq("service_type", delivery.service_type)
+    .eq("stage_order", delivery.stage_order)
+    .single()
+
+  if (!currentPipelineStage) return null
+  if (currentPipelineStage.requires_approval) return null
+  if (currentPipelineStage.auto_advance === false) return null
+
+  // 4. Count incomplete sibling tasks for this stage
+  const { count } = await supabaseAdmin
+    .from("tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("service_id", task.service_id)
+    .eq("stage_order", task.stage_order)
+    .not("status", "in", '("Done","Cancelled")')
+
+  if ((count ?? 0) > 0) return null
+
+  // 5. All tasks done — find next stage
+  const { data: stages } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("*")
+    .eq("service_type", delivery.service_type)
+    .order("stage_order")
+
+  if (!stages?.length) return null
+
+  const nextStage = stages.find(s => s.stage_order > delivery.stage_order!)
+  if (!nextStage) return null
+
+  // 6. Advance delivery (with optimistic lock on stage_order)
+  const historyEntry = {
+    from_stage: delivery.stage,
+    from_order: delivery.stage_order,
+    to_stage: nextStage.stage_name,
+    to_order: nextStage.stage_order,
+    advanced_at: new Date().toISOString(),
+    notes: "Auto-advanced: all stage tasks completed",
+  }
+  const stageHistory = Array.isArray(delivery.stage_history)
+    ? [...delivery.stage_history, historyEntry]
+    : [historyEntry]
+
+  const isFinal = !stages.find(s => s.stage_order > nextStage.stage_order)
+
+  const { error: advErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .update({
+      stage: nextStage.stage_name,
+      stage_order: nextStage.stage_order,
+      stage_entered_at: new Date().toISOString(),
+      stage_history: stageHistory,
+      status: isFinal ? "completed" : "active",
+      ...(isFinal ? { end_date: new Date().toISOString().split("T")[0] } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", delivery.id)
+    .eq("stage_order", delivery.stage_order) // optimistic lock
+
+  if (advErr) return null
+
+  // 7. Create auto-tasks for the new stage
+  const createdTasks: string[] = []
+  if (nextStage.auto_tasks && Array.isArray(nextStage.auto_tasks)) {
+    for (const taskDef of nextStage.auto_tasks as Array<{ title: string; assigned_to?: string; category?: string; priority?: string; description?: string }>) {
+      const { error: tErr } = await supabaseAdmin.from("tasks").insert({
+        task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
+        assigned_to: taskDef.assigned_to || "Luca",
+        category: taskDef.category || "Internal",
+        priority: taskDef.priority === "High" ? "urgente" : "normale",
+        description: taskDef.description || `Auto-created by pipeline advance to "${nextStage.stage_name}"`,
+        status: "todo",
+        account_id: delivery.account_id,
+        deal_id: delivery.deal_id,
+        service_id: delivery.id,
+        stage_order: nextStage.stage_order,
+      })
+      if (!tErr) createdTasks.push(taskDef.title)
+    }
+  }
+
+  logAction({
+    action_type: "advance",
+    table_name: "service_deliveries",
+    record_id: delivery.id,
+    account_id: delivery.account_id || undefined,
+    summary: `Auto-advanced: ${delivery.stage} → ${nextStage.stage_name} (all tasks completed)`,
+    details: { from_stage: delivery.stage, to_stage: nextStage.stage_name, tasks_created: createdTasks },
+  })
+
+  return `🔄 Auto-advanced "${delivery.service_name || delivery.service_type}": ${delivery.stage} → ${nextStage.stage_name}` +
+    (createdTasks.length > 0 ? ` (created ${createdTasks.length} new tasks)` : "")
+}
+
 export function registerCrmTools(server: McpServer) {
 
   // ═══════════════════════════════════════
@@ -565,10 +685,21 @@ export function registerCrmTools(server: McpServer) {
           details: { fields_changed: Object.keys(updates), new_values: updates },
         })
 
+        // Post-update hook: auto-advance pipeline when task marked Done
+        let autoAdvanceMsg = ""
+        if (table === "tasks" && updates.status === "Done") {
+          try {
+            const msg = await checkAndAutoAdvance(id)
+            if (msg) autoAdvanceMsg = `\n\n${msg}`
+          } catch {
+            // Non-blocking: don't fail the update if auto-advance errors
+          }
+        }
+
         return {
           content: [{
             type: "text" as const,
-            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}`,
+            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${autoAdvanceMsg}`,
           }],
         }
       } catch (err: any) {

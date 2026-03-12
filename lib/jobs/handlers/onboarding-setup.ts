@@ -224,8 +224,66 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     }
   }
 
-  // ─── 3. CREATE FOLLOW-UP TASKS ───
+  // ─── 3. CREATE SERVICE DELIVERY + FOLLOW-UP TASKS ───
+  let onboardingDeliveryId: string | null = null
   if (account_id && company_name) {
+    // 3a. Create or find Client Onboarding service delivery
+    try {
+      const { data: existingSD } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id")
+        .eq("account_id", account_id)
+        .eq("service_type", "Client Onboarding")
+        .eq("status", "active")
+        .maybeSingle()
+
+      if (existingSD) {
+        onboardingDeliveryId = existingSD.id
+        result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSD.id}`))
+      } else {
+        // Get stage 2 (Review & CRM Setup) since Magic Button IS the review
+        const { data: stage2 } = await supabaseAdmin
+          .from("pipeline_stages")
+          .select("stage_name, stage_order")
+          .eq("service_type", "Client Onboarding")
+          .eq("stage_order", 2)
+          .maybeSingle()
+
+        const stageName = stage2?.stage_name || "Review & CRM Setup"
+        const stageOrder = stage2?.stage_order || 2
+
+        const { data: newSD, error: sdErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .insert({
+            service_name: `Client Onboarding - ${company_name}`,
+            service_type: "Client Onboarding",
+            pipeline: "Client Onboarding",
+            stage: stageName,
+            stage_order: stageOrder,
+            stage_entered_at: now,
+            stage_history: [{ to_stage: stageName, to_order: stageOrder, advanced_at: now, notes: "Created by Magic Button (skipped Data Collection)" }],
+            account_id,
+            contact_id: contact_id || null,
+            status: "active",
+            start_date: today,
+            assigned_to: "Luca",
+          })
+          .select("id")
+          .single()
+
+        if (sdErr || !newSD) {
+          result.steps.push(step("service_delivery", "error", sdErr?.message || "unknown"))
+        } else {
+          onboardingDeliveryId = newSD.id
+          result.steps.push(step("service_delivery", "ok", `Created: ${newSD.id} (stage: ${stageName})`))
+        }
+      }
+      await updateJobProgress(job.id, result)
+    } catch (e) {
+      result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
+    }
+
+    // 3b. Create follow-up tasks linked to service delivery
     const taskDefs = [
       { title: `Create WhatsApp group — ${company_name}`, assigned_to: "Luca", category: "Client Communication", priority: "High" },
       { title: `Review and send lease agreement — ${company_name}`, assigned_to: "Antonio", category: "Document", priority: "High" },
@@ -256,6 +314,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             status: "To Do",
             account_id,
             created_by: "Claude",
+            service_id: onboardingDeliveryId,
+            stage_order: 2, // Review & CRM Setup stage
           })
         if (taskErr) {
           result.steps.push(step(`task:${td.assigned_to}`, "error", taskErr.message))

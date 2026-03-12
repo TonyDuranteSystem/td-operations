@@ -18,6 +18,7 @@ import {
   moveFile,
   downloadFileContent,
   uploadBinaryToDrive,
+  trashFile,
 } from "@/lib/google-drive"
 import { getGmailAttachment } from "@/lib/gmail"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -583,6 +584,40 @@ export function registerDriveTools(server: McpServer) {
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `❌ Upload failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // drive_delete (trash)
+  // ═══════════════════════════════════════
+  server.tool(
+    "drive_delete",
+    "Move a file or folder to the trash on the Shared Drive. Uses soft-delete — the file can be restored from trash within 30 days. For permanent deletion, use the Google Drive web UI. Use drive_search or drive_list_folder to find the file ID first.",
+    {
+      file_id: z.string().describe("File or folder ID to trash"),
+    },
+    async ({ file_id }) => {
+      try {
+        const result = await trashFile(file_id)
+
+        logAction({
+          action_type: "delete",
+          table_name: "drive",
+          record_id: file_id,
+          summary: `Trashed Drive file: ${result.name || file_id}`,
+        })
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `🗑️ Trashed: ${result.name || file_id}\nFile moved to trash. Can be restored within 30 days.`,
+          }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Trash failed: ${error instanceof Error ? error.message : String(error)}` }],
         }
       }
     }

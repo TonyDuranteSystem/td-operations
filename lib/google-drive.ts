@@ -631,3 +631,32 @@ export async function downloadFileContent(fileId: string): Promise<string> {
 
   return res.text()
 }
+
+/**
+ * Trash a file (soft-delete, recoverable for 30 days)
+ */
+export async function trashFile(fileId: string): Promise<{ id: string; name: string }> {
+  const token = await getAccessToken()
+
+  const res = await fetch(
+    `${DRIVE_API}/files/${fileId}?supportsAllDrives=true`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ trashed: true }),
+    },
+  )
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(
+      `Drive trash ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`
+    )
+  }
+
+  const data = await res.json() as { id: string; name: string }
+  return { id: data.id, name: data.name }
+}
