@@ -261,8 +261,9 @@ export default function LeasePage() {
 
   if (!lease) return null
 
-  // Email gate
-  if (!verified) {
+  // Email gate (admin preview bypasses synchronously)
+  const isAdminPreview = searchParams.get('preview') === 'td'
+  if (!verified && !isAdminPreview) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>

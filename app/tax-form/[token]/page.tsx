@@ -564,8 +564,9 @@ export default function TaxFormPage() {
     </>
   )
 
-  // Email verification gate
-  if (!verified && submission.prefilled_data?.owner_email) {
+  // Email verification gate (admin preview bypasses synchronously)
+  const isAdminPreview = searchParams.get('preview') === 'td'
+  if (!verified && !isAdminPreview && submission.prefilled_data?.owner_email) {
     return (
       <>
         <TaxFormStyles />

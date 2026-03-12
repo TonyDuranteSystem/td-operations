@@ -481,8 +481,9 @@ export default function BankingFormPage() {
     </>
   )
 
-  // Email verification gate
-  if (!verified && submission.prefilled_data?.email) {
+  // Email verification gate (admin preview bypasses synchronously)
+  const isAdminPreview = searchParams.get('preview') === 'td'
+  if (!verified && !isAdminPreview && submission.prefilled_data?.email) {
     return (
       <>
         <BankingFormStyles />
