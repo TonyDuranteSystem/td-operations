@@ -201,13 +201,15 @@ export default function OfferPage() {
       setLang(o.language || 'it')
       setLoading(false)
 
-      // Check if already verified via cookie OR admin preview
-      if (hasVerifiedCookie(token) || isPreview) {
+      // Check if already verified via cookie, admin preview, or valid access code in URL
+      const hasValidCode = !!(accessCode && o.access_code && accessCode === o.access_code)
+      if (hasVerifiedCookie(token) || isPreview || hasValidCode) {
         setVerified(true)
+        if (hasValidCode) setVerifiedCookie(token) // persist for page reloads
       }
 
       // Track view (only once verified or no email gate needed)
-      if (hasVerifiedCookie(token) || !o.client_email || isPreview) {
+      if (hasVerifiedCookie(token) || !o.client_email || isPreview || hasValidCode) {
         trackView(o)
       }
     } catch {
