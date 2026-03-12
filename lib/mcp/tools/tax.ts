@@ -596,112 +596,36 @@ export function registerTaxTools(server: McpServer) {
         lines.push(`Submitted: ${sub.completed_at}`)
         lines.push(`Confirmation: ${sub.confirmation_accepted ? "✅ Accepted" : "❌ Not accepted"}`)
 
-        if (apply_changes && changeCount > 0) {
+        if (apply_changes) {
           lines.push("")
           lines.push("───────────────────────────────────")
-          lines.push("APPLYING CHANGES TO CRM...")
+          lines.push("ENQUEUING BACKGROUND JOB...")
           lines.push("")
 
-          // Map changed fields back to CRM tables
-          const contactUpdates: Record<string, unknown> = {}
-          const accountUpdates: Record<string, unknown> = {}
+          // Enqueue async job for CRM updates
+          const { enqueueJob } = await import("@/lib/jobs/queue")
+          const { id: jobId } = await enqueueJob({
+            job_type: "tax_form_setup",
+            payload: {
+              token: sub.token,
+              submission_id: sub.id,
+              contact_id: sub.contact_id || null,
+              account_id: sub.account_id || null,
+              tax_return_id: sub.tax_return_id || null,
+              changed_fields: changes,
+            },
+            priority: 1,
+            max_attempts: 3,
+            account_id: sub.account_id || undefined,
+            related_entity_type: "tax_return_submission",
+            related_entity_id: sub.id,
+            created_by: "claude",
+          })
 
-          const contactFieldMap: Record<string, string> = {
-            owner_first_name: "first_name",
-            owner_last_name: "last_name",
-            owner_email: "email",
-            owner_phone: "phone",
-            owner_country: "residency",
-            owner_tax_residency: "citizenship",
-          }
-
-          const accountFieldMap: Record<string, string> = {
-            llc_name: "company_name",
-            ein_number: "ein_number",
-            state_of_incorporation: "state_of_formation",
-          }
-
-          for (const [key, val] of Object.entries(changes!)) {
-            if (contactFieldMap[key]) contactUpdates[contactFieldMap[key]] = val.new
-            if (accountFieldMap[key]) accountUpdates[accountFieldMap[key]] = val.new
-          }
-
-          if (sub.contact_id && Object.keys(contactUpdates).length > 0) {
-            const { error: upErr } = await supabaseAdmin
-              .from("contacts")
-              .update({ ...contactUpdates, updated_at: new Date().toISOString() })
-              .eq("id", sub.contact_id)
-            if (upErr) {
-              lines.push(`❌ Contact update failed: ${upErr.message}`)
-            } else {
-              lines.push(`✅ Contact updated: ${Object.keys(contactUpdates).join(", ")}`)
-            }
-          }
-
-          if (sub.account_id && Object.keys(accountUpdates).length > 0) {
-            const { error: upErr } = await supabaseAdmin
-              .from("accounts")
-              .update({ ...accountUpdates, updated_at: new Date().toISOString() })
-              .eq("id", sub.account_id)
-            if (upErr) {
-              lines.push(`❌ Account update failed: ${upErr.message}`)
-            } else {
-              lines.push(`✅ Account updated: ${Object.keys(accountUpdates).join(", ")}`)
-            }
-          }
-
-          // Update tax_returns record
-          if (sub.tax_return_id) {
-            const { error: trErr } = await supabaseAdmin
-              .from("tax_returns")
-              .update({
-                data_received: true,
-                data_received_date: new Date().toISOString().slice(0, 10),
-                status: "Data Received",
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", sub.tax_return_id)
-            if (trErr) {
-              lines.push(`❌ Tax return update failed: ${trErr.message}`)
-            } else {
-              lines.push(`✅ Tax return marked as "Data Received"`)
-            }
-          }
-
-          // Mark form as reviewed
-          await supabaseAdmin
-            .from("tax_return_submissions")
-            .update({
-              status: "reviewed",
-              reviewed_at: new Date().toISOString(),
-              reviewed_by: "claude",
-            })
-            .eq("id", sub.id)
-          lines.push(`✅ Form marked as reviewed`)
-        } else if (apply_changes && changeCount === 0) {
-          // Just mark as reviewed
-          await supabaseAdmin
-            .from("tax_return_submissions")
-            .update({
-              status: "reviewed",
-              reviewed_at: new Date().toISOString(),
-              reviewed_by: "claude",
-            })
-            .eq("id", sub.id)
-
-          if (sub.tax_return_id) {
-            await supabaseAdmin
-              .from("tax_returns")
-              .update({
-                data_received: true,
-                data_received_date: new Date().toISOString().slice(0, 10),
-                status: "Data Received",
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", sub.tax_return_id)
-          }
+          lines.push(`✅ Background job enqueued: ${jobId}`)
+          lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
           lines.push("")
-          lines.push(`✅ Form marked as reviewed. Tax return: Data Received.`)
+          lines.push(`➡️ Check progress: job_status('${jobId}')`)
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

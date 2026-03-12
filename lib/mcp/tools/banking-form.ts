@@ -14,13 +14,14 @@ export function registerBankingFormTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "banking_form_create",
-    "Create a Payset EUR banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send or email_send to send the link to the client.",
+    "Create a banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Providers: 'payset' (EUR IBAN, default) or 'relay' (USD business account). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send or email_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
       language: z.enum(["en", "it"]).optional().describe("Form language (auto-detected from contact.language if omitted)"),
+      provider: z.enum(["payset", "relay"]).optional().default("payset").describe("Banking provider: 'payset' (EUR IBAN, default) or 'relay' (USD business account)"),
     },
-    async ({ account_id, contact_id, language }) => {
+    async ({ account_id, contact_id, language, provider }) => {
       try {
         // 1. Get account data
         const { data: account, error: acctErr } = await supabaseAdmin
@@ -62,14 +63,15 @@ export function registerBankingFormTools(server: McpServer) {
           email: contact.email || "",
         }
 
-        // 5. Generate token
+        // 5. Generate token (includes provider prefix for uniqueness)
         const slug = (account.company_name || "form")
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, "-")
           .replace(/^-|-$/g, "")
           .slice(0, 30)
         const year = new Date().getFullYear()
-        const token = `bank-${slug}-${year}`
+        const providerPrefix = provider === "payset" ? "bank" : provider
+        const token = `${providerPrefix}-${slug}-${year}`
 
         // 6. Check for existing submission
         const { data: existing } = await supabaseAdmin
@@ -96,6 +98,7 @@ export function registerBankingFormTools(server: McpServer) {
             token,
             account_id,
             contact_id: resolvedContactId,
+            provider,
             language: formLang,
             prefilled_data: prefilled,
             status: "pending",
@@ -111,6 +114,7 @@ export function registerBankingFormTools(server: McpServer) {
             type: "text" as const,
             text: [
               `✅ Banking form created for ${account.company_name}`,
+              `   Provider: ${provider.toUpperCase()} (${provider === "payset" ? "EUR IBAN" : "USD Business"})`,
               `   Contact: ${contact.first_name || ""} ${contact.last_name || ""} (${contact.email || ""})`,
               `   Lang: ${formLang}`,
               `   Token: ${token}`,
@@ -170,6 +174,7 @@ export function registerBankingFormTools(server: McpServer) {
         const lines = [
           `📋 Banking Form: ${data.token}`,
           `   Account: ${accountName}`,
+          `   Provider: ${(data.provider || "payset").toUpperCase()}`,
           `   Lang: ${data.language}`,
           `   Status: ${data.status}`,
           "",
@@ -251,6 +256,7 @@ export function registerBankingFormTools(server: McpServer) {
         const lines = [
           `═══════════════════════════════════════`,
           `  📋 BANKING FORM REVIEW: ${accountName}`,
+          `  Provider: ${(sub.provider || "payset").toUpperCase()}`,
           `  Language: ${sub.language}`,
           `═══════════════════════════════════════`,
           "",

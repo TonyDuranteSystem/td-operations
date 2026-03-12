@@ -6,69 +6,6 @@
 
 const HUBSPOT_API = "https://api.hubapi.com"
 
-// Map Supabase state names → HubSpot lowercase codes
-const STATE_CODE_MAP: Record<string, string> = {
-  wyoming: "wy",
-  florida: "fl",
-  delaware: "de",
-  "new mexico": "nm",
-  texas: "tx",
-  nevada: "nv",
-  california: "ca",
-  "new york": "ny",
-  colorado: "co",
-  georgia: "ga",
-  illinois: "il",
-  ohio: "oh",
-  pennsylvania: "pa",
-  arizona: "az",
-  washington: "wa",
-  oregon: "or",
-  montana: "mt",
-  utah: "ut",
-  idaho: "id",
-  "south dakota": "sd",
-  "north carolina": "nc",
-  virginia: "va",
-  maryland: "md",
-  massachusetts: "ma",
-  connecticut: "ct",
-  "new jersey": "nj",
-  tennessee: "tn",
-  michigan: "mi",
-  minnesota: "mn",
-  wisconsin: "wi",
-  indiana: "in",
-  missouri: "mo",
-  alabama: "al",
-  louisiana: "la",
-  "south carolina": "sc",
-  kentucky: "ky",
-  oklahoma: "ok",
-  iowa: "ia",
-  arkansas: "ar",
-  mississippi: "ms",
-  kansas: "ks",
-  nebraska: "ne",
-  "west virginia": "wv",
-  hawaii: "hi",
-  alaska: "ak",
-  maine: "me",
-  "new hampshire": "nh",
-  vermont: "vt",
-  "rhode island": "ri",
-  "north dakota": "nd",
-}
-
-// HubSpot state_of_formation dropdown only has: wy, fl, de, nm, other
-const HUBSPOT_ALLOWED_STATES = new Set(["wy", "fl", "de", "nm"])
-
-function stateToCode(state: string): string {
-  const code = STATE_CODE_MAP[state.toLowerCase()]
-  if (!code) return "other"
-  return HUBSPOT_ALLOWED_STATES.has(code) ? code : "other"
-}
-
 function getToken(): string {
   const pat = process.env.HUBSPOT_PAT
   if (!pat) throw new Error("HUBSPOT_PAT not configured")
@@ -136,10 +73,10 @@ export async function upsertCompany(account: SupabaseAccount): Promise<string> {
   }
 
   if (account.ein_number) properties.ein_number = account.ein_number
-  if (account.state_of_formation) properties.state_of_formation = stateToCode(account.state_of_formation)
+  if (account.state_of_formation) properties.state_of_formation = account.state_of_formation
   if (account.formation_date) properties.incorporation_date = account.formation_date
   if (account.physical_address) properties.business_address = account.physical_address
-  if (account.entity_type) properties.company_type_td = account.entity_type
+  if (account.entity_type) properties.industry = account.entity_type
 
   if (searchResult.total > 0) {
     // Update existing

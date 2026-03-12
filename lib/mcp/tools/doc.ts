@@ -1626,12 +1626,22 @@ export function registerDocTools(server: McpServer) {
                 .eq("id", c.id)
             }
           }
+
         }
 
         // 4. Summary
         const toGreen = changes.filter(c => c.newHealth === "green").length
         const toYellow = changes.filter(c => c.newHealth === "yellow").length
         const toRed = changes.filter(c => c.newHealth === "red").length
+
+        if (!dry_run && changes.length > 0) {
+          logAction({
+            action_type: "update",
+            table_name: "accounts",
+            summary: `Updated client_health for ${changes.length} accounts (green:${toGreen} yellow:${toYellow} red:${toRed})`,
+            details: { changed: changes.length, unchanged, toGreen, toYellow, toRed, greenThreshold: greenT, yellowThreshold: yellowT },
+          })
+        }
 
         const lines = [
           dry_run ? "🔍 Health Update Preview (DRY RUN)" : "✅ Health Updated",

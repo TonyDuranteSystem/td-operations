@@ -2,12 +2,74 @@
  * Banking Form Types — Field configs, bilingual labels, tooltips
  * Used by: app/banking-form/[token]/page.tsx, lib/mcp/tools/banking.ts
  *
- * Payset IBAN banking application form (2 steps):
+ * Multi-provider banking application form (2 steps):
  *   Step 1: Personal Information
  *   Step 2: Business Information & Documents
  *
+ * Providers: payset (EUR IBAN), relay (USD), future others.
  * No entity type variation — all fields apply to all submissions.
  */
+
+// ─── Provider Config ─────────────────────────────────────────
+
+export type BankingProvider = 'payset' | 'relay'
+
+export interface ProviderConfig {
+  id: BankingProvider
+  currency: string
+  labels: {
+    en: { title: string; subtitle: string; disclaimer: string; successMessage: string; monthlyVolumeLabel: string }
+    it: { title: string; subtitle: string; disclaimer: string; successMessage: string; monthlyVolumeLabel: string }
+  }
+}
+
+export const PROVIDERS: Record<BankingProvider, ProviderConfig> = {
+  payset: {
+    id: 'payset',
+    currency: 'EUR',
+    labels: {
+      en: {
+        title: 'EUR Banking Application',
+        subtitle: 'Payset IBAN Account',
+        disclaimer: 'I confirm that the information provided is accurate and complete. I understand that Tony Durante LLC will use this data to apply for a EUR IBAN account with Payset on behalf of my company.',
+        successMessage: 'Your information has been received. We will schedule a live session to complete the Payset IBAN application together.',
+        monthlyVolumeLabel: 'Expected Monthly Volume (EUR)',
+      },
+      it: {
+        title: 'Richiesta Conto EUR',
+        subtitle: 'Conto IBAN Payset',
+        disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC utilizzerà questi dati per richiedere un conto IBAN EUR con Payset per conto della mia azienda.',
+        successMessage: 'Le tue informazioni sono state ricevute. Pianificheremo una sessione dal vivo per completare insieme la richiesta IBAN Payset.',
+        monthlyVolumeLabel: 'Volume Mensile Previsto (EUR)',
+      },
+    },
+  },
+  relay: {
+    id: 'relay',
+    currency: 'USD',
+    labels: {
+      en: {
+        title: 'USD Banking Application',
+        subtitle: 'Relay Business Account',
+        disclaimer: 'I confirm that the information provided is accurate and complete. I understand that Tony Durante LLC will use this data to apply for a USD business account with Relay on behalf of my company.',
+        successMessage: 'Your information has been received. We will guide you through the Relay account setup process.',
+        monthlyVolumeLabel: 'Expected Monthly Volume (USD)',
+      },
+      it: {
+        title: 'Richiesta Conto USD',
+        subtitle: 'Conto Business Relay',
+        disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC utilizzerà questi dati per richiedere un conto business USD con Relay per conto della mia azienda.',
+        successMessage: 'Le tue informazioni sono state ricevute. Ti guideremo nel processo di apertura del conto Relay.',
+        monthlyVolumeLabel: 'Volume Mensile Previsto (USD)',
+      },
+    },
+  },
+}
+
+export function getProvider(id: string | null | undefined): ProviderConfig {
+  if (id && id in PROVIDERS) return PROVIDERS[id as BankingProvider]
+  return PROVIDERS.payset // default
+}
 
 // ─── DB Record ──────────────────────────────────────────────
 
@@ -16,6 +78,7 @@ export interface BankingSubmission {
   token: string
   account_id: string | null
   contact_id: string | null
+  provider: BankingProvider
   language: 'en' | 'it'
   prefilled_data: Record<string, unknown>
   submitted_data: Record<string, unknown>
@@ -86,7 +149,7 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'phone', type: 'phone', required: true, step: 2, prefillFrom: 'contacts.phone' },
   { key: 'email', type: 'email', required: true, step: 2, prefillFrom: 'contacts.email' },
   { key: 'crypto_transactions', type: 'select', required: true, step: 2, options: ['Yes', 'No'] },
-  { key: 'monthly_volume_eur', type: 'number', required: true, step: 2 },
+  { key: 'monthly_volume', type: 'number', required: true, step: 2 },
 ]
 
 // ─── Get fields for a specific step ─────────────────────────
@@ -100,8 +163,8 @@ export function getFieldsForStep(step: number): FieldConfig[] {
 export const LABELS = {
   en: {
     // Page chrome
-    title: 'EUR Banking Application',
-    subtitle: 'Payset IBAN Account',
+    title: 'Banking Application',
+    subtitle: 'Business Account',
     step: 'Step',
     of: 'of',
     next: 'Next',
@@ -146,7 +209,7 @@ export const LABELS = {
     phone: 'Phone Number',
     email: 'Email Address',
     crypto_transactions: 'Cryptocurrency Transactions',
-    monthly_volume_eur: 'Expected Monthly Volume (EUR)',
+    monthly_volume: 'Expected Monthly Volume',
 
     // Uploads
     proof_of_address: 'Proof of Address (utility bill or bank statement)',
@@ -155,12 +218,12 @@ export const LABELS = {
     uploadRequired: 'Required',
 
     // Disclaimer
-    disclaimer: 'I confirm that the information provided is accurate and complete. I understand that Tony Durante LLC will use this data to apply for a EUR IBAN account with Payset on behalf of my company.',
+    disclaimer: 'I confirm that the information provided is accurate and complete.',
     disclaimerRequired: 'You must accept the disclaimer to submit',
 
     // Success
     successTitle: 'Form Submitted Successfully!',
-    successMessage: 'Your information has been received. We will schedule a live session to complete the Payset IBAN application together.',
+    successMessage: 'Your information has been received.',
     successTimestamp: 'Submitted on',
 
     // Errors
@@ -173,8 +236,8 @@ export const LABELS = {
   },
   it: {
     // Page chrome
-    title: 'Richiesta Conto EUR',
-    subtitle: 'Conto IBAN Payset',
+    title: 'Richiesta Conto',
+    subtitle: 'Conto Business',
     step: 'Passo',
     of: 'di',
     next: 'Avanti',
@@ -219,7 +282,7 @@ export const LABELS = {
     phone: 'Telefono',
     email: 'Email',
     crypto_transactions: 'Transazioni in Criptovaluta',
-    monthly_volume_eur: 'Volume Mensile Previsto (EUR)',
+    monthly_volume: 'Volume Mensile Previsto',
 
     // Uploads
     proof_of_address: 'Prova di Residenza (bolletta o estratto conto)',
@@ -228,12 +291,12 @@ export const LABELS = {
     uploadRequired: 'Obbligatorio',
 
     // Disclaimer
-    disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC utilizzerà questi dati per richiedere un conto IBAN EUR con Payset per conto della mia azienda.',
+    disclaimer: 'Confermo che le informazioni fornite sono accurate e complete.',
     disclaimerRequired: 'Devi accettare la dichiarazione per inviare',
 
     // Success
     successTitle: 'Modulo Inviato con Successo!',
-    successMessage: 'Le tue informazioni sono state ricevute. Pianificheremo una sessione dal vivo per completare insieme la richiesta IBAN Payset.',
+    successMessage: 'Le tue informazioni sono state ricevute.',
     successTimestamp: 'Inviato il',
 
     // Errors
@@ -295,9 +358,9 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
     en: 'Does your business involve any cryptocurrency transactions?',
     it: 'La tua attività prevede transazioni in criptovaluta?',
   },
-  monthly_volume_eur: {
-    en: 'Expected monthly transaction volume in EUR through this account.',
-    it: 'Volume mensile previsto di transazioni in EUR attraverso questo conto.',
+  monthly_volume: {
+    en: 'Expected monthly transaction volume through this account.',
+    it: 'Volume mensile previsto di transazioni attraverso questo conto.',
   },
   proof_of_address: {
     en: 'Upload a utility bill or personal bank statement not older than 3 months.',

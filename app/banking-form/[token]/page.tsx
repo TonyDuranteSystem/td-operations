@@ -8,9 +8,11 @@ import {
   TOOLTIPS,
   STEPS,
   getFieldsForStep,
+  getProvider,
   type BankingSubmission,
   type FieldConfig,
   type LabelKey,
+  type ProviderConfig,
 } from '@/lib/types/banking-form'
 
 // ─── Cookie Helpers ─────────────────────────────────────────
@@ -61,8 +63,10 @@ export default function BankingFormPage() {
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({})
   const [isAdmin, setIsAdmin] = useState(false)
+  const [providerConfig, setProviderConfig] = useState<ProviderConfig>(getProvider('payset'))
 
   const L = LABELS[lang]
+  const PL = providerConfig.labels[lang]
 
   // ─── Load Submission ────────────────────────────────────
 
@@ -80,6 +84,7 @@ export default function BankingFormPage() {
       if (err || !data) { setError('not_found'); setLoading(false); return }
 
       const sub = data as BankingSubmission
+      setProviderConfig(getProvider(sub.provider))
 
       if (sub.status === 'completed' || sub.status === 'reviewed') {
         setSubmission(sub)
@@ -284,7 +289,7 @@ export default function BankingFormPage() {
 
   function renderField(field: FieldConfig) {
     const labelKey = field.key as LabelKey
-    const label = L[labelKey] || field.key
+    const label = field.key === 'monthly_volume' ? PL.monthlyVolumeLabel : (L[labelKey] || field.key)
     const value = formData[field.key] ?? ''
     const prefilled = isFieldPrefilled(field.key)
     const changed = isFieldChanged(field.key)
@@ -412,7 +417,7 @@ export default function BankingFormPage() {
             <div><strong>{L.business_name}:</strong> {String(formData.business_name || '\u2014')}</div>
             <div><strong>{L.business_type}:</strong> {String(formData.business_type || '\u2014')}</div>
             <div><strong>{L.business_model}:</strong> {String(formData.business_model || '\u2014')}</div>
-            <div><strong>{L.monthly_volume_eur}:</strong> {formData.monthly_volume_eur ? `${String(formData.monthly_volume_eur)} EUR` : '\u2014'}</div>
+            <div><strong>{PL.monthlyVolumeLabel}:</strong> {formData.monthly_volume ? `${String(formData.monthly_volume)} ${providerConfig.currency}` : '\u2014'}</div>
             <div><strong>{L.phone}:</strong> {String(formData.phone || '\u2014')}</div>
             <div><strong>{L.email}:</strong> {String(formData.email || '\u2014')}</div>
           </div>
@@ -427,7 +432,7 @@ export default function BankingFormPage() {
               onChange={e => setDisclaimerAccepted(e.target.checked)}
               className="tf-disclaimer-checkbox"
             />
-            <span>{L.disclaimer}</span>
+            <span>{PL.disclaimer}</span>
           </label>
         </div>
 
@@ -472,7 +477,7 @@ export default function BankingFormPage() {
           <img src={LOGO_URL} alt="Tony Durante LLC" className="tf-logo" />
           <div className="tf-success-icon">&#9989;</div>
           <h1>{L.successTitle}</h1>
-          <p>{L.successMessage}</p>
+          <p>{PL.successMessage}</p>
           {submission.completed_at && (
             <p className="tf-success-ts">{L.successTimestamp}: {formatDateTime(submission.completed_at, lang)}</p>
           )}
@@ -547,8 +552,8 @@ export default function BankingFormPage() {
         {/* Hero */}
         <div className="tf-hero">
           <div className="tf-hero-label">{heroLabel}</div>
-          <h1>{L.title}</h1>
-          <p className="tf-hero-sub">{L.subtitle}</p>
+          <h1>{PL.title}</h1>
+          <p className="tf-hero-sub">{PL.subtitle}</p>
         </div>
 
         {/* Progress Bar */}

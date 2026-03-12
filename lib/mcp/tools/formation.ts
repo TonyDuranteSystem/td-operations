@@ -305,59 +305,32 @@ export function registerFormationTools(server: McpServer) {
         if (apply_changes) {
           lines.push("")
           lines.push("───────────────────────────────────")
-          lines.push("APPLYING CHANGES TO CRM...")
+          lines.push("ENQUEUING BACKGROUND JOB...")
           lines.push("")
 
-          // Update contact with submitted data
-          if (sub.contact_id) {
-            const contactUpdates: Record<string, unknown> = {
-              first_name: submitted.owner_first_name || undefined,
-              last_name: submitted.owner_last_name || undefined,
-              email: submitted.owner_email || undefined,
-              phone: submitted.owner_phone || undefined,
-              citizenship: submitted.owner_nationality || undefined,
-              residency: submitted.owner_country || undefined,
-              updated_at: new Date().toISOString(),
-            }
-            // Remove undefined values
-            for (const k of Object.keys(contactUpdates)) {
-              if (contactUpdates[k] === undefined) delete contactUpdates[k]
-            }
+          // Enqueue async job for CRM updates
+          const { enqueueJob } = await import("@/lib/jobs/queue")
+          const { id: jobId } = await enqueueJob({
+            job_type: "formation_setup",
+            payload: {
+              token: sub.token,
+              submission_id: sub.id,
+              contact_id: sub.contact_id || null,
+              lead_id: sub.lead_id || null,
+              submitted_data: submitted,
+            },
+            priority: 1,
+            max_attempts: 3,
+            lead_id: sub.lead_id || undefined,
+            related_entity_type: "formation_submission",
+            related_entity_id: sub.id,
+            created_by: "claude",
+          })
 
-            const { error: upErr } = await supabaseAdmin
-              .from("contacts")
-              .update(contactUpdates)
-              .eq("id", sub.contact_id)
-            if (upErr) {
-              lines.push(`❌ Contact update failed: ${upErr.message}`)
-            } else {
-              lines.push(`✅ Contact updated: ${Object.keys(contactUpdates).filter(k => k !== "updated_at").join(", ")}`)
-            }
-          }
-
-          // Update lead status to Converted
-          if (sub.lead_id) {
-            const { error: leadErr } = await supabaseAdmin
-              .from("leads")
-              .update({ status: "Converted", updated_at: new Date().toISOString() })
-              .eq("id", sub.lead_id)
-            if (leadErr) {
-              lines.push(`❌ Lead update failed: ${leadErr.message}`)
-            } else {
-              lines.push(`✅ Lead marked as "Converted"`)
-            }
-          }
-
-          // Mark form as reviewed
-          await supabaseAdmin
-            .from("formation_submissions")
-            .update({
-              status: "reviewed",
-              reviewed_at: new Date().toISOString(),
-              reviewed_by: "claude",
-            })
-            .eq("id", sub.id)
-          lines.push(`✅ Form marked as reviewed`)
+          lines.push(`✅ Background job enqueued: ${jobId}`)
+          lines.push(`   Steps: Contact update → Lead → Converted → Form → reviewed`)
+          lines.push("")
+          lines.push(`➡️ Check progress: job_status('${jobId}')`)
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

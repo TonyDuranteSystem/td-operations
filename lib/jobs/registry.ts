@@ -5,15 +5,15 @@
 
 import type { Job, JobResult } from "./queue"
 import { handleOnboardingSetup } from "./handlers/onboarding-setup"
+import { handleFormationSetup } from "./handlers/formation-setup"
+import { handleTaxFormSetup } from "./handlers/tax-form-setup"
 
 type JobHandler = (job: Job) => Promise<JobResult>
 
 const handlers: Record<string, JobHandler> = {
   onboarding_setup: handleOnboardingSetup,
-  // Future handlers:
-  // formation_setup: handleFormationSetup,
-  // doc_bulk_process: handleDocBulkProcess,
-  // tax_form_setup: handleTaxFormSetup,
+  formation_setup: handleFormationSetup,
+  tax_form_setup: handleTaxFormSetup,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

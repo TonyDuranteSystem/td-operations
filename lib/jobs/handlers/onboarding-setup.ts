@@ -252,6 +252,33 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         const stageName = stage2?.stage_name || "Review & CRM Setup"
         const stageOrder = stage2?.stage_order || 2
 
+        // Resolve pricing from offer (if available)
+        let sdAmount: number | null = null
+        let sdCurrency = "USD"
+        if (p.lead_id) {
+          const { data: offer } = await supabaseAdmin
+            .from("offers")
+            .select("services")
+            .eq("lead_id", p.lead_id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          if (offer?.services && Array.isArray(offer.services)) {
+            // Prefer the recommended service, fallback to first
+            const svc = offer.services.find((s: Record<string, unknown>) => s.recommended) || offer.services[0]
+            if (svc?.price && typeof svc.price === "string") {
+              // Parse price strings like "EUR 2,300", "$1,500", "USD 900"
+              const match = svc.price.match(/^(EUR|USD|\$|€)?\s*([\d,.]+)$/i)
+              if (match) {
+                const currencyPart = (match[1] || "").toUpperCase()
+                sdCurrency = currencyPart === "EUR" || currencyPart === "€" ? "EUR" : "USD"
+                sdAmount = parseFloat(match[2].replace(/,/g, ""))
+              }
+            }
+          }
+        }
+
         const { data: newSD, error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
           .insert({
@@ -267,6 +294,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             status: "active",
             start_date: today,
             assigned_to: "Luca",
+            ...(sdAmount != null && { amount: sdAmount, amount_currency: sdCurrency }),
           })
           .select("id")
           .single()
