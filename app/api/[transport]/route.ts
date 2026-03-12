@@ -66,6 +66,7 @@ import { registerFormationTools } from "@/lib/mcp/tools/formation"
 import { registerOnboardingTools } from "@/lib/mcp/tools/onboarding"
 import { registerLeaseTools } from "@/lib/mcp/tools/lease"
 import { registerBankingFormTools } from "@/lib/mcp/tools/banking-form"
+import { registerJobTools } from "@/lib/mcp/tools/jobs"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -106,6 +107,7 @@ const handler = createMcpHandler(
     registerOnboardingTools(server)
     registerLeaseTools(server)
     registerBankingFormTools(server)
+    registerJobTools(server)
   },
   {
     capabilities: {},

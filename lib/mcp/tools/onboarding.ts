@@ -7,7 +7,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { createFolder, uploadBinaryToDrive } from "@/lib/google-drive"
 
 export function registerOnboardingTools(server: McpServer) {
 
@@ -343,21 +342,23 @@ export function registerOnboardingTools(server: McpServer) {
         if (apply_changes) {
           lines.push("")
           lines.push("───────────────────────────────────")
-          lines.push("APPLYING CHANGES — FULL CRM SETUP")
+          lines.push("APPLYING CHANGES — CRM SETUP + ASYNC JOB")
           lines.push("───────────────────────────────────")
           lines.push("")
 
           const now = new Date().toISOString()
-          const today = now.slice(0, 10)
           const entityTypeMapped = sub.entity_type === "SMLLC" ? "Single Member LLC" : "Multi Member LLC"
           const companyName = String(submitted.company_name || "").trim()
           const stateOfFormation = String(submitted.state_of_formation || sub.state || "").trim()
           let contactId: string | null = sub.contact_id || null
           let accountId: string | null = sub.account_id || null
 
+          // ═══════════════════════════════════════════════
+          // PHASE 1: FAST (inline) — Contact + Account + Link
+          // ═══════════════════════════════════════════════
+
           // ─── 1. CONTACT: find/create/update ───
           try {
-            // Try to find existing contact by ID or email
             if (!contactId && submitted.owner_email) {
               const { data: existingContact } = await supabaseAdmin
                 .from("contacts")
@@ -382,7 +383,6 @@ export function registerOnboardingTools(server: McpServer) {
             contactFields.updated_at = now
 
             if (contactId) {
-              // UPDATE existing contact
               const { error: upErr } = await supabaseAdmin
                 .from("contacts")
                 .update(contactFields)
@@ -390,10 +390,9 @@ export function registerOnboardingTools(server: McpServer) {
               if (upErr) {
                 lines.push(`❌ Contact update failed: ${upErr.message}`)
               } else {
-                lines.push(`✅ Contact updated (${contactId}): ${Object.keys(contactFields).filter(k => k !== "updated_at").join(", ")}`)
+                lines.push(`✅ Contact updated (${contactId})`)
               }
             } else {
-              // CREATE new contact
               if (!ownerFullName) throw new Error("Cannot create contact: owner name is empty")
               const { data: newContact, error: createErr } = await supabaseAdmin
                 .from("contacts")
@@ -432,7 +431,6 @@ export function registerOnboardingTools(server: McpServer) {
             acctFields.updated_at = now
 
             if (accountId) {
-              // UPDATE existing account
               const { error: acctErr } = await supabaseAdmin
                 .from("accounts")
                 .update(acctFields)
@@ -440,10 +438,9 @@ export function registerOnboardingTools(server: McpServer) {
               if (acctErr) {
                 lines.push(`❌ Account update failed: ${acctErr.message}`)
               } else {
-                lines.push(`✅ Account updated (${accountId}): ${Object.keys(acctFields).filter(k => k !== "updated_at").join(", ")}`)
+                lines.push(`✅ Account updated (${accountId})`)
               }
             } else {
-              // CREATE new account
               if (!companyName) throw new Error("Cannot create account: company name is empty")
               const { data: newAcct, error: acctCreateErr } = await supabaseAdmin
                 .from("accounts")
@@ -487,336 +484,45 @@ export function registerOnboardingTools(server: McpServer) {
             }
           }
 
-          // ─── 4. DRIVE FOLDER + DOCUMENT COPY ───
-          let driveFolderId: string | null = null
-          if (companyName && stateOfFormation) {
+          // ═══════════════════════════════════════════════
+          // PHASE 2: SLOW (async job) — Drive, Lease, Tasks, Tax, Portal, Lead, Form
+          // ═══════════════════════════════════════════════
+
+          if (contactId && accountId) {
             try {
-              // Map state name to Drive folder ID (TD Clients / Companies / {State})
-              const stateFolderMap: Record<string, string> = {
-                "New Mexico": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
-                "NM": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
-                "Wyoming": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
-                "WY": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
-                "Delaware": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
-                "DE": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
-                "Florida": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
-                "FL": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
-              }
-              const companiesRootId = "1Z32I4pDzX4enwqJQzolbFw7fK94ISuCb"
+              const { enqueueJob } = await import("@/lib/jobs/queue")
+              const { id: jobId } = await enqueueJob({
+                job_type: "onboarding_setup",
+                payload: {
+                  token,
+                  submission_id: sub.id,
+                  account_id: accountId,
+                  contact_id: contactId,
+                  lead_id: sub.lead_id,
+                  company_name: companyName,
+                  state_of_formation: stateOfFormation,
+                  entity_type: sub.entity_type,
+                  submitted_data: submitted,
+                  upload_paths: sub.upload_paths,
+                },
+                priority: 1,  // Highest priority
+                account_id: accountId,
+                lead_id: sub.lead_id || undefined,
+                related_entity_type: "onboarding_submission",
+                related_entity_id: sub.id,
+              })
 
-              const parentFolderId = stateFolderMap[stateOfFormation] || null
-
-              if (!parentFolderId) {
-                // State not in map — create under Companies root and warn
-                lines.push(`⚠️ State "${stateOfFormation}" not in folder map — creating under Companies root`)
-                const newStateFolder = await createFolder(companiesRootId, stateOfFormation) as { id: string; name: string }
-                const companyFolder = await createFolder(newStateFolder.id, companyName) as { id: string; name: string }
-                driveFolderId = companyFolder.id
-                lines.push(`✅ Created Drive folders: Companies/${stateOfFormation}/${companyName}/ (${driveFolderId})`)
-              } else {
-                const companyFolder = await createFolder(parentFolderId, companyName) as { id: string; name: string }
-                driveFolderId = companyFolder.id
-                lines.push(`✅ Created Drive folder: Companies/${stateOfFormation}/${companyName}/ (${driveFolderId})`)
-              }
-
-              // Set drive_folder_id on account
-              if (accountId && driveFolderId) {
-                const { error: driveErr } = await supabaseAdmin
-                  .from("accounts")
-                  .update({ drive_folder_id: driveFolderId })
-                  .eq("id", accountId)
-                if (driveErr) {
-                  lines.push(`❌ Failed to set drive_folder_id: ${driveErr.message}`)
-                } else {
-                  lines.push(`✅ Account drive_folder_id set to ${driveFolderId}`)
-                }
-              }
-
-              // Copy uploaded documents from Supabase Storage → Drive
-              const uploads = sub.upload_paths as string[] | null
-              if (uploads && uploads.length > 0 && driveFolderId) {
-                for (const filePath of uploads) {
-                  try {
-                    const cleanPath = filePath.replace(/^\/+/, "")
-                    const { data: blob, error: dlErr } = await supabaseAdmin.storage
-                      .from("onboarding-uploads")
-                      .download(cleanPath)
-
-                    if (dlErr || !blob) {
-                      lines.push(`❌ Download failed (${cleanPath}): ${dlErr?.message || "no data"}`)
-                      continue
-                    }
-
-                    const arrayBuffer = await blob.arrayBuffer()
-                    const fileData = Buffer.from(arrayBuffer)
-                    const fileName = cleanPath.split("/").pop() || `file-${Date.now()}`
-                    const mimeType = blob.type || "application/pdf"
-
-                    const result = await uploadBinaryToDrive(fileName, fileData, mimeType, driveFolderId) as { id: string; name: string }
-                    lines.push(`✅ Copied to Drive: ${result.name} (${result.id})`)
-                  } catch (e) {
-                    lines.push(`❌ Copy failed (${filePath}): ${e instanceof Error ? e.message : String(e)}`)
-                  }
-                }
-              }
+              lines.push("")
+              lines.push(`🚀 Background job enqueued: ${jobId}`)
+              lines.push(`   Type: onboarding_setup`)
+              lines.push(`   Steps: Drive folder + doc copy, Lease, Tasks, Tax returns, Portal, Lead→Converted, Form→reviewed`)
+              lines.push(`   ➡️ Check progress: job_status('${jobId}')`)
             } catch (e) {
-              lines.push(`❌ Drive folder step failed: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
-
-          // ─── 5. AUTO-CREATE LEASE AGREEMENT ───
-          if (accountId && companyName && contactId) {
-            try {
-              const year = new Date().getFullYear()
-              // Check if lease already exists for this account + year
-              const { data: existingLease } = await supabaseAdmin
-                .from("lease_agreements")
-                .select("id, token, status")
-                .eq("account_id", accountId)
-                .eq("contract_year", year)
-                .limit(1)
-
-              if (existingLease?.length) {
-                lines.push(`✅ Lease already exists: ${existingLease[0].token} (${existingLease[0].status})`)
-              } else {
-                // Auto-assign next suite number (3D-101, 3D-102, ...)
-                const { data: lastSuite } = await supabaseAdmin
-                  .from("lease_agreements")
-                  .select("suite_number")
-                  .like("suite_number", "3D-%")
-                  .order("suite_number", { ascending: false })
-                  .limit(1)
-
-                let nextNum = 101
-                if (lastSuite?.length) {
-                  const match = lastSuite[0].suite_number.match(/3D-(\d+)/)
-                  if (match) nextNum = parseInt(match[1], 10) + 1
-                }
-                const suiteNumber = `3D-${nextNum}`
-
-                // Fetch contact details for lease
-                const { data: leaseContact } = await supabaseAdmin
-                  .from("contacts")
-                  .select("id, full_name, email, language")
-                  .eq("id", contactId)
-                  .single()
-
-                // Fetch account details
-                const { data: leaseAccount } = await supabaseAdmin
-                  .from("accounts")
-                  .select("id, company_name, ein, state_of_formation")
-                  .eq("id", accountId)
-                  .single()
-
-                if (leaseContact && leaseAccount) {
-                  const today = new Date().toISOString().slice(0, 10)
-                  const companySlug = companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-                  const leaseToken = `${companySlug}-${year}`
-
-                  const { data: newLease, error: leaseErr } = await supabaseAdmin
-                    .from("lease_agreements")
-                    .insert({
-                      token: leaseToken,
-                      account_id: accountId,
-                      contact_id: contactId,
-                      tenant_company: leaseAccount.company_name,
-                      tenant_ein: leaseAccount.ein || null,
-                      tenant_state: leaseAccount.state_of_formation || null,
-                      tenant_contact_name: leaseContact.full_name,
-                      tenant_email: leaseContact.email || null,
-                      premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-                      suite_number: suiteNumber,
-                      square_feet: 120,
-                      effective_date: today,
-                      term_start_date: today,
-                      term_end_date: `${year}-12-31`,
-                      term_months: 12,
-                      contract_year: year,
-                      monthly_rent: 100,
-                      yearly_rent: 1200,
-                      security_deposit: 150,
-                      language: leaseContact.language?.toLowerCase()?.startsWith('it') ? 'it' : 'en',
-                      status: "draft",
-                    })
-                    .select("id, token, access_code")
-                    .single()
-
-                  if (leaseErr || !newLease) {
-                    lines.push(`❌ Lease auto-creation failed: ${leaseErr?.message || "unknown error"}`)
-                  } else {
-                    const leaseUrl = `https://td-operations.vercel.app/lease/${newLease.token}?c=${newLease.access_code}`
-                    lines.push(`✅ Lease auto-created: Suite ${suiteNumber}, token: ${newLease.token} (draft)`)
-                    lines.push(`   🔗 ${leaseUrl}`)
-                    lines.push(`   ➡️ Use **lease_send('${newLease.token}')** to approve and send to client`)
-                  }
-                } else {
-                  lines.push(`⚠️ Could not fetch contact/account details for lease creation`)
-                }
-              }
-            } catch (e) {
-              lines.push(`❌ Lease auto-creation error: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
-
-          // ─── 6. CREATE FOLLOW-UP TASKS ───
-          if (accountId && companyName) {
-            const taskDefs = [
-              { title: `Create WhatsApp group — ${companyName}`, assigned_to: "Luca", category: "Client Communication" as const, priority: "High" as const },
-              { title: `Review and send lease agreement — ${companyName}`, assigned_to: "Antonio", category: "Document" as const, priority: "High" as const },
-              { title: `Registered Agent change — ${companyName}`, assigned_to: "Luca", category: "Formation" as const, priority: "High" as const },
-            ]
-            for (const td of taskDefs) {
-              try {
-                const { error: taskErr } = await supabaseAdmin
-                  .from("tasks")
-                  .insert({
-                    task_title: td.title,
-                    assigned_to: td.assigned_to,
-                    category: td.category,
-                    priority: td.priority,
-                    status: "To Do",
-                    account_id: accountId,
-                    created_by: "claude",
-                  })
-                if (taskErr) {
-                  lines.push(`❌ Task creation failed (${td.title}): ${taskErr.message}`)
-                } else {
-                  lines.push(`✅ Task created: "${td.title}" → ${td.assigned_to}`)
-                }
-              } catch (e) {
-                lines.push(`❌ Task creation error (${td.title}): ${e instanceof Error ? e.message : String(e)}`)
-              }
+              lines.push(`❌ Job enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
+              lines.push(`⚠️ Falling back to inline execution is NOT available. Re-run this tool after fixing the issue.`)
             }
           } else {
-            lines.push(`⚠️ Skipped task creation: missing account_id or company_name`)
-          }
-
-          // ─── 7. CHECK TAX RETURN STATUS ───
-          if (accountId && companyName) {
-            const returnType = sub.entity_type === "MMLLC" ? "MMLLC" : "SMLLC"
-            const currentYear = new Date().getFullYear()
-            const previousYear = currentYear - 1
-
-            // SMLLC deadline is April 15, MMLLC is March 15
-            const deadlineMonth = returnType === "MMLLC" ? "03" : "04"
-            const deadlineDay = "15"
-
-            const taxChecks: Array<{ year: number; field: string; label: string }> = [
-              { year: previousYear, field: "tax_return_previous_year_filed", label: "Previous year" },
-              { year: currentYear, field: "tax_return_current_year_filed", label: "Current year" },
-            ]
-
-            for (const tc of taxChecks) {
-              const fieldValue = String(submitted[tc.field] || "").toLowerCase()
-              if (fieldValue === "no" || fieldValue === "not sure") {
-                try {
-                  // Check if tax return already exists
-                  const { data: existingTR } = await supabaseAdmin
-                    .from("tax_returns")
-                    .select("id")
-                    .eq("account_id", accountId)
-                    .eq("tax_year", tc.year)
-                    .maybeSingle()
-                  if (existingTR) {
-                    lines.push(`✅ Tax return ${tc.year} already exists (${existingTR.id})`)
-                  } else {
-                    const deadline = `${tc.year + 1}-${deadlineMonth}-${deadlineDay}`
-                    const { error: trErr } = await supabaseAdmin
-                      .from("tax_returns")
-                      .insert({
-                        account_id: accountId,
-                        company_name: companyName,
-                        return_type: returnType,
-                        tax_year: tc.year,
-                        deadline,
-                        status: "Not Invoiced",
-                      })
-                    if (trErr) {
-                      lines.push(`❌ Tax return ${tc.year} creation failed: ${trErr.message}`)
-                    } else {
-                      lines.push(`✅ Tax return ${tc.year} created (${returnType}, status: Not Invoiced, deadline: ${deadline})`)
-                    }
-                  }
-                } catch (e) {
-                  lines.push(`❌ Tax return ${tc.year} error: ${e instanceof Error ? e.message : String(e)}`)
-                }
-              } else {
-                lines.push(`✅ Tax return ${tc.year}: client says "${submitted[tc.field] || "N/A"}" — no action needed`)
-              }
-            }
-          }
-
-          // ─── 8. SET PORTAL FIELDS on account ───
-          if (accountId) {
-            try {
-              const { error: portalErr } = await supabaseAdmin
-                .from("accounts")
-                .update({ portal_account: true, portal_created_date: today })
-                .eq("id", accountId)
-              if (portalErr) {
-                lines.push(`❌ Portal fields update failed: ${portalErr.message}`)
-              } else {
-                lines.push(`✅ Account portal_account=true, portal_created_date=${today}`)
-              }
-            } catch (e) {
-              lines.push(`❌ Portal fields error: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
-
-          // ─── 9. MARK LEAD AS CONVERTED ───
-          if (sub.lead_id) {
-            try {
-              const { error: leadErr } = await supabaseAdmin
-                .from("leads")
-                .update({ status: "Converted", updated_at: now })
-                .eq("id", sub.lead_id)
-              if (leadErr) {
-                lines.push(`❌ Lead update failed: ${leadErr.message}`)
-              } else {
-                lines.push(`✅ Lead marked as "Converted"`)
-              }
-            } catch (e) {
-              lines.push(`❌ Lead update error: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
-
-          // ─── 10. MARK FORM AS REVIEWED ───
-          try {
-            const { error: formErr } = await supabaseAdmin
-              .from("onboarding_submissions")
-              .update({
-                status: "reviewed",
-                reviewed_at: now,
-                reviewed_by: "claude",
-              })
-              .eq("id", sub.id)
-            if (formErr) {
-              lines.push(`❌ Form review update failed: ${formErr.message}`)
-            } else {
-              lines.push(`✅ Form marked as reviewed`)
-            }
-          } catch (e) {
-            lines.push(`❌ Form review error: ${e instanceof Error ? e.message : String(e)}`)
-          }
-
-          // ─── 11. UPDATE SUBMISSION with created IDs ───
-          try {
-            const subUpdates: Record<string, unknown> = { updated_at: now }
-            if (accountId && !sub.account_id) subUpdates.account_id = accountId
-            if (contactId && !sub.contact_id) subUpdates.contact_id = contactId
-            if (Object.keys(subUpdates).length > 1) {
-              const { error: subErr } = await supabaseAdmin
-                .from("onboarding_submissions")
-                .update(subUpdates)
-                .eq("id", sub.id)
-              if (subErr) {
-                lines.push(`❌ Submission ID link failed: ${subErr.message}`)
-              } else {
-                lines.push(`✅ Submission record updated with account_id/contact_id`)
-              }
-            }
-          } catch (e) {
-            lines.push(`❌ Submission update error: ${e instanceof Error ? e.message : String(e)}`)
+            lines.push(`⚠️ Cannot enqueue background job: missing contact_id (${contactId}) or account_id (${accountId})`)
           }
 
           // Summary
@@ -826,10 +532,7 @@ export function registerOnboardingTools(server: McpServer) {
           lines.push(`   Contact: ${contactId || "FAILED"}`)
           lines.push(`   Account: ${accountId || "FAILED"}`)
           lines.push(`   Company: ${companyName || "(unknown)"}`)
-          lines.push(`   Drive folder: ${driveFolderId || "NOT CREATED"}`)
-          if (driveFolderId) {
-            lines.push(`   Drive link: https://drive.google.com/drive/folders/${driveFolderId}`)
-          }
+          lines.push(`   Background job: Drive, Lease, Tasks, Tax, Portal, Lead, Form`)
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
