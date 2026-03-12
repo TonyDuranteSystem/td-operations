@@ -36,7 +36,7 @@
  *   sysdoc_*   — System documentation (read, list, update)
  *   kb_*       — Knowledge base (search, get, create, update articles & responses)
  *
- * Deploy: Vercel serverless function (Pro plan, 60s timeout)
+ * Deploy: Vercel serverless function (Pro plan, 300s timeout)
  */
 
 import { createMcpHandler } from "mcp-handler"
@@ -65,11 +65,12 @@ import { registerWhopTools } from "@/lib/mcp/tools/whop"
 import { registerFormationTools } from "@/lib/mcp/tools/formation"
 import { registerOnboardingTools } from "@/lib/mcp/tools/onboarding"
 import { registerLeaseTools } from "@/lib/mcp/tools/lease"
+import { registerBankingFormTools } from "@/lib/mcp/tools/banking-form"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
-// Vercel Pro: 60s function timeout (required for DocAI, QB operations)
-export const maxDuration = 60
+// Vercel Pro: 300s max for heavy operations (Magic Button, DocAI, bulk processing)
+export const maxDuration = 300
 
 // ─── MCP Server ──────────────────────────────────────────
 const handler = createMcpHandler(
@@ -104,6 +105,7 @@ const handler = createMcpHandler(
     registerFormationTools(server)
     registerOnboardingTools(server)
     registerLeaseTools(server)
+    registerBankingFormTools(server)
   },
   {
     capabilities: {},
