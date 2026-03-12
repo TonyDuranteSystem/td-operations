@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { createClient as createAuthClient } from '@/lib/supabase/client'
 import {
   LABELS,
   TOOLTIPS,
@@ -69,7 +69,9 @@ export default function BankingFormPage() {
   const loadSubmission = useCallback(async () => {
     try {
       // Check if user has an admin session (logged into dashboard)
-      const { data: { user } } = await supabasePublic.auth.getUser()
+      // Uses SSR browser client which reads auth cookies
+      const authClient = createAuthClient()
+      const { data: { user } } = await authClient.auth.getUser()
       const adminMode = !!user
 
       const { data, error: err } = await supabasePublic
