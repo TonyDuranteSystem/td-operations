@@ -58,7 +58,7 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_search_contacts",
-    "Search CRM contacts by name, email, or phone. Use this to find people associated with accounts. Returns contact ID, name, email, phone, ITIN, citizenship, passport status, and language preference. For full account context, use crm_get_client_summary after finding the linked account.",
+    "Search CRM contacts by name, email, or phone. Returns contact details AND their linked companies (via account_contacts junction). IMPORTANT: When a client messages you, ALWAYS search by their name here first — the result includes all their linked accounts with company_name and account_id, so you can immediately call crm_get_client_summary for each account. A person like 'Rodrigo' may own multiple LLCs with completely different names.",
     {
       query: z.string().optional().describe("Search text (matches name, email, or phone)"),
       citizenship: z.string().optional().describe("Citizenship filter"),
@@ -68,7 +68,7 @@ export function registerCrmTools(server: McpServer) {
     async ({ query, citizenship, has_itin, limit }) => {
       let q = supabaseAdmin
         .from('contacts')
-        .select('*')
+        .select('*, account_contacts(account_id, role, accounts(id, company_name, status, entity_type, state_of_formation))')
         .order('full_name')
         .limit(Math.min(limit || 25, 100))
 
