@@ -715,6 +715,20 @@ export function registerGmailTools(server: McpServer) {
           details: { to, subject, cc: cc || null, tag: tag || null, has_attachments: hasAttachments, attachment_count: allAttachments.length },
         })
 
+        // Auto-update lead status when sending offer emails
+        let leadAutoUpdate = ""
+        if (lead_id && tag === "offer") {
+          try {
+            const { createClient: createSB } = await import("@supabase/supabase-js")
+            const sbAdmin = createSB(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            const { error: leadErr } = await sbAdmin
+              .from("leads")
+              .update({ status: "Offer Sent", offer_status: "Sent", updated_at: new Date().toISOString() })
+              .eq("id", lead_id)
+            if (!leadErr) leadAutoUpdate = "\n📋 Lead auto-updated → Offer Sent"
+          } catch { /* non-blocking */ }
+        }
+
         return {
           content: [{
             type: "text" as const,
@@ -731,6 +745,7 @@ export function registerGmailTools(server: McpServer) {
               hasAttachments ? `📎 Attachments: ${allAttachments.map(a => a.filename).join(", ")}` : null,
               "",
               "Email appears in Gmail Sent folder. Client replies will thread automatically.",
+              leadAutoUpdate || null,
             ].filter(Boolean).join("\n"),
           }],
         }
