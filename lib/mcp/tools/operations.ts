@@ -881,6 +881,19 @@ export function registerOperationsTools(server: McpServer) {
 
         const name = service_name || `${service_type} — ${account?.company_name || "Unknown"}`
 
+        // Idempotency: check if an active delivery already exists for same type + account
+        const { data: existingSD } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, service_name, stage, status")
+          .eq("account_id", account_id)
+          .eq("service_type", service_type)
+          .eq("status", "active")
+          .limit(1)
+
+        if (existingSD?.length) {
+          return { content: [{ type: "text" as const, text: `⚠️ Active "${service_type}" delivery already exists for this account:\n  ID: ${existingSD[0].id}\n  Name: ${existingSD[0].service_name}\n  Stage: ${existingSD[0].stage}\n\nUse sd_advance_stage to progress it, or complete/cancel it before creating a new one.` }] }
+        }
+
         // Get first pipeline stage
         const { data: firstStage } = await supabaseAdmin
           .from("pipeline_stages")
