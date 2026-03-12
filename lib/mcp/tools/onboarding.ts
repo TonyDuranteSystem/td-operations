@@ -362,133 +362,53 @@ export function registerOnboardingTools(server: McpServer) {
 
           // ═══════════════════════════════════════════════
           // PHASE 1: FAST (inline) — Contact + Account + Link
+          // Uses DB transaction via onboarding_phase1() function
+          // If any step fails, entire operation rolls back (no orphans)
           // ═══════════════════════════════════════════════
 
-          // ─── 1. CONTACT: find/create/update ───
           try {
-            if (!contactId && submitted.owner_email) {
-              const { data: existingContact } = await supabaseAdmin
-                .from("contacts")
-                .select("id")
-                .eq("email", String(submitted.owner_email))
-                .maybeSingle()
-              if (existingContact) contactId = existingContact.id
-            }
-
             const ownerFullName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ").trim()
-            const contactFields: Record<string, unknown> = {}
-            if (submitted.owner_first_name) contactFields.first_name = submitted.owner_first_name
-            if (submitted.owner_last_name) contactFields.last_name = submitted.owner_last_name
-            if (ownerFullName) contactFields.full_name = ownerFullName
-            if (submitted.owner_email) contactFields.email = submitted.owner_email
-            if (submitted.owner_phone) contactFields.phone = submitted.owner_phone
-            if (submitted.owner_nationality) contactFields.citizenship = submitted.owner_nationality
-            if (submitted.owner_country) contactFields.residency = submitted.owner_country
-            if (submitted.owner_dob) contactFields.date_of_birth = submitted.owner_dob
-            if (submitted.owner_itin) contactFields.itin_number = submitted.owner_itin
-            if (submitted.owner_itin_issue_date) contactFields.itin_issue_date = submitted.owner_itin_issue_date
-            contactFields.updated_at = now
+            if (!ownerFullName && !contactId) throw new Error("Cannot create contact: owner name is empty")
+            if (!companyName && !accountId) throw new Error("Cannot create account: company name is empty")
 
-            if (contactId) {
-              const { error: upErr } = await supabaseAdmin
-                .from("contacts")
-                .update(contactFields)
-                .eq("id", contactId)
-              if (upErr) {
-                lines.push(`❌ Contact update failed: ${upErr.message}`)
-              } else {
-                lines.push(`✅ Contact updated (${contactId})`)
-              }
-            } else {
-              if (!ownerFullName) throw new Error("Cannot create contact: owner name is empty")
-              const { data: newContact, error: createErr } = await supabaseAdmin
-                .from("contacts")
-                .insert({ ...contactFields, status: "Active" })
-                .select("id")
-                .single()
-              if (createErr || !newContact) {
-                lines.push(`❌ Contact creation failed: ${createErr?.message || "unknown error"}`)
-              } else {
-                contactId = newContact.id
-                lines.push(`✅ Contact CREATED (${contactId}): ${ownerFullName}`)
-              }
-            }
+            const contactJson: Record<string, unknown> = {}
+            if (submitted.owner_first_name) contactJson.first_name = String(submitted.owner_first_name)
+            if (submitted.owner_last_name) contactJson.last_name = String(submitted.owner_last_name)
+            if (ownerFullName) contactJson.full_name = ownerFullName
+            if (submitted.owner_email) contactJson.email = String(submitted.owner_email)
+            if (submitted.owner_phone) contactJson.phone = String(submitted.owner_phone)
+            if (submitted.owner_nationality) contactJson.citizenship = String(submitted.owner_nationality)
+            if (submitted.owner_country) contactJson.residency = String(submitted.owner_country)
+            if (submitted.owner_dob) contactJson.date_of_birth = String(submitted.owner_dob)
+            if (submitted.owner_itin) contactJson.itin_number = String(submitted.owner_itin)
+            if (submitted.owner_itin_issue_date) contactJson.itin_issue_date = String(submitted.owner_itin_issue_date)
+
+            const accountJson: Record<string, unknown> = {}
+            if (companyName) accountJson.company_name = companyName
+            if (submitted.ein) accountJson.ein_number = String(submitted.ein)
+            if (stateOfFormation) accountJson.state_of_formation = stateOfFormation
+            if (submitted.formation_date) accountJson.formation_date = String(submitted.formation_date)
+            if (submitted.filing_id) accountJson.filing_id = String(submitted.filing_id)
+            accountJson.entity_type = entityTypeMapped
+
+            const { data: txResult, error: txErr } = await supabaseAdmin.rpc("onboarding_phase1", {
+              p_contact: contactJson,
+              p_account: accountJson,
+              p_existing_contact_id: contactId || null,
+              p_existing_account_id: accountId || null,
+            })
+
+            if (txErr) throw new Error(`Transaction failed: ${txErr.message}`)
+
+            const result = txResult as { contact_id: string; contact_action: string; account_id: string; account_action: string; linked: boolean }
+            contactId = result.contact_id
+            accountId = result.account_id
+
+            lines.push(`✅ Contact ${result.contact_action} (${contactId})`)
+            lines.push(`✅ Account ${result.account_action} (${accountId})`)
+            lines.push(`✅ Contact-Account linked`)
           } catch (e) {
-            lines.push(`❌ Contact step failed: ${e instanceof Error ? e.message : String(e)}`)
-          }
-
-          // ─── 2. ACCOUNT: find/create/update ───
-          try {
-            if (!accountId && companyName) {
-              const { data: existingAcct } = await supabaseAdmin
-                .from("accounts")
-                .select("id")
-                .ilike("company_name", companyName)
-                .maybeSingle()
-              if (existingAcct) accountId = existingAcct.id
-            }
-
-            const acctFields: Record<string, unknown> = {}
-            if (companyName) acctFields.company_name = companyName
-            if (submitted.ein) acctFields.ein_number = submitted.ein
-            if (stateOfFormation) acctFields.state_of_formation = stateOfFormation
-            if (submitted.formation_date) acctFields.formation_date = submitted.formation_date
-            if (submitted.filing_id) acctFields.filing_id = submitted.filing_id
-            acctFields.entity_type = entityTypeMapped
-            acctFields.updated_at = now
-
-            if (accountId) {
-              const { error: acctErr } = await supabaseAdmin
-                .from("accounts")
-                .update(acctFields)
-                .eq("id", accountId)
-              if (acctErr) {
-                lines.push(`❌ Account update failed: ${acctErr.message}`)
-              } else {
-                lines.push(`✅ Account updated (${accountId})`)
-              }
-            } else {
-              if (!companyName) throw new Error("Cannot create account: company name is empty")
-              const { data: newAcct, error: acctCreateErr } = await supabaseAdmin
-                .from("accounts")
-                .insert({ ...acctFields, status: "Active" })
-                .select("id")
-                .single()
-              if (acctCreateErr || !newAcct) {
-                lines.push(`❌ Account creation failed: ${acctCreateErr?.message || "unknown error"}`)
-              } else {
-                accountId = newAcct.id
-                lines.push(`✅ Account CREATED (${accountId}): ${companyName}`)
-              }
-            }
-          } catch (e) {
-            lines.push(`❌ Account step failed: ${e instanceof Error ? e.message : String(e)}`)
-          }
-
-          // ─── 3. LINK Contact <-> Account ───
-          if (contactId && accountId) {
-            try {
-              const { data: existingLink } = await supabaseAdmin
-                .from("account_contacts")
-                .select("account_id")
-                .eq("account_id", accountId)
-                .eq("contact_id", contactId)
-                .maybeSingle()
-              if (existingLink) {
-                lines.push(`✅ Contact-Account link already exists`)
-              } else {
-                const { error: linkErr } = await supabaseAdmin
-                  .from("account_contacts")
-                  .insert({ account_id: accountId, contact_id: contactId, role: "Owner" })
-                if (linkErr) {
-                  lines.push(`❌ Contact-Account link failed: ${linkErr.message}`)
-                } else {
-                  lines.push(`✅ Contact linked to Account (role: Owner)`)
-                }
-              }
-            } catch (e) {
-              lines.push(`❌ Link step failed: ${e instanceof Error ? e.message : String(e)}`)
-            }
+            lines.push(`❌ Phase 1 transaction failed (all changes rolled back): ${e instanceof Error ? e.message : String(e)}`)
           }
 
           // ═══════════════════════════════════════════════
