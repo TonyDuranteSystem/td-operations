@@ -12,8 +12,9 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 
 ## Session Start — AUTOMATIC
 When Antonio says "riprendiamo", "dove eravamo", "continua", "resume", or starts a new session:
-1. `sysdoc_read('session-context')` — system state
-2. Run TWO queries on dev_tasks:
+1. `sysdoc_read('session-context')` — system state (contains pointers to other docs)
+2. If working on Formation/Onboarding/Lease → `sysdoc_read('workflow-roadmap')` — definitive workflows + implementation checklist
+3. Run TWO queries on dev_tasks:
    - `SELECT id, title, status, priority, progress_log, updated_at FROM dev_tasks WHERE status IN ('in_progress','todo') ORDER BY updated_at DESC LIMIT 5` — pending work
    - `SELECT id, title, status, progress_log, updated_at FROM dev_tasks WHERE status = 'done' ORDER BY updated_at DESC LIMIT 3` — recently completed (to know what was JUST done)
 3. Check `git status` and recent commits — code state
