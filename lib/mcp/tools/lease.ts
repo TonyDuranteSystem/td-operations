@@ -53,7 +53,7 @@ Workflow: lease_create → lease_get (review) → lease_send → client views �
         // ─── 1. FETCH ACCOUNT ───
         const { data: account, error: accErr } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, ein, state_of_formation")
+          .select("id, company_name, ein_number, state_of_formation")
           .eq("id", params.account_id)
           .single()
 
@@ -118,7 +118,7 @@ Workflow: lease_create → lease_get (review) → lease_send → client views �
             account_id: params.account_id,
             contact_id: contact.id,
             tenant_company: account.company_name,
-            tenant_ein: account.ein || null,
+            tenant_ein: account.ein_number || null,
             tenant_state: account.state_of_formation || null,
             tenant_contact_name: contact.full_name,
             tenant_email: contact.email || null,
