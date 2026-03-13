@@ -543,6 +543,12 @@ export function registerQbTools(server: McpServer) {
             ? `Fattura #${docNumber} — Tony Durante LLC`
             : `Invoice #${docNumber} — Tony Durante LLC`
 
+        // RFC 2047: encode subject as base64 if it contains non-ASCII chars (e.g. em dash —)
+        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+        const encodedSubject = hasNonAscii
+          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+          : subject
+
         const htmlBody =
           language === "it"
             ? `<p>Gentile ${customerName},</p>
@@ -568,7 +574,7 @@ export function registerQbTools(server: McpServer) {
         const mime = [
           `From: Tony Durante LLC <support@tonydurante.us>`,
           `To: ${email_to}`,
-          `Subject: ${subject}`,
+          `Subject: ${encodedSubject}`,
           "MIME-Version: 1.0",
           `Content-Type: multipart/mixed; boundary="${boundary}"`,
           "",

@@ -468,10 +468,17 @@ export function registerOfferTools(server: McpServer) {
         // Build MIME multipart/alternative (text + html)
         const fromEmail = "support@tonydurante.us"
         const boundary = `boundary_${Date.now()}`
+
+        // RFC 2047: encode subject as base64 if it contains non-ASCII chars
+        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+        const encodedSubject = hasNonAscii
+          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+          : subject
+
         const mimeHeaders = [
           `From: Tony Durante LLC <${fromEmail}>`,
           `To: ${offer.client_email}`,
-          `Subject: ${subject}`,
+          `Subject: ${encodedSubject}`,
           "MIME-Version: 1.0",
           `Content-Type: multipart/alternative; boundary="${boundary}"`,
         ]

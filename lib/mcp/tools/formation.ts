@@ -308,34 +308,29 @@ export function registerFormationTools(server: McpServer) {
           lines.push("ENQUEUING BACKGROUND JOB...")
           lines.push("")
 
-          try {
-            // Enqueue async job for CRM updates
-            const { enqueueJob } = await import("@/lib/jobs/queue")
-            const { id: jobId } = await enqueueJob({
-              job_type: "formation_setup",
-              payload: {
-                token: sub.token,
-                submission_id: sub.id,
-                contact_id: sub.contact_id || null,
-                lead_id: sub.lead_id || null,
-                submitted_data: submitted,
-              },
-              priority: 1,
-              max_attempts: 3,
-              lead_id: sub.lead_id || undefined,
-              related_entity_type: "formation_submission",
-              related_entity_id: sub.id,
-              created_by: "claude",
-            })
+          // Enqueue async job for CRM updates
+          const { enqueueJob } = await import("@/lib/jobs/queue")
+          const { id: jobId } = await enqueueJob({
+            job_type: "formation_setup",
+            payload: {
+              token: sub.token,
+              submission_id: sub.id,
+              contact_id: sub.contact_id || null,
+              lead_id: sub.lead_id || null,
+              submitted_data: submitted,
+            },
+            priority: 1,
+            max_attempts: 3,
+            lead_id: sub.lead_id || undefined,
+            related_entity_type: "formation_submission",
+            related_entity_id: sub.id,
+            created_by: "claude",
+          })
 
-            lines.push(`✅ Background job enqueued: ${jobId}`)
-            lines.push(`   Steps: Contact update → Lead → Converted → Form → reviewed`)
-            lines.push("")
-            lines.push(`➡️ Check progress: job_status('${jobId}')`)
-          } catch (jobErr) {
-            lines.push(`❌ Failed to enqueue job: ${jobErr instanceof Error ? jobErr.message : String(jobErr)}`)
-            lines.push(`   No CRM changes were made. Form data is preserved — you can retry apply_changes.`)
-          }
+          lines.push(`✅ Background job enqueued: ${jobId}`)
+          lines.push(`   Steps: Contact update → Lead → Converted → Form → reviewed`)
+          lines.push("")
+          lines.push(`➡️ Check progress: job_status('${jobId}')`)
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

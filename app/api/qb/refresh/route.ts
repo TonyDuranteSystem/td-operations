@@ -11,12 +11,9 @@
 //
 // Vercel Cron config: vercel.json → "0 */6 * * *" (every 6 hours)
 
-export const maxDuration = 60
-
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { refreshAccessToken, storeTokens } from '@/lib/quickbooks'
-import { logCron } from '@/lib/cron-log'
 
 function isAuthorized(request: NextRequest): boolean {
   const authHeader = request.headers.get('authorization')
@@ -87,9 +84,6 @@ export async function GET(request: NextRequest) {
 
     console.log(`[QB Cron] ✅ Token refreshed. Access expires: ${newAccessExpires.toISOString()}, Refresh: ${newDaysRemaining} days`)
 
-    const elapsed = Date.now() - now.getTime()
-    logCron({ endpoint: '/api/qb/refresh', status: 'success', duration_ms: elapsed, details: { refresh_token_days_remaining: newDaysRemaining } })
-
     return NextResponse.json({
       success: true,
       message: 'Token refreshed successfully',
@@ -100,7 +94,6 @@ export async function GET(request: NextRequest) {
 
   } catch (err) {
     console.error('[QB Cron] Error:', err)
-    logCron({ endpoint: '/api/qb/refresh', status: 'error', duration_ms: 0, error_message: String(err) })
     return NextResponse.json(
       { error: 'Token refresh failed', details: String(err) },
       { status: 500 }

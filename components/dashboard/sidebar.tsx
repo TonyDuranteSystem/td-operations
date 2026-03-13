@@ -12,7 +12,6 @@ import {
   Cog,
   CreditCard,
   Calendar,
-  Shield,
   LogOut,
   Menu,
   X,
@@ -29,7 +28,6 @@ const navigation = [
   { name: 'Services', href: '/services', icon: Cog },
   { name: 'Payments', href: '/payments', icon: CreditCard },
   { name: 'Calendar', href: '/calendar', icon: Calendar },
-  { name: 'Audit Log', href: '/audit', icon: Shield },
 ]
 
 export function Sidebar({ user }: { user: { email?: string } }) {

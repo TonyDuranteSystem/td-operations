@@ -465,10 +465,18 @@ support@tonydurante.us`
 
         // Build MIME multipart/alternative (text + html)
         const boundary = `boundary_${Date.now()}`
+
+        // RFC 2047: encode subject as base64 if it contains non-ASCII chars (e.g. em dash —)
+        const leaseSubject = `Office Lease Agreement — ${lease.tenant_company}`
+        const hasNonAscii = /[^\x00-\x7F]/.test(leaseSubject)
+        const encodedSubject = hasNonAscii
+          ? `=?UTF-8?B?${Buffer.from(leaseSubject, "utf-8").toString("base64")}?=`
+          : leaseSubject
+
         const mimeHeaders = [
           `From: Tony Durante LLC <${fromEmail}>`,
           `To: ${lease.tenant_email}`,
-          `Subject: Office Lease Agreement — ${lease.tenant_company}`,
+          `Subject: ${encodedSubject}`,
           "MIME-Version: 1.0",
           `Content-Type: multipart/alternative; boundary="${boundary}"`,
         ]
