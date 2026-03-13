@@ -186,6 +186,8 @@ export default function ContractPage() {
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
   const [form, setForm] = useState<FormData>({ name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', country: '', nationality: '', passport: '', passport_exp: '' })
+  const formRef = useRef<FormData>(form)
+  useEffect(() => { formRef.current = form }, [form])
   const [passportFile, setPassportFile] = useState<File | null>(null)
 
   const sigMsaRef = useRef<HTMLCanvasElement>(null)
@@ -254,7 +256,7 @@ export default function ContractPage() {
   const isValidZip = (v: string) => /^\d{3,10}$/.test(v.replace(/\s/g, ''))
 
   const checkReady = useCallback(() => {
-    const f = form
+    const f = formRef.current
     const hasMSA = sigPadsRef.current.msa && !sigPadsRef.current.msa.isEmpty()
     const hasSOW = sigPadsRef.current.sow && !sigPadsRef.current.sow.isEmpty()
     const phoneOk = !f.phone || isValidPhone(f.phone)
@@ -281,9 +283,11 @@ export default function ContractPage() {
       setStatusMsg('Ready to sign. Click the button below.')
       setStatusType('info')
     }
-  }, [form])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  useEffect(() => { if (offer) checkReady() }, [form, checkReady, offer])
+  // Re-validate whenever form data changes
+  useEffect(() => { if (offer) checkReady() }, [form, offer, checkReady])
 
   function updateForm(field: keyof FormData, value: string) {
     setForm(f => ({ ...f, [field]: value }))
