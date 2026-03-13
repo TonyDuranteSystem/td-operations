@@ -791,6 +791,7 @@ export function registerOperationsTools(server: McpServer) {
 
         // 7. Create auto-tasks (unless skipped)
         const createdTasks: string[] = []
+        const failedTasks: { title: string; error: string }[] = []
         if (!skip_tasks && targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
           for (const taskDef of targetStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
             const { error: tErr } = await supabaseAdmin
@@ -807,21 +808,32 @@ export function registerOperationsTools(server: McpServer) {
                 delivery_id: delivery.id,
                 stage_order: targetStage.stage_order,
               })
-            if (!tErr) createdTasks.push(taskDef.title)
+            if (tErr) {
+              failedTasks.push({ title: taskDef.title, error: tErr.message })
+            } else {
+              createdTasks.push(taskDef.title)
+            }
           }
         }
 
-        // 8. Format response
+        // 8. Format response with structured status
+        const overallStatus = failedTasks.length > 0 ? "partial" : "success"
+        const statusIcon = failedTasks.length > 0 ? "⚠️" : "✅"
         const lines = [
-          `✅ Advanced to: **${targetStage.stage_name}** (stage ${targetStage.stage_order}/${stages.length})`,
+          `${statusIcon} Advanced to: **${targetStage.stage_name}** (stage ${targetStage.stage_order}/${stages.length})`,
           `📋 Service: ${delivery.service_name || delivery.service_type}`,
           `🔄 From: ${delivery.stage || "New"} → ${targetStage.stage_name}`,
+          `Overall: ${overallStatus}`,
         ]
         if (targetStage.sla_days) lines.push(`⏱️ SLA: ${targetStage.sla_days} days`)
         if (targetStage.requires_approval) lines.push(`🔒 This stage requires approval before advancing`)
         if (createdTasks.length > 0) {
           lines.push(`\n📝 Auto-created ${createdTasks.length} tasks:`)
-          for (const t of createdTasks) lines.push(`  • ${t}`)
+          for (const t of createdTasks) lines.push(`  ✅ ${t}`)
+        }
+        if (failedTasks.length > 0) {
+          lines.push(`\n❌ Failed to create ${failedTasks.length} tasks:`)
+          for (const t of failedTasks) lines.push(`  ❌ ${t.title} — ${t.error}`)
         }
         if (isCompleted) lines.push(`\n🎉 Service delivery marked as COMPLETED`)
 
@@ -868,6 +880,19 @@ export function registerOperationsTools(server: McpServer) {
           .single()
 
         const name = service_name || `${service_type} — ${account?.company_name || "Unknown"}`
+
+        // Idempotency: check if an active delivery already exists for same type + account
+        const { data: existingSD } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, service_name, stage, status")
+          .eq("account_id", account_id)
+          .eq("service_type", service_type)
+          .eq("status", "active")
+          .limit(1)
+
+        if (existingSD?.length) {
+          return { content: [{ type: "text" as const, text: `⚠️ Active "${service_type}" delivery already exists for this account:\n  ID: ${existingSD[0].id}\n  Name: ${existingSD[0].service_name}\n  Stage: ${existingSD[0].stage}\n\nUse sd_advance_stage to progress it, or complete/cancel it before creating a new one.` }] }
+        }
 
         // Get first pipeline stage
         const { data: firstStage } = await supabaseAdmin
@@ -1084,6 +1109,61 @@ export function registerOperationsTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Audit error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // cron_status
+  // ═══════════════════════════════════════
+  server.tool(
+    "cron_status",
+    "Show recent Vercel cron executions — success/error, duration, last run time. Use this to check if crons (QB refresh, sync-drive, sync-airtable) are running correctly. Returns the last 5 executions per endpoint.",
+    {},
+    async () => {
+      try {
+        const { data, error } = await supabaseAdmin
+          .from("cron_log")
+          .select("*")
+          .order("executed_at", { ascending: false })
+          .limit(20)
+
+        if (error) throw error
+
+        const rows = data || []
+        if (rows.length === 0) {
+          return { content: [{ type: "text" as const, text: "No cron executions logged yet. Crons run every 6h — check back later or verify CRON_SECRET is set on Vercel." }] }
+        }
+
+        // Group by endpoint
+        const grouped: Record<string, typeof rows> = {}
+        for (const row of rows) {
+          if (!grouped[row.endpoint]) grouped[row.endpoint] = []
+          if (grouped[row.endpoint].length < 5) grouped[row.endpoint].push(row)
+        }
+
+        const lines: string[] = ["# Cron Status\n"]
+        for (const [endpoint, entries] of Object.entries(grouped)) {
+          const lastRun = entries[0]
+          const status = lastRun.status === "success" ? "✅" : "❌"
+          lines.push(`## ${endpoint} ${status}`)
+          lines.push(`Last run: ${new Date(lastRun.executed_at).toISOString()}`)
+          if (lastRun.error_message) lines.push(`Error: ${lastRun.error_message}`)
+          lines.push("")
+          lines.push("| Time | Status | Duration |")
+          lines.push("|------|--------|----------|")
+          for (const e of entries) {
+            const time = new Date(e.executed_at).toISOString().substring(0, 19).replace("T", " ")
+            const dur = e.duration_ms ? `${e.duration_ms}ms` : "—"
+            const s = e.status === "success" ? "✅" : `❌ ${e.error_message?.substring(0, 40) || ""}`
+            lines.push(`| ${time} | ${s} | ${dur} |`)
+          }
+          lines.push("")
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
     }
   )
