@@ -213,6 +213,15 @@ git add path/to/specific-file.ts path/to/other-file.ts
 
 **Never commit files you didn't intentionally modify.** If `git status` shows unexpected deletions or modifications, investigate before committing.
 
+### Protected files — DO NOT TOUCH without explicit request
+These files are shared infrastructure. **NEVER modify, simplify, revert, or "clean up" these files** unless Antonio explicitly asks you to:
+- `scripts/git-auto-pull.sh` — auto-pull + npm ci detection
+- `.husky/pre-push` — build check before push
+- `.claude/settings.json` — hooks configuration
+- `CLAUDE.md` — project rules
+- `middleware.ts` — auth middleware
+If `git status` shows these as modified, **leave them alone** — another machine likely updated them intentionally.
+
 ### When `git push` fails (non-fast-forward)
 Another machine pushed first. This is NORMAL in a multi-machine setup. Follow this sequence:
 1. `git pull --rebase origin main` — replay your commits on top of the latest remote
