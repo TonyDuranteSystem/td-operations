@@ -192,8 +192,35 @@ docs/
 ## Communication
 Antonio communicates in Italian and English. Match his language. Be direct and efficient.
 
+## Multi-Machine Git Safety (iMac + Mac Mini + MacBook)
+All three machines share the same repo via GitHub auto-sync.
+
+### CRITICAL RULE: Never use `git add -A` or `git add .`
+These commands stage EVERYTHING, including deletion of files that exist on remote but are missing locally.
+If your working copy is behind, `git add -A` will DELETE other machines' work.
+
+**Always do:**
+```bash
+git add path/to/specific-file.ts path/to/other-file.ts
+```
+
+**Before committing, always:**
+1. `git pull origin main` — get latest
+2. `git diff --stat` — review what will be committed
+3. `git add <specific files>` — only your changes
+4. `npm run build` — verify nothing is broken
+5. `git commit` then `git push`
+
+**Never commit files you didn't intentionally modify.** If `git status` shows unexpected deletions or modifications, investigate before committing.
+
+### Module-Level Initialization
+Never use `createClient()` at module level in API routes or lib files — Next.js evaluates these at build time when env vars may not exist. Use:
+- `import { supabaseAdmin } from "@/lib/supabase-admin"` (Proxy-based lazy init), or
+- A local `getSupabase()` getter function
+
 ## Do NOT
 - Use Make, Zapier, n8n — all automation via Supabase Edge Functions
 - Commit `.env.local` or credentials
 - Create README.md or documentation files unless asked
 - Push to main without building first (`npm run build`)
+- Use `git add -A` or `git add .` — always add specific files
