@@ -565,7 +565,7 @@ export default function BankingFormPage() {
               onClick={() => { if (visibleSteps.indexOf(step) < visibleSteps.indexOf(currentStep)) setCurrentStep(step) }}
             >
               <div className="tf-progress-num">{visibleSteps.indexOf(step) < visibleSteps.indexOf(currentStep) ? '\u2713' : idx + 1}</div>
-              <div className="tf-progress-label">{STEPS[lang][step - 1]}</div>
+              <div className="tf-progress-label">{STEPS[providerConfig.id][lang][step - 1]}</div>
             </div>
           ))}
           <div className="tf-progress-bar">
