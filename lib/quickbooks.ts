@@ -8,13 +8,19 @@
  * - Auto-refresh before expiry via cron or on-demand
  */
 
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-// Supabase admin client (bypasses RLS for token storage)
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Supabase admin client (lazy-init to avoid build-time crash when env vars are missing)
+let _supabaseAdmin: SupabaseClient | null = null
+function getSupabaseAdmin() {
+  if (!_supabaseAdmin) {
+    _supabaseAdmin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+  }
+  return _supabaseAdmin
+}
 
 // QuickBooks OAuth2 endpoints
 const QB_AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2'
@@ -125,7 +131,7 @@ export async function storeTokens(tokenData: {
   const refreshExpires = new Date(now.getTime() + tokenData.x_refresh_token_expires_in * 1000)
 
   // Strategy: UPDATE the existing active row in-place (avoids constraint issues)
-  const { data: updated, error: updateErr } = await supabaseAdmin
+  const { data: updated, error: updateErr } = await getSupabaseAdmin()
     .from('qb_tokens')
     .update({
       access_token: tokenData.access_token,
@@ -149,7 +155,7 @@ export async function storeTokens(tokenData: {
   console.warn('[QB] No active token row to update, inserting new row...')
 
   // Clean up any stale inactive rows first
-  const { error: cleanupErr } = await supabaseAdmin
+  const { error: cleanupErr } = await getSupabaseAdmin()
     .from('qb_tokens')
     .delete()
     .eq('realm_id', realmId)
@@ -159,7 +165,7 @@ export async function storeTokens(tokenData: {
     console.error('[QB] Cleanup failed:', cleanupErr.message)
   }
 
-  const { data, error } = await supabaseAdmin
+  const { data, error } = await getSupabaseAdmin()
     .from('qb_tokens')
     .insert({
       realm_id: realmId,
@@ -190,7 +196,7 @@ export async function getActiveToken(): Promise<string> {
   const realmId = process.env.QB_REALM_ID!
 
   // Fetch active token
-  const { data: token, error } = await supabaseAdmin
+  const { data: token, error } = await getSupabaseAdmin()
     .from('qb_tokens')
     .select('*')
     .eq('realm_id', realmId)

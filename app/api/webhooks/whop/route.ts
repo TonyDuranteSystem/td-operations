@@ -11,12 +11,18 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { createClient } from "@supabase/supabase-js"
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+let _supabase: SupabaseClient | null = null
+function getSupabase() {
+  if (!_supabase) {
+    _supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+  }
+  return _supabase
+}
 
 // ─── Standard Webhooks Signature Verification ──────────────────────
 
@@ -115,7 +121,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   console.log(`[whop-webhook] payment.succeeded: ${paymentId} — ${clientName || username || email} — $${total} ${currency} — ${productTitle}`)
 
   // 1. Log webhook event
-  await supabase.from("webhook_events").insert({
+  await getSupabase().from("webhook_events").insert({
     source: "whop",
     event_type: "payment.succeeded",
     external_id: paymentId,
@@ -129,7 +135,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
   if (email) {
     // Check contacts first
-    const { data: contacts } = await supabase
+    const { data: contacts } = await getSupabase()
       .from("contacts")
       .select("id, account_contacts(account_id)")
       .ilike("email", email)
@@ -144,7 +150,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     }
 
     // Check leads
-    const { data: leads } = await supabase
+    const { data: leads } = await getSupabase()
       .from("leads")
       .select("id")
       .ilike("email", email)
@@ -169,31 +175,85 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId
 
-  const { error: payErr } = await supabase.from("payments").insert(paymentRecord)
+  const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
   if (payErr) {
     console.error("[whop-webhook] Failed to create payment:", payErr.message)
   }
 
   // 4. Update lead status to "Paid" (conversion happens after onboarding review)
   if (leadId) {
-    await supabase
+    await getSupabase()
       .from("leads")
       .update({ status: "Paid", updated_at: new Date().toISOString() })
       .eq("id", leadId)
   }
 
-  // 5. Create task for follow-up
-  await supabase.from("tasks").insert({
-    task_title: `Whop payment received: ${clientName || email} — $${total} ${productTitle}`,
-    description: `Payment ${paymentId} received via Whop.\nClient: ${clientName || "N/A"}\nEmail: ${email || "N/A"}\nProduct: ${productTitle || "N/A"}\nAmount: $${total} ${currency}\n\nNext steps: Send onboarding/formation form link.`,
-    assigned_to: "Antonio",
-    priority: "High",
-    category: "Payment",
-    status: "todo",
-    account_id: accountId,
-  })
+  // 5. Check if there's a pending_activation waiting for this payment
+  if (email) {
+    const { data: pendingList } = await getSupabase()
+      .from("pending_activations")
+      .select("id, offer_token, lead_id")
+      .eq("status", "awaiting_payment")
+      .eq("client_email", email)
+      .limit(1)
 
-  console.log(`[whop-webhook] Payment processed. Account: ${accountId || "none"}, Lead: ${leadId || "none"}, Task created.`)
+    if (pendingList && pendingList.length > 0) {
+      const pending = pendingList[0]
+      // Update pending_activation → payment_confirmed
+      await getSupabase()
+        .from("pending_activations")
+        .update({
+          status: "payment_confirmed",
+          payment_confirmed_at: new Date().toISOString(),
+          payment_method: "whop",
+          whop_membership_id: paymentId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pending.id)
+
+      console.log(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
+
+      // Trigger Stage 0 activation via internal endpoint
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : "http://localhost:3000"
+        await fetch(`${baseUrl}/api/workflows/activate-formation`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${process.env.API_SECRET_TOKEN}`
+          },
+          body: JSON.stringify({ pending_activation_id: pending.id }),
+        })
+      } catch (e) {
+        console.error("[whop-webhook] Failed to trigger activate-formation:", e)
+      }
+    } else {
+      // No pending activation — create follow-up task as before
+      await getSupabase().from("tasks").insert({
+        task_title: `Whop payment received: ${clientName || email} — $${total} ${productTitle}`,
+        description: `Payment ${paymentId} received via Whop.\nClient: ${clientName || "N/A"}\nEmail: ${email || "N/A"}\nProduct: ${productTitle || "N/A"}\nAmount: $${total} ${currency}\n\nNo pending activation found — check if contract was signed.`,
+        assigned_to: "Antonio",
+        priority: "High",
+        category: "Payment",
+        status: "todo",
+        account_id: accountId,
+      })
+    }
+  } else {
+    // No email — create follow-up task
+    await getSupabase().from("tasks").insert({
+      task_title: `Whop payment received: ${clientName || "unknown"} — $${total} ${productTitle}`,
+      description: `Payment ${paymentId} received via Whop.\nNo email found.\nProduct: ${productTitle || "N/A"}\nAmount: $${total} ${currency}`,
+      assigned_to: "Antonio",
+      priority: "High",
+      category: "Payment",
+      status: "todo",
+    })
+  }
+
+  console.log(`[whop-webhook] Payment processed. Account: ${accountId || "none"}, Lead: ${leadId || "none"}`)
 }
 
 async function handleMembershipEvent(
@@ -206,7 +266,7 @@ async function handleMembershipEvent(
   console.log(`[whop-webhook] ${eventType}: ${membershipId} — status: ${status}`)
 
   // Log webhook event
-  await supabase.from("webhook_events").insert({
+  await getSupabase().from("webhook_events").insert({
     source: "whop",
     event_type: eventType,
     external_id: membershipId,
@@ -235,7 +295,7 @@ export async function POST(req: NextRequest) {
 
     if (!rawEventType) {
       console.error("[whop-webhook] No event type found in payload. Keys:", Object.keys(payload).join(", "))
-      await supabase.from("webhook_events").insert({
+      await getSupabase().from("webhook_events").insert({
         source: "whop",
         event_type: "unknown_no_type",
         external_id: (payload.id || data.id || "unknown") as string,
@@ -253,7 +313,7 @@ export async function POST(req: NextRequest) {
 
       case "payment_failed":
         console.log("[whop-webhook] Payment failed:", data)
-        await supabase.from("webhook_events").insert({
+        await getSupabase().from("webhook_events").insert({
           source: "whop",
           event_type: "payment_failed",
           external_id: (data.id as string) || "unknown",
@@ -264,7 +324,7 @@ export async function POST(req: NextRequest) {
       case "payment_created":
       case "payment_pending":
         console.log(`[whop-webhook] ${eventType}:`, data)
-        await supabase.from("webhook_events").insert({
+        await getSupabase().from("webhook_events").insert({
           source: "whop",
           event_type: eventType,
           external_id: (data.id as string) || "unknown",
@@ -286,7 +346,7 @@ export async function POST(req: NextRequest) {
 
       default:
         console.log(`[whop-webhook] Unhandled event: ${eventType}`)
-        await supabase.from("webhook_events").insert({
+        await getSupabase().from("webhook_events").insert({
           source: "whop",
           event_type: eventType || "unknown",
           external_id: (data.id as string) || "unknown",

@@ -6,12 +6,18 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+let _supabase: SupabaseClient | null = null
+function getSupabase() {
+  if (!_supabase) {
+    _supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+  }
+  return _supabase
+}
 
 async function verifySignature(body: string, signature: string | null): Promise<boolean> {
   const secret = process.env.CIRCLEBACK_SIGNING_SECRET
@@ -76,7 +82,7 @@ export async function POST(req: NextRequest) {
         .filter(Boolean)
 
       if (attendeeEmails.length > 0) {
-        const { data: leads } = await supabase
+        const { data: leads } = await getSupabase()
           .from('leads')
           .select('id')
           .in('email', attendeeEmails)
@@ -106,7 +112,7 @@ export async function POST(req: NextRequest) {
       updated_at: new Date().toISOString(),
     }
 
-    const { error } = await supabase
+    const { error } = await getSupabase()
       .from('call_summaries')
       .upsert(record, { onConflict: 'circleback_id' })
 

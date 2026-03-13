@@ -410,6 +410,17 @@ export default function ContractPage() {
         } catch { /* retry */ }
       }
 
+      // Notify backend that contract was signed → creates pending_activation
+      try {
+        await fetch('/api/webhooks/offer-signed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offer_token: offer.token })
+        })
+      } catch (e) {
+        console.warn('[contract] Failed to notify offer-signed webhook:', e)
+      }
+
       // Post-sign behavior — show payment choice buttons
       const hasCard = offer.payment_links && offer.payment_links.length > 0
       const hasBank = !!offer.bank_details

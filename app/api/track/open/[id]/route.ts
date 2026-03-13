@@ -5,7 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { createClient } from "@supabase/supabase-js"
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
 
 // 1x1 transparent GIF (43 bytes)
 const PIXEL = Buffer.from(
@@ -13,11 +13,17 @@ const PIXEL = Buffer.from(
   "base64"
 )
 
-// Use service role to bypass RLS
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Lazy-init to avoid build-time crash
+let _supabase: SupabaseClient | null = null
+function getSupabase() {
+  if (!_supabase) {
+    _supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+  }
+  return _supabase
+}
 
 export async function GET(
   _req: NextRequest,
@@ -27,7 +33,7 @@ export async function GET(
 
   // Fire-and-forget: atomically increment open count
   try {
-    await supabase.rpc("increment_email_open", { p_tracking_id: trackingId })
+    await getSupabase().rpc("increment_email_open", { p_tracking_id: trackingId })
   } catch {
     // Silently fail — don't break the pixel response
   }

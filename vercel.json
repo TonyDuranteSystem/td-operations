@@ -11,6 +11,10 @@
     {
       "path": "/api/sync-airtable",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/check-wire-payments",
+      "schedule": "0 */6 * * *"
     }
   ],
   "rewrites": [
