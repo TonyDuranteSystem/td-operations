@@ -608,7 +608,7 @@ export function registerOfferTools(server: McpServer) {
               ``,
               `🔗 Offer URL: https://offerte.tonydurante.us/?t=${token}&c=${offer.access_code}`,
               ``,
-              result.hasWarnings ? `⚠️ Warnings: ${result.steps.filter(s => s.status === "error").map(s => `${s.step}: ${s.error}`).join(", ")}` : "",
+              result.hasWarnings ? `⚠️ Steps: ${result.steps.map(s => `${s.step}=${s.status}`).join(", ")}` : "",
             ].filter(Boolean).join("\n"),
           }],
         }
