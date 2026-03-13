@@ -9,7 +9,9 @@ import {
   STEPS,
   getFieldsForStep,
   getProvider,
+  getUploads,
   type BankingSubmission,
+  type BankingProvider,
   type FieldConfig,
   type LabelKey,
   type ProviderConfig,
@@ -158,12 +160,11 @@ export default function BankingFormPage() {
 
   useEffect(() => {
     if (submission) {
-      document.title = lang === 'en'
-        ? `EUR Banking Application \u2014 ${token}`
-        : `Richiesta Conto EUR \u2014 ${token}`
+      const PLabel = providerConfig.labels[lang]
+      document.title = `${PLabel.title} \u2014 ${token}`
       document.documentElement.lang = lang
     }
-  }, [submission, lang, token])
+  }, [submission, lang, token, providerConfig])
 
   // ─── Form Field Handling ────────────────────────────────
 
@@ -187,8 +188,10 @@ export default function BankingFormPage() {
 
   // ─── Validation ─────────────────────────────────────────
 
+  const providerId: BankingProvider = providerConfig.id
+
   function getRequiredFieldsForStep(step: number): FieldConfig[] {
-    return getFieldsForStep(step).filter(f => f.required)
+    return getFieldsForStep(step, providerId).filter(f => f.required)
   }
 
   function isStepValid(step: number): boolean {
@@ -197,15 +200,21 @@ export default function BankingFormPage() {
       const val = formData[f.key]
       return val !== undefined && val !== null && String(val).trim() !== ''
     })
-    // Step 2 also requires both file uploads
-    if (step === 2) {
-      return fieldsValid && !!uploadFiles.proof_of_address && !!uploadFiles.business_bank_statement
+    // Upload validation — on the step that shows uploads (last non-partner step)
+    const uploadsStep = providerId === 'relay' ? 2 : 2
+    if (step === uploadsStep) {
+      const requiredUploads = getUploads(providerId).filter(u => u.required)
+      const uploadsValid = requiredUploads.every(u => !!uploadFiles[u.key])
+      return fieldsValid && uploadsValid
     }
     return fieldsValid
   }
 
-  // Always 2 steps
   function getVisibleSteps(): number[] {
+    if (providerId === 'relay') {
+      // Show step 3 (partner) only if has_partner = 'Yes'
+      return formData.has_partner === 'Yes' ? [1, 2, 3] : [1, 2]
+    }
     return [1, 2]
   }
 
@@ -355,75 +364,93 @@ export default function BankingFormPage() {
 
   // ─── Render Step Content ────────────────────────────────
 
-  function renderStepContent(step: number) {
-    if (!submission) return null
-    const fields = getFieldsForStep(step)
-
-    if (step === 1) {
-      // Step 1: Personal Information fields
-      return (
-        <div className="tf-step-content">
-          <h2 className="tf-step-title">{L.step1Title}</h2>
-          <div className="tf-fields-grid">
-            {fields.map(f => renderField(f))}
-          </div>
-        </div>
-      )
+  function getStepTitle(step: number): string {
+    if (providerId === 'relay') {
+      if (step === 1) return L.relayStep1Title
+      if (step === 2) return L.relayStep2Title
+      if (step === 3) return L.relayStep3Title
+      return ''
     }
+    // Payset
+    if (step === 1) return L.step1Title
+    return L.step2Title
+  }
 
-    // Step 2: Business Information + Documents + Review + Disclaimer
+  function renderUploads() {
+    const uploads = getUploads(providerId)
     return (
-      <div className="tf-step-content">
-        <h2 className="tf-step-title">{L.step2Title}</h2>
-
-        {/* Business fields */}
-        <div className="tf-fields-grid">
-          {fields.map(f => renderField(f))}
-        </div>
-
-        {/* Document uploads */}
-        <div className="tf-docs-section" style={{ marginTop: 28 }}>
-          <div className="tf-doc-item">
-            <span>{L.proof_of_address}</span>
-            <div className="tf-doc-upload">
-              <span className="tf-doc-missing">{L.uploadRequired}</span>
-              <input
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={e => setUploadFiles(prev => ({ ...prev, proof_of_address: e.target.files?.[0] || null }))}
-              />
+      <div className="tf-docs-section" style={{ marginTop: 28 }}>
+        {uploads.map(u => {
+          const labelKey = u.key as LabelKey
+          return (
+            <div key={u.key} className="tf-doc-item">
+              <span>{L[labelKey] || u.key}</span>
+              <div className="tf-doc-upload">
+                {u.required && <span className="tf-doc-missing">{L.uploadRequired}</span>}
+                <input
+                  type="file"
+                  accept={u.accept}
+                  onChange={e => setUploadFiles(prev => ({ ...prev, [u.key]: e.target.files?.[0] || null }))}
+                />
+              </div>
             </div>
-          </div>
-          <div className="tf-doc-item">
-            <span>{L.business_bank_statement}</span>
-            <div className="tf-doc-upload">
-              <span className="tf-doc-missing">{L.uploadRequired}</span>
-              <input
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={e => setUploadFiles(prev => ({ ...prev, business_bank_statement: e.target.files?.[0] || null }))}
-              />
-            </div>
-          </div>
-        </div>
+          )
+        })}
+      </div>
+    )
+  }
 
-        {/* Review summary */}
-        <div className="tf-review-summary">
-          <h3>{lang === 'en' ? 'Summary' : 'Riepilogo'}</h3>
-          <div className="tf-summary-grid">
-            <div><strong>{L.first_name}:</strong> {String(formData.first_name || '\u2014')}</div>
-            <div><strong>{L.last_name}:</strong> {String(formData.last_name || '\u2014')}</div>
-            <div><strong>{L.personal_country}:</strong> {String(formData.personal_country || '\u2014')}</div>
-            <div><strong>{L.business_name}:</strong> {String(formData.business_name || '\u2014')}</div>
-            <div><strong>{L.business_type}:</strong> {String(formData.business_type || '\u2014')}</div>
-            <div><strong>{L.business_model}:</strong> {String(formData.business_model || '\u2014')}</div>
-            <div><strong>{PL.monthlyVolumeLabel}:</strong> {formData.monthly_volume ? `${String(formData.monthly_volume)} ${providerConfig.currency}` : '\u2014'}</div>
-            <div><strong>{L.phone}:</strong> {String(formData.phone || '\u2014')}</div>
-            <div><strong>{L.email}:</strong> {String(formData.email || '\u2014')}</div>
-          </div>
+  function renderPaysetSummary() {
+    return (
+      <div className="tf-review-summary">
+        <h3>{lang === 'en' ? 'Summary' : 'Riepilogo'}</h3>
+        <div className="tf-summary-grid">
+          <div><strong>{L.first_name}:</strong> {String(formData.first_name || '\u2014')}</div>
+          <div><strong>{L.last_name}:</strong> {String(formData.last_name || '\u2014')}</div>
+          <div><strong>{L.personal_country}:</strong> {String(formData.personal_country || '\u2014')}</div>
+          <div><strong>{L.business_name}:</strong> {String(formData.business_name || '\u2014')}</div>
+          <div><strong>{L.business_type}:</strong> {String(formData.business_type || '\u2014')}</div>
+          <div><strong>{L.business_model}:</strong> {String(formData.business_model || '\u2014')}</div>
+          <div><strong>{PL.monthlyVolumeLabel}:</strong> {formData.monthly_volume ? `${String(formData.monthly_volume)} ${providerConfig.currency}` : '\u2014'}</div>
+          <div><strong>{L.phone}:</strong> {String(formData.phone || '\u2014')}</div>
+          <div><strong>{L.email}:</strong> {String(formData.email || '\u2014')}</div>
         </div>
+      </div>
+    )
+  }
 
-        {/* Disclaimer */}
+  function renderRelaySummary() {
+    return (
+      <div className="tf-review-summary">
+        <h3>{lang === 'en' ? 'Summary' : 'Riepilogo'}</h3>
+        <div className="tf-summary-grid">
+          <div><strong>{L.business_name}:</strong> {String(formData.business_name || '\u2014')}</div>
+          <div><strong>{L.ein}:</strong> {String(formData.ein || '\u2014')}</div>
+          <div><strong>{L.avg_monthly_revenue}:</strong> {formData.avg_monthly_revenue ? `$${String(formData.avg_monthly_revenue)}` : '\u2014'}</div>
+          <div><strong>{L.first_name}:</strong> {String(formData.first_name || '\u2014')}</div>
+          <div><strong>{L.last_name}:</strong> {String(formData.last_name || '\u2014')}</div>
+          <div><strong>{L.equity_pct}:</strong> {formData.equity_pct ? `${String(formData.equity_pct)}%` : '\u2014'}</div>
+          <div><strong>{L.personal_phone}:</strong> {String(formData.personal_phone || '\u2014')}</div>
+          <div><strong>{L.personal_email}:</strong> {String(formData.personal_email || '\u2014')}</div>
+          {formData.has_partner === 'Yes' && (
+            <>
+              <div style={{ gridColumn: '1 / -1', marginTop: 8, fontWeight: 700, color: 'var(--tf-blue)' }}>
+                {lang === 'en' ? 'Partner:' : 'Socio:'}
+              </div>
+              <div><strong>{L.partner_first_name}:</strong> {String(formData.partner_first_name || '\u2014')}</div>
+              <div><strong>{L.partner_last_name}:</strong> {String(formData.partner_last_name || '\u2014')}</div>
+              <div><strong>{L.partner_equity_pct}:</strong> {formData.partner_equity_pct ? `${String(formData.partner_equity_pct)}%` : '\u2014'}</div>
+              <div><strong>{L.partner_email}:</strong> {String(formData.partner_email || '\u2014')}</div>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  function renderDisclaimer() {
+    return (
+      <>
         <div className="tf-disclaimer">
           <label className="tf-disclaimer-label">
             <input
@@ -435,10 +462,74 @@ export default function BankingFormPage() {
             <span>{PL.disclaimer}</span>
           </label>
         </div>
-
         {submitError && <div className="tf-error-msg">{submitError}</div>}
-      </div>
+      </>
     )
+  }
+
+  function renderStepContent(step: number) {
+    if (!submission) return null
+    const fields = getFieldsForStep(step, providerId)
+    const lastStep = isLastStep(step)
+
+    // ─── PAYSET ─────────────────────────────
+    if (providerId === 'payset') {
+      if (step === 1) {
+        return (
+          <div className="tf-step-content">
+            <h2 className="tf-step-title">{getStepTitle(step)}</h2>
+            <div className="tf-fields-grid">{fields.map(f => renderField(f))}</div>
+          </div>
+        )
+      }
+      // Step 2: fields + uploads + summary + disclaimer
+      return (
+        <div className="tf-step-content">
+          <h2 className="tf-step-title">{getStepTitle(step)}</h2>
+          <div className="tf-fields-grid">{fields.map(f => renderField(f))}</div>
+          {renderUploads()}
+          {renderPaysetSummary()}
+          {renderDisclaimer()}
+        </div>
+      )
+    }
+
+    // ─── RELAY ──────────────────────────────
+    if (step === 1) {
+      return (
+        <div className="tf-step-content">
+          <h2 className="tf-step-title">{getStepTitle(step)}</h2>
+          <div className="tf-fields-grid">{fields.map(f => renderField(f))}</div>
+        </div>
+      )
+    }
+
+    if (step === 2) {
+      // Owner info + uploads + (summary + disclaimer only if last step)
+      return (
+        <div className="tf-step-content">
+          <h2 className="tf-step-title">{getStepTitle(step)}</h2>
+          <div className="tf-fields-grid">{fields.map(f => renderField(f))}</div>
+          {renderUploads()}
+          {lastStep && renderRelaySummary()}
+          {lastStep && renderDisclaimer()}
+        </div>
+      )
+    }
+
+    if (step === 3) {
+      // Partner info + summary + disclaimer (always last step)
+      return (
+        <div className="tf-step-content">
+          <h2 className="tf-step-title">{getStepTitle(step)}</h2>
+          <div className="tf-fields-grid">{fields.map(f => renderField(f))}</div>
+          {renderRelaySummary()}
+          {renderDisclaimer()}
+        </div>
+      )
+    }
+
+    return null
   }
 
   // ─── Render States ──────────────────────────────────────
@@ -524,7 +615,8 @@ export default function BankingFormPage() {
   const nextStep = getNextStep(currentStep)
 
   // Hero label: show business name from prefilled_data
-  const heroLabel = (submission.prefilled_data?.business_name as string) || 'Payset IBAN'
+  const defaultHero = providerId === 'relay' ? 'Relay Business Account' : 'Payset IBAN'
+  const heroLabel = (submission.prefilled_data?.business_name as string) || defaultHero
 
   return (
     <>

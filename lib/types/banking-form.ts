@@ -104,25 +104,51 @@ export interface FieldConfig {
   key: string
   type: FieldType
   required: boolean
-  step: 1 | 2
+  step: 1 | 2 | 3
   /** CRM field to pre-fill from. Format: "contacts.column" or "accounts.column" */
   prefillFrom?: string
   options?: string[]
 }
 
+// ─── Upload Config ──────────────────────────────────────────
+
+export interface UploadConfig {
+  key: string
+  required: boolean
+  accept: string
+}
+
+export const PAYSET_UPLOADS: UploadConfig[] = [
+  { key: 'proof_of_address', required: true, accept: '.pdf,.jpg,.jpeg,.png' },
+  { key: 'business_bank_statement', required: true, accept: '.pdf,.jpg,.jpeg,.png' },
+]
+
+export const RELAY_UPLOADS: UploadConfig[] = [
+  { key: 'passport_image', required: true, accept: '.jpg,.jpeg,.png' },
+  { key: 'proof_of_address', required: true, accept: '.pdf,.jpg,.jpeg,.png' },
+]
+
+export function getUploads(provider: BankingProvider): UploadConfig[] {
+  return provider === 'relay' ? RELAY_UPLOADS : PAYSET_UPLOADS
+}
+
 // ─── Step Labels ────────────────────────────────────────────
 
-export const STEPS = {
-  en: ['Personal Information', 'Business Information & Documents'],
-  it: ['Informazioni Personali', 'Informazioni Aziendali e Documenti'],
-} as const
+export const STEPS: Record<BankingProvider, { en: string[]; it: string[] }> = {
+  payset: {
+    en: ['Personal Information', 'Business Information & Documents'],
+    it: ['Informazioni Personali', 'Informazioni Aziendali e Documenti'],
+  },
+  relay: {
+    en: ['Business Information', 'Owner Information & Documents', 'Partner Information'],
+    it: ['Informazioni Aziendali', 'Informazioni Titolare e Documenti', 'Informazioni Socio'],
+  },
+}
 
-// ─── Field Definitions ──────────────────────────────────────
+// ─── Field Definitions — Payset (EUR IBAN) ──────────────────
 
-export const FORM_FIELDS: FieldConfig[] = [
-  // ═══════════════════════════════════════
-  // STEP 1: Personal Information
-  // ═══════════════════════════════════════
+export const PAYSET_FIELDS: FieldConfig[] = [
+  // Step 1: Personal Information
   { key: 'first_name', type: 'text', required: true, step: 1, prefillFrom: 'contacts.first_name' },
   { key: 'last_name', type: 'text', required: true, step: 1, prefillFrom: 'contacts.last_name' },
   { key: 'personal_street', type: 'text', required: true, step: 1 },
@@ -131,9 +157,7 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'personal_zip', type: 'text', required: true, step: 1 },
   { key: 'personal_country', type: 'country', required: true, step: 1, prefillFrom: 'contacts.citizenship' },
 
-  // ═══════════════════════════════════════
-  // STEP 2: Business Information & Documents
-  // ═══════════════════════════════════════
+  // Step 2: Business Information & Documents
   { key: 'business_name', type: 'text', required: true, step: 2, prefillFrom: 'accounts.company_name' },
   { key: 'business_street', type: 'text', required: true, step: 2 },
   { key: 'business_city', type: 'text', required: true, step: 2 },
@@ -152,10 +176,53 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'monthly_volume', type: 'number', required: true, step: 2 },
 ]
 
-// ─── Get fields for a specific step ─────────────────────────
+// ─── Field Definitions — Relay (USD Business Account) ───────
 
-export function getFieldsForStep(step: number): FieldConfig[] {
-  return FORM_FIELDS.filter(f => f.step === step)
+export const RELAY_FIELDS: FieldConfig[] = [
+  // Step 1: Business Information
+  { key: 'business_name', type: 'text', required: true, step: 1, prefillFrom: 'accounts.company_name' },
+  { key: 'phone', type: 'phone', required: true, step: 1, prefillFrom: 'contacts.phone' },
+  { key: 'email', type: 'email', required: true, step: 1, prefillFrom: 'contacts.email' },
+  { key: 'ein', type: 'text', required: true, step: 1, prefillFrom: 'accounts.ein' },
+  { key: 'business_description', type: 'textarea', required: true, step: 1 },
+  { key: 'avg_monthly_revenue', type: 'number', required: true, step: 1 },
+  { key: 'other_us_bank', type: 'text', required: false, step: 1 },
+
+  // Step 2: Owner Information & Documents
+  { key: 'last_name', type: 'text', required: true, step: 2, prefillFrom: 'contacts.last_name' },
+  { key: 'first_name', type: 'text', required: true, step: 2, prefillFrom: 'contacts.first_name' },
+  { key: 'personal_street', type: 'text', required: true, step: 2 },
+  { key: 'personal_city', type: 'text', required: true, step: 2 },
+  { key: 'personal_state', type: 'text', required: true, step: 2 },
+  { key: 'personal_zip', type: 'text', required: true, step: 2 },
+  { key: 'personal_phone', type: 'phone', required: true, step: 2, prefillFrom: 'contacts.phone' },
+  { key: 'equity_pct', type: 'number', required: true, step: 2 },
+  { key: 'personal_email', type: 'email', required: true, step: 2, prefillFrom: 'contacts.email' },
+  { key: 'has_partner', type: 'select', required: true, step: 2, options: ['No', 'Yes'] },
+
+  // Step 3: Partner Information (only shown if has_partner = 'Yes')
+  { key: 'partner_last_name', type: 'text', required: true, step: 3 },
+  { key: 'partner_first_name', type: 'text', required: true, step: 3 },
+  { key: 'partner_street', type: 'text', required: true, step: 3 },
+  { key: 'partner_city', type: 'text', required: true, step: 3 },
+  { key: 'partner_state', type: 'text', required: true, step: 3 },
+  { key: 'partner_zip', type: 'text', required: true, step: 3 },
+  { key: 'partner_phone', type: 'phone', required: true, step: 3 },
+  { key: 'partner_equity_pct', type: 'number', required: true, step: 3 },
+  { key: 'partner_email', type: 'email', required: true, step: 3 },
+]
+
+// ─── Backward compat + provider-aware helpers ───────────────
+
+/** @deprecated Use getFormFields(provider, step) instead */
+export const FORM_FIELDS = PAYSET_FIELDS
+
+export function getFormFields(provider: BankingProvider): FieldConfig[] {
+  return provider === 'relay' ? RELAY_FIELDS : PAYSET_FIELDS
+}
+
+export function getFieldsForStep(step: number, provider: BankingProvider = 'payset'): FieldConfig[] {
+  return getFormFields(provider).filter(f => f.step === step)
 }
 
 // ─── Bilingual Labels ───────────────────────────────────────
@@ -182,22 +249,23 @@ export const LABELS = {
     emailGateError: 'The email does not match our records. Please try again.',
     emailPlaceholder: 'your@email.com',
 
-    // Step 1: Personal Information
-    step1Title: 'Personal Information',
+    // Prefill disclaimer
+    prefillDisclaimer: 'Some fields have been pre-filled with your information on file. Please verify that all pre-filled data is correct before submitting.',
+
+    // Shared field labels
     first_name: 'First Name',
     last_name: 'Last Name',
     personal_street: 'Street Address',
     personal_city: 'City',
     personal_state_province: 'State / Province',
+    personal_state: 'State / Province',
     personal_zip: 'ZIP / Postal Code',
     personal_country: 'Country of Residence',
-
-    // Step 2: Business Information & Documents
-    step2Title: 'Business Information & Documents',
     business_name: 'Business Name (LLC)',
     business_street: 'Business Street Address',
     business_city: 'Business City',
     business_state_province: 'Business State / Province',
+    business_state: 'State',
     business_zip: 'Business ZIP / Postal Code',
     business_country: 'Business Country',
     business_type: 'Business Type',
@@ -211,9 +279,39 @@ export const LABELS = {
     crypto_transactions: 'Cryptocurrency Transactions',
     monthly_volume: 'Expected Monthly Volume',
 
-    // Uploads
+    // Relay-specific field labels
+    ein: 'EIN Number',
+    entity_type: 'Entity Type',
+    mailing_address: 'Mailing Address',
+    avg_monthly_revenue: 'Average Monthly Revenue (USD)',
+    other_us_bank: 'Other US Bank Account',
+    business_description: 'Business Description',
+    personal_phone: 'Personal Phone',
+    equity_pct: 'Equity %',
+    personal_email: 'Personal Email',
+    has_partner: 'Do you have a business partner?',
+    partner_last_name: 'Partner Last Name',
+    partner_first_name: 'Partner First Name',
+    partner_street: 'Partner Street Address',
+    partner_city: 'Partner City',
+    partner_state: 'Partner State / Province',
+    partner_zip: 'Partner ZIP / Postal Code',
+    partner_phone: 'Partner Phone',
+    partner_equity_pct: 'Partner Equity %',
+    partner_email: 'Partner Email',
+
+    // Step titles (provider-specific)
+    step1Title: 'Personal Information',
+    step2Title: 'Business Information & Documents',
+    relayStep1Title: 'Business Information',
+    relayStep2Title: 'Owner Information & Documents',
+    relayStep3Title: 'Partner Information',
+
+    // Uploads — Payset
     proof_of_address: 'Proof of Address (utility bill or bank statement)',
     business_bank_statement: 'Business Bank Statement (last 3 months)',
+    // Uploads — Relay
+    passport_image: 'Passport Photo (JPG format, all 4 corners visible, no fingers)',
     uploadFile: 'Upload File',
     uploadRequired: 'Required',
 
@@ -255,22 +353,23 @@ export const LABELS = {
     emailGateError: 'L\'email non corrisponde ai nostri dati. Riprova.',
     emailPlaceholder: 'tua@email.com',
 
-    // Step 1: Informazioni Personali
-    step1Title: 'Informazioni Personali',
+    // Prefill disclaimer
+    prefillDisclaimer: 'Alcuni campi sono stati precompilati con i dati in nostro possesso. Si prega di verificare che tutte le informazioni precompilate siano corrette prima di inviare.',
+
+    // Shared field labels
     first_name: 'Nome',
     last_name: 'Cognome',
     personal_street: 'Indirizzo',
     personal_city: 'Città',
     personal_state_province: 'Stato / Provincia',
+    personal_state: 'Stato / Provincia',
     personal_zip: 'CAP / Codice Postale',
     personal_country: 'Paese di Residenza',
-
-    // Step 2: Informazioni Aziendali e Documenti
-    step2Title: 'Informazioni Aziendali e Documenti',
     business_name: 'Nome Azienda (LLC)',
     business_street: 'Indirizzo Aziendale',
     business_city: 'Città Aziendale',
     business_state_province: 'Stato / Provincia Aziendale',
+    business_state: 'Stato',
     business_zip: 'CAP Aziendale',
     business_country: 'Paese Aziendale',
     business_type: 'Tipo di Attività',
@@ -284,9 +383,39 @@ export const LABELS = {
     crypto_transactions: 'Transazioni in Criptovaluta',
     monthly_volume: 'Volume Mensile Previsto',
 
-    // Uploads
+    // Relay-specific field labels
+    ein: 'Numero EIN',
+    entity_type: 'Tipo di Entità',
+    mailing_address: 'Indirizzo Postale',
+    avg_monthly_revenue: 'Fatturato Mensile Medio (USD)',
+    other_us_bank: 'Altro Conto Bancario USA',
+    business_description: 'Descrizione Attività',
+    personal_phone: 'Telefono Personale',
+    equity_pct: 'Quota Societaria %',
+    personal_email: 'Email Personale',
+    has_partner: 'Hai un socio?',
+    partner_last_name: 'Cognome Socio',
+    partner_first_name: 'Nome Socio',
+    partner_street: 'Indirizzo Socio',
+    partner_city: 'Città Socio',
+    partner_state: 'Stato / Provincia Socio',
+    partner_zip: 'CAP Socio',
+    partner_phone: 'Telefono Socio',
+    partner_equity_pct: 'Quota Societaria Socio %',
+    partner_email: 'Email Socio',
+
+    // Step titles (provider-specific)
+    step1Title: 'Informazioni Personali',
+    step2Title: 'Informazioni Aziendali e Documenti',
+    relayStep1Title: 'Informazioni Aziendali',
+    relayStep2Title: 'Informazioni Titolare e Documenti',
+    relayStep3Title: 'Informazioni Socio',
+
+    // Uploads — Payset
     proof_of_address: 'Prova di Residenza (bolletta o estratto conto)',
     business_bank_statement: 'Estratto Conto Aziendale (ultimi 3 mesi)',
+    // Uploads — Relay
+    passport_image: 'Foto Passaporto (formato JPG, tutti e 4 gli angoli visibili, senza dita)',
     uploadFile: 'Carica File',
     uploadRequired: 'Obbligatorio',
 
@@ -369,5 +498,46 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   business_bank_statement: {
     en: 'Upload your company\'s bank statement for the last 3 months.',
     it: 'Carica l\'estratto conto della tua azienda degli ultimi 3 mesi.',
+  },
+  // Relay-specific
+  ein: {
+    en: 'Your Employer Identification Number (EIN) assigned by the IRS.',
+    it: 'Il tuo Employer Identification Number (EIN) assegnato dall\'IRS.',
+  },
+  business_description: {
+    en: 'Describe what your business does — products, services, industry.',
+    it: 'Descrivi cosa fa la tua azienda — prodotti, servizi, settore.',
+  },
+  avg_monthly_revenue: {
+    en: 'Estimated average monthly revenue in US dollars.',
+    it: 'Fatturato mensile medio stimato in dollari USA.',
+  },
+  other_us_bank: {
+    en: 'If you already have a US bank account, specify the bank name.',
+    it: 'Se hai già un conto bancario americano, specifica il nome della banca.',
+  },
+  personal_phone: {
+    en: 'Your personal phone number.',
+    it: 'Il tuo numero di telefono personale.',
+  },
+  equity_pct: {
+    en: 'Your ownership percentage in the company (e.g., 100 for sole owner, 50 for equal partners).',
+    it: 'La tua percentuale di proprietà nell\'azienda (es. 100 per unico titolare, 50 per soci paritari).',
+  },
+  personal_email: {
+    en: 'Your personal email address.',
+    it: 'Il tuo indirizzo email personale.',
+  },
+  has_partner: {
+    en: 'Select "Yes" if your LLC has more than one member/owner.',
+    it: 'Seleziona "Sì" se la tua LLC ha più di un membro/titolare.',
+  },
+  passport_image: {
+    en: 'Take a clear photo of your passport in JPG format. All 4 corners must be visible, no fingers covering the document.',
+    it: 'Scatta una foto chiara del tuo passaporto in formato JPG. Tutti e 4 gli angoli devono essere visibili, senza dita che coprono il documento.',
+  },
+  personal_state: {
+    en: 'Your state or province of residence.',
+    it: 'Il tuo stato o provincia di residenza.',
   },
 }

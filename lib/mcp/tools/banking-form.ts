@@ -26,7 +26,7 @@ export function registerBankingFormTools(server: McpServer) {
         // 1. Get account data
         const { data: account, error: acctErr } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, physical_address, state_of_formation")
+          .select("id, company_name, physical_address, state_of_formation, ein")
           .eq("id", account_id)
           .single()
         if (acctErr || !account) throw new Error(`Account not found: ${acctErr?.message || account_id}`)
@@ -53,15 +53,28 @@ export function registerBankingFormTools(server: McpServer) {
           .single()
         if (ctErr || !contact) throw new Error(`Contact not found: ${ctErr?.message || resolvedContactId}`)
 
-        // 4. Build prefilled data
-        const prefilled: Record<string, unknown> = {
-          first_name: contact.first_name || "",
-          last_name: contact.last_name || "",
-          personal_country: contact.citizenship || "",
-          business_name: account.company_name || "",
-          phone: contact.phone || "",
-          email: contact.email || "",
-        }
+        // 4. Build prefilled data (provider-specific)
+        const prefilled: Record<string, unknown> = provider === "relay"
+          ? {
+              // Relay: business + owner info
+              business_name: account.company_name || "",
+              phone: contact.phone || "",
+              email: contact.email || "",
+              ein: account.ein || "",
+              first_name: contact.first_name || "",
+              last_name: contact.last_name || "",
+              personal_phone: contact.phone || "",
+              personal_email: contact.email || "",
+            }
+          : {
+              // Payset: personal + business info
+              first_name: contact.first_name || "",
+              last_name: contact.last_name || "",
+              personal_country: contact.citizenship || "",
+              business_name: account.company_name || "",
+              phone: contact.phone || "",
+              email: contact.email || "",
+            }
 
         // 5. Generate token (includes provider prefix for uniqueness)
         const slug = (account.company_name || "form")
@@ -341,17 +354,25 @@ export function registerBankingFormTools(server: McpServer) {
             .eq("id", sub.account_id)
             .single()
 
-          // Create follow-up task
+          // Create follow-up task (provider-aware)
+          const isRelay = (sub.provider || "payset") === "relay"
+          const taskTitle = isRelay
+            ? `${acct?.company_name || "Client"} — Complete Relay USD account application`
+            : `${acct?.company_name || "Client"} — Schedule live Payset application session`
+          const taskDesc = isRelay
+            ? `Banking form completed. Data collected for Relay USD business account.\n\nNext: Submit the Relay application with the collected data.\n\nForm token: ${token}`
+            : `Banking form completed. Data collected for Payset IBAN application.\n\nNext: Schedule a live session via WhatsApp/Telegram to complete the Payset application together with the client (OTP verification required).\n\nForm token: ${token}`
+
           const { error: taskErr } = await supabaseAdmin
             .from("tasks")
             .insert({
-              task_title: `${acct?.company_name || "Client"} — Schedule live Payset application session`,
+              task_title: taskTitle,
               assigned_to: "Antonio",
               status: "To Do",
               priority: "High",
               category: "Client Communication",
               account_id: sub.account_id,
-              description: `Banking form completed. Data collected for Payset IBAN application.\n\nNext: Schedule a live session via WhatsApp/Telegram to complete the Payset application together with the client (OTP verification required).\n\nForm token: ${token}`,
+              description: taskDesc,
               created_by: "Claude",
             })
           if (taskErr) {
