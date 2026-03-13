@@ -213,6 +213,22 @@ git add path/to/specific-file.ts path/to/other-file.ts
 
 **Never commit files you didn't intentionally modify.** If `git status` shows unexpected deletions or modifications, investigate before committing.
 
+### When `git push` fails (non-fast-forward)
+Another machine pushed first. This is NORMAL in a multi-machine setup. Follow this sequence:
+1. `git pull --rebase origin main` — replay your commits on top of the latest remote
+2. If **no conflicts**: `npm run build` → if passes → `git push`
+3. If **conflicts exist**: **STOP**. List the conflicted files. Ask Antonio which version to keep.
+4. After resolving conflicts: `git rebase --continue` → `npm run build` → `git push`
+5. **NEVER run `git push --force`** — branch protection will block it, and it would destroy other machines' work
+
+### Simultaneous work on multiple machines
+When Antonio works on all 3 machines at once:
+- Each machine works on **different files** to minimize conflicts
+- Commit and push frequently (small commits > big commits)
+- Auto-pull runs every 5 minutes on each machine
+- If two machines edit the **same file**: the second to push will need `git pull --rebase`
+- If auto-pull finds uncommitted changes, it **skips** (by design) — no data loss
+
 ### Module-Level Initialization
 Never use `createClient()` at module level in API routes or lib files — Next.js evaluates these at build time when env vars may not exist. Use:
 - `import { supabaseAdmin } from "@/lib/supabase-admin"` (Proxy-based lazy init), or
