@@ -67,6 +67,7 @@ import { registerFormationTools } from "@/lib/mcp/tools/formation"
 import { registerOnboardingTools } from "@/lib/mcp/tools/onboarding"
 import { registerLeaseTools } from "@/lib/mcp/tools/lease"
 import { registerOaTools } from "@/lib/mcp/tools/oa"
+import { registerWelcomePackageTools } from "@/lib/mcp/tools/welcome-package"
 import { registerBankingFormTools } from "@/lib/mcp/tools/banking-form"
 import { registerJobTools } from "@/lib/mcp/tools/jobs"
 import { registerQbExpenseTools } from "@/lib/mcp/tools/qb-expenses"
@@ -111,6 +112,7 @@ const handler = createMcpHandler(
     registerLeaseTools(server)
     registerOaTools(server)
     registerBankingFormTools(server)
+    registerWelcomePackageTools(server)
     registerJobTools(server)
     registerQbExpenseTools(server)
   },
