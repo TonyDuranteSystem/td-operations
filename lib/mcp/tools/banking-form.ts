@@ -1,5 +1,6 @@
 /**
- * Banking Form Tools — Create, retrieve, and review Payset EUR banking application forms.
+ * Banking Form Tools — Create, retrieve, and review banking application forms.
+ * Supports Payset (EUR IBAN) and Relay (USD business account).
  * Follows the same pattern as formation form tools (formation.ts).
  */
 
@@ -151,7 +152,7 @@ export function registerBankingFormTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "banking_form_get",
-    "Get a Payset banking application form by token or account_id. Returns prefilled data, submitted data, status, timestamps, and changed fields.",
+    "Get a banking application form (Payset EUR or Relay USD) by token or account_id. Returns prefilled data, submitted data, status, timestamps, and changed fields.",
     {
       token: z.string().optional().describe("Form token (e.g., 'bank-real-alpha-2026')"),
       account_id: z.string().uuid().optional().describe("Account UUID"),
@@ -233,7 +234,7 @@ export function registerBankingFormTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "banking_form_review",
-    "Review a completed Payset banking form submission. Shows diff table of changed fields (pre-filled vs submitted). If apply_changes=true, updates the Banking Fintech service delivery status and creates a task to schedule the live Payset session. Always run without apply_changes first to review, then confirm with Antonio before applying.",
+    "Review a completed banking form submission (Payset EUR or Relay USD). Shows diff table of changed fields (pre-filled vs submitted). If apply_changes=true, updates the Banking Fintech service delivery status and creates a provider-specific follow-up task. Always run without apply_changes first to review, then confirm with Antonio before applying.",
     {
       token: z.string().describe("Form token to review"),
       apply_changes: z.boolean().optional().default(false).describe("If true, update service delivery + create follow-up task"),
@@ -275,17 +276,38 @@ export function registerBankingFormTools(server: McpServer) {
           "",
         ]
 
-        // Show submitted data summary — Personal info
-        lines.push("👤 Personal Info:")
-        lines.push(`   Name: ${submitted.first_name || ""} ${submitted.last_name || ""}`)
-        lines.push(`   Email: ${submitted.email || ""}`)
-        lines.push(`   Phone: ${submitted.phone || ""}`)
-        lines.push(`   Country: ${submitted.personal_country || ""}`)
-        lines.push("")
+        const isRelayProvider = (sub.provider || "payset") === "relay"
 
-        // Show submitted data summary — Business info
-        lines.push("🏢 Business Info:")
-        lines.push(`   Business Name: ${submitted.business_name || ""}`)
+        if (isRelayProvider) {
+          // Relay: Business + Owner info
+          lines.push("🏢 Business Info:")
+          lines.push(`   Business Name: ${submitted.business_name || ""}`)
+          lines.push(`   EIN: ${submitted.ein || ""}`)
+          lines.push(`   Avg Monthly Revenue: ${submitted.avg_monthly_revenue ? `$${submitted.avg_monthly_revenue}` : ""}`)
+          lines.push("")
+          lines.push("👤 Owner Info:")
+          lines.push(`   Name: ${submitted.first_name || ""} ${submitted.last_name || ""}`)
+          lines.push(`   Email: ${submitted.personal_email || ""}`)
+          lines.push(`   Phone: ${submitted.personal_phone || ""}`)
+          lines.push(`   Equity: ${submitted.equity_pct ? `${submitted.equity_pct}%` : ""}`)
+          if (submitted.has_partner === "Yes") {
+            lines.push("")
+            lines.push("👥 Partner:")
+            lines.push(`   Name: ${submitted.partner_first_name || ""} ${submitted.partner_last_name || ""}`)
+            lines.push(`   Email: ${submitted.partner_email || ""}`)
+            lines.push(`   Equity: ${submitted.partner_equity_pct ? `${submitted.partner_equity_pct}%` : ""}`)
+          }
+        } else {
+          // Payset: Personal + Business info
+          lines.push("👤 Personal Info:")
+          lines.push(`   Name: ${submitted.first_name || ""} ${submitted.last_name || ""}`)
+          lines.push(`   Email: ${submitted.email || ""}`)
+          lines.push(`   Phone: ${submitted.phone || ""}`)
+          lines.push(`   Country: ${submitted.personal_country || ""}`)
+          lines.push("")
+          lines.push("🏢 Business Info:")
+          lines.push(`   Business Name: ${submitted.business_name || ""}`)
+        }
         lines.push("")
 
         if (changeCount === 0) {
@@ -378,7 +400,7 @@ export function registerBankingFormTools(server: McpServer) {
           if (taskErr) {
             lines.push(`❌ Task creation failed: ${taskErr.message}`)
           } else {
-            lines.push(`✅ Task created: "${acct?.company_name || "Client"} — Schedule live Payset application session"`)
+            lines.push(`✅ Task created: "${taskTitle}"`)
           }
 
           // Mark form as reviewed

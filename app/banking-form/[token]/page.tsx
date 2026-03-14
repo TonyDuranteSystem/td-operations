@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 import {
@@ -44,6 +44,14 @@ function formatDateTime(d: string, lang: 'en' | 'it') {
 // ─── Main Component ─────────────────────────────────────────
 
 export default function BankingFormPage() {
+  return (
+    <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#6b7280' }}>Loading...</div>}>
+      <BankingFormContent />
+    </Suspense>
+  )
+}
+
+function BankingFormContent() {
   const params = useParams()
   const searchParams = useSearchParams()
   const token = params.token as string
@@ -201,7 +209,7 @@ export default function BankingFormPage() {
       return val !== undefined && val !== null && String(val).trim() !== ''
     })
     // Upload validation — on the step that shows uploads (last non-partner step)
-    const uploadsStep = providerId === 'relay' ? 2 : 2
+    const uploadsStep = 2
     if (step === uploadsStep) {
       const requiredUploads = getUploads(providerId).filter(u => u.required)
       const uploadsValid = requiredUploads.every(u => !!uploadFiles[u.key])
