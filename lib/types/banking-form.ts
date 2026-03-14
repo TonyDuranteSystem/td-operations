@@ -505,8 +505,8 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
     it: 'Il tuo Employer Identification Number (EIN) assegnato dall\'IRS.',
   },
   business_description: {
-    en: 'Describe what your business does — products, services, industry.',
-    it: 'Descrivi cosa fa la tua azienda — prodotti, servizi, settore.',
+    en: 'Describe what your business does — products, services, industry. Be as precise and detailed as possible: this is where the bank truly gets to know your business and evaluates what you do.',
+    it: 'Descrivi cosa fa la tua azienda — prodotti, servizi, settore. Sii il più preciso e dettagliato possibile: è qui che la banca vi conosce veramente e valuta quello che fate.',
   },
   avg_monthly_revenue: {
     en: 'Estimated average monthly revenue in US dollars.',
@@ -541,3 +541,4 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
     it: 'Il tuo stato o provincia di residenza.',
   },
 }
+// test conflict
