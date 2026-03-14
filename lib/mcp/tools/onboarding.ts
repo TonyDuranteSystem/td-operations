@@ -60,14 +60,14 @@ export function registerOnboardingTools(server: McpServer) {
         if (account_id) {
           const { data: acct } = await supabaseAdmin
             .from("accounts")
-            .select("company_name, state_of_formation, formation_date, ein, entity_type")
+            .select("company_name, state_of_formation, formation_date, ein_number, entity_type")
             .eq("id", account_id)
             .single()
           if (acct) {
             if (acct.company_name) prefilled.company_name = acct.company_name
             if (acct.state_of_formation) prefilled.state_of_formation = acct.state_of_formation
             if (acct.formation_date) prefilled.formation_date = acct.formation_date
-            if (acct.ein) prefilled.ein = acct.ein
+            if (acct.ein_number) prefilled.ein = acct.ein_number
           }
         }
 

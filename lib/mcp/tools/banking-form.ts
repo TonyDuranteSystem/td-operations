@@ -27,7 +27,7 @@ export function registerBankingFormTools(server: McpServer) {
         // 1. Get account data
         const { data: account, error: acctErr } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, physical_address, state_of_formation, ein")
+          .select("id, company_name, physical_address, state_of_formation, ein_number")
           .eq("id", account_id)
           .single()
         if (acctErr || !account) throw new Error(`Account not found: ${acctErr?.message || account_id}`)
@@ -61,7 +61,7 @@ export function registerBankingFormTools(server: McpServer) {
               business_name: account.company_name || "",
               phone: contact.phone || "",
               email: contact.email || "",
-              ein: account.ein || "",
+              ein: account.ein_number || "",
               first_name: contact.first_name || "",
               last_name: contact.last_name || "",
               personal_phone: contact.phone || "",
