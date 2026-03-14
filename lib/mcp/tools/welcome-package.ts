@@ -309,18 +309,20 @@ Prerequisites:
           try {
             const { listFolder } = await import("@/lib/google-drive")
             // Search Company subfolder first
-            const folderContents = await listFolder(account.drive_folder_id)
-            const companyFolder = folderContents.find((f: { name: string; mimeType: string }) =>
+            const folderResult = await listFolder(account.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+            const folderContents = folderResult.files || []
+            const companyFolder = folderContents.find(f =>
               f.name === "Company" && f.mimeType === "application/vnd.google-apps.folder"
             )
 
             const searchFolderId = companyFolder?.id || account.drive_folder_id
-            const files = await listFolder(searchFolderId)
+            const filesResult = await listFolder(searchFolderId) as { files?: { id: string; name: string }[] }
+            const files = filesResult.files || []
 
             for (const f of files) {
               const name = (f.name || "").toLowerCase()
-              if (name.includes("ein") && name.endsWith(".pdf") && !einFileId) einFileId = f.id
-              if (name.includes("articles") && name.endsWith(".pdf") && !articlesFileId) articlesFileId = f.id
+              if (name.includes("ein") && !einFileId) einFileId = f.id
+              if (name.includes("articles") && !articlesFileId) articlesFileId = f.id
             }
           } catch {
             // Drive errors are non-fatal
