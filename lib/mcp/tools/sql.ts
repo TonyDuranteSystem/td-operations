@@ -146,6 +146,11 @@ function validateStatement(stmt: string, isCtebody = false): ValidationResult {
     return { allowed: false, reason: "ALTER TABLE DROP COLUMN is blocked. Use Supabase Dashboard for schema changes.", isMutation: true }
   }
 
+  // 1b. Allow DDL statements (CREATE, ALTER) — they are not data mutations
+  if (/^\s*(CREATE|ALTER)\b/.test(upper)) {
+    return { allowed: true, isMutation: true }
+  }
+
   // 2. Detect mutations
   const updateMatch = upper.match(/\bUPDATE\s+(?:ONLY\s+)?("?\w+"?\.)?"?(\w+)"?\b/)
   const deleteMatch = upper.match(/\bDELETE\s+FROM\s+(?:ONLY\s+)?("?\w+"?\.)?"?(\w+)"?\b/)

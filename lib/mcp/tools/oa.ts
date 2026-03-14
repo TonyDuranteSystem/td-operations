@@ -1,0 +1,470 @@
+/**
+ * Operating Agreement MCP Tools
+ *
+ * Tools:
+ *   oa_create  — Create an OA record from CRM account data
+ *   oa_get     — Get OA details by token or account_id
+ *   oa_send    — Send OA link to client via Gmail with tracking
+ */
+
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { z } from "zod"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logAction } from "@/lib/mcp/action-log"
+import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+
+const OA_BASE_URL = "https://td-operations.vercel.app/operating-agreement"
+
+export function registerOaTools(server: McpServer) {
+
+  // ───────────────────────────────────────────────────────────
+  // oa_create
+  // ───────────────────────────────────────────────────────────
+  server.tool(
+    "oa_create",
+    `Create a new Operating Agreement for a Single Member LLC. Pulls company + member info from CRM account and linked contact.
+
+Prerequisites:
+- Account must exist with company_name and state_of_formation
+- Account must have at least one linked contact (the member)
+
+Supported states: NM, WY, FL. English only. SMLLC only.
+
+Defaults: business_purpose="any and all lawful business activities", fiscal_year_end="December 31", accounting_method="Cash", duration="Perpetual", principal_address=Tony Durante LLC office.
+
+The OA is created as 'draft'. Use oa_send to send the link to the client for signature.
+
+Admin preview: append ?preview=td to the OA URL to bypass the email gate.
+Example: https://td-operations.vercel.app/operating-agreement/{token}?preview=td
+ALWAYS provide the admin preview link after creating an OA so Antonio can review it before sending.
+
+Workflow: oa_create → oa_get (review via admin preview) → oa_send → client views → signs → PDF saved.`,
+    {
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
+      formation_date: z.string().optional().describe("Date LLC was formed YYYY-MM-DD (pulls from account if available)"),
+      ein_number: z.string().optional().describe("EIN (pulls from account if available)"),
+      business_purpose: z.string().optional().describe("Business purpose (default: 'any and all lawful business activities')"),
+      initial_contribution: z.string().optional().describe("Initial capital contribution (default: '$0.00')"),
+      fiscal_year_end: z.string().optional().describe("Fiscal year end (default: 'December 31')"),
+      accounting_method: z.string().optional().describe("Accounting method (default: 'Cash')"),
+      duration: z.string().optional().describe("Duration (default: 'Perpetual')"),
+      registered_agent_name: z.string().optional().describe("Registered agent name"),
+      registered_agent_address: z.string().optional().describe("Registered agent address"),
+      principal_address: z.string().optional().describe("Principal office address (default: '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771')"),
+      language: z.string().optional().describe("Language: 'en' only for now (default: 'en')"),
+    },
+    async (params) => {
+      try {
+        // ─── 1. FETCH ACCOUNT ───
+        const { data: account, error: accErr } = await supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, ein_number, state_of_formation, formation_date")
+          .eq("id", params.account_id)
+          .single()
+
+        if (accErr || !account) {
+          return { content: [{ type: "text" as const, text: `❌ Account not found: ${accErr?.message || "no data"}` }] }
+        }
+
+        // Validate state
+        const state = (account.state_of_formation || "").toUpperCase()
+        if (!OA_SUPPORTED_STATES.includes(state as typeof OA_SUPPORTED_STATES[number])) {
+          return { content: [{ type: "text" as const, text: `❌ State "${state}" not supported for OA. Supported: ${OA_SUPPORTED_STATES.join(", ")}` }] }
+        }
+
+        // ─── 2. FETCH PRIMARY CONTACT ───
+        const { data: contactLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("contact_id")
+          .eq("account_id", params.account_id)
+          .limit(1)
+
+        if (!contactLinks?.length) {
+          return { content: [{ type: "text" as const, text: `❌ No contacts linked to account "${account.company_name}". Link a contact first.` }] }
+        }
+
+        const { data: contact, error: contactErr } = await supabaseAdmin
+          .from("contacts")
+          .select("id, full_name, email, phone, address, language")
+          .eq("id", contactLinks[0].contact_id)
+          .single()
+
+        if (contactErr || !contact) {
+          return { content: [{ type: "text" as const, text: `❌ Contact not found: ${contactErr?.message || "no data"}` }] }
+        }
+
+        // ─── 3. CHECK DUPLICATE ───
+        const { data: existing } = await supabaseAdmin
+          .from("oa_agreements")
+          .select("id, token, status")
+          .eq("account_id", params.account_id)
+          .limit(1)
+
+        if (existing?.length) {
+          return { content: [{ type: "text" as const, text: `⚠️ OA already exists for ${account.company_name} (token: ${existing[0].token}, status: ${existing[0].status}). Use oa_get to view it.` }] }
+        }
+
+        // ─── 4. BUILD TOKEN ───
+        const companySlug = account.company_name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")
+        const year = new Date().getFullYear()
+        const token = `${companySlug}-oa-${year}`
+
+        // ─── 5. BUILD DATES ───
+        const today = new Date().toISOString().slice(0, 10)
+        const effectiveDate = params.effective_date || today
+        const formationDate = params.formation_date || account.formation_date || today
+        const ein = params.ein_number || account.ein_number || null
+
+        // ─── 6. INSERT ───
+        const { data: oa, error: insertErr } = await supabaseAdmin
+          .from("oa_agreements")
+          .insert({
+            token,
+            account_id: params.account_id,
+            contact_id: contact.id,
+            company_name: account.company_name,
+            state_of_formation: state,
+            formation_date: formationDate,
+            ein_number: ein,
+            member_name: contact.full_name,
+            member_address: contact.address || null,
+            member_email: contact.email || null,
+            effective_date: effectiveDate,
+            business_purpose: params.business_purpose || "any and all lawful business activities",
+            initial_contribution: params.initial_contribution || "$0.00",
+            fiscal_year_end: params.fiscal_year_end || "December 31",
+            accounting_method: params.accounting_method || "Cash",
+            duration: params.duration || "Perpetual",
+            registered_agent_name: params.registered_agent_name || null,
+            registered_agent_address: params.registered_agent_address || null,
+            principal_address: params.principal_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+            language: params.language || "en",
+            status: "draft",
+          })
+          .select("id, token, access_code")
+          .single()
+
+        if (insertErr || !oa) {
+          return { content: [{ type: "text" as const, text: `❌ Insert failed: ${insertErr?.message || "no data"}` }] }
+        }
+
+        logAction({
+          action_type: "create",
+          table_name: "oa_agreements",
+          record_id: oa.id,
+          account_id: params.account_id,
+          summary: `Created Operating Agreement for ${account.company_name} (${state})`,
+          details: { token: oa.token, state, member: contact.full_name },
+        })
+
+        const oaUrl = `${OA_BASE_URL}/${oa.token}?c=${oa.access_code}`
+        const adminPreviewUrl = `${OA_BASE_URL}/${oa.token}?preview=td`
+
+        const lines = [
+          `✅ Operating Agreement created for **${account.company_name}**`,
+          ``,
+          `Token: ${oa.token}`,
+          `State: ${state}`,
+          `Member: ${contact.full_name}`,
+          `Effective: ${effectiveDate}`,
+          `Formation: ${formationDate}`,
+          ein ? `EIN: ${ein}` : null,
+          `Status: draft`,
+          ``,
+          `👁️ Admin Preview: ${adminPreviewUrl}`,
+          `🔗 Client URL: ${oaUrl}`,
+          ``,
+          `⚠️ Review the admin preview FIRST, then use **oa_send** to send to the client.`,
+        ].filter(Boolean)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error: ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    }
+  )
+
+  // ───────────────────────────────────────────────────────────
+  // oa_get
+  // ───────────────────────────────────────────────────────────
+  server.tool(
+    "oa_get",
+    `Get full details of an Operating Agreement by token (e.g. 'acme-llc-oa-2026') or by account_id. Returns all fields including access_code, URL, status, signing info, and OA data.`,
+    {
+      token: z.string().optional().describe("OA token (e.g. 'acme-llc-oa-2026')"),
+      account_id: z.string().uuid().optional().describe("Account UUID"),
+    },
+    async (params) => {
+      try {
+        let query = supabaseAdmin.from("oa_agreements").select("*")
+
+        if (params.token) {
+          query = query.eq("token", params.token)
+        } else if (params.account_id) {
+          query = query.eq("account_id", params.account_id).order("created_at", { ascending: false }).limit(1)
+        } else {
+          return { content: [{ type: "text" as const, text: "❌ Provide either token or account_id" }] }
+        }
+
+        const { data, error: err } = await query.single()
+
+        if (err || !data) {
+          return { content: [{ type: "text" as const, text: `❌ OA not found: ${err?.message || "no data"}` }] }
+        }
+
+        const url = `${OA_BASE_URL}/${data.token}?c=${data.access_code}`
+        const adminPreviewUrl = `${OA_BASE_URL}/${data.token}?preview=td`
+
+        const lines = [
+          `📄 **Operating Agreement**`,
+          ``,
+          `Token: ${data.token}`,
+          `Status: ${data.status}`,
+          ``,
+          `**Company:** ${data.company_name}`,
+          `State: ${data.state_of_formation}`,
+          data.ein_number ? `EIN: ${data.ein_number}` : null,
+          `Formation Date: ${data.formation_date}`,
+          ``,
+          `**Member:** ${data.member_name}`,
+          data.member_address ? `Address: ${data.member_address}` : null,
+          data.member_email ? `Email: ${data.member_email}` : null,
+          ``,
+          `Effective Date: ${data.effective_date}`,
+          `Purpose: ${data.business_purpose}`,
+          `Contribution: ${data.initial_contribution}`,
+          `Fiscal Year: ${data.fiscal_year_end}`,
+          `Accounting: ${data.accounting_method}`,
+          `Duration: ${data.duration}`,
+          ``,
+          data.registered_agent_name ? `Registered Agent: ${data.registered_agent_name}` : null,
+          `Principal Office: ${data.principal_address}`,
+          ``,
+          `Views: ${data.view_count}${data.viewed_at ? ` (last: ${data.viewed_at})` : ""}`,
+          data.signed_at ? `✅ Signed: ${data.signed_at}` : "⏳ Not signed yet",
+          data.pdf_storage_path ? `PDF: ${data.pdf_storage_path}` : null,
+          ``,
+          `👁️ Admin Preview: ${adminPreviewUrl}`,
+          `🔗 Client URL: ${url}`,
+        ].filter(Boolean)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error: ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    }
+  )
+
+  // ───────────────────────────────────────────────────────────
+  // oa_send
+  // ───────────────────────────────────────────────────────────
+  server.tool(
+    "oa_send",
+    `Send the Operating Agreement link to the member via Gmail with open tracking. Sets status to 'sent'. Email is sent immediately (NOT a draft). Requires member_email to be set on the OA. Use gmail_track_status to check if the client opened the email.`,
+    {
+      token: z.string().describe("OA token to send"),
+    },
+    async (params) => {
+      try {
+        // Fetch OA
+        const { data: oa, error: err } = await supabaseAdmin
+          .from("oa_agreements")
+          .select("*")
+          .eq("token", params.token)
+          .single()
+
+        if (err || !oa) {
+          return { content: [{ type: "text" as const, text: `❌ OA not found: ${err?.message || "no data"}` }] }
+        }
+
+        if (!oa.member_email) {
+          return { content: [{ type: "text" as const, text: `❌ No member_email set on OA "${params.token}". Update the contact record first.` }] }
+        }
+
+        // ─── IDEMPOTENCY CHECK ───
+        const { data: existingTracking } = await supabaseAdmin
+          .from("email_tracking")
+          .select("tracking_id, created_at")
+          .eq("recipient", oa.member_email)
+          .ilike("subject", `%Operating Agreement%${oa.company_name}%`)
+          .limit(1)
+
+        if (existingTracking?.length && oa.status === "sent") {
+          return { content: [{ type: "text" as const, text: [
+            `⚠️ OA email already sent for "${params.token}"`,
+            ``,
+            `Tracking: ${existingTracking[0].tracking_id}`,
+            `Sent at: ${existingTracking[0].created_at}`,
+            ``,
+            `Use gmail_track_status to check if the client opened it.`,
+          ].join("\n") }] }
+        }
+
+        // Build URL
+        const url = `${OA_BASE_URL}/${oa.token}?c=${oa.access_code}`
+        const { gmailPost } = await import("@/lib/gmail")
+
+        const subject = `Operating Agreement — ${oa.company_name}`
+        const fromEmail = "support@tonydurante.us"
+
+        // Generate tracking ID
+        const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
+
+        // HTML email body
+        const htmlBody = `
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+  <p>Dear ${oa.member_name},</p>
+
+  <p>Your Operating Agreement for <strong>${oa.company_name}</strong> is ready for your review and signature.</p>
+
+  <p style="margin: 24px 0;">
+    <a href="${url}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+      Review &amp; Sign Operating Agreement
+    </a>
+  </p>
+
+  <p>You will be asked to verify your email address (<strong>${oa.member_email}</strong>) to access the document.</p>
+
+  <p>The Operating Agreement covers the formation and governance of your ${oa.state_of_formation} LLC, including:</p>
+  <ul style="line-height: 1.8;">
+    <li>Member rights and responsibilities</li>
+    <li>Capital contributions and distributions</li>
+    <li>Management structure</li>
+    <li>State-specific provisions for ${oa.state_of_formation}</li>
+  </ul>
+
+  <p>If you have any questions, please reply to this email or contact us on WhatsApp.</p>
+
+  <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
+</div>
+<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+
+        const plainText = `Dear ${oa.member_name},
+
+Your Operating Agreement for ${oa.company_name} is ready for your review and signature.
+
+Review and sign the agreement online:
+${url}
+
+You will be asked to verify your email address (${oa.member_email}) to access the document.
+
+The Operating Agreement covers the formation and governance of your ${oa.state_of_formation} LLC, including:
+- Member rights and responsibilities
+- Capital contributions and distributions
+- Management structure
+- State-specific provisions for ${oa.state_of_formation}
+
+If you have any questions, please reply to this email or contact us on WhatsApp.
+
+Best regards,
+Tony Durante LLC
+support@tonydurante.us`
+
+        // Build MIME multipart/alternative
+        const boundary = `boundary_${Date.now()}`
+        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+        const encodedSubject = hasNonAscii
+          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+          : subject
+
+        const mimeHeaders = [
+          `From: Tony Durante LLC <${fromEmail}>`,
+          `To: ${oa.member_email}`,
+          `Subject: ${encodedSubject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        ]
+
+        const mimeParts = [
+          mimeHeaders.join("\r\n"),
+          "",
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(plainText).toString("base64"),
+          "",
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(htmlBody).toString("base64"),
+          "",
+          `--${boundary}--`,
+        ]
+
+        const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
+
+        // Send via Gmail API
+        const result = await gmailPost("/messages/send", {
+          raw: encodedRaw,
+        }) as { id: string; threadId: string }
+
+        // ─── POST-SEND: Track + Update status ───
+        const steps: { step: string; status: string; error?: string }[] = [
+          { step: "send_email", status: "ok" },
+        ]
+
+        // Save tracking record
+        const { error: trackErr } = await supabaseAdmin.from("email_tracking").insert({
+          tracking_id: trackingId,
+          gmail_message_id: result.id,
+          gmail_thread_id: result.threadId,
+          recipient: oa.member_email,
+          subject,
+          from_email: fromEmail,
+          account_id: oa.account_id || null,
+        })
+        steps.push({ step: "save_tracking", status: trackErr ? "error" : "ok", error: trackErr?.message })
+
+        // NOW update status to "sent"
+        const { error: statusErr } = await supabaseAdmin
+          .from("oa_agreements")
+          .update({ status: "sent", updated_at: new Date().toISOString() })
+          .eq("id", oa.id)
+        steps.push({ step: "update_status", status: statusErr ? "error" : "ok", error: statusErr?.message })
+
+        logAction({
+          action_type: "send",
+          table_name: "oa_agreements",
+          record_id: oa.id,
+          account_id: oa.account_id,
+          summary: `Sent OA email for ${oa.company_name} to ${oa.member_email}`,
+          details: { token: params.token, gmail_message_id: result.id, tracking_id: trackingId },
+        })
+
+        const hasWarning = steps.some(s => s.status === "error")
+        const statusLine = hasWarning
+          ? `⚠️ Email sent but some follow-up steps had issues`
+          : `✅ OA email sent via Gmail`
+
+        return { content: [{ type: "text" as const, text: [
+          statusLine,
+          ``,
+          `📧 To: ${oa.member_email}`,
+          `📋 Subject: ${subject}`,
+          `🆔 Message ID: ${result.id}`,
+          `👁️ Open tracking: ${trackingId}`,
+          ``,
+          `Steps:`,
+          ...steps.map(s => `  ${s.status === "ok" ? "✅" : "❌"} ${s.step}${s.error ? ` — ${s.error}` : ""}`),
+          ``,
+          `Use gmail_track_status to check if the client opened the email.`,
+        ].join("\n") }] }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error sending OA email (OA status NOT changed): ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    }
+  )
+
+} // end registerOaTools
+
+// Helper
+function fmtDate(d: string) {
+  return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+}
