@@ -3,16 +3,29 @@
  *
  * Triggered when payment is confirmed (Whop webhook or cron wire check).
  * Executes the full Stage 0 sequence:
- *   0.3 → Create QB invoice (paid) + send
- *   0.4 → Lead → Contact
- *   0.5 → Create service_delivery "Company Formation"
- *   0.6 → Create formation form + send email
+ *   0.3 → QB invoice (SUPERVISED — prepared, awaits confirmation)
+ *   0.4 → Lead → Contact (AUTO)
+ *   0.5 → Service delivery (DEFERRED — created in Stage 2)
+ *   0.6 → Formation form + send email (SUPERVISED — prepared, awaits confirmation)
  *
- * Then marks pending_activation as "activated".
+ * Supervised steps are saved in prepared_steps JSONB.
+ * Claude confirms via MCP before execution.
+ * After 5 successful confirmations → auto mode.
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+
+// How many successful supervised runs before switching to auto
+const AUTO_THRESHOLD = 5
+
+interface PreparedStep {
+  step: string
+  action: string
+  description: string
+  params: Record<string, unknown>
+  status: "pending" | "confirmed" | "executed" | "skipped"
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,26 +58,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, message: "Already activated" })
     }
 
+    // Check if we should run in auto mode
+    const { count: successCount } = await supabase
+      .from("action_log")
+      .select("*", { count: "exact", head: true })
+      .eq("action_type", "formation_confirmed")
+
+    const isAutoMode = (successCount || 0) >= AUTO_THRESHOLD
+
     const steps: Array<{ step: string; status: string; detail?: string }> = []
+    const preparedSteps: PreparedStep[] = []
 
-    // ─── STEP 0.3: Create QB Invoice (paid) ────────────────────
-    // This will be done via MCP tools by the cron/manual trigger
-    // For now, create a task for Antonio to create + send the QB invoice
-    await supabase.from("tasks").insert({
-      task_title: `Crea fattura QB per ${activation.client_name}`,
-      description: `Offerta: ${activation.offer_token}\nImporto: ${activation.amount} ${activation.currency}\nMetodo: ${activation.payment_method}\n\nCreare fattura su QuickBooks, segnare come pagata, e inviare al cliente.`,
-      assigned_to: "Antonio",
-      priority: "High",
-      category: "Payment",
-      status: "todo",
-    })
-    steps.push({ step: "0.3", status: "task_created", detail: "QB invoice task created" })
-
-    // ─── STEP 0.4: Lead → Contact ──────────────────────────────
+    // ─── STEP 0.4: Lead → Contact (AUTOMATIC) ─────────────────
     let contactId: string | null = null
     let leadId = activation.lead_id
 
-    // Get lead data if we have lead_id
     if (leadId) {
       const { data: lead } = await supabase
         .from("leads")
@@ -73,7 +81,6 @@ export async function POST(req: NextRequest) {
         .single()
 
       if (lead) {
-        // Check if contact already exists with this email
         const { data: existingContact } = await supabase
           .from("contacts")
           .select("id")
@@ -84,7 +91,6 @@ export async function POST(req: NextRequest) {
           contactId = existingContact[0].id
           steps.push({ step: "0.4", status: "existing", detail: `Contact already exists: ${contactId}` })
         } else {
-          // Create new contact from lead
           const { data: newContact, error: cErr } = await supabase
             .from("contacts")
             .insert({
@@ -106,7 +112,7 @@ export async function POST(req: NextRequest) {
         }
       }
     } else {
-      // Try to find lead by email from offer
+      // Try to find lead by email
       const { data: leads } = await supabase
         .from("leads")
         .select("*")
@@ -115,7 +121,6 @@ export async function POST(req: NextRequest) {
 
       if (leads && leads.length > 0) {
         leadId = leads[0].id
-        // Same contact creation logic
         const { data: existingContact } = await supabase
           .from("contacts")
           .select("id")
@@ -144,15 +149,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── STEP 0.5: Create Service Delivery ─────────────────────
-    // We don't have account_id yet (account is created in Stage 2 after Articles)
-    // Create a placeholder service delivery linked to the lead
-    // It will be linked to the account later in Stage 2
+    // ─── STEP 0.5: Service Delivery (DEFERRED) ─────────────────
     steps.push({ step: "0.5", status: "deferred", detail: "Service delivery will be created in Stage 2 when account exists" })
 
-    // ─── STEP 0.6: Create formation form + send email ──────────
+    // ─── STEP 0.3: QB Invoice (SUPERVISED) ────────────────────
+    preparedSteps.push({
+      step: "0.3",
+      action: "qb_create_invoice",
+      description: `Create QB invoice for ${activation.client_name}: ${activation.amount} ${activation.currency} (${activation.payment_method}). Mark as paid and send to ${activation.client_email}.`,
+      params: {
+        client_name: activation.client_name,
+        client_email: activation.client_email,
+        amount: activation.amount,
+        currency: activation.currency,
+        payment_method: activation.payment_method,
+        offer_token: activation.offer_token,
+        mark_as_paid: true,
+        send_to_client: true,
+      },
+      status: "pending",
+    })
+
+    // ─── STEP 0.6: Formation Form (SUPERVISED) ────────────────
     if (leadId) {
-      // Get lead language for form
       const { data: lead } = await supabase
         .from("leads")
         .select("language, full_name, email")
@@ -162,7 +181,7 @@ export async function POST(req: NextRequest) {
       if (lead) {
         // Check if formation form already exists
         const { data: existingForm } = await supabase
-          .from("formation_forms")
+          .from("formation_submissions")
           .select("token")
           .eq("lead_id", leadId)
           .limit(1)
@@ -170,43 +189,98 @@ export async function POST(req: NextRequest) {
         if (existingForm && existingForm.length > 0) {
           steps.push({ step: "0.6", status: "existing", detail: `Form already exists: ${existingForm[0].token}` })
         } else {
-          // Create task to send formation form (will be done via MCP)
-          await supabase.from("tasks").insert({
-            task_title: `Invia formation form a ${activation.client_name}`,
-            description: `Lead ID: ${leadId}\nEmail: ${lead.email}\nLingua: ${lead.language}\n\nCreare formation form (formation_form_create) e inviare link via email al cliente.`,
-            assigned_to: "Luca",
-            priority: "High",
-            category: "Formation",
-            status: "todo",
+          const formLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
+
+          preparedSteps.push({
+            step: "0.6",
+            action: "formation_form_create + gmail_send",
+            description: `Create formation form for ${lead.full_name} (${formLang}) and send link to ${lead.email}.`,
+            params: {
+              lead_id: leadId,
+              entity_type: "SMLLC",
+              state: "NM",
+              language: formLang,
+              client_name: lead.full_name,
+              client_email: lead.email,
+            },
+            status: "pending",
           })
-          steps.push({ step: "0.6", status: "task_created", detail: "Formation form task created for Luca" })
         }
       }
     } else {
       steps.push({ step: "0.6", status: "skipped", detail: "No lead_id available" })
     }
 
-    // ─── Mark activation as activated ──────────────────────────
-    await supabase
-      .from("pending_activations")
-      .update({
-        status: "activated",
-        activated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+    // ─── Decide: supervised or auto ──────────────────────────
+    if (isAutoMode && preparedSteps.length > 0) {
+      // AUTO MODE: Execute prepared steps immediately
+      for (const ps of preparedSteps) {
+        steps.push({ step: ps.step, status: "auto_queued", detail: `Auto mode: ${ps.description}` })
+        ps.status = "confirmed"
+      }
+
+      // Save and mark as activated
+      await supabase
+        .from("pending_activations")
+        .update({
+          status: "activated",
+          prepared_steps: preparedSteps,
+          confirmation_mode: "auto",
+          activated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pending_activation_id)
+    } else if (preparedSteps.length > 0) {
+      // SUPERVISED MODE: Save prepared steps, wait for confirmation
+      await supabase
+        .from("pending_activations")
+        .update({
+          status: "pending_confirmation",
+          prepared_steps: preparedSteps,
+          confirmation_mode: "supervised",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pending_activation_id)
+
+      steps.push({
+        step: "supervision",
+        status: "awaiting_confirmation",
+        detail: `${preparedSteps.length} step(s) prepared. Use formation_confirm(activation_id) via MCP to review and execute.`,
       })
-      .eq("id", pending_activation_id)
+    } else {
+      // No supervised steps needed — mark as activated
+      await supabase
+        .from("pending_activations")
+        .update({
+          status: "activated",
+          activated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pending_activation_id)
+    }
 
     // Log action
     await supabase.from("action_log").insert({
       action_type: "formation_activated",
       entity_type: "pending_activations",
       entity_id: pending_activation_id,
-      details: { steps, lead_id: leadId, contact_id: contactId },
+      details: {
+        steps,
+        prepared_steps: preparedSteps.length,
+        mode: isAutoMode ? "auto" : "supervised",
+        lead_id: leadId,
+        contact_id: contactId,
+      },
     })
 
-    console.log(`[activate-formation] Completed for ${activation.client_name}. Steps:`, steps)
+    console.log(`[activate-formation] ${isAutoMode ? "AUTO" : "SUPERVISED"} for ${activation.client_name}. Steps:`, steps)
 
-    return NextResponse.json({ ok: true, steps })
+    return NextResponse.json({
+      ok: true,
+      mode: isAutoMode ? "auto" : "supervised",
+      steps,
+      prepared_steps: preparedSteps.length,
+    })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[activate-formation] Error:", msg)

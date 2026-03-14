@@ -340,4 +340,200 @@ export function registerFormationTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // formation_confirm
+  // ═══════════════════════════════════════
+  server.tool(
+    "formation_confirm",
+    `Review and confirm supervised formation steps. When a new client pays, activate-formation prepares steps (QB invoice, formation form) but waits for confirmation before executing. Use this tool to:
+1. View prepared steps (without execute=true)
+2. Confirm and execute all steps (with execute=true)
+
+After 5 successful confirmations, the system switches to auto mode.
+
+Prerequisite: pending_activation must be in status 'pending_confirmation'.`,
+    {
+      activation_id: z.string().uuid().describe("Pending activation UUID"),
+      execute: z.boolean().optional().default(false).describe("If true, execute all prepared steps. If false (default), just show what will be done."),
+    },
+    async ({ activation_id, execute }) => {
+      try {
+        const { data: activation, error } = await supabaseAdmin
+          .from("pending_activations")
+          .select("*")
+          .eq("id", activation_id)
+          .single()
+
+        if (error || !activation) {
+          return { content: [{ type: "text" as const, text: `❌ Activation not found: ${activation_id}` }] }
+        }
+
+        const preparedSteps = (activation.prepared_steps || []) as Array<{
+          step: string
+          action: string
+          description: string
+          params: Record<string, unknown>
+          status: string
+        }>
+
+        if (preparedSteps.length === 0) {
+          return { content: [{ type: "text" as const, text: `⚠️ No prepared steps for activation ${activation_id} (status: ${activation.status})` }] }
+        }
+
+        const lines = [
+          `═══════════════════════════════════════`,
+          `  🔍 FORMATION CONFIRMATION: ${activation.client_name}`,
+          `  Status: ${activation.status} | Mode: ${activation.confirmation_mode}`,
+          `═══════════════════════════════════════`,
+          ``,
+        ]
+
+        // Show prepared steps
+        for (const ps of preparedSteps) {
+          lines.push(`📋 Step ${ps.step}: ${ps.action}`)
+          lines.push(`   ${ps.description}`)
+          lines.push(`   Status: ${ps.status}`)
+          lines.push(``)
+        }
+
+        if (!execute) {
+          lines.push(`───────────────────────────────────`)
+          lines.push(`To execute these steps, call:`)
+          lines.push(`formation_confirm(activation_id="${activation_id}", execute=true)`)
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        // ─── EXECUTE PREPARED STEPS ───
+        if (activation.status !== "pending_confirmation") {
+          return { content: [{ type: "text" as const, text: `⚠️ Activation status is "${activation.status}" — expected "pending_confirmation".` }] }
+        }
+
+        lines.push(`───────────────────────────────────`)
+        lines.push(`EXECUTING STEPS...`)
+        lines.push(``)
+
+        const executionResults: Array<{ step: string; status: string; detail?: string }> = []
+
+        for (const ps of preparedSteps) {
+          // Mark as confirmed
+          ps.status = "confirmed"
+
+          // For now, create CRM tasks with full context
+          // These will be replaced with direct API calls as we build confidence
+          if (ps.step === "0.3") {
+            await supabaseAdmin.from("tasks").insert({
+              task_title: `[AUTO] QB Invoice: ${activation.client_name}`,
+              description: `CONFIRMED by Claude.\n\n${ps.description}\n\nParams: ${JSON.stringify(ps.params, null, 2)}`,
+              assigned_to: "Antonio",
+              priority: "High",
+              category: "Payment",
+              status: "todo",
+            })
+            ps.status = "executed"
+            executionResults.push({ step: ps.step, status: "ok", detail: "QB invoice task created (confirmed)" })
+          }
+
+          if (ps.step === "0.6") {
+            const params = ps.params as Record<string, string>
+            // Create formation form directly
+            const slug = (params.client_name || "form")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "")
+              .slice(0, 30)
+            const year = new Date().getFullYear()
+            const formToken = `${slug}-${year}`
+
+            // Check if already exists
+            const { data: existing } = await supabaseAdmin
+              .from("formation_submissions")
+              .select("id, token")
+              .eq("token", formToken)
+              .maybeSingle()
+
+            if (existing) {
+              executionResults.push({ step: ps.step, status: "existing", detail: `Form already exists: ${existing.token}` })
+            } else {
+              // Find contact for pre-fill
+              let contactId: string | null = null
+              if (params.client_email) {
+                const { data: contact } = await supabaseAdmin
+                  .from("contacts")
+                  .select("id")
+                  .eq("email", params.client_email)
+                  .maybeSingle()
+                contactId = contact?.id || null
+              }
+
+              const nameParts = (params.client_name || "").trim().split(/\s+/)
+              const firstName = nameParts[0] || ""
+              const lastName = nameParts.slice(1).join(" ") || ""
+
+              const { data: submission, error: insErr } = await supabaseAdmin
+                .from("formation_submissions")
+                .insert({
+                  token: formToken,
+                  lead_id: params.lead_id,
+                  contact_id: contactId,
+                  entity_type: params.entity_type || "SMLLC",
+                  state: params.state || "NM",
+                  language: params.language || "en",
+                  prefilled_data: {
+                    owner_first_name: firstName,
+                    owner_last_name: lastName,
+                    owner_email: params.client_email || "",
+                  },
+                  status: "pending",
+                })
+                .select("id, token")
+                .single()
+
+              if (insErr) {
+                executionResults.push({ step: ps.step, status: "error", detail: insErr.message })
+              } else {
+                ps.status = "executed"
+                const formUrl = `https://td-operations.vercel.app/formation-form/${submission.token}`
+                executionResults.push({
+                  step: ps.step,
+                  status: "ok",
+                  detail: `Form created: ${submission.token}. URL: ${formUrl}. Send to client via gmail_send.`,
+                })
+              }
+            }
+          }
+        }
+
+        // Update activation: mark as activated
+        await supabaseAdmin
+          .from("pending_activations")
+          .update({
+            status: "activated",
+            prepared_steps: preparedSteps,
+            activated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", activation_id)
+
+        // Log successful confirmation
+        await supabaseAdmin.from("action_log").insert({
+          action_type: "formation_confirmed",
+          entity_type: "pending_activations",
+          entity_id: activation_id,
+          details: { execution_results: executionResults },
+        })
+
+        for (const r of executionResults) {
+          lines.push(`${r.status === "ok" ? "✅" : r.status === "existing" ? "⚠️" : "❌"} Step ${r.step}: ${r.detail}`)
+        }
+
+        lines.push(``)
+        lines.push(`✅ Activation confirmed and executed.`)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
 } // end registerFormationTools

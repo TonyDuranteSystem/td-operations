@@ -5,6 +5,8 @@
  * - Contact update with submitted data
  * - Lead → Converted
  * - Form → reviewed
+ * - Email notification to support@ (client completed form)
+ * - CRM task for Luca (WhatsApp follow-up)
  *
  * The MCP tool validates and shows diff inline before enqueuing this job.
  */
@@ -107,6 +109,79 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     }
   } catch (e) {
     result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))
+  }
+
+  await updateJobProgress(job.id, result)
+
+  // ─── 4. EMAIL NOTIFICATION TO SUPPORT ───
+  try {
+    const clientName = submitted.owner_first_name
+      ? `${submitted.owner_first_name} ${submitted.owner_last_name || ""}`
+      : p.token
+
+    const { gmailPost } = await import("@/lib/gmail")
+
+    const subject = `Formation Form Completed: ${clientName}`
+    const body = [
+      `Client ${clientName} has completed the formation data collection form.`,
+      ``,
+      `Token: ${p.token}`,
+      `Email: ${submitted.owner_email || "N/A"}`,
+      `LLC Names: ${submitted.llc_name_1 || "N/A"}`,
+      ``,
+      `Review: formation_form_review(token="${p.token}")`,
+      `Admin Preview: https://td-operations.vercel.app/formation-form/${p.token}?preview=td`,
+    ].join("\n")
+
+    const boundary = `boundary_${Date.now()}`
+    const mimeHeaders = [
+      `From: Tony Durante LLC <support@tonydurante.us>`,
+      `To: support@tonydurante.us`,
+      `Subject: ${subject}`,
+      "MIME-Version: 1.0",
+      `Content-Type: text/plain; charset=utf-8`,
+      "Content-Transfer-Encoding: base64",
+    ]
+    const rawEmail = [...mimeHeaders, "", Buffer.from(body).toString("base64")].join("\r\n")
+    const encodedRaw = Buffer.from(rawEmail).toString("base64url")
+
+    await gmailPost("/messages/send", { raw: encodedRaw })
+    result.steps.push(step("email_notification", "ok", `Notified support@ about ${clientName}`))
+  } catch (e) {
+    result.steps.push(step("email_notification", "error", e instanceof Error ? e.message : String(e)))
+  }
+
+  // ─── 5. CRM TASK FOR LUCA (WHATSAPP FOLLOW-UP) ───
+  try {
+    const clientName = submitted.owner_first_name
+      ? `${submitted.owner_first_name} ${submitted.owner_last_name || ""}`
+      : p.token
+
+    const { error: taskErr } = await supabaseAdmin.from("tasks").insert({
+      task_title: `WhatsApp follow-up: ${clientName} (formation form completed)`,
+      description: [
+        `Il cliente ${clientName} ha completato il formation form.`,
+        ``,
+        `Email: ${submitted.owner_email || "N/A"}`,
+        `Phone: ${submitted.owner_phone || "N/A"}`,
+        `LLC Name: ${submitted.llc_name_1 || "N/A"}`,
+        ``,
+        `Azione: Contattare via WhatsApp per confermare ricezione e prossimi step.`,
+        `Review form: formation_form_review(token="${p.token}")`,
+      ].join("\n"),
+      assigned_to: "Luca",
+      priority: "High",
+      category: "Formation",
+      status: "todo",
+    })
+
+    if (taskErr) {
+      result.steps.push(step("luca_whatsapp_task", "error", taskErr.message))
+    } else {
+      result.steps.push(step("luca_whatsapp_task", "ok", `WhatsApp task created for Luca`))
+    }
+  } catch (e) {
+    result.steps.push(step("luca_whatsapp_task", "error", e instanceof Error ? e.message : String(e)))
   }
 
   // Summary
