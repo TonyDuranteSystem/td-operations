@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData } from '@/lib/types/oa-templates'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -263,7 +263,6 @@ export default function OperatingAgreementPage() {
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
-            <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 50, marginBottom: 16 }} />
             <h2 style={{ fontSize: 20, color: '#222', margin: 0 }}>Verify Your Identity</h2>
             <p style={{ fontSize: 14, color: '#666', marginTop: 8 }}>Enter the email address associated with this agreement to view it.</p>
           </div>
@@ -323,7 +322,6 @@ export default function OperatingAgreementPage() {
 
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 48, marginBottom: 16 }} />
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: 1 }}>OPERATING AGREEMENT</h1>
           <p style={{ fontSize: 15, color: '#555', marginTop: 4 }}>{oa.company_name}</p>
           <p style={{ fontSize: 13, color: '#888', marginTop: 2 }}>
