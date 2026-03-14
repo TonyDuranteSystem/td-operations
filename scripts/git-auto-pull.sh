@@ -9,8 +9,11 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_DIR" || exit 0
 
-# Skip if there are uncommitted changes (don't overwrite local work)
+# Check for uncommitted changes
 if ! /usr/bin/git diff --quiet HEAD 2>/dev/null; then
+  # Notify user about uncommitted changes (macOS notification)
+  DIRTY_FILES=$(/usr/bin/git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ')
+  osascript -e "display notification \"${DIRTY_FILES} file non committati in td-operations. Ricorda di committare prima di cambiare macchina.\" with title \"TD Operations\" sound name \"Submarine\"" 2>/dev/null
   exit 0
 fi
 
