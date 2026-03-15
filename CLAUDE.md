@@ -154,6 +154,7 @@ Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summa
 
 ### Key tables for dev context
 - `dev_tasks` — Issue tracker for development work (NOT client tasks)
+  - **REGOLA**: Prima di INSERT su dev_tasks, fare SELECT per verificare che non esista già un task sullo stesso argomento. Se esiste → UPDATE. Mai duplicare.
 - `session_checkpoints` — Quick saves from session_checkpoint tool
 - `action_log` — Automatic audit trail of all MCP write operations
 - `system_docs` — Session context, project-state, tech-stack
