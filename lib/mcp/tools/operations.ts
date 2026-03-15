@@ -861,8 +861,8 @@ export function registerOperationsTools(server: McpServer) {
     "Create a new service delivery and initialize it at the first pipeline stage. Auto-creates tasks for the first stage. Use this when starting a new service for a client (LLC Formation, Tax Return, etc.). Returns the created delivery with ID.",
     {
       service_type: z.string().describe("Service type: 'Company Formation', 'Tax Return', 'EIN', 'ITIN', 'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address'"),
-      account_id: z.string().uuid().describe("CRM account UUID"),
-      contact_id: z.string().uuid().optional().describe("Primary contact UUID"),
+      account_id: z.string().uuid().optional().describe("CRM account UUID. Required for LLC services. Omit for individual clients (ITIN, Banking Physical) — use contact_id instead."),
+      contact_id: z.string().uuid().optional().describe("Primary contact UUID. Required for individual clients when account_id is omitted."),
       deal_id: z.string().uuid().optional().describe("Linked deal UUID"),
       service_name: z.string().optional().describe("Custom name (defaults to service_type + company name)"),
       assigned_to: z.string().optional().default("Luca").describe("Assignee (default: Luca)"),
@@ -872,23 +872,42 @@ export function registerOperationsTools(server: McpServer) {
     },
     async ({ service_type, account_id, contact_id, deal_id, service_name, assigned_to, amount, amount_currency, notes }) => {
       try {
-        // Get account name for service_name default
-        const { data: account } = await supabaseAdmin
-          .from("accounts")
-          .select("company_name")
-          .eq("id", account_id)
-          .single()
+        if (!account_id && !contact_id) {
+          return { content: [{ type: "text" as const, text: "❌ Either account_id or contact_id is required. Use account_id for LLC services, contact_id for individual clients." }] }
+        }
 
-        const name = service_name || `${service_type} — ${account?.company_name || "Unknown"}`
+        // Get name for service_name default
+        let clientName = "Unknown"
+        if (account_id) {
+          const { data: account } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", account_id)
+            .single()
+          clientName = account?.company_name || "Unknown"
+        } else if (contact_id) {
+          const { data: contact } = await supabaseAdmin
+            .from("contacts")
+            .select("full_name")
+            .eq("id", contact_id)
+            .single()
+          clientName = contact?.full_name || "Unknown"
+        }
 
-        // Idempotency: check if an active delivery already exists for same type + account
-        const { data: existingSD } = await supabaseAdmin
+        const name = service_name || `${service_type} — ${clientName}`
+
+        // Idempotency: check if an active delivery already exists for same type + account/contact
+        const idempotencyQuery = supabaseAdmin
           .from("service_deliveries")
           .select("id, service_name, stage, status")
-          .eq("account_id", account_id)
           .eq("service_type", service_type)
           .eq("status", "active")
           .limit(1)
+
+        if (account_id) idempotencyQuery.eq("account_id", account_id)
+        else idempotencyQuery.is("account_id", null).eq("contact_id", contact_id!)
+
+        const { data: existingSD } = await idempotencyQuery
 
         if (existingSD?.length) {
           return { content: [{ type: "text" as const, text: `⚠️ Active "${service_type}" delivery already exists for this account:\n  ID: ${existingSD[0].id}\n  Name: ${existingSD[0].service_name}\n  Stage: ${existingSD[0].stage}\n\nUse sd_advance_stage to progress it, or complete/cancel it before creating a new one.` }] }
@@ -914,7 +933,7 @@ export function registerOperationsTools(server: McpServer) {
             stage_order: firstStage?.stage_order || null,
             stage_entered_at: new Date().toISOString(),
             stage_history: firstStage ? [{ to_stage: firstStage.stage_name, to_order: firstStage.stage_order, advanced_at: new Date().toISOString(), notes: "Created" }] : [],
-            account_id,
+            account_id: account_id || null,
             contact_id: contact_id || null,
             deal_id: deal_id || null,
             status: "active",
