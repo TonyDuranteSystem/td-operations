@@ -241,19 +241,17 @@ When a team member (Luca, Antonio, or anyone) communicates that an action has be
 13. Deadline Overview: ALWAYS use deadline_upcoming (ONE call). Returns overdue + this week + upcoming in one response.
 14. NEVER create files (docx, pdf, xlsx) for task/tax/deadline views. ALWAYS display as markdown tables directly in chat. This is faster and more useful.
 
-## Database Table Names — EXACT (for execute_sql)
+## Database Schema — MANDATORY before writing SQL
 
-When writing raw SQL, use these EXACT table names. Do NOT guess or invent table names:
-- accounts, contacts, account_contacts, leads, deals, tasks, services, service_deliveries, payments
-- tax_returns, deadlines, conversations, knowledge_articles, sop_runbooks, pipeline_stages
-- oa_agreements (Operating Agreements)
-- lease_agreements (Lease Agreements)
-- banking_submissions (Banking Forms — NOT "banking_forms", NOT "banking_form_submissions")
-- formation_submissions (Formation Forms)
-- onboarding_submissions (Onboarding Forms)
-- tax_form_submissions (Tax Forms)
-- session_checkpoints, action_log, system_docs, dev_tasks
-- pending_activations, oauth_clients, oauth_codes, oauth_tokens, oauth_users
+**BEFORE writing ANY raw SQL query, read \`sysdoc_read('db-schema-reference')\`** — it contains ALL table names, column names, and enum values with exact casing. NEVER guess table or column names.
+
+Quick reference for the most common mistakes:
+- \`banking_submissions\` NOT "banking_forms" or "banking_form_submissions"
+- \`accounts.ein_number\` NOT "ein"
+- \`accounts.drive_folder_id\` NOT "folder_id"
+- \`approved_responses.response_text\` NOT "content"
+- \`knowledge_articles.content\` NOT "response_text"
+- Enum values are CASE-SENSITIVE: \`'Active'\` not \`'active'\`, \`'State RA Renewal'\` not \`'RA Renewal'\`
 
 ## Error Handling
 
