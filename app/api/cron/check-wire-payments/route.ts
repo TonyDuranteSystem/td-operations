@@ -10,6 +10,8 @@
  * and check if deposit memo/description contains client name or offer reference.
  */
 
+export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { qbApiCall } from "@/lib/quickbooks"
