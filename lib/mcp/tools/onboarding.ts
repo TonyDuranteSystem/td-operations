@@ -418,6 +418,8 @@ export function registerOnboardingTools(server: McpServer) {
           }
 
           // ─── 2. ACCOUNT: find/create/update ───
+          // Also: services_bundle from offer, account_type, ra_renewal_date
+          let servicesBundlePopulated = false
           try {
             if (!accountId && companyName) {
               const { data: existingAcct } = await supabaseAdmin
@@ -435,7 +437,63 @@ export function registerOnboardingTools(server: McpServer) {
             if (submitted.formation_date) acctFields.formation_date = submitted.formation_date
             if (submitted.filing_id) acctFields.filing_id = submitted.filing_id
             acctFields.entity_type = entityTypeMapped
+            acctFields.ra_renewal_date = now.slice(0, 10)  // Onboarding: RA renewal = date of RA change (today)
             acctFields.updated_at = now
+
+            // Derive account_type + installments + services_bundle from lead/offer
+            let derivedAccountType = "Client" // default
+            if (sub.lead_id) {
+              // Copy installments from lead → account + derive account_type
+              const { data: lead } = await supabaseAdmin
+                .from("leads")
+                .select("offer_installment_jan, offer_installment_jun, offer_annual_amount, offer_annual_currency")
+                .eq("id", sub.lead_id)
+                .single()
+
+              if (lead) {
+                if (lead.offer_installment_jan) acctFields.installment_1_amount = lead.offer_installment_jan
+                if (lead.offer_installment_jun) acctFields.installment_2_amount = lead.offer_installment_jun
+                if (lead.offer_annual_currency) {
+                  acctFields.installment_1_currency = lead.offer_annual_currency
+                  acctFields.installment_2_currency = lead.offer_annual_currency
+                }
+
+                const hasAnnual = (lead.offer_installment_jan && lead.offer_installment_jan > 0)
+                  || (lead.offer_installment_jun && lead.offer_installment_jun > 0)
+                  || (lead.offer_annual_amount && lead.offer_annual_amount > 0)
+                derivedAccountType = hasAnnual ? "Client" : "One-Time"
+              }
+
+              // Populate services_bundle from offer
+              const { data: offer } = await supabaseAdmin
+                .from("offers")
+                .select("services, additional_services")
+                .eq("lead_id", sub.lead_id)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (offer) {
+                const allServices: string[] = []
+                if (offer.services && Array.isArray(offer.services)) {
+                  for (const s of offer.services) {
+                    const svc = s as Record<string, unknown>
+                    if (svc.name) allServices.push(String(svc.name))
+                  }
+                }
+                if (offer.additional_services && Array.isArray(offer.additional_services)) {
+                  for (const s of offer.additional_services) {
+                    const svc = s as Record<string, unknown>
+                    if (svc.name) allServices.push(String(svc.name))
+                  }
+                }
+                if (allServices.length > 0) {
+                  acctFields.services_bundle = allServices.join(", ")
+                  servicesBundlePopulated = true
+                }
+              }
+            }
+            acctFields.account_type = derivedAccountType
 
             if (accountId) {
               const { error: acctErr } = await supabaseAdmin
@@ -461,6 +519,8 @@ export function registerOnboardingTools(server: McpServer) {
                 lines.push(`✅ Account CREATED (${accountId}): ${companyName}`)
               }
             }
+            if (servicesBundlePopulated) lines.push(`✅ services_bundle populated from offer`)
+            lines.push(`✅ account_type = ${derivedAccountType} (from offer), ra_renewal_date = ${now.slice(0, 10)}`)
           } catch (e) {
             lines.push(`❌ Account step failed: ${e instanceof Error ? e.message : String(e)}`)
           }

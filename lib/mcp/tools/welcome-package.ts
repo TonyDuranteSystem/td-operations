@@ -353,6 +353,7 @@ Prerequisites:
           link_lease: leaseUrl,
           link_relay: relayUrl,
           link_payset: paysetUrl,
+          lang,
         })
 
         // ─── 9. LOG ACTION ───
@@ -422,12 +423,12 @@ function generateWelcomeEmail(vars: {
   link_lease: string
   link_relay: string
   link_payset: string
+  lang: "it" | "en"
 }): string {
-  return `--- VERSIONE ITALIANA ---
+  if (vars.lang === "it") {
+    return `Ciao ${vars.nome},
 
-Ciao ${vars.nome},
-
-Siamo lieti di informarti che la tua società ${vars.company_name} è ufficialmente costituita e pronta ad operare.
+Siamo lieti di informarti che la tua società ${vars.company_name} è ufficialmente pronta ad operare.
 
 In allegato trovi:
 - EIN Letter — il tuo Employer Identification Number assegnato dall'IRS
@@ -486,13 +487,12 @@ Il conto con IBAN (Payset e/o Wise) va utilizzato solo ed esclusivamente per inc
 Siamo a disposizione.
 
 Tony Durante LLC
-support@tonydurante.us
+support@tonydurante.us`
+  }
 
---- ENGLISH VERSION ---
+  return `Hi ${vars.name},
 
-Hi ${vars.name},
-
-We are pleased to inform you that your company ${vars.company_name} is officially formed and ready to operate.
+We are pleased to inform you that your company ${vars.company_name} is officially ready to operate.
 
 Please find attached:
 - EIN Letter — your Employer Identification Number assigned by the IRS

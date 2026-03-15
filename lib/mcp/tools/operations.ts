@@ -226,17 +226,19 @@ export function registerOperationsTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_create_account",
-    "Create a new CRM account (company/LLC). Use this when onboarding a new client after lead conversion. Returns the created account with ID.",
+    "Create a new CRM account (company/LLC). Use this when onboarding a new client after lead conversion. If lead_id is provided, account_type is auto-derived from the offer (annual installments → Client, no installments → One-Time). Returns the created account with ID.",
     {
       company_name: z.string().describe("Company/LLC name"),
       entity_type: z.string().optional().describe("Entity type (e.g., Single Member LLC, Multi-Member LLC, Corporation)"),
       state_of_formation: z.string().optional().describe("State of formation (e.g., Wyoming, Delaware, Florida)"),
+      lead_id: z.string().uuid().optional().describe("Lead UUID — if provided, auto-derives account_type from offer installments"),
+      account_type: z.enum(["Client", "One-Time"]).optional().describe("Client = annual management, One-Time = single service. Auto-derived from lead if lead_id provided."),
       status: z.string().optional().describe("Account status (default: Active)"),
       ein: z.string().optional().describe("EIN number (e.g., 30-1482516)"),
       formation_date: z.string().optional().describe("Formation date (YYYY-MM-DD)"),
       notes: z.string().optional().describe("Account notes"),
     },
-    async ({ company_name, entity_type, state_of_formation, status, ein, formation_date, notes }) => {
+    async ({ company_name, entity_type, state_of_formation, lead_id, account_type, status, ein, formation_date, notes }) => {
       try {
         // Check for duplicates
         const { data: existing } = await supabaseAdmin
@@ -250,14 +252,44 @@ export function registerOperationsTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: `⚠️ Possible duplicates found:\n${dupes}\n\nIf this is a new account, use a more specific name or proceed with crm_update_record on the existing one.` }] }
         }
 
+        // Auto-derive account_type + installments from lead's offer if lead_id provided
+        let resolvedAccountType = account_type || "Client"
+        let inst1Amount: number | null = null
+        let inst2Amount: number | null = null
+        let instCurrency = "USD"
+        if (lead_id) {
+          const { data: lead } = await supabaseAdmin
+            .from("leads")
+            .select("offer_installment_jan, offer_installment_jun, offer_annual_amount, offer_annual_currency")
+            .eq("id", lead_id)
+            .single()
+
+          if (lead) {
+            // Copy installments from lead → account
+            if (lead.offer_installment_jan) inst1Amount = lead.offer_installment_jan
+            if (lead.offer_installment_jun) inst2Amount = lead.offer_installment_jun
+            if (lead.offer_annual_currency) instCurrency = lead.offer_annual_currency
+
+            // Derive account_type from installments (only if not explicitly set)
+            if (!account_type) {
+              const hasAnnual = (inst1Amount && inst1Amount > 0) || (inst2Amount && inst2Amount > 0)
+                || (lead.offer_annual_amount && lead.offer_annual_amount > 0)
+              resolvedAccountType = hasAnnual ? "Client" : "One-Time"
+            }
+          }
+        }
+
         const insert: Record<string, unknown> = {
           company_name,
           entity_type: entity_type || null,
           state_of_formation: state_of_formation || null,
+          account_type: resolvedAccountType,
           status: status || "Active",
           ein_number: ein || null,
           formation_date: formation_date || null,
           notes: notes || null,
+          ...(inst1Amount != null && { installment_1_amount: inst1Amount, installment_1_currency: instCurrency }),
+          ...(inst2Amount != null && { installment_2_amount: inst2Amount, installment_2_currency: instCurrency }),
         }
 
         const { data, error } = await supabaseAdmin
@@ -272,11 +304,11 @@ export function registerOperationsTools(server: McpServer) {
           action_type: "create",
           table_name: "accounts",
           record_id: data.id,
-          summary: `Account created: ${company_name} (${state_of_formation || "no state"})`,
-          details: { company_name, entity_type, state_of_formation, status: status || "Active" },
+          summary: `Account created: ${company_name} (${state_of_formation || "no state"}, ${resolvedAccountType})`,
+          details: { company_name, entity_type, state_of_formation, account_type: resolvedAccountType, status: status || "Active" },
         })
 
-        return { content: [{ type: "text" as const, text: `✅ Account created: ${data.company_name}\nStatus: ${data.status} | State: ${data.state_of_formation || "—"}\nID: ${data.id}` }] }
+        return { content: [{ type: "text" as const, text: `✅ Account created: ${data.company_name}\nStatus: ${data.status} | Type: ${resolvedAccountType} | State: ${data.state_of_formation || "—"}\nID: ${data.id}` }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
