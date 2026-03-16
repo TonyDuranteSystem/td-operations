@@ -3,7 +3,8 @@
  *
  * Executes the apply_changes phase of formation_form_review:
  * - Contact update with submitted data
- * - Lead → Converted
+ * - CRM Account creation (LLC placeholder — EIN/formation_date added later)
+ * - Service Delivery creation (Company Formation, Stage 1)
  * - Form → reviewed
  * - Email notification to support@ (client completed form)
  * - CRM task for Luca (WhatsApp follow-up)
@@ -21,6 +22,14 @@ interface FormationPayload {
   contact_id: string | null
   lead_id: string | null
   submitted_data: Record<string, unknown>
+}
+
+// State name → code mapping for formation
+const STATE_CODE_MAP: Record<string, string> = {
+  "New Mexico": "NM", "NM": "NM",
+  "Wyoming": "WY", "WY": "WY",
+  "Florida": "FL", "FL": "FL",
+  "Delaware": "DE", "DE": "DE",
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -74,9 +83,86 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // ─── 2. LEAD CONVERSION — SKIPPED (now happens at payment in whop webhook / check-wire-payments) ───
   result.steps.push(step("lead_converted", "skipped", "Moved to payment confirmation (Change 1.1)"))
 
+  // ─── 2a. CREATE CRM ACCOUNT (LLC placeholder — EIN/formation_date added later) ───
+  let accountId: string | null = null
+  const companyName = String(submitted.llc_name_1 || "").trim()
+
+  if (companyName && p.contact_id) {
+    try {
+      // Fetch submission for entity_type and state
+      const { data: formSub } = await supabaseAdmin
+        .from("formation_submissions")
+        .select("entity_type, state")
+        .eq("id", p.submission_id)
+        .single()
+
+      const entityType = formSub?.entity_type || "SMLLC"
+      const stateRaw = formSub?.state || ""
+      const stateCode = STATE_CODE_MAP[stateRaw] || stateRaw
+
+      // Check if account already exists for this company name
+      const { data: existingAcct } = await supabaseAdmin
+        .from("accounts")
+        .select("id")
+        .ilike("company_name", companyName)
+        .limit(1)
+
+      if (existingAcct?.length) {
+        accountId = existingAcct[0].id
+        result.steps.push(step("account_create", "skipped", `Already exists: ${accountId}`))
+      } else {
+        const { data: newAcct, error: acctErr } = await supabaseAdmin
+          .from("accounts")
+          .insert({
+            company_name: companyName,
+            entity_type: entityType,
+            state_of_formation: stateCode,
+            account_type: "Formation",
+            status: "Pending Formation",
+            // EIN, formation_date, registered_agent — filled later when state confirms
+          })
+          .select("id")
+          .single()
+
+        if (acctErr || !newAcct) {
+          result.steps.push(step("account_create", "error", acctErr?.message || "insert failed"))
+        } else {
+          accountId = newAcct.id
+
+          // Link contact to account
+          const { error: linkErr } = await supabaseAdmin
+            .from("account_contacts")
+            .insert({
+              account_id: newAcct.id,
+              contact_id: p.contact_id,
+              role: "Owner",
+            })
+
+          if (linkErr && !linkErr.message.includes("duplicate")) {
+            result.steps.push(step("account_create", "ok", `${companyName} (${entityType}, ${stateCode}) — link error: ${linkErr.message}`))
+          } else {
+            result.steps.push(step("account_create", "ok", `${companyName} (${entityType}, ${stateCode}) → linked to contact`))
+          }
+        }
+      }
+
+      // Also link to submission for traceability
+      if (accountId) {
+        await supabaseAdmin
+          .from("formation_submissions")
+          .update({ account_id: accountId })
+          .eq("id", p.submission_id)
+      }
+    } catch (e) {
+      result.steps.push(step("account_create", "error", e instanceof Error ? e.message : String(e)))
+    }
+    await updateJobProgress(job.id, result)
+  } else {
+    result.steps.push(step("account_create", "skipped", companyName ? "No contact_id" : "No LLC name in submitted data"))
+  }
+
   // ─── 2b. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
   try {
-    // Find contact_id from the contact we just updated (or from submission)
     const sdContactId = p.contact_id
     if (sdContactId) {
       // Check if SD already exists for this contact
@@ -91,10 +177,11 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       if (existingSd && existingSd.length > 0) {
         result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSd[0].id}`))
       } else {
+        const sdName = companyName ? `Company Formation - ${companyName}` : "Company Formation"
         const { data: sd, error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
           .insert({
-            service_name: "Company Formation",
+            service_name: sdName,
             service_type: "Company Formation",
             pipeline: "Company Formation",
             stage: "Data Collection",
@@ -102,7 +189,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             stage_entered_at: now,
             stage_history: JSON.stringify([{ stage: "Data Collection", entered_at: now, by: "formation_setup" }]),
             contact_id: sdContactId,
-            account_id: null, // LLC doesn't exist yet
+            account_id: accountId, // Now linked to CRM account
             status: "active",
             start_date: now.slice(0, 10),
             assigned_to: "Luca",
@@ -113,7 +200,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         if (sdErr) {
           result.steps.push(step("service_delivery", "error", sdErr.message))
         } else {
-          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection)`))
+          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection${accountId ? ", linked to account" : ""})`))
         }
       }
     } else {
@@ -207,6 +294,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       priority: "High",
       category: "Formation",
       status: "todo",
+      ...(accountId ? { account_id: accountId } : {}),
     })
 
     if (taskErr) {
