@@ -952,6 +952,37 @@ export function registerOperationsTools(server: McpServer) {
           details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, tasks_created: createdTasks, notes },
         })
 
+        // ─── AUTO-TRIGGER: Welcome Package on "Post-Formation + Banking" ───
+        if (
+          delivery.service_type === "Company Formation" &&
+          targetStage.stage_name === "Post-Formation + Banking" &&
+          delivery.account_id
+        ) {
+          try {
+            // Check if welcome package was already prepared
+            const { data: acctCheck } = await supabaseAdmin
+              .from("accounts")
+              .select("welcome_package_status")
+              .eq("id", delivery.account_id)
+              .single()
+
+            if (acctCheck?.welcome_package_status) {
+              lines.push(`\n📦 Welcome package: already ${acctCheck.welcome_package_status}`)
+            } else {
+              // Enqueue welcome_package_prepare as a job
+              const { enqueueJob } = await import("@/lib/jobs/queue")
+              await enqueueJob({
+                job_type: "welcome_package_prepare",
+                payload: { account_id: delivery.account_id },
+                priority: 5,
+              })
+              lines.push(`\n📦 Welcome package job enqueued — will prepare OA, Lease, banking forms, and email draft`)
+            }
+          } catch (wpErr) {
+            lines.push(`\n⚠️ Welcome package auto-trigger failed: ${wpErr instanceof Error ? wpErr.message : String(wpErr)}`)
+          }
+        }
+
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }

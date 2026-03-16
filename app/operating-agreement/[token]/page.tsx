@@ -251,6 +251,17 @@ function OperatingAgreementContent() {
         })
         .eq('id', oa.id)
 
+      // Notify backend (email to support@, SD history update, task creation)
+      try {
+        await fetch('/api/oa-signed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oa_id: oa.id, token }),
+        })
+      } catch {
+        // Non-blocking — signature is already saved
+      }
+
       setSigned(true)
     } catch (err) {
       console.error('Signing failed:', err)

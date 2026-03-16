@@ -4,6 +4,7 @@
  * Executes the "slow" phase of the Magic Button:
  * - Drive folder creation + document copy
  * - Lease agreement auto-creation
+ * - Operating Agreement auto-creation
  * - Follow-up tasks creation
  * - Tax return checks
  * - Portal fields
@@ -16,6 +17,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createFolder, uploadBinaryToDrive } from "@/lib/google-drive"
+import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import type { Job, JobResult } from "../queue"
 import { updateJobProgress } from "../queue"
 
@@ -246,6 +248,119 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       await updateJobProgress(job.id, result)
     } catch (e) {
       result.steps.push(step("lease", "error", e instanceof Error ? e.message : String(e)))
+      await updateJobProgress(job.id, result)
+    }
+  }
+
+  // ─── 2b. AUTO-CREATE OPERATING AGREEMENT ───
+  if (account_id && company_name && contact_id && state_of_formation) {
+    try {
+      const { data: existingOa } = await supabaseAdmin
+        .from("oa_agreements")
+        .select("id, token, status")
+        .eq("account_id", account_id)
+        .limit(1)
+
+      if (existingOa?.length) {
+        result.steps.push(step("oa", "skipped", `Already exists: ${existingOa[0].token} (${existingOa[0].status})`))
+      } else {
+        const stateCode = state_of_formation.toUpperCase().replace("NEW MEXICO", "NM").replace("WYOMING", "WY").replace("FLORIDA", "FL").replace("DELAWARE", "DE")
+        if (!OA_SUPPORTED_STATES.includes(stateCode as typeof OA_SUPPORTED_STATES[number])) {
+          result.steps.push(step("oa", "skipped", `State "${state_of_formation}" not supported for OA (${OA_SUPPORTED_STATES.join(", ")})`))
+        } else {
+          const year = new Date().getFullYear()
+          const companySlug = company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+          const oaToken = `${companySlug}-oa-${year}`
+
+          // Fetch contact details for OA
+          const { data: oaContact } = await supabaseAdmin
+            .from("contacts")
+            .select("id, full_name, email, language")
+            .eq("id", contact_id)
+            .single()
+
+          // Fetch account details for OA
+          const { data: oaAccount } = await supabaseAdmin
+            .from("accounts")
+            .select("id, company_name, ein_number, physical_address, registered_agent_provider, registered_agent_address, formation_date")
+            .eq("id", account_id)
+            .single()
+
+          if (oaContact && oaAccount) {
+            // Determine entity type from payload
+            const entityType = p.entity_type === "MMLLC" ? "MMLLC" : "SMLLC"
+
+            // Build members array for MMLLC
+            let membersJson: Record<string, unknown>[] | null = null
+            if (entityType === "MMLLC") {
+              const { data: allContactLinks } = await supabaseAdmin
+                .from("account_contacts")
+                .select("contact_id")
+                .eq("account_id", account_id)
+
+              if (allContactLinks && allContactLinks.length > 1) {
+                const { data: memberContacts } = await supabaseAdmin
+                  .from("contacts")
+                  .select("full_name, email")
+                  .in("id", allContactLinks.map(c => c.contact_id))
+
+                if (memberContacts && memberContacts.length > 1) {
+                  const pct = Math.floor(100 / memberContacts.length)
+                  const remainder = 100 - pct * memberContacts.length
+                  membersJson = memberContacts.map((mc, i) => ({
+                    name: mc.full_name,
+                    email: mc.email || null,
+                    ownership_pct: pct + (i === 0 ? remainder : 0),
+                    initial_contribution: "$0 (No initial capital contribution required)",
+                  }))
+                }
+              }
+            }
+
+            const { data: newOa, error: oaErr } = await supabaseAdmin
+              .from("oa_agreements")
+              .insert({
+                token: oaToken,
+                account_id,
+                contact_id,
+                company_name: oaAccount.company_name,
+                state_of_formation: stateCode,
+                formation_date: oaAccount.formation_date || today,
+                ein_number: oaAccount.ein_number || null,
+                entity_type: entityType,
+                manager_name: oaContact.full_name,
+                member_name: oaContact.full_name,
+                member_address: oaAccount.physical_address || null,
+                member_email: oaContact.email || null,
+                members: membersJson,
+                effective_date: oaAccount.formation_date || today,
+                business_purpose: "any and all lawful business activities",
+                initial_contribution: "$0 (No initial capital contribution required)",
+                fiscal_year_end: "December 31",
+                accounting_method: "Cash",
+                duration: "Perpetual",
+                registered_agent_name: oaAccount.registered_agent_provider || null,
+                registered_agent_address: oaAccount.registered_agent_address || null,
+                principal_address: oaAccount.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+                language: "en",
+                status: "draft",
+              })
+              .select("id, token, access_code")
+              .single()
+
+            if (oaErr || !newOa) {
+              result.steps.push(step("oa", "error", oaErr?.message || "insert failed"))
+            } else {
+              result.steps.push(step("oa", "ok", `${newOa.token} (${entityType}, draft)`))
+            }
+          } else {
+            result.steps.push(step("oa", "error", "Could not fetch contact/account details for OA"))
+          }
+        }
+      }
+      await updateJobProgress(job.id, result)
+    } catch (e) {
+      result.steps.push(step("oa", "error", e instanceof Error ? e.message : String(e)))
       await updateJobProgress(job.id, result)
     }
   }

@@ -108,6 +108,36 @@ Prerequisites:
             steps.push({ step: "OA", status: "skipped", detail: `State "${state}" not supported (${OA_SUPPORTED_STATES.join(", ")})` })
           } else {
             const oaToken = `${companySlug}-oa-${year}`
+
+            // Determine entity type: check if account has multiple contacts
+            const { data: allContacts } = await supabaseAdmin
+              .from("account_contacts")
+              .select("contact_id")
+              .eq("account_id", account_id)
+
+            const isMMLC = (allContacts?.length || 1) > 1
+            const entityType = isMMLC ? "MMLLC" : "SMLLC"
+
+            // Build members array for MMLLC
+            let membersJson: Record<string, unknown>[] | null = null
+            if (isMMLC && allContacts) {
+              const { data: memberContacts } = await supabaseAdmin
+                .from("contacts")
+                .select("full_name, email")
+                .in("id", allContacts.map(c => c.contact_id))
+
+              if (memberContacts && memberContacts.length > 1) {
+                const pct = Math.floor(100 / memberContacts.length)
+                const remainder = 100 - pct * memberContacts.length
+                membersJson = memberContacts.map((mc, i) => ({
+                  name: mc.full_name,
+                  email: mc.email || null,
+                  ownership_pct: pct + (i === 0 ? remainder : 0),
+                  initial_contribution: "$0 (No initial capital contribution required)",
+                }))
+              }
+            }
+
             const { data: oa, error: oaErr } = await supabaseAdmin
               .from("oa_agreements")
               .insert({
@@ -118,9 +148,12 @@ Prerequisites:
                 state_of_formation: state,
                 formation_date: account.formation_date || today,
                 ein_number: account.ein_number,
+                entity_type: entityType,
+                manager_name: contact.full_name,
                 member_name: contact.full_name,
                 member_address: account.physical_address || null,
                 member_email: contact.email || null,
+                members: membersJson,
                 effective_date: account.formation_date || today,
                 business_purpose: "any and all lawful business activities",
                 initial_contribution: "$0 (No initial capital contribution required)",
@@ -356,7 +389,15 @@ Prerequisites:
           lang,
         })
 
-        // ─── 9. LOG ACTION ───
+        // ─── 9. UPDATE WELCOME PACKAGE STATUS ON ACCOUNT ───
+        const hasErrors = steps.some(s => s.status === "error")
+        const wpStatus = hasErrors ? "prepared_with_errors" : "prepared"
+        await supabaseAdmin
+          .from("accounts")
+          .update({ welcome_package_status: wpStatus })
+          .eq("id", account_id)
+
+        // ─── 10. LOG ACTION ───
         logAction({
           action_type: "welcome_package_prepared",
           table_name: "accounts",
