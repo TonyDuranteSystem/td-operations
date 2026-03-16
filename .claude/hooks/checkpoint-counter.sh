@@ -13,6 +13,15 @@ COUNT=0
 if [ -f "$COUNTER_FILE" ]; then COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo "0"); if ! [[ "$COUNT" =~ ^[0-9]+$ ]]; then COUNT=0; fi; fi
 COUNT=$((COUNT + 1))
 echo "$COUNT" > "$COUNTER_FILE"
+
+# Every 50 tool calls, check if remote has new commits (multi-machine safety)
+if [ $((COUNT % 50)) -eq 0 ]; then
+  AHEAD=$(git fetch origin main --quiet 2>/dev/null && git rev-list HEAD..origin/main --count 2>/dev/null || echo "0")
+  if [ "$AHEAD" != "0" ] && [ -n "$AHEAD" ]; then
+    echo "⚠️ Remote is ${AHEAD} commit(s) ahead. Another machine pushed changes. Pull before committing: git pull --rebase origin main"
+  fi
+fi
+
 if [ "$COUNT" -ge 15 ]; then echo "🔴 URGENT: ${COUNT} tool calls without checkpoint! You MUST save now. Call session_checkpoint({summary: \"what you did\", next_steps: \"what's pending\"})."
 elif [ "$COUNT" -ge 10 ]; then echo "🟠 WARNING: ${COUNT} tool calls since last checkpoint. Save your progress now with session_checkpoint({summary: \"what you did\", next_steps: \"what's pending\"})."
 elif [ "$COUNT" -ge 5 ]; then echo "🟡 Reminder: ${COUNT} tool calls since last checkpoint. Consider saving with session_checkpoint."
