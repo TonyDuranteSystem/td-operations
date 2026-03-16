@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 130 tools, data source priority,
+ * This guides Claude on how to use the 157 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -88,7 +88,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection — Key Rules
 
-You have 130 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 157 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
