@@ -85,8 +85,8 @@ export const FORM_FIELDS: FieldConfig[] = [
   // STEP 2: LLC Details
   // ═══════════════════════════════════════
   { key: 'llc_name_1', type: 'text', required: true, step: 2 },
-  { key: 'llc_name_2', type: 'text', required: false, step: 2 },
-  { key: 'llc_name_3', type: 'text', required: false, step: 2 },
+  { key: 'llc_name_2', type: 'text', required: true, step: 2 },
+  { key: 'llc_name_3', type: 'text', required: true, step: 2 },
   { key: 'business_purpose', type: 'textarea', required: true, step: 2 },
 
   // ═══════════════════════════════════════
@@ -328,6 +328,10 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   llc_name_2: {
     en: 'Backup name in case your first choice is not available.',
     it: 'Nome alternativo nel caso la prima scelta non sia disponibile.',
+  },
+  llc_name_3: {
+    en: 'Third backup name in case neither of your first two choices is available.',
+    it: 'Terzo nome alternativo nel caso le prime due scelte non siano disponibili.',
   },
   business_purpose: {
     en: 'Describe your main business activity (e.g., "e-commerce", "consulting", "software development").',

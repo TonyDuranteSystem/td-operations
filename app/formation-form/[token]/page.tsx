@@ -447,7 +447,8 @@ export default function FormationFormPage() {
               <div><strong>{L.owner_nationality}:</strong> {String(formData.owner_nationality || '—')}</div>
               <div><strong>{L.owner_country}:</strong> {String(formData.owner_country || '—')}</div>
               <div><strong>{L.llc_name_1}:</strong> {String(formData.llc_name_1 || '—')}</div>
-              {formData.llc_name_2 ? <div><strong>{L.llc_name_2}:</strong> {String(formData.llc_name_2)}</div> : null}
+              <div><strong>{L.llc_name_2}:</strong> {String(formData.llc_name_2 || '—')}</div>
+              <div><strong>{L.llc_name_3}:</strong> {String(formData.llc_name_3 || '—')}</div>
               <div><strong>{lang === 'en' ? 'Entity Type' : 'Tipo'}:</strong> {submission.entity_type}</div>
               <div><strong>{lang === 'en' ? 'State' : 'Stato'}:</strong> {submission.state}</div>
             </div>
