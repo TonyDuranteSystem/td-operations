@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
-import { generateOASections, type OAData } from '@/lib/types/oa-templates'
+import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -19,10 +19,13 @@ interface OAAgreement {
   state_of_formation: string
   formation_date: string
   ein_number: string | null
+  entity_type: string | null
+  manager_name: string | null
   member_name: string
   member_address: string | null
   member_email: string | null
   member_ownership_pct: number
+  members: OAMember[] | null
   effective_date: string
   business_purpose: string
   initial_contribution: string
@@ -76,6 +79,12 @@ function OperatingAgreementContent() {
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
   const sigPadRef = useRef<any>(null)
   const oaBodyRef = useRef<HTMLDivElement>(null)
+
+  // Derived
+  const entityType = oa?.entity_type || 'SMLLC'
+  const isMMLLC = entityType === 'MMLLC'
+  const members: OAMember[] = (isMMLLC && oa?.members) ? oa.members : []
+  const managerName = oa?.manager_name || oa?.member_name || ''
 
   // ─── LOAD OA ───
   const loadOA = useCallback(async () => {
@@ -178,7 +187,7 @@ function OperatingAgreementContent() {
       // 1. Get signature as image
       const sigDataUrl = sigPadRef.current.toDataURL('image/png')
 
-      // 2. Freeze signature canvas → image
+      // 2. Freeze signature canvas -> image
       const canvas = sigCanvasRef.current
       if (canvas) {
         const img = document.createElement('img')
@@ -222,12 +231,22 @@ function OperatingAgreementContent() {
       if (!uploadRes.ok) throw new Error('PDF upload failed')
 
       // 6. Update OA record
+      const sigData: Record<string, unknown> = {
+        manager_name: managerName,
+        signed_date: today(),
+      }
+      if (isMMLLC) {
+        sigData.members = members.map(m => m.name)
+      } else {
+        sigData.member_name = oa.member_name
+      }
+
       await supabasePublic
         .from('oa_agreements')
         .update({
           status: 'signed',
           signed_at: new Date().toISOString(),
-          signature_data: { member_name: oa.member_name, signed_date: today() },
+          signature_data: sigData,
           pdf_storage_path: pdfPath,
         })
         .eq('id', oa.id)
@@ -299,8 +318,11 @@ function OperatingAgreementContent() {
     state_of_formation: oa.state_of_formation,
     formation_date: oa.formation_date,
     ein_number: oa.ein_number || undefined,
+    entity_type: isMMLLC ? 'MMLLC' : 'SMLLC',
     member_name: oa.member_name,
     member_address: oa.member_address || undefined,
+    members: isMMLLC ? members : undefined,
+    manager_name: managerName,
     effective_date: oa.effective_date,
     business_purpose: oa.business_purpose,
     initial_contribution: oa.initial_contribution,
@@ -312,6 +334,11 @@ function OperatingAgreementContent() {
     principal_address: oa.principal_address,
   }
   const sections = generateOASections(oaData)
+
+  const entityLabel = isMMLLC ? 'Multi-Member' : 'Single Member'
+  const preambleSigners = isMMLLC
+    ? `the Members listed herein`
+    : `${oa.member_name} (the "Member")`
 
   return (
     <div style={{ background: '#f5f5f0', minHeight: '100vh', padding: '24px 16px', fontFamily: 'Georgia, "Times New Roman", serif' }}>
@@ -333,7 +360,10 @@ function OperatingAgreementContent() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: 1 }}>OPERATING AGREEMENT</h1>
           <p style={{ fontSize: 15, color: '#555', marginTop: 4 }}>{oa.company_name}</p>
           <p style={{ fontSize: 13, color: '#888', marginTop: 2 }}>
-            A {oa.state_of_formation} Single Member Limited Liability Company
+            A {oa.state_of_formation} {entityLabel} Limited Liability Company
+          </p>
+          <p style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
+            Manager-Managed
           </p>
           <div style={{ width: 60, height: 2, background: '#0A3161', margin: '12px auto' }} />
         </div>
@@ -341,7 +371,7 @@ function OperatingAgreementContent() {
         {/* Preamble */}
         <p style={{ fontStyle: 'italic' }}>
           This Operating Agreement (&ldquo;Agreement&rdquo;) of {oa.company_name} (the &ldquo;Company&rdquo;) is entered into
-          and effective as of {today()}, by {oa.member_name} (the &ldquo;Member&rdquo;).
+          and effective as of {today()}, by {preambleSigners}.
         </p>
 
         <hr style={{ border: 'none', borderTop: '1px solid #ddd', margin: '24px 0' }} />
@@ -358,20 +388,21 @@ function OperatingAgreementContent() {
 
         {/* Signature Section */}
         <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 24 }}>
-          IN WITNESS WHEREOF, the Member has executed this Operating Agreement as of the date first written above.
+          IN WITNESS WHEREOF, the {isMMLLC ? 'Members have' : 'Member has'} executed this Operating Agreement as of the date first written above.
         </p>
 
-        <div style={{ maxWidth: 400 }}>
-          <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>SOLE MEMBER</p>
+        {/* Manager Signature Block */}
+        <div style={{ maxWidth: 400, marginBottom: 32 }}>
+          <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>MANAGER</p>
           <p style={{ fontWeight: 700, marginBottom: 12 }}>{oa.company_name}</p>
-          <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{oa.member_name}</strong></p>
-          <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: Sole Member / Manager</p>
+          <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{managerName}</strong></p>
+          <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: Manager</p>
           <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
 
-          {/* Signature canvas */}
+          {/* Signature canvas — Manager signs */}
           {!signed && (
             <div style={{ marginTop: 16 }}>
-              <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Member Signature:</p>
+              <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Manager Signature:</p>
               <canvas
                 ref={sigCanvasRef}
                 style={{ width: '100%', height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
@@ -385,6 +416,27 @@ function OperatingAgreementContent() {
             </div>
           )}
         </div>
+
+        {/* MMLLC: Member Signature Blocks (read-only — acknowledged by Manager signing) */}
+        {isMMLLC && members.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 12, textTransform: 'uppercase', color: '#555' }}>MEMBERS</p>
+            {members.map((m, idx) => (
+              <div key={idx} style={{ marginBottom: 20, paddingLeft: 16, borderLeft: '2px solid #eee' }}>
+                <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{m.name}</strong></p>
+                <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Ownership: {m.ownership_pct}%</p>
+                <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* SMLLC: Member line under manager */}
+        {!isMMLLC && (
+          <div style={{ marginTop: 8 }}>
+            <p style={{ fontSize: 13, color: '#555', fontStyle: 'italic' }}>Sole Member / Manager</p>
+          </div>
+        )}
 
         {/* Signed confirmation */}
         {signed && (
