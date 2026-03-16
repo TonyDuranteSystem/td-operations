@@ -59,6 +59,9 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/onboarding-form') &&
     !request.nextUrl.pathname.startsWith('/banking-form') &&
     !request.nextUrl.pathname.startsWith('/lease') &&
+    !request.nextUrl.pathname.startsWith('/operating-agreement') &&
+    !request.nextUrl.pathname.startsWith('/closure-form') &&
+    !request.nextUrl.pathname.startsWith('/itin-form') &&
     !request.nextUrl.pathname.startsWith('/contract-template') &&
     !request.nextUrl.pathname.startsWith('/.well-known') &&
     !request.nextUrl.pathname.startsWith('/oauth')
