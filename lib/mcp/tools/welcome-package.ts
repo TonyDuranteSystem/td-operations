@@ -443,7 +443,7 @@ Prerequisites:
           ``,
           emailBody,
           ``,
-          `⚠️ Email NOT sent. Review the content above, then use gmail_send to send it with EIN letter and Articles as attachments.`,
+          `⚠️ Email NOT sent. The email body above is ready-to-use HTML. Pass it EXACTLY as-is to gmail_send(body_html=...) — do NOT rewrite, reformat, or modify ANY URLs. Attach EIN letter and Articles via drive_file_id params.`,
         ].filter(Boolean)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -454,7 +454,9 @@ Prerequisites:
   )
 }
 
-// ─── Email Template (dac9ce5f — bilingual IT+EN) ───
+// ─── Email Template (HTML — bilingual IT+EN) ───
+// Returns ready-to-use HTML for gmail_send(body_html=...).
+// All URLs are preserved as-is in href attributes — no conversion needed by Claude.ai.
 
 function generateWelcomeEmail(vars: {
   nome: string
@@ -466,131 +468,120 @@ function generateWelcomeEmail(vars: {
   link_payset: string
   lang: "it" | "en"
 }): string {
-  if (vars.lang === "it") {
-    return `Ciao ${vars.nome},
+  const linkStyle = 'style="color:#2563eb;text-decoration:underline"'
+  const hrStyle = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
 
-Siamo lieti di informarti che la tua società ${vars.company_name} è ufficialmente pronta ad operare.
-
-In allegato trovi:
-- EIN Letter — il tuo Employer Identification Number assegnato dall'IRS
-- Articles of Organization — il documento ufficiale di costituzione della tua società
-
----
-
-Firma l'Operating Agreement
-
-L'Operating Agreement è il documento che regola il funzionamento interno della tua società e conferma la tua posizione di unico titolare. Clicca il link qui sotto per visualizzare, firmare e scaricare il documento.
-
-→ ${vars.link_oa || "[link non disponibile]"}
-
----
-
-Firma il Lease Agreement
-
-Per avere un indirizzo fisico associato alla tua società, è necessario firmare il contratto di locazione. Clicca il link qui sotto per visualizzare e firmare il documento.
-
-→ ${vars.link_lease || "[link non disponibile]"}
-
----
-
-Conto bancario in dollari (Relay)
-
-Per il conto bancario americano in dollari (Relay), abbiamo bisogno di alcune informazioni per procedere con l'apertura. Compila il form al link qui sotto con i tuoi dati personali e aziendali.
-
-Una volta completata l'application da parte nostra, riceverai un'email direttamente da Relay per autenticare il tuo account. Controlla la tua casella email (anche lo spam) e completa la verifica cliccando il link che riceverai.
-
-→ ${vars.link_relay || "[link non disponibile]"}
-
----
-
-Conto con IBAN in euro (Payset)
-
-Per il conto con IBAN in euro (Payset), abbiamo bisogno di alcune informazioni per procedere con l'apertura. Compila il form al link qui sotto con i tuoi dati personali e aziendali.
-
-Una volta ricevuti i tuoi dati, ti contatteremo su Telegram per concordare un momento in cui procedere insieme con l'application. Durante il processo, riceverai un codice OTP via SMS sul tuo telefono che dovrai comunicarci in tempo reale per completare l'attivazione.
-
-→ ${vars.link_payset || "[link non disponibile]"}
-
----
-
-Conto alternativo IBAN (Wise)
-
-Ti consigliamo di aprire anche un conto su Wise (wise.com) per ricevere pagamenti in euro, in modo da avere un doppio account con IBAN. Abbiamo scelto Payset perché è il servizio più affidabile tra quelli disponibili, ma trattandosi di conti fintech è sempre meglio avere un'alternativa attiva. Puoi aprire il conto Wise in autonomia direttamente su wise.com.
-
----
-
-Regole importanti sull'utilizzo dei conti con IBAN
-
-Il conto con IBAN (Payset e/o Wise) va utilizzato solo ed esclusivamente per incassare pagamenti in euro. Una volta ricevuti i fondi, devono essere convertiti in dollari e trasferiti sul conto americano Relay. Non utilizzare il conto IBAN per effettuare pagamenti verso terzi.
-
----
-
-Siamo a disposizione.
-
-Tony Durante LLC
-support@tonydurante.us`
+  function linkBlock(url: string, labelIt: string, labelEn: string): string {
+    if (!url) return vars.lang === "it" ? "<p>[link non disponibile]</p>" : "<p>[link not available]</p>"
+    const label = vars.lang === "it" ? labelIt : labelEn
+    return `<p><a href="${url}" ${linkStyle}>${label}</a></p>`
   }
 
-  return `Hi ${vars.name},
+  if (vars.lang === "it") {
+    return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a">
+<p>Ciao ${vars.nome},</p>
 
-We are pleased to inform you that your company ${vars.company_name} is officially ready to operate.
+<p>Siamo lieti di informarti che la tua società <strong>${vars.company_name}</strong> è ufficialmente pronta ad operare.</p>
 
-Please find attached:
-- EIN Letter — your Employer Identification Number assigned by the IRS
-- Articles of Organization — your company's official formation document
+<p>In allegato trovi:</p>
+<ul>
+<li>EIN Letter -- il tuo Employer Identification Number assegnato dall'IRS</li>
+<li>Articles of Organization -- il documento ufficiale di costituzione della tua società</li>
+</ul>
 
----
+${hrStyle}
 
-Sign the Operating Agreement
+<p><strong>Firma l'Operating Agreement</strong></p>
+<p>L'Operating Agreement è il documento che regola il funzionamento interno della tua società e conferma la tua posizione di unico titolare. Clicca il link qui sotto per visualizzare, firmare e scaricare il documento.</p>
+${linkBlock(vars.link_oa, "Firma Operating Agreement", "Sign Operating Agreement")}
 
-The Operating Agreement is the document that governs the internal operations of your company and confirms your position as sole owner. Click the link below to view, sign and download the document.
+${hrStyle}
 
-→ ${vars.link_oa || "[link not available]"}
+<p><strong>Firma il Lease Agreement</strong></p>
+<p>Per avere un indirizzo fisico associato alla tua società, è necessario firmare il contratto di locazione. Clicca il link qui sotto per visualizzare e firmare il documento.</p>
+${linkBlock(vars.link_lease, "Firma Lease Agreement", "Sign Lease Agreement")}
 
----
+${hrStyle}
 
-Sign the Lease Agreement
+<p><strong>Conto bancario in dollari (Relay)</strong></p>
+<p>Per il conto bancario americano in dollari (Relay), abbiamo bisogno di alcune informazioni per procedere con l'apertura. Compila il form al link qui sotto con i tuoi dati personali e aziendali.</p>
+<p>Una volta completata l'application da parte nostra, riceverai un'email direttamente da Relay per autenticare il tuo account. Controlla la tua casella email (anche lo spam) e completa la verifica cliccando il link che riceverai.</p>
+${linkBlock(vars.link_relay, "Compila Form Relay", "Fill Out Relay Form")}
 
-To have a physical address associated with your company, you need to sign the lease agreement. Click the link below to view and sign the document.
+${hrStyle}
 
-→ ${vars.link_lease || "[link not available]"}
+<p><strong>Conto con IBAN in euro (Payset)</strong></p>
+<p>Per il conto con IBAN in euro (Payset), abbiamo bisogno di alcune informazioni per procedere con l'apertura. Compila il form al link qui sotto con i tuoi dati personali e aziendali.</p>
+<p>Una volta ricevuti i tuoi dati, ti contatteremo su Telegram per concordare un momento in cui procedere insieme con l'application. Durante il processo, riceverai un codice OTP via SMS sul tuo telefono che dovrai comunicarci in tempo reale per completare l'attivazione.</p>
+${linkBlock(vars.link_payset, "Compila Form Payset", "Fill Out Payset Form")}
 
----
+${hrStyle}
 
-US Dollar Bank Account (Relay)
+<p><strong>Conto alternativo IBAN (Wise)</strong></p>
+<p>Ti consigliamo di aprire anche un conto su Wise (wise.com) per ricevere pagamenti in euro, in modo da avere un doppio account con IBAN. Abbiamo scelto Payset perché è il servizio più affidabile tra quelli disponibili, ma trattandosi di conti fintech è sempre meglio avere un'alternativa attiva. Puoi aprire il conto Wise in autonomia direttamente su wise.com.</p>
 
-For your US dollar bank account (Relay), we need some information to proceed with the application. Please fill out the form at the link below with your personal and business details.
+${hrStyle}
 
-Once we complete the application on your behalf, you will receive an email directly from Relay to authenticate your account. Please check your inbox (including spam) and complete the verification by clicking the link you receive.
+<p><strong>Regole importanti sull'utilizzo dei conti con IBAN</strong></p>
+<p>Il conto con IBAN (Payset e/o Wise) va utilizzato solo ed esclusivamente per incassare pagamenti in euro. Una volta ricevuti i fondi, devono essere convertiti in dollari e trasferiti sul conto americano Relay. Non utilizzare il conto IBAN per effettuare pagamenti verso terzi.</p>
 
-→ ${vars.link_relay || "[link not available]"}
+${hrStyle}
 
----
+<p>Siamo a disposizione.</p>
+<p><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
+</div>`
+  }
 
-EUR IBAN Account (Payset)
+  return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a">
+<p>Hi ${vars.name},</p>
 
-For your EUR IBAN account (Payset), we need some information to proceed with the application. Please fill out the form at the link below with your personal and business details.
+<p>We are pleased to inform you that your company <strong>${vars.company_name}</strong> is officially ready to operate.</p>
 
-Once we receive your data, we will contact you on Telegram to schedule a time to proceed together with the application. During the process, you will receive an OTP code via SMS on your phone that you will need to share with us in real time to complete the activation.
+<p>Please find attached:</p>
+<ul>
+<li>EIN Letter -- your Employer Identification Number assigned by the IRS</li>
+<li>Articles of Organization -- your company's official formation document</li>
+</ul>
 
-→ ${vars.link_payset || "[link not available]"}
+${hrStyle}
 
----
+<p><strong>Sign the Operating Agreement</strong></p>
+<p>The Operating Agreement is the document that governs the internal operations of your company and confirms your position as sole owner. Click the link below to view, sign and download the document.</p>
+${linkBlock(vars.link_oa, "Firma Operating Agreement", "Sign Operating Agreement")}
 
-Alternative IBAN Account (Wise)
+${hrStyle}
 
-We recommend also opening a Wise account (wise.com) to receive payments in euros, so you have two IBAN accounts available. We chose Payset because it is the most reliable service among those available, but since these are fintech accounts, it is always better to have a backup option. You can open the Wise account on your own directly at wise.com.
+<p><strong>Sign the Lease Agreement</strong></p>
+<p>To have a physical address associated with your company, you need to sign the lease agreement. Click the link below to view and sign the document.</p>
+${linkBlock(vars.link_lease, "Firma Lease Agreement", "Sign Lease Agreement")}
 
----
+${hrStyle}
 
-Important Rules on IBAN Account Usage
+<p><strong>US Dollar Bank Account (Relay)</strong></p>
+<p>For your US dollar bank account (Relay), we need some information to proceed with the application. Please fill out the form at the link below with your personal and business details.</p>
+<p>Once we complete the application on your behalf, you will receive an email directly from Relay to authenticate your account. Please check your inbox (including spam) and complete the verification by clicking the link you receive.</p>
+${linkBlock(vars.link_relay, "Compila Form Relay", "Fill Out Relay Form")}
 
-Your IBAN account (Payset and/or Wise) must be used exclusively to receive payments in euros. Once funds are received, they must be converted to USD and transferred to your US bank account on Relay. Do not use the IBAN account to make outgoing payments to third parties.
+${hrStyle}
 
----
+<p><strong>EUR IBAN Account (Payset)</strong></p>
+<p>For your EUR IBAN account (Payset), we need some information to proceed with the application. Please fill out the form at the link below with your personal and business details.</p>
+<p>Once we receive your data, we will contact you on Telegram to schedule a time to proceed together with the application. During the process, you will receive an OTP code via SMS on your phone that you will need to share with us in real time to complete the activation.</p>
+${linkBlock(vars.link_payset, "Compila Form Payset", "Fill Out Payset Form")}
 
-We are at your disposal.
+${hrStyle}
 
-Tony Durante LLC
-support@tonydurante.us`
+<p><strong>Alternative IBAN Account (Wise)</strong></p>
+<p>We recommend also opening a Wise account (wise.com) to receive payments in euros, so you have two IBAN accounts available. We chose Payset because it is the most reliable service among those available, but since these are fintech accounts, it is always better to have a backup option. You can open the Wise account on your own directly at wise.com.</p>
+
+${hrStyle}
+
+<p><strong>Important Rules on IBAN Account Usage</strong></p>
+<p>Your IBAN account (Payset and/or Wise) must be used exclusively to receive payments in euros. Once funds are received, they must be converted to USD and transferred to your US bank account on Relay. Do not use the IBAN account to make outgoing payments to third parties.</p>
+
+${hrStyle}
+
+<p>We are at your disposal.</p>
+<p><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
+</div>`
 }

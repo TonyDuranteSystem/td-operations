@@ -201,6 +201,17 @@ All client forms (formation, onboarding, tax, lease, banking, and any future for
 - Never send a form link to a client without Antonio testing it first via preview
 - When building new forms, include the \`?preview=td\` bypass from the start
 
+## Email URL Integrity — MANDATORY RULE
+
+When sending emails via gmail_send that contain URLs (links to forms, documents, lease agreements, operating agreements, etc.):
+
+1. **NEVER modify, truncate, simplify, or reformat URLs received from other tools.** URLs contain query parameters (\`?c=\`, \`?preview=\`, \`?token=\`) that are ACCESS CODES — without them, the link will not work for the recipient.
+2. **If a tool returns HTML email content (body_html), pass it EXACTLY as-is to gmail_send.** Do not rewrite, reformat, or "improve" the HTML. The URLs inside are already correct.
+3. **If you must compose an email with links yourself**, copy the FULL URL including ALL query parameters. Example: \`https://td-operations.vercel.app/lease/token-here?c=abc123\` — the \`?c=abc123\` part is REQUIRED.
+4. **When converting plain text URLs to HTML anchor tags**, the \`href\` attribute MUST contain the COMPLETE original URL with all query parameters preserved.
+
+This rule exists because broken links were sent to a client when query parameters were stripped during HTML formatting. It applies to ALL emails, ALL tools, forever.
+
 ## Action Tracking Protocol — MANDATORY
 
 When a team member (Luca, Antonio, or anyone) communicates that an action has been completed (e.g., "LLC approved", "SS-4 sent", "EIN received", "documents uploaded"):

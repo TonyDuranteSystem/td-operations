@@ -540,7 +540,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_send",
-    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. PRIMARY email tool for ALL client communications. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array).",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. PRIMARY email tool for ALL client communications. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array). ⚠️ URL INTEGRITY: When body_html contains URLs from other tools (welcome_package_prepare, lease_send, etc.), pass them EXACTLY as received — NEVER remove or modify query parameters (?c=, ?token=, etc.). These are access codes; without them, links break.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
