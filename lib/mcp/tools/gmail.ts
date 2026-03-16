@@ -40,6 +40,30 @@ const DEFAULT_EMAIL = () =>
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
 
+// ─── ASCII Sanitizer ─────────────────────────────────────────
+// Replaces common Unicode characters that cause encoding corruption
+// in email clients with their ASCII equivalents.
+function sanitizeToAscii(text: string): string {
+  return text
+    .replace(/\u2014/g, "--")    // em dash
+    .replace(/\u2013/g, "-")     // en dash
+    .replace(/\u2018/g, "'")     // left single curly quote
+    .replace(/\u2019/g, "'")     // right single curly quote
+    .replace(/\u201C/g, '"')     // left double curly quote
+    .replace(/\u201D/g, '"')     // right double curly quote
+    .replace(/\u2022/g, "*")     // bullet
+    .replace(/\u2026/g, "...")   // ellipsis
+    .replace(/\u2192/g, "->")    // right arrow
+    .replace(/\u2190/g, "<-")    // left arrow
+    .replace(/\u2194/g, "<->")   // left-right arrow
+    .replace(/\u00AB/g, "<<")    // left guillemet
+    .replace(/\u00BB/g, ">>")    // right guillemet
+    .replace(/\u00A0/g, " ")     // non-breaking space
+    .replace(/\u200B/g, "")      // zero-width space
+    .replace(/\u200D/g, "")      // zero-width joiner
+    .replace(/\uFEFF/g, "")      // BOM
+}
+
 // ─── Token Management (per-user) ────────────────────────────
 
 async function getGmailToken(asUser?: string): Promise<{ token: string; userEmail: string }> {
@@ -430,6 +454,10 @@ export function registerGmailTools(server: McpServer) {
     },
     async ({ to, subject, body, cc, bcc, reply_to_message_id, as_user }) => {
       try {
+        // Sanitize all text content to ASCII before processing
+        subject = sanitizeToAscii(subject)
+        body = sanitizeToAscii(body)
+
         const fromEmail = as_user || DEFAULT_EMAIL()
 
         // Build RFC 2822 email
@@ -540,6 +568,11 @@ export function registerGmailTools(server: McpServer) {
     },
     async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, drive_file_id, drive_file_id_2, drive_file_id_3, drive_file_ids, attachments }) => {
       try {
+        // Sanitize all text content to ASCII before processing
+        subject = sanitizeToAscii(subject)
+        body_html = sanitizeToAscii(body_html)
+        if (body_text) body_text = sanitizeToAscii(body_text)
+
         const fromEmail = as_user || DEFAULT_EMAIL()
 
         // Merge all drive_file_id* params into a single array
