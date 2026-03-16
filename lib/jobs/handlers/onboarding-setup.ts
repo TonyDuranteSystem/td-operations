@@ -512,7 +512,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     for (const tc of taxChecks) {
       const fieldValue = String(submitted[tc.field] || "").toLowerCase()
-      if (fieldValue === "no" || fieldValue === "not sure") {
+      if (fieldValue === "no") {
         try {
           const { data: existingTR } = await supabaseAdmin
             .from("tax_returns")
