@@ -257,6 +257,15 @@ export default function TaxFormPage() {
 
       setSubmitted(true)
       setSubmission(prev => prev ? { ...prev, status: 'completed', completed_at: new Date().toISOString() } : null)
+
+      // Non-blocking: notify backend
+      try {
+        await fetch('/api/tax-form-completed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ submission_id: submission.id, token: submission.token }),
+        })
+      } catch { /* Non-blocking */ }
     } catch (err) {
       setSubmitError(L.errorSubmit)
       console.error(err)

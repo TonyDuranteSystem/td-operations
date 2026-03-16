@@ -952,6 +952,60 @@ export function registerOperationsTools(server: McpServer) {
           details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, tasks_created: createdTasks, notes },
         })
 
+        // ─── AUTO-TRIGGER: Tax Return — sync tax_returns record with SD stage ───
+        if (delivery.service_type === "Tax Return Filing" && delivery.account_id) {
+          try {
+            const taxYear = new Date().getFullYear()
+            const { data: tr } = await supabaseAdmin
+              .from("tax_returns")
+              .select("id, status")
+              .eq("account_id", delivery.account_id)
+              .eq("tax_year", taxYear)
+              .maybeSingle()
+
+            if (tr) {
+              const stageToStatus: Record<string, string> = {
+                "Payment Verified": "Activated - Need Link",
+                "Data Link Sent": "Link Sent - Awaiting Data",
+                "Extension Requested": "Extension Requested",
+                "Extension Filed": "Extension Filed",
+                "Data Received": "Data Received",
+                "Preparation - Sent to India": "Sent to India",
+                "TR Completed": "TR Completed - Awaiting Signature",
+                "TR Filed": "TR Filed",
+              }
+              const newStatus = stageToStatus[targetStage.stage_name]
+              if (newStatus && newStatus !== tr.status) {
+                const trUpdates: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() }
+
+                // Set date fields based on stage
+                if (targetStage.stage_name === "Extension Requested") {
+                  trUpdates.extension_requested_date = new Date().toISOString().slice(0, 10)
+                } else if (targetStage.stage_name === "Extension Filed") {
+                  trUpdates.extension_filed = true
+                  trUpdates.extension_confirmed_date = new Date().toISOString().slice(0, 10)
+                } else if (targetStage.stage_name === "Data Received") {
+                  trUpdates.data_received = true
+                  trUpdates.data_received_date = new Date().toISOString().slice(0, 10)
+                } else if (targetStage.stage_name === "Preparation - Sent to India") {
+                  trUpdates.sent_to_india = true
+                  trUpdates.sent_to_india_date = new Date().toISOString().slice(0, 10)
+                  trUpdates.india_status = "Sent - Pending"
+                }
+
+                await supabaseAdmin
+                  .from("tax_returns")
+                  .update(trUpdates)
+                  .eq("id", tr.id)
+
+                lines.push(`\n📊 Tax return synced: ${tr.status} → ${newStatus}`)
+              }
+            }
+          } catch (trErr) {
+            lines.push(`\n⚠️ Tax return sync failed: ${trErr instanceof Error ? trErr.message : String(trErr)}`)
+          }
+        }
+
         // ─── AUTO-TRIGGER: Welcome Package on "Post-Formation + Banking" ───
         if (
           delivery.service_type === "Company Formation" &&

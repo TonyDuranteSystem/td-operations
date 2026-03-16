@@ -137,7 +137,100 @@ export async function handleTaxFormSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("tax_return_update", "skipped", "No tax_return_id"))
   }
 
-  // ─── 4. MARK FORM AS REVIEWED ───
+  // ─── 4. ADVANCE SERVICE DELIVERY TO "Data Received" ───
+  if (p.account_id) {
+    try {
+      const { data: sd } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id, stage, stage_order, stage_history")
+        .eq("account_id", p.account_id)
+        .eq("service_type", "Tax Return Filing")
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle()
+
+      if (sd) {
+        const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
+        history.push({
+          from_stage: sd.stage,
+          from_order: sd.stage_order,
+          to_stage: "Data Received",
+          to_order: 5,
+          advanced_at: now,
+          notes: "Client submitted tax form (auto-advanced by tax_form_setup)",
+        })
+
+        const { error: sdErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .update({
+            stage: "Data Received",
+            stage_order: 5,
+            stage_entered_at: now,
+            stage_history: history,
+          })
+          .eq("id", sd.id)
+
+        if (sdErr) {
+          result.steps.push(step("sd_advance", "error", sdErr.message))
+        } else {
+          result.steps.push(step("sd_advance", "ok", `SD ${sd.id} → Data Received (stage 5)`))
+        }
+      } else {
+        result.steps.push(step("sd_advance", "skipped", "No active Tax Return Filing SD found"))
+      }
+    } catch (e) {
+      result.steps.push(step("sd_advance", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  await updateJobProgress(job.id, result)
+
+  // ─── 5. EMAIL NOTIFICATION TO SUPPORT ───
+  try {
+    // Get company name for email
+    let companyName = p.token
+    if (p.account_id) {
+      const { data: acc } = await supabaseAdmin
+        .from("accounts")
+        .select("company_name")
+        .eq("id", p.account_id)
+        .single()
+      if (acc) companyName = acc.company_name
+    }
+
+    const { gmailPost } = await import("@/lib/gmail")
+
+    const subject = `Tax Form Completed: ${companyName}`
+    const body = [
+      `The tax data collection form for ${companyName} has been submitted by the client.`,
+      ``,
+      `Token: ${p.token}`,
+      `Changes: ${changeCount} field(s) modified by client`,
+      ``,
+      `Review: tax_form_review(token="${p.token}")`,
+      `Admin Preview: https://td-operations.vercel.app/tax-form/${p.token}?preview=td`,
+    ].join("\n")
+
+    const mimeHeaders = [
+      `From: Tony Durante LLC <support@tonydurante.us>`,
+      `To: support@tonydurante.us`,
+      `Subject: ${subject}`,
+      "MIME-Version: 1.0",
+      `Content-Type: text/plain; charset=utf-8`,
+      "Content-Transfer-Encoding: base64",
+    ]
+    const rawEmail = [...mimeHeaders, "", Buffer.from(body).toString("base64")].join("\r\n")
+    const encodedRaw = Buffer.from(rawEmail).toString("base64url")
+
+    await gmailPost("/messages/send", { raw: encodedRaw })
+    result.steps.push(step("email_notification", "ok", `Notified support@ about ${companyName}`))
+  } catch (e) {
+    result.steps.push(step("email_notification", "error", e instanceof Error ? e.message : String(e)))
+  }
+
+  await updateJobProgress(job.id, result)
+
+  // ─── 6. MARK FORM AS REVIEWED ───
   try {
     const { error: formErr } = await supabaseAdmin
       .from("tax_return_submissions")
