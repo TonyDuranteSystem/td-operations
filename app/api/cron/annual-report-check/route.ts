@@ -177,6 +177,57 @@ export async function GET(req: NextRequest) {
         executed_at: new Date().toISOString(),
       })
 
+    // Send email report if there are new filings or blocked accounts
+    if (created > 0 || blocked > 0) {
+      try {
+        const { gmailPost } = await import("@/lib/gmail")
+
+        const newRows = results
+          .filter(r => r.action.includes("task Luca"))
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">✅ SD + Task Luca</td></tr>`)
+          .join("")
+
+        const blockedRows = results
+          .filter(r => r.action.includes("BLOCKED"))
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">🚫 Bloccato — pagamento overdue</td></tr>`)
+          .join("")
+
+        const skippedRows = results
+          .filter(r => r.action.includes("skipped"))
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#888">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#888">${r.action}</td></tr>`)
+          .join("")
+
+        const html = `
+          <h2>📋 Annual Report Check — ${today.toISOString().split("T")[0]}</h2>
+          <p><strong>${created}</strong> nuovi filing | <strong>${blocked}</strong> bloccati | <strong>${skipped}</strong> skippati | <strong>${accounts.length}</strong> verificati</p>
+          ${newRows ? `<h3>✅ Nuovi filing da fare (Luca)</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Azione</th></tr>
+            ${newRows}
+          </table>` : ""}
+          ${blockedRows ? `<h3 style="margin-top:16px">🚫 Bloccati — pagamento overdue (Antonio)</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Stato</th></tr>
+            ${blockedRows}
+          </table>` : ""}
+          ${skippedRows ? `<h3 style="margin-top:16px;color:#888">⏭️ Skippati</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Motivo</th></tr>
+            ${skippedRows}
+          </table>` : ""}
+          <p style="margin-top:16px;color:#888;font-size:12px">Generato automaticamente da /api/cron/annual-report-check</p>
+        `
+
+        await gmailPost("/messages/send", {
+          to: "support@tonydurante.us",
+          subject: `📋 Annual Report: ${created} filing${blocked ? ` + ${blocked} bloccati` : ""}`,
+          htmlBody: html,
+        })
+      } catch (emailErr) {
+        console.error("Annual Report email report failed:", emailErr)
+      }
+    }
+
     return NextResponse.json({ ok: true, checked: accounts.length, created, skipped, blocked, results })
 
   } catch (err: unknown) {

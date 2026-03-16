@@ -1051,6 +1051,49 @@ export function registerOperationsTools(server: McpServer) {
           }
         }
 
+        // ─── AUTO-TRIGGER: Annual Report — update annual_report_due_date +1 year on completion ───
+        if (delivery.service_type === "State Annual Report" && isCompleted && delivery.account_id) {
+          try {
+            const { data: acct } = await supabaseAdmin
+              .from("accounts")
+              .select("annual_report_due_date")
+              .eq("id", delivery.account_id)
+              .single()
+
+            if (acct?.annual_report_due_date) {
+              const currentDate = new Date(acct.annual_report_due_date)
+              currentDate.setFullYear(currentDate.getFullYear() + 1)
+              const newDate = currentDate.toISOString().split("T")[0]
+
+              await supabaseAdmin
+                .from("accounts")
+                .update({ annual_report_due_date: newDate, updated_at: new Date().toISOString() })
+                .eq("id", delivery.account_id)
+
+              lines.push(`\n📋 Annual report due date updated: ${acct.annual_report_due_date} → ${newDate}`)
+            }
+
+            // Close related open tasks
+            const { data: arTasks } = await supabaseAdmin
+              .from("tasks")
+              .select("id")
+              .eq("delivery_id", delivery_id)
+              .in("status", ["To Do", "In Progress"])
+
+            if (arTasks?.length) {
+              await supabaseAdmin
+                .from("tasks")
+                .update({ status: "Done", updated_at: new Date().toISOString() })
+                .eq("delivery_id", delivery_id)
+                .in("status", ["To Do", "In Progress"])
+
+              lines.push(`✅ Closed ${arTasks.length} related task(s)`)
+            }
+          } catch (arErr) {
+            lines.push(`\n⚠️ Annual report auto-update failed: ${arErr instanceof Error ? arErr.message : String(arErr)}`)
+          }
+        }
+
         // ─── AUTO-TRIGGER: Welcome Package on "Post-Formation + Banking" ───
         if (
           delivery.service_type === "Company Formation" &&
