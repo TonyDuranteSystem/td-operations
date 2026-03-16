@@ -27,7 +27,7 @@ Do this AUTOMATICALLY without Antonio having to explain what was being worked on
 
 ## Critical Code Rules
 
-### MCP Tools (150 tools in 29 files under `lib/mcp/tools/`)
+### MCP Tools (147 tools in 29 files under `lib/mcp/tools/`)
 - NEVER use `execute_sql` for CRM writes — always use `crm_update_record`
 - Tool descriptions are the documentation — keep them detailed with prerequisites and cross-references
 - Server instructions live in `lib/mcp/instructions.ts` — update when adding/changing tools
