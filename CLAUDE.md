@@ -27,11 +27,22 @@ Do this AUTOMATICALLY without Antonio having to explain what was being worked on
 
 ## Critical Code Rules
 
-### MCP Tools (78 tools in 15 files under `lib/mcp/tools/`)
+### MCP Tools (150 tools in 29 files under `lib/mcp/tools/`)
 - NEVER use `execute_sql` for CRM writes — always use `crm_update_record`
 - Tool descriptions are the documentation — keep them detailed with prerequisites and cross-references
 - Server instructions live in `lib/mcp/instructions.ts` — update when adding/changing tools
 - Mirror docs in `docs/claude-connector-system-instructions.md` for reference
+
+### MCP Tool Counting — Source of Truth
+The ONLY source of truth for active tools is `app/api/[transport]/route.ts`.
+- **NEVER** count `server.tool()` across all files — some files may exist but not be registered
+- Only files with an **uncommented** `import` AND **uncommented** `register*Tools(server)` call are active
+- Commented imports = REMOVED tools. The file may still exist but those tools are NOT active
+- Before updating any tool count (instructions.ts, skill, docs), verify with:
+  ```bash
+  grep -v '//' app/api/\[transport\]/route.ts | grep 'register.*Tools'
+  ```
+- When removing tools: DELETE the source file (or move to `/deprecated`). Never leave dead tool files — they cause confusion across machines and incorrect counts.
 
 ### Database
 - All schema changes via Supabase Dashboard or `execute_sql` — no local migrations
