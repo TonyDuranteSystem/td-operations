@@ -161,7 +161,20 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     }
   }
 
-  // 3. Create payment record in CRM
+  // 3. Create payment record in CRM (with whop_payment_id for idempotency)
+  // Check if this Whop payment was already processed
+  if (paymentId) {
+    const { data: existingPayment } = await getSupabase()
+      .from("payments")
+      .select("id")
+      .eq("whop_payment_id", paymentId)
+      .limit(1)
+    if (existingPayment && existingPayment.length > 0) {
+      console.log(`[whop-webhook] Payment ${paymentId} already processed — skipping duplicate`)
+      return NextResponse.json({ ok: true, message: "Duplicate webhook, already processed" })
+    }
+  }
+
   const paymentRecord: Record<string, unknown> = {
     amount: total,
     amount_paid: total,
@@ -171,6 +184,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     payment_method: "Whop",
     description: `${productTitle || "Whop payment"} — ${clientName || email || "unknown"}`,
     notes: `Whop payment ${paymentId}. Product: ${productTitle || "N/A"}.`,
+    whop_payment_id: paymentId || null,
   }
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId

@@ -68,6 +68,24 @@ export async function GET(req: NextRequest) {
         deposits = payResult.QueryResponse?.Payment || []
       } catch (e2) {
         console.error("[check-wire] QB payment query also failed:", e2)
+        // Alert Antonio that QB is unreachable
+        try {
+          const { gmailPost } = await import("@/lib/gmail")
+          const alertBody = `QuickBooks API is unreachable. Wire payment matching is NOT running.\n\nError: ${e2 instanceof Error ? e2.message : String(e2)}\n\nAction: Re-authorize QB at /api/qb/refresh or check token status.`
+          const rawEmail = [
+            `From: Tony Durante LLC <support@tonydurante.us>`,
+            `To: support@tonydurante.us`,
+            `Subject: ⚠️ QB API Down — Wire Payment Cron Failed`,
+            "MIME-Version: 1.0",
+            "Content-Type: text/plain; charset=utf-8",
+            "Content-Transfer-Encoding: base64",
+            "",
+            Buffer.from(alertBody).toString("base64"),
+          ].join("\r\n")
+          await gmailPost("/messages/send", { raw: Buffer.from(rawEmail).toString("base64url") })
+        } catch (emailErr) {
+          console.error("[check-wire] Failed to send QB alert email:", emailErr)
+        }
         return NextResponse.json({ error: "QB API unavailable" }, { status: 503 })
       }
     }
