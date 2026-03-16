@@ -107,6 +107,53 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
+      // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
+      try {
+        const { data: acct } = await supabaseAdmin
+          .from("accounts")
+          .select("drive_folder_id")
+          .eq("id", oa.account_id)
+          .single()
+
+        if (acct?.drive_folder_id) {
+          // Find the "1. Company" subfolder
+          const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+          const companyFolder = folderResult.files?.find(f =>
+            f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+          )
+          const targetFolderId = companyFolder?.id || acct.drive_folder_id
+
+          // Find latest signed PDF in Storage
+          const { data: files } = await supabaseAdmin.storage
+            .from("signed-oa")
+            .list(oa.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+
+          if (files?.length) {
+            const pdfFile = files[0]
+            const { data: blob } = await supabaseAdmin.storage
+              .from("signed-oa")
+              .download(`${oa.token}/${pdfFile.name}`)
+
+            if (blob) {
+              const arrayBuffer = await blob.arrayBuffer()
+              const fileData = Buffer.from(arrayBuffer)
+              const fileName = `Operating Agreement - ${oa.company_name} (Signed).pdf`
+
+              const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+              results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+            } else {
+              results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
+            }
+          } else {
+            results.push({ step: "drive_upload", status: "skipped", detail: "No PDF found in Storage" })
+          }
+        } else {
+          results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
+        }
+      } catch (e) {
+        results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
     }
 
     return NextResponse.json({ ok: true, results })

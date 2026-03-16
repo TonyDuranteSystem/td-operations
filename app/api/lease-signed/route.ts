@@ -109,39 +109,43 @@ export async function POST(req: NextRequest) {
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
-      // ─── 3. CREATE TASK: Upload signed lease to Drive ───
+      // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
       try {
-        const taskTitle = `Upload signed lease to Drive — ${lease.tenant_company}`
-        const { data: existingTask } = await supabaseAdmin
-          .from("tasks")
-          .select("id")
-          .eq("task_title", taskTitle)
-          .eq("account_id", lease.account_id)
-          .maybeSingle()
+        const { data: acct } = await supabaseAdmin
+          .from("accounts")
+          .select("drive_folder_id")
+          .eq("id", lease.account_id)
+          .single()
 
-        if (!existingTask) {
-          await supabaseAdmin.from("tasks").insert({
-            task_title: taskTitle,
-            description: [
-              `Lease signed by ${lease.tenant_company} (Suite ${lease.suite_number}).`,
-              ``,
-              `PDF in Storage: signed-leases/${lease.pdf_storage_path || lease.token}`,
-              ``,
-              `Action: Download from Supabase Storage and upload to Drive → Company folder → 1. Company`,
-            ].join("\n"),
-            assigned_to: "Luca",
-            priority: "Normal",
-            category: "Document",
-            status: "To Do",
-            account_id: lease.account_id,
-            created_by: "System",
-          })
-          results.push({ step: "task_drive_upload", status: "ok", detail: "Task created: upload signed lease to Drive" })
+        if (acct?.drive_folder_id) {
+          const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+          const companyFolder = folderResult.files?.find(f =>
+            f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+          )
+          const targetFolderId = companyFolder?.id || acct.drive_folder_id
+
+          // Download signed PDF from Storage
+          const pdfPath = lease.pdf_storage_path || `${lease.token}/lease-signed.pdf`
+          const { data: blob } = await supabaseAdmin.storage
+            .from("signed-leases")
+            .download(pdfPath)
+
+          if (blob) {
+            const arrayBuffer = await blob.arrayBuffer()
+            const fileData = Buffer.from(arrayBuffer)
+            const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
+
+            const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+            results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+          } else {
+            results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
+          }
         } else {
-          results.push({ step: "task_drive_upload", status: "skipped", detail: "Already exists" })
+          results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
         }
       } catch (e) {
-        results.push({ step: "task_drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 

@@ -68,6 +68,7 @@ import { registerWelcomePackageTools } from "@/lib/mcp/tools/welcome-package"
 import { registerBankingFormTools } from "@/lib/mcp/tools/banking-form"
 import { registerJobTools } from "@/lib/mcp/tools/jobs"
 import { registerQbExpenseTools } from "@/lib/mcp/tools/qb-expenses"
+import { registerITINFormTools } from "@/lib/mcp/tools/itin-form"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -111,6 +112,7 @@ const handler = createMcpHandler(
     registerWelcomePackageTools(server)
     registerJobTools(server)
     registerQbExpenseTools(server)
+    registerITINFormTools(server)
   },
   {
     capabilities: {},

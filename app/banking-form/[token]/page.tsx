@@ -292,6 +292,17 @@ function BankingFormContent() {
 
       if (subErr) throw new Error(subErr.message)
 
+      // Notify backend (email to support@, task creation)
+      try {
+        await fetch('/api/banking-form-completed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ submission_id: submission.id, token: submission.token }),
+        })
+      } catch {
+        // Non-blocking
+      }
+
       setSubmitted(true)
       setSubmission(prev => prev ? { ...prev, status: 'completed', completed_at: new Date().toISOString() } : null)
     } catch (err) {
