@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 136 tools, data source priority,
+ * This guides Claude on how to use the 130 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -88,7 +88,7 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 ## Tool Selection — Key Rules
 
-You have 137 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 130 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
@@ -149,19 +149,15 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - drive_upload_file: Upload BINARY files (PDF, images, docs) from Gmail attachments, URLs, or Supabase Storage (onboarding-uploads bucket). Max ~4MB.
 - drive_delete: Soft-delete (move to trash) a file or folder. Recoverable for 30 days. Use for removing duplicates or obsolete files.
 
-### Gmail (8 tools: gmail_*) — PRIMARY EMAIL SYSTEM
-- gmail_send: 📧 PRIMARY — Send email directly via Gmail API. Appears in Sent folder, supports threading (reply_to_message_id), HTML body, open tracking via pixel. Use this for ALL client emails. Supports as_user for different mailboxes.
+### Gmail (9 tools: gmail_*) — PRIMARY EMAIL SYSTEM
+- gmail_send: 📧 PRIMARY — Send email directly via Gmail API. Appears in Sent folder, supports threading (reply_to_message_id), HTML body, open tracking via pixel, Drive file attachments. Use this for ALL client emails.
 - gmail_search: Search inbox. Default: support@tonydurante.us. Use as_user for Antonio's inbox.
-- gmail_read/gmail_read_thread: Read messages/threads.
+- gmail_read/gmail_read_thread: Read messages/threads. gmail_read now shows attachments with IDs.
+- gmail_read_attachment: Download attachments from emails. Can list attachments, read text files, or save binary files directly to Google Drive via save_to_drive_folder_id. Workflow: gmail_read → see attachment IDs → gmail_read_attachment(attachment_id, save_to_drive_folder_id).
 - gmail_draft: Create draft (does NOT send). Only for drafts that Antonio needs to review.
 - gmail_track_status: Check open tracking for emails sent via gmail_send. Shows open count, first/last opened.
+- gmail_labels: List Gmail labels with unread counts.
 - RULE: For client emails, ALWAYS use gmail_send (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
-
-### Email — Postmark (7 tools: email_*) — SECONDARY (automated/bulk only)
-- email_send: Send via Postmark. Use ONLY for automated notifications, bulk emails, or template-based sends where threading is not needed.
-- email_send_with_template: Template-based sends (formation info, onboarding, tax form links).
-- email_get_delivery_status / email_search_activity / email_get_stats: Postmark tracking.
-- email_list_templates / email_create_template: Template management.
 
 ### Messaging — WhatsApp & Telegram (6 tools: msg_*)
 - msg_inbox: Unified inbox with unread counts.
@@ -183,8 +179,8 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 - cb_*: Circleback call summaries — list, get details, search (3 tools). Data arrives via webhook, auto-linked to leads by attendee email.
 - offer_*: Service proposals — create, list, get, update, send (5 tools). All JSONB fields use English names (services, cost_summary, issues, strategy, etc.). Workflow: create (draft) → review → offer_send (creates Gmail draft) → client views → signs → pays.
 - whop_*: Whop payment gateway — list payments (check if client paid), list plans (checkout links), list products, create plans, list memberships (5 tools). Use whop_list_payments to verify client payments instead of checking the browser.
-- formation_form_*: LLC formation data collection forms for new clients (4 tools). Workflow: after Whop payment → formation_form_create(lead_id, entity_type, state) → send URL via email_send → client fills form → formation_form_review(token) → apply changes to CRM. Entity type (SMLLC/MMLLC) and state decided during call (default: SMLLC + NM). Formation pipeline: 5 stages (Data Collection → State Filing → EIN → Post-Formation+Banking → Closing). RULE: Account created ONLY after state confirmation (Stage 2). Lease Agreement is first step of Stage 4. **Supervised automation**: formation_confirm(activation_id) reviews and executes prepared steps (QB invoice, formation form) from activate-formation. After 5 successful confirmations → auto mode.
-- onboarding_form_*: Onboarding data collection forms for clients with EXISTING LLCs (3 tools). Workflow: onboarding_form_create(lead_id, entity_type, state) → send URL via email_send → client fills form (owner info, company info, ITIN, documents: passport, Articles, EIN letter, SS-4) → onboarding_form_review(token) → apply changes to CRM (Contact + Account + Drive folder + document copy + **auto-create lease as draft** + tasks + tax returns if needed). The Magic Button (apply_changes=true) does 11 automatic steps. Lease is auto-created with next available suite number — use lease_send(token) after review to send to client.
+- formation_form_*: LLC formation data collection forms for new clients (4 tools). Workflow: after Whop payment → formation_form_create(lead_id, entity_type, state) → send URL via gmail_send → client fills form → formation_form_review(token) → apply changes to CRM. Entity type (SMLLC/MMLLC) and state decided during call (default: SMLLC + NM). Formation pipeline: 5 stages (Data Collection → State Filing → EIN → Post-Formation+Banking → Closing). RULE: Account created ONLY after state confirmation (Stage 2). Lease Agreement is first step of Stage 4. **Supervised automation**: formation_confirm(activation_id) reviews and executes prepared steps (QB invoice, formation form) from activate-formation. After 5 successful confirmations → auto mode.
+- onboarding_form_*: Onboarding data collection forms for clients with EXISTING LLCs (3 tools). Workflow: onboarding_form_create(lead_id, entity_type, state) → send URL via gmail_send → client fills form (owner info, company info, ITIN, documents: passport, Articles, EIN letter, SS-4) → onboarding_form_review(token) → apply changes to CRM (Contact + Account + Drive folder + document copy + **auto-create lease as draft** + tasks + tax returns if needed). The Magic Button (apply_changes=true) does 11 automatic steps. Lease is auto-created with next available suite number — use lease_send(token) after review to send to client.
 - banking_form_*: Multi-provider banking application data collection forms for existing clients (3 tools). Providers: 'payset' (EUR IBAN, default) or 'relay' (USD business account). Workflow: banking_form_create(account_id, provider) → send URL via gmail_send → client fills form (personal info, business info, proof of address, bank statement) → banking_form_review(token) → apply changes. Form auto-adapts title, disclaimer, and labels per provider. Payset has NO API — onboarding is manual (live session with OTP codes).
 - lease_*: Office Lease Agreements for clients needing a physical address for banking (5 tools). Workflow: lease_create(account_id, suite_number) → lease_get(token) to review → lease_send(token) sends email via Gmail with open tracking → client views/signs online → PDF auto-saved to Supabase Storage. Suite format: 3D-XXX. Default: $100/mo, $150 deposit, 12 months. Landlord: Tony Durante LLC, 10225 Ulmerton Rd Suite 3D, Largo FL 33771. CRITICAL: Required for banking — Mercury, Relay, Chase all need a real lease. lease_list to search by status/account/year, lease_update to modify fields.
 - oa_*: Operating Agreement for Single Member LLCs (3 tools). State-specific templates for NM, WY, FL — English only. Workflow: oa_create(account_id) → oa_get(token) to review via admin preview → oa_send(token) sends email via Gmail with open tracking → client views/signs online → PDF auto-saved to Supabase Storage. Pulls company + member info from CRM account and linked contact. OA is part of Formation Stage 3 (Post-Formation) — sent in the Welcome Package email after EIN is obtained. Token format: {company-slug}-oa-{year}.
@@ -230,7 +226,7 @@ When a team member (Luca, Antonio, or anyone) communicates that an action has be
 2. Client Lookup: START with crm_get_client_summary (returns everything in one call).
 3. Lead Queries: lead_search for leads, NOT crm_search_deals. Deals ≠ Leads.
 4. Business Rules: ALWAYS kb_search before answering pricing/services/procedures questions.
-5. Sending Email: ALWAYS gmail_send for client emails (threading + Sent folder + open tracking). Tracking opens: gmail_track_status (NOT email_get_delivery_status which is Postmark-only). Postmark (email_send) only for automated/bulk/template emails. Reading: gmail_search + gmail_read.
+5. Sending Email: ALWAYS gmail_send for client emails (threading + Sent folder + open tracking). Tracking opens: gmail_track_status. Attachments: gmail_read_attachment with save_to_drive_folder_id to save to client's Drive folder. Reading: gmail_search + gmail_read.
 6. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 7. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
 8. QB Invoice Workflow: Create → Review (qb_get_invoice) → Update if needed → CONFIRM with user → Send. NEVER auto-send invoices.

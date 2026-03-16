@@ -137,7 +137,7 @@ export function registerBankingFormTools(server: McpServer) {
               `   👁️ Admin Preview: ${adminPreviewUrl}`,
               `   🔗 Client URL: ${url}`,
               "",
-              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send or email_send`,
+              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send`,
             ].join("\n"),
           }],
         }

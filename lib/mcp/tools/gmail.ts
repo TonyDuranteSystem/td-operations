@@ -1,5 +1,5 @@
 /**
- * Gmail MCP Tools (8 tools)
+ * Gmail MCP Tools (9 tools)
  * Search, read, draft, send emails via Gmail API with open tracking.
  * Uses the same SA with DWD as Drive (impersonates support@tonydurante.us).
  *
@@ -308,6 +308,28 @@ export function registerGmailTools(server: McpServer) {
         const date = getHeader(msg.payload.headers, "Date")
         const body = extractBody(msg.payload)
 
+        // Find attachments
+        const findAttachmentsMeta = (parts: GmailPart[] | undefined): Array<{ filename: string; mimeType: string; size: number; attachmentId: string }> => {
+          const result: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }> = []
+          if (!parts) return result
+          for (const part of parts) {
+            if (part.body?.size && part.body.size > 0 && (part as unknown as Record<string, unknown>).filename) {
+              const fn = (part as unknown as Record<string, unknown>).filename as string
+              if (fn) {
+                result.push({
+                  filename: fn,
+                  mimeType: part.mimeType,
+                  size: part.body.size,
+                  attachmentId: ((part.body as unknown as Record<string, unknown>).attachmentId as string) || "",
+                })
+              }
+            }
+            if (part.parts) result.push(...findAttachmentsMeta(part.parts))
+          }
+          return result
+        }
+        const attachmentsList = findAttachmentsMeta(msg.payload.parts)
+
         const lines = [
           `📧 ${subject || "(no subject)"}`,
           "",
@@ -316,13 +338,24 @@ export function registerGmailTools(server: McpServer) {
           cc ? `📋 CC: ${cc}` : "",
           `📅 Date: ${date}`,
           `🏷️ Labels: ${msg.labelIds?.join(", ") || "none"}`,
-          "",
-          "── Body ──────────────────────────────",
-          body.length > 5000 ? body.slice(0, 5000) + "\n\n⚠️ Truncated (5000 chars)" : body,
-        ].filter(Boolean)
+        ]
+
+        if (attachmentsList.length > 0) {
+          lines.push("")
+          lines.push(`📎 Attachments (${attachmentsList.length}):`)
+          for (const att of attachmentsList) {
+            const sizeKb = Math.round(att.size / 1024)
+            lines.push(`  📄 ${att.filename} (${att.mimeType}, ${sizeKb} KB) — ID: ${att.attachmentId}`)
+          }
+          lines.push(`  💡 Use gmail_read_attachment(message_id="${message_id}", attachment_id="...") to download`)
+        }
+
+        lines.push("")
+        lines.push("── Body ──────────────────────────────")
+        lines.push(body.length > 5000 ? body.slice(0, 5000) + "\n\n⚠️ Truncated (5000 chars)" : body)
 
         return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
+          content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }],
         }
       } catch (error) {
         return {
@@ -385,7 +418,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_draft",
-    "Create an email draft in Gmail (does NOT send). Default mailbox: support@tonydurante.us. The draft is saved and must be reviewed and sent manually from Gmail. Supports reply threading via reply_to_message_id. For immediate sending, use email_send (Postmark) instead.",
+    "Create an email draft in Gmail (does NOT send). Default mailbox: support@tonydurante.us. The draft is saved and must be reviewed and sent manually from Gmail. Supports reply threading via reply_to_message_id. For immediate sending, use gmail_send instead.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -479,7 +512,7 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_send",
-    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. Use this instead of email_send (Postmark) for client emails that need reply threading. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array).",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. PRIMARY email tool for ALL client communications. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array).",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -803,6 +836,198 @@ export function registerGmailTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `❌ Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // gmail_read_attachment
+  // ═══════════════════════════════════════
+  server.tool(
+    "gmail_read_attachment",
+    "Download attachments from a Gmail message. Can list attachments, read text files, or save binary files directly to Google Drive. When save_to_drive_folder_id is provided, downloads the attachment and uploads it to the specified Drive folder automatically — no extra steps needed. Workflow: gmail_search → gmail_read (shows attachments with IDs) → gmail_read_attachment (download/save). To find the client's Drive folder: use crm_get_client_summary to get drive_folder_id, then optionally drive_list_folder to pick a subfolder (e.g. '1. Company', '5. Correspondence').",
+    {
+      message_id: z.string().describe("Gmail message ID (from gmail_search or gmail_read)"),
+      attachment_id: z.string().optional().describe("Specific attachment ID to download (from gmail_read). If omitted, lists all attachments with metadata."),
+      save_to_drive_folder_id: z.string().optional().describe("Google Drive folder ID to save the attachment to. If provided, the file is downloaded from Gmail and uploaded to Drive automatically. Use crm_get_client_summary → drive_folder_id to find the client's folder, then drive_list_folder to pick a subfolder."),
+      as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
+    },
+    async ({ message_id, attachment_id, save_to_drive_folder_id, as_user }) => {
+      try {
+        // First, get the message to find attachments
+        const msg = await gmailGet(`/messages/${message_id}`, {
+          format: "full",
+        }, as_user) as GmailMessage
+
+        // Recursively find all attachment parts
+        type AttachmentInfo = {
+          partId: string
+          filename: string
+          mimeType: string
+          size: number
+          attachmentId: string
+        }
+
+        const findAttachments = (parts: GmailPart[] | undefined, result: AttachmentInfo[] = []): AttachmentInfo[] => {
+          if (!parts) return result
+          for (const part of parts) {
+            if (part.body?.size && part.body.size > 0 && (part as unknown as Record<string, unknown>).filename) {
+              const fn = (part as unknown as Record<string, unknown>).filename as string
+              if (fn) {
+                result.push({
+                  partId: (part as unknown as Record<string, unknown>).partId as string || "",
+                  filename: fn,
+                  mimeType: part.mimeType,
+                  size: part.body.size,
+                  attachmentId: ((part.body as unknown as Record<string, unknown>).attachmentId as string) || "",
+                })
+              }
+            }
+            if (part.parts) findAttachments(part.parts, result)
+          }
+          return result
+        }
+
+        const attachments = findAttachments(msg.payload.parts)
+
+        // Also check top-level payload for single-part messages
+        if (msg.payload.body?.size && msg.payload.body.size > 0 && (msg.payload as unknown as Record<string, unknown>).filename) {
+          const filename = (msg.payload as unknown as Record<string, unknown>).filename as string
+          if (filename) {
+            attachments.push({
+              partId: "",
+              filename,
+              mimeType: msg.payload.mimeType,
+              size: msg.payload.body.size,
+              attachmentId: ((msg.payload.body as unknown as Record<string, unknown>).attachmentId as string) || "",
+            })
+          }
+        }
+
+        if (attachments.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: `📭 No attachments found in message ${message_id}` }],
+          }
+        }
+
+        // If no specific attachment requested, list all
+        if (!attachment_id) {
+          const lines = [
+            `📎 ${attachments.length} attachment(s) in message ${message_id}`,
+            "",
+          ]
+          for (const att of attachments) {
+            const sizeKb = Math.round(att.size / 1024)
+            lines.push(`  📄 ${att.filename}`)
+            lines.push(`     Type: ${att.mimeType} | Size: ${sizeKb} KB`)
+            lines.push(`     Attachment ID: ${att.attachmentId}`)
+            lines.push("")
+          }
+          lines.push("Use gmail_read_attachment with attachment_id to download a specific file.")
+          return {
+            content: [{ type: "text" as const, text: lines.join("\n") }],
+          }
+        }
+
+        // Download the specific attachment
+        const attInfo = attachments.find(a => a.attachmentId === attachment_id)
+        const attData = await gmailGet(
+          `/messages/${message_id}/attachments/${attachment_id}`,
+          undefined,
+          as_user
+        ) as { data: string; size: number }
+
+        // Decode from base64url
+        const base64Standard = attData.data.replace(/-/g, "+").replace(/_/g, "/")
+        const buffer = Buffer.from(base64Standard, "base64")
+
+        const filename = attInfo?.filename || "attachment"
+        const mimeType = attInfo?.mimeType || "application/octet-stream"
+        const sizeKb = Math.round(buffer.length / 1024)
+
+        // If save_to_drive_folder_id provided, upload to Drive automatically
+        if (save_to_drive_folder_id) {
+          try {
+            const { uploadBinaryToDrive } = await import("@/lib/google-drive")
+            const driveFile = await uploadBinaryToDrive(filename, buffer, mimeType, save_to_drive_folder_id)
+            const driveId = (driveFile as { id: string }).id
+
+            logAction({
+              action_type: "upload",
+              table_name: "google_drive",
+              record_id: driveId,
+              summary: `Gmail attachment → Drive: ${filename} (${sizeKb} KB)`,
+              details: { gmail_message_id: message_id, filename, mimeType, drive_folder_id: save_to_drive_folder_id },
+            })
+
+            return {
+              content: [{
+                type: "text" as const,
+                text: [
+                  `✅ Attachment saved to Google Drive`,
+                  "",
+                  `📄 ${filename} (${mimeType}, ${sizeKb} KB)`,
+                  `📁 Drive File ID: ${driveId}`,
+                  `📂 Folder: ${save_to_drive_folder_id}`,
+                  "",
+                  `Source: Gmail message ${message_id}`,
+                ].join("\n"),
+              }],
+            }
+          } catch (driveErr) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `❌ Downloaded attachment but Drive upload failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}\n\nFile: ${filename} (${sizeKb} KB). Try again with drive_upload_file manually.`,
+              }],
+            }
+          }
+        }
+
+        // For text-based files, return decoded content
+        const textMimeTypes = [
+          "text/plain", "text/csv", "text/html", "text/xml",
+          "application/json", "application/xml", "text/tab-separated-values",
+        ]
+        const isText = textMimeTypes.some(t => mimeType.startsWith(t)) ||
+          filename.match(/\.(txt|csv|json|xml|tsv|log|md|yaml|yml)$/i)
+
+        if (isText) {
+          const textContent = buffer.toString("utf-8")
+          const truncated = textContent.length > 10000
+          return {
+            content: [{
+              type: "text" as const,
+              text: [
+                `📄 ${filename} (${mimeType}, ${sizeKb} KB)`,
+                "",
+                "── Content ──────────────────────────────",
+                truncated ? textContent.slice(0, 10000) + "\n\n⚠️ Truncated at 10,000 chars" : textContent,
+              ].join("\n"),
+            }],
+          }
+        }
+
+        // For binary files, return info + instructions
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `📄 ${filename} (${mimeType}, ${sizeKb} KB)`,
+              "",
+              "Binary file downloaded. To save to Drive, call again with save_to_drive_folder_id.",
+              "To find the right folder: crm_get_client_summary → drive_folder_id → drive_list_folder for subfolders.",
+              "",
+              `Attachment ID: ${attachment_id}`,
+              `Filename: ${filename}`,
+              `MIME Type: ${mimeType}`,
+            ].join("\n"),
+          }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: `❌ Gmail attachment read failed: ${error instanceof Error ? error.message : String(error)}` }],
+        }
       }
     }
   )

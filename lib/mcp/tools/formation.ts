@@ -14,7 +14,7 @@ export function registerFormationTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "formation_form_create",
-    "Create a formation data collection form for a new LLC client. Pre-fills owner info from the lead record. Entity type (SMLLC/MMLLC) and state are set as metadata — decided during the call, not by the client. Returns the form URL (https://td-operations.vercel.app/formation-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use email_send to send the link to the client.",
+    "Create a formation data collection form for a new LLC client. Pre-fills owner info from the lead record. Entity type (SMLLC/MMLLC) and state are set as metadata — decided during the call, not by the client. Returns the form URL (https://td-operations.vercel.app/formation-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       lead_id: z.string().uuid().describe("Lead UUID — the client who paid for formation"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type decided during call (default: SMLLC)"),
@@ -113,7 +113,7 @@ export function registerFormationTools(server: McpServer) {
               `   👁️ Admin Preview: ${adminPreviewUrl}`,
               `   🔗 Client URL: ${url}`,
               "",
-              `⚠️ Review the admin preview FIRST, then send the client URL via email_send`,
+              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send`,
             ].join("\n"),
           }],
         }

@@ -15,7 +15,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_create",
-    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (https://td-operations.vercel.app/onboarding-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use email_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
+    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (https://td-operations.vercel.app/onboarding-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
     {
       lead_id: z.string().uuid().describe("Lead UUID"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type (default: SMLLC)"),
@@ -146,7 +146,7 @@ export function registerOnboardingTools(server: McpServer) {
               `   👁️ Admin Preview: ${adminPreviewUrl}`,
               `   🔗 Client URL: ${url}`,
               "",
-              `⚠️ Review the admin preview FIRST, then send the client URL via email_send`,
+              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send`,
             ].join("\n"),
           }],
         }

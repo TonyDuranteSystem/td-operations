@@ -295,7 +295,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_form_create",
-    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (https://td-operations.vercel.app/tax-form/{token}). Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use email_send or email_send_with_template to send the link to the client.",
+    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (https://td-operations.vercel.app/tax-form/{token}). Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
@@ -429,7 +429,7 @@ export function registerTaxTools(server: McpServer) {
               `   👁️ Admin Preview: ${adminPreviewUrl}`,
               `   🔗 Client URL: ${url}`,
               "",
-              `⚠️ Review the admin preview FIRST, then send the client URL via email_send or email_send_with_template (template: tax-form-link-${formLang})`,
+              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send`,
             ].join("\n"),
           }],
         }
