@@ -127,14 +127,14 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         // 6. Check for existing
         const { data: existing } = await supabaseAdmin
           .from("closure_submissions")
-          .select("id, token, status")
+          .select("id, token, status, access_code")
           .eq("token", token)
           .maybeSingle()
         if (existing) {
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Closure form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/closure-form/${existing.token}\n👁️ Preview: https://td-operations.vercel.app/closure-form/${existing.token}?preview=td`,
+              text: `⚠️ Closure form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/closure-form/${existing.token}/${existing.access_code}\n👁️ Preview: https://td-operations.vercel.app/closure-form/${existing.token}/${existing.access_code}?preview=td`,
             }],
           }
         }
@@ -151,11 +151,11 @@ Use gmail_send to send the link to the client after Antonio approves.`,
             prefilled_data: prefilled,
             status: "pending",
           })
-          .select("id, token")
+          .select("id, token, access_code")
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/closure-form/${token}`
+        const url = `https://td-operations.vercel.app/closure-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -250,7 +250,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/closure-form/${data.token}`
+        const formUrl = `https://td-operations.vercel.app/closure-form/${data.token}/${data.access_code}`
         lines.push("")
         lines.push(`   👁️ Admin Preview: ${formUrl}?preview=td`)
         lines.push(`   🔗 Client URL: ${formUrl}`)

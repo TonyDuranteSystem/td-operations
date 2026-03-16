@@ -34,7 +34,7 @@ Suite number format: "3D-XXX" (e.g. 3D-107). REQUIRED — each client gets a uni
 
 The lease is created as 'draft'. Use lease_send to approve and create the Gmail draft.
 
-Admin preview: append ?preview=td to the lease URL (WITHOUT the ?c= access code) to bypass the email gate. Example: https://td-operations.vercel.app/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before sending.
+Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path segment) to bypass the email gate. Example: https://td-operations.vercel.app/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before sending.
 
 Workflow: lease_create → lease_get (review with admin preview link) → lease_send → client views → signs → PDF saved.`,
     {
@@ -146,7 +146,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           return { content: [{ type: "text" as const, text: `❌ Insert failed: ${insertErr?.message || "no data"}` }] }
         }
 
-        const leaseUrl = `${LEASE_BASE_URL}/${lease.token}?c=${lease.access_code}`
+        const leaseUrl = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
 
         logAction({
           action_type: "create",
@@ -216,7 +216,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           return { content: [{ type: "text" as const, text: `❌ Lease not found: ${err?.message || "no data"}` }] }
         }
 
-        const url = `${LEASE_BASE_URL}/${data.token}?c=${data.access_code}`
+        const url = `${LEASE_BASE_URL}/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${LEASE_BASE_URL}/${data.token}?preview=td`
 
         const lines = [
@@ -383,7 +383,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
         }
 
         // Build URL
-        const url = `${LEASE_BASE_URL}/${lease.token}?c=${lease.access_code}`
+        const url = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
 
         const subject = `Office Lease Agreement — ${lease.tenant_company}`

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -52,22 +52,9 @@ function today() {
 }
 
 // ─── Main Page ──────────────────────────────────────────
-export default function LeasePage() {
-  const { token } = useParams<{ token: string }>()
+export default function LeasePageWithCode() {
+  const { token, code } = useParams<{ token: string; code: string }>()
   const searchParams = useSearchParams()
-  const router = useRouter()
-  const accessCode = searchParams.get('c') || ''
-
-  // Redirect old ?c= links to new /lease/{token}/{code} path
-  useEffect(() => {
-    const code = searchParams.get('c')
-    if (code) {
-      const params = new URLSearchParams(searchParams.toString())
-      params.delete('c')
-      const remaining = params.toString()
-      router.replace(`/lease/${token}/${code}${remaining ? `?${remaining}` : ''}`)
-    }
-  }, [searchParams, token, router])
 
   const [isAdmin, setIsAdmin] = useState(false)
   const [lease, setLease] = useState<LeaseAgreement | null>(null)
@@ -109,7 +96,7 @@ export default function LeasePage() {
       return
     }
 
-    if (!adminMode && data.access_code !== accessCode) {
+    if (!adminMode && data.access_code !== code) {
       setError('Invalid link.')
       setLoading(false)
       return
@@ -128,7 +115,7 @@ export default function LeasePage() {
       const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`lease_verified_${token}=`))
       if (cookie) setVerified(true)
     }
-  }, [token, accessCode, searchParams])
+  }, [token, code, searchParams])
 
   useEffect(() => { loadLease() }, [loadLease])
 

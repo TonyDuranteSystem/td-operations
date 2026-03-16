@@ -15,7 +15,7 @@ export function registerBankingFormTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "banking_form_create",
-    "Create a banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Providers: 'payset' (EUR IBAN, default) or 'relay' (USD business account). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
+    "Create a banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}/{access_code}). Providers: 'payset' (EUR IBAN, default) or 'relay' (USD business account). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
@@ -90,14 +90,14 @@ export function registerBankingFormTools(server: McpServer) {
         // 6. Check for existing submission
         const { data: existing } = await supabaseAdmin
           .from("banking_submissions")
-          .select("id, token, status")
+          .select("id, token, status, access_code")
           .eq("token", token)
           .maybeSingle()
         if (existing) {
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Form already exists for ${account.company_name}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/banking-form/${existing.token}`,
+              text: `⚠️ Form already exists for ${account.company_name}\nToken: ${existing.token}\nStatus: ${existing.status}\nAccess Code: ${existing.access_code}\nURL: https://td-operations.vercel.app/banking-form/${existing.token}/${existing.access_code}`,
             }],
           }
         }
@@ -117,11 +117,11 @@ export function registerBankingFormTools(server: McpServer) {
             prefilled_data: prefilled,
             status: "pending",
           })
-          .select("id, token")
+          .select("id, token, access_code")
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/banking-form/${token}`
+        const url = `https://td-operations.vercel.app/banking-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -214,7 +214,7 @@ export function registerBankingFormTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/banking-form/${data.token}`
+        const formUrl = `https://td-operations.vercel.app/banking-form/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")

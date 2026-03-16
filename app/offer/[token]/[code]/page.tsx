@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 
@@ -148,21 +148,11 @@ function hasVerifiedCookie(token: string): boolean {
 
 // ─── Component ──────────────────────────────────────────────
 
-export default function OfferPage() {
-  const params = useParams()
+export default function OfferPageWithCode() {
+  const { token, code } = useParams<{ token: string; code: string }>()
   const searchParams = useSearchParams()
-  const router = useRouter()
-  const token = params.token as string
-  const accessCode = searchParams.get('c') || ''
+  const accessCode = code
   const isPreview = searchParams.get('preview') === '1'
-
-  // Redirect legacy ?c= URLs to the new /offer/{token}/{code} path
-  useEffect(() => {
-    if (accessCode) {
-      const preview = isPreview ? '?preview=1' : ''
-      router.replace(`/offer/${encodeURIComponent(token)}/${encodeURIComponent(accessCode)}${preview}`)
-    }
-  }, [accessCode, token, isPreview, router])
 
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)

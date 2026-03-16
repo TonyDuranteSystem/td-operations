@@ -202,7 +202,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           details: { token: oa.token, state, entity_type: entityType, manager: managerName, member: contact.full_name },
         })
 
-        const oaUrl = `${OA_BASE_URL}/${oa.token}?c=${oa.access_code}`
+        const oaUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}`
         const adminPreviewUrl = `${OA_BASE_URL}/${oa.token}?preview=td`
 
         const lines = [
@@ -261,7 +261,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ OA not found: ${err?.message || "no data"}` }] }
         }
 
-        const url = `${OA_BASE_URL}/${data.token}?c=${data.access_code}`
+        const url = `${OA_BASE_URL}/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${OA_BASE_URL}/${data.token}?preview=td`
         const entityType = data.entity_type || "SMLLC"
         const members = data.members as Array<{ name: string; ownership_pct: number }> | null
@@ -337,7 +337,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         }
 
         // Build URL
-        const url = `${OA_BASE_URL}/${oa.token}?c=${oa.access_code}`
+        const url = `${OA_BASE_URL}/${oa.token}/${oa.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
 
         const entityLabel = (oa.entity_type || "SMLLC") === "MMLLC" ? "Multi-Member" : "Single Member"

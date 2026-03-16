@@ -201,16 +201,28 @@ All client forms (formation, onboarding, tax, lease, banking, and any future for
 - Never send a form link to a client without Antonio testing it first via preview
 - When building new forms, include the \`?preview=td\` bypass from the start
 
+## Form URL Format — MANDATORY RULE
+
+ALL client-facing form URLs use path-based access codes (NOT query parameters):
+
+\`\`\`
+Format: https://td-operations.vercel.app/{form-type}/{token}/{access_code}
+Example: https://td-operations.vercel.app/lease/ag-group-llc-2026/0b3d352f
+\`\`\`
+
+This applies to: lease, operating-agreement, offer, formation-form, onboarding-form, tax-form, banking-form, closure-form, and any future forms.
+
+The access code is part of the URL path — it CANNOT be accidentally removed. All form creation tools (lease_create, oa_create, formation_form_create, etc.) return URLs in this format automatically.
+
 ## Email URL Integrity — MANDATORY RULE
 
-When sending emails via gmail_send that contain URLs (links to forms, documents, lease agreements, operating agreements, etc.):
+When sending emails via gmail_send that contain URLs:
 
-1. **NEVER modify, truncate, simplify, or reformat URLs received from other tools.** URLs contain query parameters (\`?c=\`, \`?preview=\`, \`?token=\`) that are ACCESS CODES — without them, the link will not work for the recipient.
-2. **If a tool returns HTML email content (body_html), pass it EXACTLY as-is to gmail_send.** Do not rewrite, reformat, or "improve" the HTML. The URLs inside are already correct.
-3. **If you must compose an email with links yourself**, copy the FULL URL including ALL query parameters. Example: \`https://td-operations.vercel.app/lease/token-here?c=abc123\` — the \`?c=abc123\` part is REQUIRED.
-4. **When converting plain text URLs to HTML anchor tags**, the \`href\` attribute MUST contain the COMPLETE original URL with all query parameters preserved.
+1. **NEVER modify, truncate, simplify, or reformat URLs received from other tools.** The full path including the access code segment is REQUIRED for the link to work.
+2. **If a tool returns HTML email content (body_html), pass it EXACTLY as-is to gmail_send.** Do not rewrite or "improve" the HTML.
+3. **For emails with form links, prefer dedicated send tools** (lease_send, oa_send, offer_send, welcome_package_send) — they compose the email server-side with correct URLs. Use gmail_send only for ad-hoc emails without form links.
 
-This rule exists because broken links were sent to a client when query parameters were stripped during HTML formatting. It applies to ALL emails, ALL tools, forever.
+This rule exists because broken links were sent to a client. It applies to ALL emails, ALL tools, forever.
 
 ## Action Tracking Protocol — MANDATORY
 

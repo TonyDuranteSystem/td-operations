@@ -99,8 +99,8 @@ Prerequisites:
           .limit(1)
 
         if (existingOa?.length) {
-          oaUrl = `${BASE_URL}/operating-agreement/${existingOa[0].token}?c=${existingOa[0].access_code}`
-          oaAdminUrl = `${BASE_URL}/operating-agreement/${existingOa[0].token}?preview=td`
+          oaUrl = `${BASE_URL}/operating-agreement/${existingOa[0].token}/${existingOa[0].access_code}`
+          oaAdminUrl = `${BASE_URL}/operating-agreement/${existingOa[0].token}/${existingOa[0].access_code}?preview=td`
           steps.push({ step: "OA", status: "existing", detail: `${existingOa[0].token} (${existingOa[0].status})` })
         } else {
           const state = (account.state_of_formation || "").toUpperCase()
@@ -172,8 +172,8 @@ Prerequisites:
             if (oaErr || !oa) {
               steps.push({ step: "OA", status: "error", detail: oaErr?.message || "insert failed" })
             } else {
-              oaUrl = `${BASE_URL}/operating-agreement/${oa.token}?c=${oa.access_code}`
-              oaAdminUrl = `${BASE_URL}/operating-agreement/${oa.token}?preview=td`
+              oaUrl = `${BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}`
+              oaAdminUrl = `${BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?preview=td`
               steps.push({ step: "OA", status: "created", detail: oa.token })
             }
           }
@@ -190,8 +190,8 @@ Prerequisites:
           .limit(1)
 
         if (existingLease?.length) {
-          leaseUrl = `${BASE_URL}/lease/${existingLease[0].token}?c=${existingLease[0].access_code}`
-          leaseAdminUrl = `${BASE_URL}/lease/${existingLease[0].token}?preview=td`
+          leaseUrl = `${BASE_URL}/lease/${existingLease[0].token}/${existingLease[0].access_code}`
+          leaseAdminUrl = `${BASE_URL}/lease/${existingLease[0].token}/${existingLease[0].access_code}?preview=td`
           steps.push({ step: "Lease", status: "existing", detail: `${existingLease[0].token} (suite ${existingLease[0].suite_number}, ${existingLease[0].status})` })
         } else {
           // Auto-assign suite if not provided
@@ -241,8 +241,8 @@ Prerequisites:
           if (leaseErr || !lease) {
             steps.push({ step: "Lease", status: "error", detail: leaseErr?.message || "insert failed" })
           } else {
-            leaseUrl = `${BASE_URL}/lease/${lease.token}?c=${lease.access_code}`
-            leaseAdminUrl = `${BASE_URL}/lease/${lease.token}?preview=td`
+            leaseUrl = `${BASE_URL}/lease/${lease.token}/${lease.access_code}`
+            leaseAdminUrl = `${BASE_URL}/lease/${lease.token}/${lease.access_code}?preview=td`
             steps.push({ step: "Lease", status: "created", detail: `${lease.token} (suite ${lease.suite_number})` })
           }
         }
@@ -252,12 +252,12 @@ Prerequisites:
         const relayToken = `relay-${companySlug.slice(0, 30)}-${year}`
         const { data: existingRelay } = await supabaseAdmin
           .from("banking_submissions")
-          .select("id, token, status")
+          .select("id, token, status, access_code")
           .eq("token", relayToken)
           .maybeSingle()
 
         if (existingRelay) {
-          relayUrl = `${BASE_URL}/banking-form/${existingRelay.token}`
+          relayUrl = `${BASE_URL}/banking-form/${existingRelay.token}/${existingRelay.access_code}`
           steps.push({ step: "Relay form", status: "existing", detail: `${existingRelay.token} (${existingRelay.status})` })
         } else {
           const relayPrefilled = {
@@ -281,13 +281,13 @@ Prerequisites:
               prefilled_data: relayPrefilled,
               status: "pending",
             })
-            .select("id, token")
+            .select("id, token, access_code")
             .single()
 
           if (relayErr || !relay) {
             steps.push({ step: "Relay form", status: "error", detail: relayErr?.message || "insert failed" })
           } else {
-            relayUrl = `${BASE_URL}/banking-form/${relay.token}`
+            relayUrl = `${BASE_URL}/banking-form/${relay.token}/${relay.access_code}`
             steps.push({ step: "Relay form", status: "created", detail: relay.token })
           }
         }
@@ -297,12 +297,12 @@ Prerequisites:
         const paysetToken = `bank-${companySlug.slice(0, 30)}-${year}`
         const { data: existingPayset } = await supabaseAdmin
           .from("banking_submissions")
-          .select("id, token, status")
+          .select("id, token, status, access_code")
           .eq("token", paysetToken)
           .maybeSingle()
 
         if (existingPayset) {
-          paysetUrl = `${BASE_URL}/banking-form/${existingPayset.token}`
+          paysetUrl = `${BASE_URL}/banking-form/${existingPayset.token}/${existingPayset.access_code}`
           steps.push({ step: "Payset form", status: "existing", detail: `${existingPayset.token} (${existingPayset.status})` })
         } else {
           const paysetPrefilled = {
@@ -324,13 +324,13 @@ Prerequisites:
               prefilled_data: paysetPrefilled,
               status: "pending",
             })
-            .select("id, token")
+            .select("id, token, access_code")
             .single()
 
           if (paysetErr || !payset) {
             steps.push({ step: "Payset form", status: "error", detail: paysetErr?.message || "insert failed" })
           } else {
-            paysetUrl = `${BASE_URL}/banking-form/${payset.token}`
+            paysetUrl = `${BASE_URL}/banking-form/${payset.token}/${payset.access_code}`
             steps.push({ step: "Payset form", status: "created", detail: payset.token })
           }
         }

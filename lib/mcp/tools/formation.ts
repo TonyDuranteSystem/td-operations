@@ -14,7 +14,7 @@ export function registerFormationTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "formation_form_create",
-    "Create a formation data collection form for a new LLC client. Pre-fills owner info from the lead record. Entity type (SMLLC/MMLLC) and state are set as metadata — decided during the call, not by the client. Returns the form URL (https://td-operations.vercel.app/formation-form/{token}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
+    "Create a formation data collection form for a new LLC client. Pre-fills owner info from the lead record. Entity type (SMLLC/MMLLC) and state are set as metadata — decided during the call, not by the client. Returns the form URL (https://td-operations.vercel.app/formation-form/{token}/{access_code}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       lead_id: z.string().uuid().describe("Lead UUID — the client who paid for formation"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type decided during call (default: SMLLC)"),
@@ -66,14 +66,14 @@ export function registerFormationTools(server: McpServer) {
         // 5. Check for existing submission
         const { data: existing } = await supabaseAdmin
           .from("formation_submissions")
-          .select("id, token, status")
+          .select("id, token, status, access_code")
           .eq("token", token)
           .maybeSingle()
         if (existing) {
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Form already exists for ${lead.full_name}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/formation-form/${existing.token}`,
+              text: `⚠️ Form already exists for ${lead.full_name}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/formation-form/${existing.token}/${existing.access_code}`,
             }],
           }
         }
@@ -94,11 +94,11 @@ export function registerFormationTools(server: McpServer) {
             prefilled_data: prefilled,
             status: "pending",
           })
-          .select("id, token")
+          .select("id, token, access_code")
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/formation-form/${token}`
+        const url = `https://td-operations.vercel.app/formation-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -189,7 +189,7 @@ export function registerFormationTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/formation-form/${data.token}`
+        const formUrl = `https://td-operations.vercel.app/formation-form/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")
@@ -485,14 +485,14 @@ Prerequisite: pending_activation must be in status 'pending_confirmation'.`,
                   },
                   status: "pending",
                 })
-                .select("id, token")
+                .select("id, token, access_code")
                 .single()
 
               if (insErr) {
                 executionResults.push({ step: ps.step, status: "error", detail: insErr.message })
               } else {
                 ps.status = "executed"
-                const formUrl = `https://td-operations.vercel.app/formation-form/${submission.token}`
+                const formUrl = `https://td-operations.vercel.app/formation-form/${submission.token}/${submission.access_code}`
                 executionResults.push({
                   step: ps.step,
                   status: "ok",

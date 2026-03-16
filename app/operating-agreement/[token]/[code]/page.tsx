@@ -1,14 +1,14 @@
 'use client'
 
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-// ─── Types ──────────────────────────────────────────────
+// --- Types -----------------------------------------------
 interface OAAgreement {
   id: string
   token: string
@@ -44,35 +44,24 @@ interface OAAgreement {
   pdf_storage_path: string | null
 }
 
-// ─── Helpers ────────────────────────────────────────────
+// --- Helpers ---------------------------------------------
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
-// ─── Main Page ──────────────────────────────────────────
-export default function OperatingAgreementPage() {
+// --- Main Page -------------------------------------------
+export default function OperatingAgreementCodePage() {
   return (
     <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" /></div>}>
-      <OperatingAgreementContent />
+      <OperatingAgreementCodeContent />
     </Suspense>
   )
 }
 
-function OperatingAgreementContent() {
-  const { token } = useParams<{ token: string }>()
+function OperatingAgreementCodeContent() {
+  const { token, code } = useParams<{ token: string; code: string }>()
   const searchParams = useSearchParams()
-  const router = useRouter()
-  const accessCode = searchParams.get('c') || ''
-
-  // Redirect old ?c= links to new /token/code path
-  useEffect(() => {
-    const code = searchParams.get('c')
-    if (code && token) {
-      const preview = searchParams.get('preview')
-      const newUrl = `/operating-agreement/${token}/${code}${preview ? `?preview=${preview}` : ''}`
-      router.replace(newUrl)
-    }
-  }, [token, searchParams, router])
+  const accessCode = code || ''
 
   const [isAdmin, setIsAdmin] = useState(false)
   const [oa, setOa] = useState<OAAgreement | null>(null)
@@ -97,7 +86,7 @@ function OperatingAgreementContent() {
   const members: OAMember[] = (isMMLLC && oa?.members) ? oa.members : []
   const managerName = oa?.manager_name || oa?.member_name || ''
 
-  // ─── LOAD OA ───
+  // --- LOAD OA ---
   const loadOA = useCallback(async () => {
     if (!token) return
 
@@ -172,7 +161,7 @@ function OperatingAgreementContent() {
     setTimeout(initSig, 300)
   }, [verified, oa, signed])
 
-  // ─── EMAIL GATE ───
+  // --- EMAIL GATE ---
   function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
     if (!oa?.member_email) return
@@ -185,7 +174,7 @@ function OperatingAgreementContent() {
     }
   }
 
-  // ─── SIGN ───
+  // --- SIGN ---
   async function handleSign() {
     if (!oa || !sigPadRef.current) return
     if (sigPadRef.current.isEmpty()) {
@@ -282,7 +271,7 @@ function OperatingAgreementContent() {
     }
   }
 
-  // ─── RENDER ───
+  // --- RENDER ---
 
   if (loading) {
     return (
@@ -500,7 +489,7 @@ function OperatingAgreementContent() {
   )
 }
 
-// ─── Shared Styles ──────────────────────────────────────
+// --- Shared Styles ---------------------------------------
 const h2Style: React.CSSProperties = {
   fontSize: 16,
   fontWeight: 700,

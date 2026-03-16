@@ -372,14 +372,14 @@ export function registerTaxTools(server: McpServer) {
         // 6. Check for existing submission
         const { data: existing } = await supabaseAdmin
           .from("tax_return_submissions")
-          .select("id, token, status")
+          .select("id, token, status, access_code")
           .eq("token", token)
           .maybeSingle()
         if (existing) {
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Form already exists for ${account.company_name} ${tax_year}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/tax-form/${existing.token}`,
+              text: `⚠️ Form already exists for ${account.company_name} ${tax_year}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/tax-form/${existing.token}/${existing.access_code}`,
             }],
           }
         }
@@ -411,11 +411,11 @@ export function registerTaxTools(server: McpServer) {
             tax_return_id: taxReturn?.id || null,
             status: "pending",
           })
-          .select("id, token")
+          .select("id, token, access_code")
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/tax-form/${token}`
+        const url = `https://td-operations.vercel.app/tax-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -510,7 +510,7 @@ export function registerTaxTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/tax-form/${data.token}`
+        const formUrl = `https://td-operations.vercel.app/tax-form/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")
