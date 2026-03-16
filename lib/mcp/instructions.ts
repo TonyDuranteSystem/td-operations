@@ -227,6 +227,7 @@ When a team member (Luca, Antonio, or anyone) communicates that an action has be
 3. Lead Queries: lead_search for leads, NOT crm_search_deals. Deals ≠ Leads.
 4. Business Rules: ALWAYS kb_search before answering pricing/services/procedures questions.
 5. Sending Email: ALWAYS gmail_send for client emails (threading + Sent folder + open tracking). Tracking opens: gmail_track_status. Attachments: gmail_read_attachment with save_to_drive_folder_id to save to client's Drive folder. Reading: gmail_search + gmail_read.
+   ENCODING RULE: ALL text content (emails, templates, documents, form labels) MUST use only ASCII characters. NEVER use: em dash (—), en dash (–), curly quotes (" " ' '), bullets (•), arrows (→ ←), ellipsis (…), or other Unicode symbols. Use instead: double hyphen (--), straight quotes (" '), asterisk (*) or hyphen (-) for lists, > for arrows, three dots (...). This prevents encoding corruption in email clients.
 6. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 7. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
 8. QB Invoice Workflow: Create → Review (qb_get_invoice) → Update if needed → CONFIRM with user → Send. NEVER auto-send invoices.
