@@ -196,7 +196,14 @@ Antonio communicates in Italian and English. Match his language. Be direct and e
 ## Multi-Machine Git Safety (iMac + Mac Mini + MacBook)
 All three machines share the same repo via GitHub auto-sync.
 
-### CRITICAL RULE: Never use `git add -A` or `git add .`
+### CRITICAL RULE #0: `git pull` BEFORE any work
+Every session MUST start with `git pull origin main`. This is enforced by the SessionStart hook (`session-git-pull.sh`).
+- If pull fails due to uncommitted changes → stash, pull, then decide what to do with stash
+- If pull fails due to conflicts → STOP and alert Antonio
+- NEVER read code, make decisions, or propose changes based on stale local state
+- This rule exists because working on 3 machines simultaneously causes constant desync
+
+### CRITICAL RULE #1: Never use `git add -A` or `git add .`
 These commands stage EVERYTHING, including deletion of files that exist on remote but are missing locally.
 If your working copy is behind, `git add -A` will DELETE other machines' work.
 

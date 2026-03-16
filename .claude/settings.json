@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /Users/tonydurante/Desktop/td-operations/.claude/hooks/checkpoint-counter.sh",
+            "command": "bash .claude/hooks/checkpoint-counter.sh",
             "timeout": 5
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /Users/tonydurante/Desktop/td-operations/.claude/hooks/stop-check.sh",
+            "command": "bash .claude/hooks/stop-check.sh",
             "timeout": 5
           },
           {
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /Users/tonydurante/Desktop/td-operations/.claude/hooks/pre-compact-save.sh",
+            "command": "bash .claude/hooks/pre-compact-save.sh",
             "timeout": 15
           },
           {
@@ -48,8 +48,13 @@
         "matcher": "startup|resume",
         "hooks": [
           {
+            "type": "command",
+            "command": "bash .claude/hooks/session-git-pull.sh",
+            "timeout": 30
+          },
+          {
             "type": "prompt",
-            "prompt": "Session starting. Follow CLAUDE.md Session Start protocol: (1) sysdoc_read('session-context'), (2) query dev_tasks for BOTH pending work (status in_progress/todo) AND recently completed (status done, ORDER BY updated_at DESC LIMIT 3) so you know what was JUST done, (3) git status + recent commits. Present: 'Ultimo lavoro completato' + 'In sospeso' + 'Prossimi passi' (from progress_log PENDING of most recent task). Then ask 'Su cosa lavoriamo?'",
+            "prompt": "Session starting. MANDATORY FIRST STEP: Read the git pull result above — if it pulled new commits, acknowledge what changed. Then follow CLAUDE.md Session Start protocol: (1) sysdoc_read('session-context'), (2) query dev_tasks for BOTH pending work (status in_progress/todo) AND recently completed (status done, ORDER BY updated_at DESC LIMIT 3) so you know what was JUST done, (3) git status + recent commits. Present: 'Ultimo lavoro completato' + 'In sospeso' + 'Prossimi passi' (from progress_log PENDING of most recent task). Then ask 'Su cosa lavoriamo?'",
             "timeout": 60
           }
         ]
