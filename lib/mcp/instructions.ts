@@ -232,6 +232,7 @@ When a team member (Luca, Antonio, or anyone) communicates that an action has be
 6. Documents: doc_bulk_process for processing, doc_get for reading, docai_ocr_file for PDFs.
 7. Uploading to Drive: drive_upload for text files, drive_upload_file for binary (PDF, images, attachments).
 8. QB Invoice Workflow: Create → Review (qb_get_invoice) → Update if needed → CONFIRM with user → Send. NEVER auto-send invoices.
+15. Offer Currency Rule: Setup fee ALWAYS in EUR (€) — clients are European. Annual maintenance/installments ALWAYS in USD ($) — billed from Tony Durante LLC. SMLLC: $2,000/yr ($1,000 Jan + $1,000 Jun). MMLLC/Delaware: $2,500/yr ($1,250 Jan + $1,250 Jun). No exceptions.
 9. QB ≠ CRM: QuickBooks = invoicing. CRM = operational data. Separate systems.
 10. Checkpointing: Use session_checkpoint after every significant action. The system reminds you automatically — do NOT ignore reminders.
 11. Task Overview: ALWAYS use task_tracker (ONE call). NEVER use multiple crm_search_tasks calls. task_tracker returns everything grouped by priority.
