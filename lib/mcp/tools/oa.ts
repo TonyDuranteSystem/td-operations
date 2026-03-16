@@ -11,6 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { safeSend } from "@/lib/mcp/safe-send"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 
 const OA_BASE_URL = "https://td-operations.vercel.app/operating-agreement"
@@ -285,25 +286,6 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ No member_email set on OA "${params.token}". Update the contact record first.` }] }
         }
 
-        // ─── IDEMPOTENCY CHECK ───
-        const { data: existingTracking } = await supabaseAdmin
-          .from("email_tracking")
-          .select("tracking_id, created_at")
-          .eq("recipient", oa.member_email)
-          .ilike("subject", `%Operating Agreement%${oa.company_name}%`)
-          .limit(1)
-
-        if (existingTracking?.length && oa.status === "sent") {
-          return { content: [{ type: "text" as const, text: [
-            `⚠️ OA email already sent for "${params.token}"`,
-            ``,
-            `Tracking: ${existingTracking[0].tracking_id}`,
-            `Sent at: ${existingTracking[0].created_at}`,
-            ``,
-            `Use gmail_track_status to check if the client opened it.`,
-          ].join("\n") }] }
-        }
-
         // Build URL
         const url = `${OA_BASE_URL}/${oa.token}?c=${oa.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
@@ -400,34 +382,73 @@ support@tonydurante.us`
 
         const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
 
-        // Send via Gmail API
-        const result = await gmailPost("/messages/send", {
-          raw: encodedRaw,
-        }) as { id: string; threadId: string }
+        // ─── safeSend: email FIRST, status updates AFTER ───
+        const result = await safeSend<{ id: string; threadId: string }>({
+          // Idempotency: don't send if already sent
+          idempotencyCheck: async () => {
+            if (oa.status === "sent") {
+              const { data: existing } = await supabaseAdmin
+                .from("email_tracking")
+                .select("tracking_id, created_at")
+                .eq("recipient", oa.member_email!)
+                .ilike("subject", `%Operating Agreement%${oa.company_name}%`)
+                .limit(1)
+              if (existing?.length) {
+                return {
+                  alreadySent: true,
+                  message: [
+                    `⚠️ OA email already sent for "${params.token}"`,
+                    ``,
+                    `Tracking: ${existing[0].tracking_id}`,
+                    `Sent at: ${existing[0].created_at}`,
+                    ``,
+                    `Use gmail_track_status to check if the client opened it.`,
+                  ].join("\n"),
+                }
+              }
+            }
+            return null
+          },
 
-        // ─── POST-SEND: Track + Update status ───
-        const steps: { step: string; status: string; error?: string }[] = [
-          { step: "send_email", status: "ok" },
-        ]
+          // SEND FIRST — actual Gmail send
+          sendFn: async () => {
+            return await gmailPost("/messages/send", {
+              raw: encodedRaw,
+            }) as { id: string; threadId: string }
+          },
 
-        // Save tracking record
-        const { error: trackErr } = await supabaseAdmin.from("email_tracking").insert({
-          tracking_id: trackingId,
-          gmail_message_id: result.id,
-          gmail_thread_id: result.threadId,
-          recipient: oa.member_email,
-          subject,
-          from_email: fromEmail,
-          account_id: oa.account_id || null,
+          // POST-SEND: status updates + tracking (only after send succeeds)
+          postSendSteps: [
+            {
+              name: "save_tracking",
+              fn: async () => {
+                await supabaseAdmin.from("email_tracking").insert({
+                  tracking_id: trackingId,
+                  gmail_message_id: result.sendResult?.id,
+                  gmail_thread_id: result.sendResult?.threadId,
+                  recipient: oa.member_email,
+                  subject,
+                  from_email: fromEmail,
+                  account_id: oa.account_id || null,
+                })
+              },
+            },
+            {
+              name: "update_status",
+              fn: async () => {
+                await supabaseAdmin
+                  .from("oa_agreements")
+                  .update({ status: "sent", updated_at: new Date().toISOString() })
+                  .eq("id", oa.id)
+              },
+            },
+          ],
         })
-        steps.push({ step: "save_tracking", status: trackErr ? "error" : "ok", error: trackErr?.message })
 
-        // NOW update status to "sent"
-        const { error: statusErr } = await supabaseAdmin
-          .from("oa_agreements")
-          .update({ status: "sent", updated_at: new Date().toISOString() })
-          .eq("id", oa.id)
-        steps.push({ step: "update_status", status: statusErr ? "error" : "ok", error: statusErr?.message })
+        // Handle idempotency
+        if (result.alreadySent) {
+          return { content: [{ type: "text" as const, text: result.idempotencyMessage! }] }
+        }
 
         logAction({
           action_type: "send",
@@ -435,11 +456,10 @@ support@tonydurante.us`
           record_id: oa.id,
           account_id: oa.account_id,
           summary: `Sent OA email for ${oa.company_name} to ${oa.member_email}`,
-          details: { token: params.token, gmail_message_id: result.id, tracking_id: trackingId },
+          details: { token: params.token, gmail_message_id: result.sendResult?.id, tracking_id: trackingId },
         })
 
-        const hasWarning = steps.some(s => s.status === "error")
-        const statusLine = hasWarning
+        const statusLine = result.hasWarnings
           ? `⚠️ Email sent but some follow-up steps had issues`
           : `✅ OA email sent via Gmail`
 
@@ -448,14 +468,12 @@ support@tonydurante.us`
           ``,
           `📧 To: ${oa.member_email}`,
           `📋 Subject: ${subject}`,
-          `🆔 Message ID: ${result.id}`,
+          `🆔 Message ID: ${result.sendResult?.id}`,
           `👁️ Open tracking: ${trackingId}`,
           ``,
-          `Steps:`,
-          ...steps.map(s => `  ${s.status === "ok" ? "✅" : "❌"} ${s.step}${s.error ? ` — ${s.error}` : ""}`),
-          ``,
+          result.hasWarnings ? `⚠️ Steps: ${result.steps.map(s => `${s.step}=${s.status}`).join(", ")}` : "",
           `Use gmail_track_status to check if the client opened the email.`,
-        ].join("\n") }] }
+        ].filter(Boolean).join("\n") }] }
       } catch (err) {
         return { content: [{ type: "text" as const, text: `❌ Error sending OA email (OA status NOT changed): ${err instanceof Error ? err.message : String(err)}` }] }
       }

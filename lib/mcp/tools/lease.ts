@@ -11,6 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { safeSend } from "@/lib/mcp/safe-send"
 
 const LEASE_BASE_URL = "https://td-operations.vercel.app/lease"
 
@@ -381,29 +382,6 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           return { content: [{ type: "text" as const, text: `❌ No tenant_email set on lease "${params.token}". Update the lease or contact record first.` }] }
         }
 
-        // ─── IDEMPOTENCY CHECK ───
-        // If email was already sent for this lease, don't send again
-        const { data: existingTracking } = await supabaseAdmin
-          .from("email_tracking")
-          .select("tracking_id, created_at")
-          .eq("recipient", lease.tenant_email)
-          .ilike("subject", `%${lease.tenant_company}%`)
-          .limit(1)
-
-        if (existingTracking?.length && lease.status === "sent") {
-          return { content: [{ type: "text" as const, text: [
-            `⚠️ Lease email already sent for "${params.token}"`,
-            ``,
-            `Tracking: ${existingTracking[0].tracking_id}`,
-            `Sent at: ${existingTracking[0].created_at}`,
-            ``,
-            `Use gmail_track_status to check if the client opened it.`,
-            `To resend, first use lease_update to set status back to "draft".`,
-          ].join("\n") }] }
-        }
-
-        // Status update happens AFTER email is sent successfully (see below)
-
         // Build URL
         const url = `${LEASE_BASE_URL}/${lease.token}?c=${lease.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
@@ -501,34 +479,74 @@ support@tonydurante.us`
 
         const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
 
-        // Send via Gmail API (NOT draft)
-        const result = await gmailPost("/messages/send", {
-          raw: encodedRaw,
-        }) as { id: string; threadId: string }
+        // ─── safeSend: email FIRST, status updates AFTER ───
+        const result = await safeSend<{ id: string; threadId: string }>({
+          // Idempotency: don't send if already sent
+          idempotencyCheck: async () => {
+            if (lease.status === "sent") {
+              const { data: existing } = await supabaseAdmin
+                .from("email_tracking")
+                .select("tracking_id, created_at")
+                .eq("recipient", lease.tenant_email!)
+                .ilike("subject", `%${lease.tenant_company}%`)
+                .limit(1)
+              if (existing?.length) {
+                return {
+                  alreadySent: true,
+                  message: [
+                    `⚠️ Lease email already sent for "${params.token}"`,
+                    ``,
+                    `Tracking: ${existing[0].tracking_id}`,
+                    `Sent at: ${existing[0].created_at}`,
+                    ``,
+                    `Use gmail_track_status to check if the client opened it.`,
+                    `To resend, first use lease_update to set status back to "draft".`,
+                  ].join("\n"),
+                }
+              }
+            }
+            return null
+          },
 
-        // ─── POST-SEND: Track + Update status ───
-        const steps: { step: string; status: string; error?: string }[] = [
-          { step: "send_email", status: "ok" },
-        ]
+          // SEND FIRST — actual Gmail send
+          sendFn: async () => {
+            return await gmailPost("/messages/send", {
+              raw: encodedRaw,
+            }) as { id: string; threadId: string }
+          },
 
-        // Save tracking record
-        const { error: trackErr } = await supabaseAdmin.from("email_tracking").insert({
-          tracking_id: trackingId,
-          gmail_message_id: result.id,
-          gmail_thread_id: result.threadId,
-          recipient: lease.tenant_email,
-          subject,
-          from_email: fromEmail,
-          account_id: lease.account_id || null,
+          // POST-SEND: status updates + tracking (only after send succeeds)
+          postSendSteps: [
+            {
+              name: "save_tracking",
+              fn: async () => {
+                await supabaseAdmin.from("email_tracking").insert({
+                  tracking_id: trackingId,
+                  gmail_message_id: result.sendResult?.id,
+                  gmail_thread_id: result.sendResult?.threadId,
+                  recipient: lease.tenant_email,
+                  subject,
+                  from_email: fromEmail,
+                  account_id: lease.account_id || null,
+                })
+              },
+            },
+            {
+              name: "update_status",
+              fn: async () => {
+                await supabaseAdmin
+                  .from("lease_agreements")
+                  .update({ status: "sent", updated_at: new Date().toISOString() })
+                  .eq("id", lease.id)
+              },
+            },
+          ],
         })
-        steps.push({ step: "save_tracking", status: trackErr ? "error" : "ok", error: trackErr?.message })
 
-        // NOW update status to "sent" — email was successfully sent
-        const { error: statusErr } = await supabaseAdmin
-          .from("lease_agreements")
-          .update({ status: "sent", updated_at: new Date().toISOString() })
-          .eq("id", lease.id)
-        steps.push({ step: "update_status", status: statusErr ? "error" : "ok", error: statusErr?.message })
+        // Handle idempotency
+        if (result.alreadySent) {
+          return { content: [{ type: "text" as const, text: result.idempotencyMessage! }] }
+        }
 
         logAction({
           action_type: "send",
@@ -536,12 +554,10 @@ support@tonydurante.us`
           record_id: lease.id,
           account_id: lease.account_id,
           summary: `Sent lease email for ${lease.tenant_company} to ${lease.tenant_email}`,
-          details: { token: params.token, gmail_message_id: result.id, tracking_id: trackingId },
+          details: { token: params.token, gmail_message_id: result.sendResult?.id, tracking_id: trackingId },
         })
 
-        const hasWarning = steps.some(s => s.status === "error")
-        const overallStatus = hasWarning ? "partial" : "success"
-        const statusLine = hasWarning
+        const statusLine = result.hasWarnings
           ? `⚠️ Email sent but some follow-up steps had issues`
           : `✅ Lease email sent via Gmail`
 
@@ -550,18 +566,14 @@ support@tonydurante.us`
           ``,
           `📧 To: ${lease.tenant_email}`,
           `📋 Subject: ${subject}`,
-          `🆔 Message ID: ${result.id}`,
+          `🆔 Message ID: ${result.sendResult?.id}`,
           `👁️ Open tracking: ${trackingId}`,
-          `Overall: ${overallStatus}`,
           ``,
-          `Steps:`,
-          ...steps.map(s => `  ${s.status === "ok" ? "✅" : "❌"} ${s.step}${s.error ? ` — ${s.error}` : ""}`),
-          ``,
+          result.hasWarnings ? `⚠️ Steps: ${result.steps.map(s => `${s.step}=${s.status}`).join(", ")}` : "",
           `Use gmail_track_status to check if the client opened the email.`,
-        ].join("\n") }] }
+        ].filter(Boolean).join("\n") }] }
 
       } catch (err) {
-        // If email sending fails, status was never updated — it stays as-is (draft/whatever it was)
         return { content: [{ type: "text" as const, text: `❌ Error sending lease email (lease status NOT changed): ${err instanceof Error ? err.message : String(err)}` }] }
       }
     }

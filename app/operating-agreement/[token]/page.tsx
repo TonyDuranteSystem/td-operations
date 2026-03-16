@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData } from '@/lib/types/oa-templates'
@@ -48,6 +48,14 @@ function today() {
 
 // ─── Main Page ──────────────────────────────────────────
 export default function OperatingAgreementPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" /></div>}>
+      <OperatingAgreementContent />
+    </Suspense>
+  )
+}
+
+function OperatingAgreementContent() {
   const { token } = useParams<{ token: string }>()
   const searchParams = useSearchParams()
   const accessCode = searchParams.get('c') || ''
