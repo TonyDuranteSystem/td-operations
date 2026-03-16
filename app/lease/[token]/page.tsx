@@ -229,6 +229,17 @@ export default function LeasePage() {
         })
         .eq('id', lease.id)
 
+      // 7. Notify backend (email to support@, SD history, task creation)
+      try {
+        await fetch('/api/lease-signed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lease_id: lease.id, token: lease.token }),
+        })
+      } catch {
+        // Non-blocking — signing is already saved
+      }
+
       setSigned(true)
     } catch (err) {
       console.error('Signing failed:', err)
