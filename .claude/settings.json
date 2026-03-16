@@ -1,11 +1,27 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/tonydurante/Desktop/td-operations/.claude/hooks/checkpoint-counter.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "bash /Users/tonydurante/Desktop/td-operations/.claude/hooks/stop-check.sh",
+            "timeout": 5
+          },
+          {
             "type": "prompt",
-            "prompt": "You just finished responding. CHECK: Did you make any significant changes this turn (code edits, git operations, CRM updates, config changes, decisions, or task completions)? If YES — you MUST save progress NOW by running execute_sql to INSERT or UPDATE dev_tasks with what was done, files changed, and what is PENDING. If NO significant changes (just reading, answering questions, or minor exploration) — respond with {\"decision\": \"no_save_needed\"}. NEVER skip saving after significant work. Antonio should NEVER have to remind you.",
+            "prompt": "The stop-check script above reports your session state. If SAVE_NEEDED=true, you MUST run session_checkpoint NOW with: (1) summary of what was done (files, commits, DB changes, decisions), (2) next_steps with specific pending items. NO EXCEPTIONS. If SAVE_NEEDED=false AND your response was purely answering a question with zero tool calls, you may skip. Otherwise SAVE.",
             "timeout": 60
           }
         ]
@@ -15,8 +31,13 @@
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "bash /Users/tonydurante/Desktop/td-operations/.claude/hooks/pre-compact-save.sh",
+            "timeout": 15
+          },
+          {
             "type": "prompt",
-            "prompt": "CRITICAL: Context compaction is about to happen. You MUST save all current work to Supabase NOW before context is lost. Run execute_sql to INSERT or UPDATE dev_tasks with: (1) what was done this session, (2) current state of any in-progress work, (3) files changed, (4) commits made, (5) what is PENDING. Also update session-context via sysdoc_update if any system-level state changed. This is your LAST CHANCE to save before context is compressed.",
+            "prompt": "CRITICAL: Context compaction is about to happen. The auto-save script just ran but it only saves a minimal checkpoint. You MUST NOW save DETAILED progress to dev_tasks via execute_sql with: (1) EVERY file changed, (2) EVERY commit hash, (3) EVERY CRM/DB update made, (4) exact state of in-progress work, (5) what is PENDING with specific details. Also sysdoc_update('session-context') if system state changed. This is your LAST CHANCE — after compaction you will NOT remember any of this.",
             "timeout": 120
           }
         ]
