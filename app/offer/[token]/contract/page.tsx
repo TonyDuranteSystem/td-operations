@@ -382,7 +382,34 @@ export default function ContractPage() {
         body: pdfBlob
       })
 
-      // Save contract record
+      // Save contract record — include business fields from offer
+      // Derive LLC type from services
+      const servicesArr = Array.isArray(offer.services)
+        ? offer.services
+        : (typeof offer.services === 'string' ? JSON.parse(offer.services) : [])
+      const allServiceNames = servicesArr.map((s: any) => (s.name || '').toLowerCase()).join(' ')
+      const llcType = allServiceNames.includes('multi-member') ? 'MMLLC'
+        : allServiceNames.includes('single-member') ? 'SMLLC'
+        : null
+
+      // Derive installments + annual_fee from recurring_costs
+      const rc = Array.isArray(offer.recurring_costs) ? offer.recurring_costs : []
+      let installmentJan = 0
+      let installmentJun = 0
+      for (const item of rc) {
+        const rawAmt = (item as any).amount || item.price || '0'
+        const amt = parseFloat(String(rawAmt).replace(/[^0-9.]/g, ''))
+        const lbl = (item.label || '').toLowerCase()
+        if (lbl.includes('gennaio') || lbl.includes('january') || lbl.includes('jan')) installmentJan = amt
+        else if (lbl.includes('giugno') || lbl.includes('june') || lbl.includes('jun')) installmentJun = amt
+        else if (amt > 0 && installmentJan === 0) installmentJan = amt
+        else if (amt > 0 && installmentJun === 0) installmentJun = amt
+      }
+      const annualFee = installmentJan + installmentJun
+      const contractYear = offer.offer_date
+        ? new Date(offer.offer_date).getFullYear().toString()
+        : new Date().getFullYear().toString()
+
       const contractData: Record<string, any> = {
         offer_token: offer.token,
         client_name: form.name,
@@ -398,7 +425,11 @@ export default function ContractPage() {
         client_passport_exp: form.passport_exp,
         signed_at: new Date().toISOString(),
         pdf_path: pdfPath,
-        status: 'signed'
+        status: 'signed',
+        llc_type: llcType,
+        annual_fee: annualFee > 0 ? annualFee.toString() : null,
+        contract_year: contractYear,
+        installments: annualFee > 0 ? JSON.stringify({ jan: installmentJan, jun: installmentJun }) : null,
       }
       await supabasePublic.from('contracts').insert(contractData)
 

@@ -71,25 +71,59 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
 
   await updateJobProgress(job.id, result)
 
-  // ─── 2. MARK LEAD AS CONVERTED ───
-  if (p.lead_id) {
-    try {
-      const { error: leadErr } = await supabaseAdmin
-        .from("leads")
-        .update({ status: "Converted", updated_at: now })
-        .eq("id", p.lead_id)
+  // ─── 2. LEAD CONVERSION — SKIPPED (now happens at payment in whop webhook / check-wire-payments) ───
+  result.steps.push(step("lead_converted", "skipped", "Moved to payment confirmation (Change 1.1)"))
 
-      if (leadErr) {
-        result.steps.push(step("lead_converted", "error", leadErr.message))
+  // ─── 2b. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
+  try {
+    // Find contact_id from the contact we just updated (or from submission)
+    const sdContactId = p.contact_id
+    if (sdContactId) {
+      // Check if SD already exists for this contact
+      const { data: existingSd } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id")
+        .eq("contact_id", sdContactId)
+        .eq("service_type", "Company Formation")
+        .eq("status", "active")
+        .limit(1)
+
+      if (existingSd && existingSd.length > 0) {
+        result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSd[0].id}`))
       } else {
-        result.steps.push(step("lead_converted", "ok", "Lead → Converted"))
+        const { data: sd, error: sdErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .insert({
+            service_name: "Company Formation",
+            service_type: "Company Formation",
+            pipeline: "Company Formation",
+            stage: "Data Collection",
+            stage_order: 1,
+            stage_entered_at: now,
+            stage_history: JSON.stringify([{ stage: "Data Collection", entered_at: now, by: "formation_setup" }]),
+            contact_id: sdContactId,
+            account_id: null, // LLC doesn't exist yet
+            status: "active",
+            start_date: now.slice(0, 10),
+            assigned_to: "Luca",
+          })
+          .select("id")
+          .single()
+
+        if (sdErr) {
+          result.steps.push(step("service_delivery", "error", sdErr.message))
+        } else {
+          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection)`))
+        }
       }
-    } catch (e) {
-      result.steps.push(step("lead_converted", "error", e instanceof Error ? e.message : String(e)))
+    } else {
+      result.steps.push(step("service_delivery", "skipped", "No contact_id available"))
     }
-  } else {
-    result.steps.push(step("lead_converted", "skipped", "No lead_id"))
+  } catch (e) {
+    result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
   }
+
+  await updateJobProgress(job.id, result)
 
   // ─── 3. MARK FORM AS REVIEWED ───
   try {

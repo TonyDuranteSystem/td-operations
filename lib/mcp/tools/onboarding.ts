@@ -440,27 +440,51 @@ export function registerOnboardingTools(server: McpServer) {
             acctFields.ra_renewal_date = now.slice(0, 10)  // Onboarding: RA renewal = date of RA change (today)
             acctFields.updated_at = now
 
-            // Derive account_type + installments + services_bundle from lead/offer
+            // Derive account_type + installments + services_bundle from CONTRACTS (source of truth)
             let derivedAccountType = "Client" // default
-            if (sub.lead_id) {
-              // Copy installments from lead → account + derive account_type
-              const { data: lead } = await supabaseAdmin
-                .from("leads")
-                .select("offer_installment_jan, offer_installment_jun, offer_annual_amount, offer_annual_currency")
-                .eq("id", sub.lead_id)
-                .single()
 
-              if (lead) {
-                if (lead.offer_installment_jan) acctFields.installment_1_amount = lead.offer_installment_jan
-                if (lead.offer_installment_jun) acctFields.installment_2_amount = lead.offer_installment_jun
-                if (lead.offer_annual_currency) {
-                  acctFields.installment_1_currency = lead.offer_annual_currency
-                  acctFields.installment_2_currency = lead.offer_annual_currency
+            // Find the signed contract via offer linked to this lead
+            if (sub.lead_id) {
+              const { data: contract } = await supabaseAdmin
+                .from("contracts")
+                .select("annual_fee, installments, llc_type, offer_token")
+                .eq("offer_token", (
+                  await supabaseAdmin
+                    .from("offers")
+                    .select("token")
+                    .eq("lead_id", sub.lead_id)
+                    .eq("status", "signed")
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
+                ).data?.token || "__none__")
+                .eq("status", "signed")
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (contract) {
+                // Parse installments from contract JSON {"jan":1000,"jun":1000}
+                let instJan = 0, instJun = 0
+                if (contract.installments) {
+                  try {
+                    const inst = typeof contract.installments === "string"
+                      ? JSON.parse(contract.installments) : contract.installments
+                    instJan = inst.jan || 0
+                    instJun = inst.jun || 0
+                  } catch { /* ignore parse errors */ }
                 }
 
-                const hasAnnual = (lead.offer_installment_jan && lead.offer_installment_jan > 0)
-                  || (lead.offer_installment_jun && lead.offer_installment_jun > 0)
-                  || (lead.offer_annual_amount && lead.offer_annual_amount > 0)
+                if (instJan > 0) acctFields.installment_1_amount = instJan
+                if (instJun > 0) acctFields.installment_2_amount = instJun
+                if (instJan > 0 || instJun > 0) {
+                  // Determine currency from annual_fee format or default USD
+                  acctFields.installment_1_currency = "USD"
+                  acctFields.installment_2_currency = "USD"
+                }
+
+                const hasAnnual = instJan > 0 || instJun > 0
+                  || (contract.annual_fee && parseFloat(contract.annual_fee) > 0)
                 derivedAccountType = hasAnnual ? "Client" : "One-Time"
               }
 
@@ -475,11 +499,11 @@ export function registerOnboardingTools(server: McpServer) {
 
               if (offer) {
                 const allServices: string[] = []
-                if (offer.services && Array.isArray(offer.services)) {
-                  for (const s of offer.services) {
-                    const svc = s as Record<string, unknown>
-                    if (svc.name) allServices.push(String(svc.name))
-                  }
+                const svcList = Array.isArray(offer.services) ? offer.services
+                  : (typeof offer.services === "string" ? JSON.parse(offer.services) : [])
+                for (const s of svcList) {
+                  const svc = s as Record<string, unknown>
+                  if (svc.name) allServices.push(String(svc.name))
                 }
                 if (offer.additional_services && Array.isArray(offer.additional_services)) {
                   for (const s of offer.additional_services) {

@@ -103,8 +103,8 @@ export async function GET(req: NextRequest) {
         if (exactAmountMatch || (amountMatch && (nameMatch || tokenMatch))) {
           console.log(`[check-wire] MATCH: ${pending.client_name} — $${pendingAmount} ≈ QB $${depositAmount} (${txnDate})`)
 
-          // Update pending_activation
-          await supabase
+          // Optimistic locking: only update if still awaiting_payment (prevents race with Whop webhook)
+          const { data: wireUpdated } = await supabase
             .from("pending_activations")
             .update({
               status: "payment_confirmed",
@@ -114,6 +114,21 @@ export async function GET(req: NextRequest) {
               updated_at: new Date().toISOString(),
             })
             .eq("id", pending.id)
+            .eq("status", "awaiting_payment")
+            .select("id, lead_id")
+
+          if (!wireUpdated || wireUpdated.length === 0) {
+            console.log(`[check-wire] pending_activation ${pending.id} already processed — skipping`)
+            break
+          }
+
+          // Lead → Converted at payment
+          if (wireUpdated[0].lead_id) {
+            await supabase
+              .from("leads")
+              .update({ status: "Converted", updated_at: new Date().toISOString() })
+              .eq("id", wireUpdated[0].lead_id)
+          }
 
           // Trigger activation
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`

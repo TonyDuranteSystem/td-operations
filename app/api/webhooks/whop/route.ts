@@ -180,11 +180,11 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     console.error("[whop-webhook] Failed to create payment:", payErr.message)
   }
 
-  // 4. Update lead status to "Paid" (conversion happens after onboarding review)
+  // 4. Update lead status to "Converted" (payment = conversion point)
   if (leadId) {
     await getSupabase()
       .from("leads")
-      .update({ status: "Paid", updated_at: new Date().toISOString() })
+      .update({ status: "Converted", updated_at: new Date().toISOString() })
       .eq("id", leadId)
   }
 
@@ -199,8 +199,8 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
     if (pendingList && pendingList.length > 0) {
       const pending = pendingList[0]
-      // Update pending_activation → payment_confirmed
-      await getSupabase()
+      // Optimistic locking: only update if still awaiting_payment (prevents race with wire cron)
+      const { data: updated } = await getSupabase()
         .from("pending_activations")
         .update({
           status: "payment_confirmed",
@@ -210,6 +210,13 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
           updated_at: new Date().toISOString(),
         })
         .eq("id", pending.id)
+        .eq("status", "awaiting_payment")
+        .select("id")
+
+      if (!updated || updated.length === 0) {
+        console.log(`[whop-webhook] pending_activation ${pending.id} already processed — skipping`)
+        return NextResponse.json({ ok: true, message: "Already processed" })
+      }
 
       console.log(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
 

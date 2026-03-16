@@ -78,8 +78,34 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           parentFolderId = newStateFolder.id
         }
 
-        const companyFolder = await createFolder(parentFolderId, company_name) as { id: string }
+        // Folder naming: "{Company Name} - {Owner Name}" per Drive convention
+        let folderName = company_name
+        if (contact_id) {
+          const { data: ownerContact } = await supabaseAdmin
+            .from("contacts")
+            .select("first_name, last_name")
+            .eq("id", contact_id)
+            .single()
+          if (ownerContact) {
+            const ownerName = [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ")
+            if (ownerName) folderName = `${company_name} - ${ownerName}`
+          }
+        }
+
+        const companyFolder = await createFolder(parentFolderId, folderName) as { id: string }
         driveFolderId = companyFolder.id
+
+        // Create 5 subfolders from _TEMPLATE structure
+        const templateSubfolders = [
+          "1. Company", "2. Contacts", "3. Tax", "4. Banking", "5. Correspondence"
+        ]
+        for (const subName of templateSubfolders) {
+          try {
+            await createFolder(driveFolderId, subName)
+          } catch (subErr) {
+            console.warn(`[onboarding-setup] Failed to create subfolder ${subName}:`, subErr)
+          }
+        }
 
         // Set drive_folder_id on account
         await supabaseAdmin
@@ -427,22 +453,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     }
   }
 
-  // ─── 6. MARK LEAD AS CONVERTED ───
-  if (p.lead_id) {
-    try {
-      const { error: leadErr } = await supabaseAdmin
-        .from("leads")
-        .update({ status: "Converted", updated_at: now })
-        .eq("id", p.lead_id)
-      if (leadErr) {
-        result.steps.push(step("lead_converted", "error", leadErr.message))
-      } else {
-        result.steps.push(step("lead_converted", "ok", "Lead → Converted"))
-      }
-    } catch (e) {
-      result.steps.push(step("lead_converted", "error", e instanceof Error ? e.message : String(e)))
-    }
-  }
+  // ─── 6. LEAD CONVERSION — SKIPPED (now happens at payment in whop webhook / check-wire-payments) ───
+  result.steps.push(step("lead_converted", "skipped", "Moved to payment confirmation (Change 1.1)"))
 
   // ─── 7. MARK FORM AS REVIEWED ───
   try {

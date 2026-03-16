@@ -252,29 +252,49 @@ export function registerOperationsTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: `⚠️ Possible duplicates found:\n${dupes}\n\nIf this is a new account, use a more specific name or proceed with crm_update_record on the existing one.` }] }
         }
 
-        // Auto-derive account_type + installments from lead's offer if lead_id provided
+        // Auto-derive account_type + installments from CONTRACTS (source of truth) if lead_id provided
         let resolvedAccountType = account_type || "Client"
         let inst1Amount: number | null = null
         let inst2Amount: number | null = null
         let instCurrency = "USD"
         if (lead_id) {
-          const { data: lead } = await supabaseAdmin
-            .from("leads")
-            .select("offer_installment_jan, offer_installment_jun, offer_annual_amount, offer_annual_currency")
-            .eq("id", lead_id)
-            .single()
+          // Find signed contract via offer linked to this lead
+          const { data: offerForLead } = await supabaseAdmin
+            .from("offers")
+            .select("token")
+            .eq("lead_id", lead_id)
+            .eq("status", "signed")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
 
-          if (lead) {
-            // Copy installments from lead → account
-            if (lead.offer_installment_jan) inst1Amount = lead.offer_installment_jan
-            if (lead.offer_installment_jun) inst2Amount = lead.offer_installment_jun
-            if (lead.offer_annual_currency) instCurrency = lead.offer_annual_currency
+          if (offerForLead?.token) {
+            const { data: contract } = await supabaseAdmin
+              .from("contracts")
+              .select("annual_fee, installments")
+              .eq("offer_token", offerForLead.token)
+              .eq("status", "signed")
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle()
 
-            // Derive account_type from installments (only if not explicitly set)
-            if (!account_type) {
-              const hasAnnual = (inst1Amount && inst1Amount > 0) || (inst2Amount && inst2Amount > 0)
-                || (lead.offer_annual_amount && lead.offer_annual_amount > 0)
-              resolvedAccountType = hasAnnual ? "Client" : "One-Time"
+            if (contract) {
+              // Parse installments from contract JSON {"jan":1000,"jun":1000}
+              if (contract.installments) {
+                try {
+                  const inst = typeof contract.installments === "string"
+                    ? JSON.parse(contract.installments) : contract.installments
+                  if (inst.jan && inst.jan > 0) inst1Amount = inst.jan
+                  if (inst.jun && inst.jun > 0) inst2Amount = inst.jun
+                } catch { /* ignore parse errors */ }
+              }
+
+              // Derive account_type from installments (only if not explicitly set)
+              if (!account_type) {
+                const hasAnnual = (inst1Amount && inst1Amount > 0) || (inst2Amount && inst2Amount > 0)
+                  || (contract.annual_fee && parseFloat(contract.annual_fee) > 0)
+                resolvedAccountType = hasAnnual ? "Client" : "One-Time"
+              }
             }
           }
         }
