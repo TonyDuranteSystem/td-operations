@@ -702,11 +702,12 @@ export function registerOperationsTools(server: McpServer) {
       stage: z.string().optional().describe("Current stage filter"),
       status: z.string().optional().describe("Status: active, completed, cancelled"),
       account_id: z.string().uuid().optional().describe("Filter by account UUID"),
+      contact_id: z.string().uuid().optional().describe("Filter by contact UUID (for individual clients without account)"),
       pipeline: z.string().optional().describe("Pipeline filter"),
       assigned_to: z.string().optional().describe("Assignee name"),
       limit: z.number().optional().default(50).describe("Max results (default 50)"),
     },
-    async ({ service_type, stage, status, account_id, pipeline, assigned_to, limit }) => {
+    async ({ service_type, stage, status, account_id, contact_id, pipeline, assigned_to, limit }) => {
       try {
         let q = supabaseAdmin
           .from("service_deliveries")
@@ -718,6 +719,7 @@ export function registerOperationsTools(server: McpServer) {
         if (stage) q = q.ilike("stage", `%${stage}%`)
         if (status) q = q.eq("status", status)
         if (account_id) q = q.eq("account_id", account_id)
+        if (contact_id) q = q.eq("contact_id", contact_id)
         if (pipeline) q = q.ilike("pipeline", `%${pipeline}%`)
         if (assigned_to) q = q.ilike("assigned_to", `%${assigned_to}%`)
 

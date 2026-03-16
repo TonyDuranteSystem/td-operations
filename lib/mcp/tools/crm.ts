@@ -220,6 +220,7 @@ export function registerCrmTools(server: McpServer) {
     {
       status: z.string().optional().describe("Payment status: paid, pending, overdue, cancelled, partial"),
       account_id: z.string().optional().describe("Filter by account UUID"),
+      contact_id: z.string().optional().describe("Filter by contact UUID (for individual clients without account)"),
       company_name: z.string().optional().describe("Filter by company name (partial match)"),
       currency: z.string().optional().describe("Currency: USD or EUR"),
       min_amount: z.number().optional().describe("Minimum payment amount"),
@@ -227,7 +228,7 @@ export function registerCrmTools(server: McpServer) {
       year: z.number().optional().describe("Payment year"),
       limit: z.number().optional().default(50).describe("Max results (default 50)"),
     },
-    async ({ status, account_id, company_name, currency, min_amount, max_amount, year, limit }) => {
+    async ({ status, account_id, contact_id, company_name, currency, min_amount, max_amount, year, limit }) => {
       let q = supabaseAdmin
         .from('payments')
         .select('*, accounts(company_name)')
@@ -236,6 +237,7 @@ export function registerCrmTools(server: McpServer) {
 
       if (status) q = q.eq('status', status)
       if (account_id) q = q.eq('account_id', account_id)
+      if (contact_id) q = q.eq('contact_id', contact_id)
       if (currency) q = q.eq('amount_currency', currency)
       if (min_amount) q = q.gte('amount', min_amount)
       if (max_amount) q = q.lte('amount', max_amount)
@@ -319,9 +321,10 @@ export function registerCrmTools(server: McpServer) {
       assigned_to: z.string().optional().describe("Assignee name"),
       category: z.string().optional().describe("Task category"),
       account_id: z.string().optional().describe("Filter by account UUID"),
+      contact_id: z.string().optional().describe("Filter by contact UUID (for individual clients without account)"),
       limit: z.number().optional().default(50),
     },
-    async ({ status, priority, assigned_to, category, account_id, limit }) => {
+    async ({ status, priority, assigned_to, category, account_id, contact_id, limit }) => {
       let q = supabaseAdmin
         .from('tasks')
         .select('*, accounts(company_name)')
@@ -333,6 +336,7 @@ export function registerCrmTools(server: McpServer) {
       if (assigned_to) q = q.ilike('assigned_to', `%${assigned_to}%`)
       if (category) q = q.eq('category', category)
       if (account_id) q = q.eq('account_id', account_id)
+      if (contact_id) q = q.eq('contact_id', contact_id)
 
       const { data, error } = await q
 
@@ -386,20 +390,102 @@ export function registerCrmTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_get_client_summary",
-    "Get a complete 360° view of a CRM account in one call: account details, contacts, services, payments, deals, tasks, and documents. Use this FIRST when asked about any specific client. Accepts account UUID or company name (fuzzy match). This is the primary tool for client-related questions — prefer it over individual search tools.",
+    "Get a complete 360° view of a CRM client in one call. For LLC clients: pass account_id or company_name — returns account details, contacts, services, payments, deals, tasks, and documents. For individual clients (no LLC): pass contact_id — returns contact details, service deliveries, payments, tasks, and tax returns linked to that person. Use this FIRST when asked about any specific client.",
     {
-      account_id: z.string().optional().describe("Account UUID (use this if you have it)"),
-      company_name: z.string().optional().describe("Company name search (use this if you don't have the ID)"),
+      account_id: z.string().optional().describe("Account UUID (for LLC clients)"),
+      company_name: z.string().optional().describe("Company name search (for LLC clients, fuzzy match)"),
+      contact_id: z.string().optional().describe("Contact UUID (for individual clients without an LLC)"),
     },
-    async ({ account_id, company_name }) => {
-      // Find the account
+    async ({ account_id, company_name, contact_id }) => {
+      // ── Individual client mode (contact_id, no account) ──
+      if (contact_id && !account_id && !company_name) {
+        const { data: contact, error: cErr } = await supabaseAdmin
+          .from('contacts')
+          .select('*')
+          .eq('id', contact_id)
+          .maybeSingle()
+
+        if (cErr || !contact) {
+          return { content: [{ type: "text" as const, text: cErr ? `Error: ${cErr.message}` : "Contact not found" }] }
+        }
+
+        // Also check if they have linked accounts
+        const [linkedAccounts, serviceDeliveries, payments, tasks, taxReturns, conversations] = await Promise.all([
+          supabaseAdmin
+            .from('account_contacts')
+            .select('*, accounts(id, company_name, status, entity_type)')
+            .eq('contact_id', contact_id),
+          supabaseAdmin
+            .from('service_deliveries')
+            .select('*')
+            .eq('contact_id', contact_id)
+            .order('updated_at', { ascending: false }),
+          supabaseAdmin
+            .from('payments')
+            .select('*')
+            .eq('contact_id', contact_id)
+            .order('due_date', { ascending: false }),
+          supabaseAdmin
+            .from('tasks')
+            .select('*')
+            .eq('contact_id', contact_id)
+            .order('due_date', { ascending: true }),
+          supabaseAdmin
+            .from('tax_returns')
+            .select('*')
+            .eq('contact_id', contact_id)
+            .order('tax_year', { ascending: false }),
+          supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('contact_id', contact_id)
+            .order('created_at', { ascending: false })
+            .limit(10),
+        ])
+
+        const paymentData = payments.data || []
+        const totalInvoiced = paymentData.reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
+        const totalPaid = paymentData
+          .filter((p: Record<string, unknown>) => p.status === 'paid')
+          .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
+
+        const summary = {
+          type: "individual_client",
+          contact: contact,
+          linked_accounts: linkedAccounts.data?.map((ac: Record<string, unknown>) => ac.accounts) || [],
+          service_deliveries: {
+            total: serviceDeliveries.data?.length || 0,
+            active: serviceDeliveries.data?.filter((s: Record<string, unknown>) => s.status === 'active').length || 0,
+            items: serviceDeliveries.data || [],
+          },
+          payments: {
+            total_invoiced: totalInvoiced,
+            total_paid: totalPaid,
+            balance_due: totalInvoiced - totalPaid,
+            items: paymentData,
+          },
+          tasks: {
+            total: tasks.data?.length || 0,
+            open: tasks.data?.filter((t: Record<string, unknown>) => t.status !== 'done').length || 0,
+            items: tasks.data || [],
+          },
+          tax_returns: taxReturns.data || [],
+          recent_conversations: conversations.data || [],
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(summary, null, 2) }]
+        }
+      }
+
+      // ── LLC client mode (account_id or company_name) ──
       let accountQuery = supabaseAdmin.from('accounts').select('*')
       if (account_id) {
         accountQuery = accountQuery.eq('id', account_id)
       } else if (company_name) {
         accountQuery = accountQuery.ilike('company_name', `%${company_name}%`)
       } else {
-        return { content: [{ type: "text" as const, text: "Please provide either account_id or company_name" }] }
+        return { content: [{ type: "text" as const, text: "Please provide account_id, company_name, or contact_id" }] }
       }
 
       const { data: accounts, error: accErr } = await accountQuery
@@ -452,6 +538,7 @@ export function registerCrmTools(server: McpServer) {
       const overduePayments = paymentData.filter((p: Record<string, unknown>) => p.status === 'overdue')
 
       const summary = {
+        type: "llc_client",
         account: account,
         contacts: contacts.data?.map((ac: Record<string, unknown>) => ({
           ...(ac.contacts as Record<string, unknown>),

@@ -20,12 +20,13 @@ export function registerTaxTools(server: McpServer) {
       status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
       return_type: z.string().optional().describe("Return type: 1065, 1120-S, 1040NR"),
       account_id: z.string().uuid().optional().describe("Filter by account UUID"),
+      contact_id: z.string().uuid().optional().describe("Filter by contact UUID (for individual tax returns without account)"),
       company_name: z.string().optional().describe("Search by company name"),
       special_case: z.boolean().optional().describe("Filter special cases only"),
       overdue_only: z.boolean().optional().describe("Show only returns past deadline that aren't filed"),
       limit: z.number().optional().default(50).describe("Max results (default 50)"),
     },
-    async ({ tax_year, status, return_type, account_id, company_name, special_case, overdue_only, limit }) => {
+    async ({ tax_year, status, return_type, account_id, contact_id, company_name, special_case, overdue_only, limit }) => {
       try {
         let q = supabaseAdmin
           .from("tax_returns")
@@ -37,6 +38,7 @@ export function registerTaxTools(server: McpServer) {
         if (status) q = q.eq("status", status)
         if (return_type) q = q.eq("return_type", return_type)
         if (account_id) q = q.eq("account_id", account_id)
+        if (contact_id) q = q.eq("contact_id", contact_id)
         if (company_name) q = q.ilike("company_name", `%${company_name}%`)
         if (special_case === true) q = q.eq("special_case", true)
         if (overdue_only) {
