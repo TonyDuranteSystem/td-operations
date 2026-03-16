@@ -138,6 +138,48 @@ export async function GET(req: NextRequest) {
         executed_at: new Date().toISOString(),
       })
 
+    // Send email report if there are new renewals
+    if (created > 0) {
+      try {
+        const { gmailPost } = await import("@/lib/gmail")
+
+        const renewalRows = results
+          .filter(r => r.action === "created SD + task")
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">SD + Task creati</td></tr>`)
+          .join("")
+
+        const skippedRows = results
+          .filter(r => r.action !== "created SD + task")
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#888">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#888">${r.action}</td></tr>`)
+          .join("")
+
+        const html = `
+          <h2>🔄 RA Renewal Report — ${today.toISOString().split("T")[0]}</h2>
+          <p><strong>${created}</strong> nuovi rinnovi creati | <strong>${skipped}</strong> skippati | <strong>${accounts.length}</strong> account verificati</p>
+          <h3>✅ Nuovi rinnovi da fare (assegnati a Luca)</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Azione</th></tr>
+            ${renewalRows}
+          </table>
+          ${skippedRows ? `<h3 style="margin-top:16px">⏭️ Skippati</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Motivo</th></tr>
+            ${skippedRows}
+          </table>` : ""}
+          <p style="margin-top:16px;color:#888;font-size:12px">Generato automaticamente da /api/cron/ra-renewal-check</p>
+        `
+
+        await gmailPost("/messages/send", {
+          to: "support@tonydurante.us",
+          subject: `🔄 RA Renewal: ${created} nuovi rinnovi da fare`,
+          htmlBody: html,
+        })
+      } catch (emailErr) {
+        // Email failure is non-blocking — log but don't fail the cron
+        console.error("RA Renewal email report failed:", emailErr)
+      }
+    }
+
     return NextResponse.json({ ok: true, checked: accounts.length, created, skipped, results })
 
   } catch (err: unknown) {

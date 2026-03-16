@@ -1008,6 +1008,49 @@ export function registerOperationsTools(server: McpServer) {
           }
         }
 
+        // ─── AUTO-TRIGGER: RA Renewal — update ra_renewal_date +1 year on completion ───
+        if (delivery.service_type === "State RA Renewal" && isCompleted && delivery.account_id) {
+          try {
+            const { data: acct } = await supabaseAdmin
+              .from("accounts")
+              .select("ra_renewal_date")
+              .eq("id", delivery.account_id)
+              .single()
+
+            if (acct?.ra_renewal_date) {
+              const currentDate = new Date(acct.ra_renewal_date)
+              currentDate.setFullYear(currentDate.getFullYear() + 1)
+              const newDate = currentDate.toISOString().split("T")[0]
+
+              await supabaseAdmin
+                .from("accounts")
+                .update({ ra_renewal_date: newDate, updated_at: new Date().toISOString() })
+                .eq("id", delivery.account_id)
+
+              lines.push(`\n🔄 RA renewal date updated: ${acct.ra_renewal_date} → ${newDate}`)
+            }
+
+            // Close related open tasks
+            const { data: openTasks } = await supabaseAdmin
+              .from("tasks")
+              .select("id")
+              .eq("delivery_id", delivery_id)
+              .in("status", ["To Do", "In Progress"])
+
+            if (openTasks?.length) {
+              await supabaseAdmin
+                .from("tasks")
+                .update({ status: "Done", updated_at: new Date().toISOString() })
+                .eq("delivery_id", delivery_id)
+                .in("status", ["To Do", "In Progress"])
+
+              lines.push(`✅ Closed ${openTasks.length} related task(s)`)
+            }
+          } catch (raErr) {
+            lines.push(`\n⚠️ RA renewal auto-update failed: ${raErr instanceof Error ? raErr.message : String(raErr)}`)
+          }
+        }
+
         // ─── AUTO-TRIGGER: Welcome Package on "Post-Formation + Banking" ───
         if (
           delivery.service_type === "Company Formation" &&
