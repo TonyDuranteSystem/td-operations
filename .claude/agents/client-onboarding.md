@@ -44,7 +44,7 @@ ONBOARDING STEPS (execute in order):
    - Note: don't call HubSpot directly, just ensure CRM data is complete
 
 7. SEND WELCOME EMAIL
-   - Draft welcome email via gmail_draft or email_send
+   - Draft welcome email via gmail_draft or gmail_send
    - Include: offer link, document upload instructions, contact info
 
 RULES:

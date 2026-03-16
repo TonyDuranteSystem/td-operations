@@ -15,7 +15,7 @@ export function registerBankingFormTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "banking_form_create",
-    "Create a banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Providers: 'payset' (EUR IBAN, default) or 'relay' (USD business account). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send or email_send to send the link to the client.",
+    "Create a banking application form for an existing client. Pre-fills owner info from account + contact. Returns the form URL (https://td-operations.vercel.app/banking-form/{token}). Providers: 'payset' (EUR IBAN, default) or 'relay' (USD business account). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
