@@ -604,6 +604,36 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("submission_ids", "error", e instanceof Error ? e.message : String(e)))
   }
 
+  // ─── 9. ENQUEUE WELCOME PACKAGE (banking forms, Drive search, email draft) ───
+  // OA + Lease were just created above — welcome_package_prepare is idempotent
+  // and will skip them, only creating Relay/Payset forms + email draft + review task
+  if (account_id) {
+    try {
+      const { data: acctWP } = await supabaseAdmin
+        .from("accounts")
+        .select("welcome_package_status, ein_number")
+        .eq("id", account_id)
+        .single()
+
+      if (acctWP?.welcome_package_status) {
+        result.steps.push(step("welcome_package", "skipped", `Already ${acctWP.welcome_package_status}`))
+      } else if (!acctWP?.ein_number) {
+        result.steps.push(step("welcome_package", "skipped", "No EIN yet — will be triggered when formation reaches Post-Formation stage"))
+      } else {
+        const { enqueueJob } = await import("@/lib/jobs/queue")
+        await enqueueJob({
+          job_type: "welcome_package_prepare",
+          payload: { account_id },
+          priority: 5,
+        })
+        result.steps.push(step("welcome_package", "ok", "Job enqueued (Relay, Payset, email draft, review task)"))
+      }
+    } catch (e) {
+      result.steps.push(step("welcome_package", "error", e instanceof Error ? e.message : String(e)))
+    }
+    await updateJobProgress(job.id, result)
+  }
+
   // Summary
   const okCount = result.steps.filter(s => s.status === "ok").length
   const errCount = result.steps.filter(s => s.status === "error").length
