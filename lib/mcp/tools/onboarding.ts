@@ -440,6 +440,36 @@ export function registerOnboardingTools(server: McpServer) {
             acctFields.ra_renewal_date = now.slice(0, 10)  // Onboarding: RA renewal = date of RA change (today)
             acctFields.updated_at = now
 
+            // ─── Referral propagation: lead/offer → account ───
+            if (sub.lead_id) {
+              try {
+                const { data: lead } = await supabaseAdmin
+                  .from("leads")
+                  .select("referrer_name, referrer_partner_id, source")
+                  .eq("id", sub.lead_id)
+                  .maybeSingle()
+
+                if (lead?.referrer_name) {
+                  // Check offer for detailed referral info
+                  const { data: offer } = await supabaseAdmin
+                    .from("offers")
+                    .select("referrer_name, referrer_type, referrer_account_id, referrer_commission_type, referrer_commission_pct, referrer_agreed_price")
+                    .eq("lead_id", sub.lead_id)
+                    .not("referrer_name", "is", null)
+                    .limit(1)
+                    .maybeSingle()
+
+                  acctFields.referrer = offer?.referrer_name || lead.referrer_name
+                  acctFields.referred_by = offer?.referrer_account_id || lead.referrer_partner_id || null
+                  acctFields.referral_commission_pct = offer?.referrer_commission_pct ?? 10
+                  acctFields.referral_status = "pending"
+                  lines.push(`📎 Referral: ${acctFields.referrer} (${offer?.referrer_type || "client"}, ${acctFields.referral_commission_pct}%) → status: pending`)
+                }
+              } catch (refErr) {
+                lines.push(`⚠️ Referral lookup failed: ${refErr instanceof Error ? refErr.message : String(refErr)}`)
+              }
+            }
+
             // Derive account_type + installments + services_bundle from CONTRACTS (source of truth)
             let derivedAccountType = "Client" // default
 

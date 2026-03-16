@@ -310,6 +310,38 @@ export function registerOfferTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: `❌ Validation error: ${validationError}` }] }
         }
 
+        // Auto-lookup referrer from lead if lead_id provided and no referrer_name set
+        let refName = params.referrer_name || null
+        let refEmail = params.referrer_email || null
+        let refType = params.referrer_type || null
+        let refAccountId = params.referrer_account_id || null
+        let refCommissionType = params.referrer_commission_type || null
+        let refCommissionPct = params.referrer_commission_pct ?? null
+        const refAgreedPrice = params.referrer_agreed_price ?? null
+        const refNotes = params.referrer_notes || null
+        let referralAutoFilled = false
+
+        if (params.lead_id && !params.referrer_name) {
+          const { data: lead } = await supabaseAdmin
+            .from("leads")
+            .select("referrer_name, referrer_partner_id, source")
+            .eq("id", params.lead_id)
+            .maybeSingle()
+
+          if (lead?.referrer_name) {
+            refName = lead.referrer_name
+            referralAutoFilled = true
+            if (lead.referrer_partner_id) {
+              refType = "partner"
+              refAccountId = lead.referrer_partner_id
+            } else {
+              refType = "client"
+              refCommissionType = "credit_note"
+              refCommissionPct = 10
+            }
+          }
+        }
+
         const { data, error } = await supabaseAdmin
           .from("offers")
           .insert({
@@ -337,14 +369,14 @@ export function registerOfferTools(server: McpServer) {
             expires_at: params.expires_at,
             lead_id: params.lead_id,
             deal_id: params.deal_id,
-            referrer_name: params.referrer_name,
-            referrer_email: params.referrer_email,
-            referrer_type: params.referrer_type,
-            referrer_account_id: params.referrer_account_id,
-            referrer_commission_type: params.referrer_commission_type,
-            referrer_commission_pct: params.referrer_commission_pct,
-            referrer_agreed_price: params.referrer_agreed_price,
-            referrer_notes: params.referrer_notes,
+            referrer_name: refName,
+            referrer_email: refEmail,
+            referrer_type: refType,
+            referrer_account_id: refAccountId,
+            referrer_commission_type: refCommissionType,
+            referrer_commission_pct: refCommissionPct,
+            referrer_agreed_price: refAgreedPrice,
+            referrer_notes: refNotes,
             view_count: 0,
           })
           .select("token, access_code, status, client_name, language")
@@ -358,8 +390,8 @@ export function registerOfferTools(server: McpServer) {
           action_type: "create",
           table_name: "offers",
           record_id: params.token,
-          summary: `Created offer: ${params.client_name} (${params.token})`,
-          details: { language: params.language, payment_type: params.payment_type, lead_id: params.lead_id },
+          summary: `Created offer: ${params.client_name} (${params.token})${refName ? ` — referral: ${refName}` : ""}`,
+          details: { language: params.language, payment_type: params.payment_type, lead_id: params.lead_id, referrer: refName },
         })
 
         // If lead_id provided, update lead's offer status
@@ -371,10 +403,14 @@ export function registerOfferTools(server: McpServer) {
             .eq("id", params.lead_id)
         }
 
+        const referralLine = referralAutoFilled
+          ? `\n📎 Referral auto-filled from lead: ${refName} (${refType}, ${refCommissionType || "no commission type"}${refCommissionPct ? ` ${refCommissionPct}%` : ""})`
+          : ""
+
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer created as DRAFT: ${params.token}\nURL: https://offerte.tonydurante.us/?t=${params.token}&c=${accessCode}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
+            text: `✅ Offer created as DRAFT: ${params.token}\nURL: https://offerte.tonydurante.us/?t=${params.token}&c=${accessCode}${referralLine}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
           }],
         }
       } catch (err: unknown) {

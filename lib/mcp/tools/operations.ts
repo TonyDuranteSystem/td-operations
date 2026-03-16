@@ -226,19 +226,22 @@ export function registerOperationsTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_create_account",
-    "Create a new CRM account (company/LLC). Use this when onboarding a new client after lead conversion. If lead_id is provided, account_type is auto-derived from the offer (annual installments → Client, no installments → One-Time). Returns the created account with ID.",
+    "Create a new CRM account (company/LLC). Use this when onboarding a new client after lead conversion. If lead_id is provided, account_type is auto-derived from the offer (annual installments → Client, no installments → One-Time), and referral info is auto-populated from lead/offer if present. Returns the created account with ID.",
     {
       company_name: z.string().describe("Company/LLC name"),
       entity_type: z.string().optional().describe("Entity type (e.g., Single Member LLC, Multi-Member LLC, Corporation)"),
       state_of_formation: z.string().optional().describe("State of formation (e.g., Wyoming, Delaware, Florida)"),
-      lead_id: z.string().uuid().optional().describe("Lead UUID — if provided, auto-derives account_type from offer installments"),
+      lead_id: z.string().uuid().optional().describe("Lead UUID — auto-derives account_type + referral from offer/lead"),
       account_type: z.enum(["Client", "One-Time"]).optional().describe("Client = annual management, One-Time = single service. Auto-derived from lead if lead_id provided."),
       status: z.string().optional().describe("Account status (default: Active)"),
       ein: z.string().optional().describe("EIN number (e.g., 30-1482516)"),
       formation_date: z.string().optional().describe("Formation date (YYYY-MM-DD)"),
       notes: z.string().optional().describe("Account notes"),
+      referrer: z.string().optional().describe("Referrer name (client or partner who referred)"),
+      referred_by: z.string().uuid().optional().describe("Referrer's account UUID (partner or client account)"),
+      referral_commission_pct: z.number().optional().describe("Referral commission % (default 10 for client referrals)"),
     },
-    async ({ company_name, entity_type, state_of_formation, lead_id, account_type, status, ein, formation_date, notes }) => {
+    async ({ company_name, entity_type, state_of_formation, lead_id, account_type, status, ein, formation_date, notes, referrer, referred_by, referral_commission_pct }) => {
       try {
         // Check for duplicates
         const { data: existing } = await supabaseAdmin
@@ -299,6 +302,49 @@ export function registerOperationsTools(server: McpServer) {
           }
         }
 
+        // Auto-lookup referral from lead/offer if lead_id provided and no explicit referrer
+        let refName = referrer || null
+        let refBy = referred_by || null
+        let refPct = referral_commission_pct ?? null
+        let refStatus: string | null = null
+        let referralAutoFilled = false
+
+        if (lead_id && !referrer) {
+          const { data: leadRef } = await supabaseAdmin
+            .from("leads")
+            .select("referrer_name, referrer_partner_id")
+            .eq("id", lead_id)
+            .maybeSingle()
+
+          if (leadRef?.referrer_name) {
+            refName = leadRef.referrer_name
+            refBy = leadRef.referrer_partner_id || null
+            referralAutoFilled = true
+
+            // Check offer for detailed commission info
+            const { data: offerRef } = await supabaseAdmin
+              .from("offers")
+              .select("referrer_name, referrer_account_id, referrer_commission_pct, referrer_type")
+              .eq("lead_id", lead_id)
+              .not("referrer_name", "is", null)
+              .limit(1)
+              .maybeSingle()
+
+            if (offerRef) {
+              refName = offerRef.referrer_name || refName
+              refBy = offerRef.referrer_account_id || refBy
+              refPct = offerRef.referrer_commission_pct ?? 10
+            } else {
+              refPct = 10
+            }
+            refStatus = "pending"
+          }
+        }
+
+        if (refName && refStatus === null) {
+          refStatus = "pending"
+        }
+
         const insert: Record<string, unknown> = {
           company_name,
           entity_type: entity_type || null,
@@ -310,6 +356,10 @@ export function registerOperationsTools(server: McpServer) {
           notes: notes || null,
           ...(inst1Amount != null && { installment_1_amount: inst1Amount, installment_1_currency: instCurrency }),
           ...(inst2Amount != null && { installment_2_amount: inst2Amount, installment_2_currency: instCurrency }),
+          referrer: refName,
+          referred_by: refBy,
+          referral_commission_pct: refPct,
+          referral_status: refStatus,
         }
 
         const { data, error } = await supabaseAdmin
@@ -324,11 +374,15 @@ export function registerOperationsTools(server: McpServer) {
           action_type: "create",
           table_name: "accounts",
           record_id: data.id,
-          summary: `Account created: ${company_name} (${state_of_formation || "no state"}, ${resolvedAccountType})`,
-          details: { company_name, entity_type, state_of_formation, account_type: resolvedAccountType, status: status || "Active" },
+          summary: `Account created: ${company_name} (${state_of_formation || "no state"}, ${resolvedAccountType})${refName ? ` — referral: ${refName}` : ""}`,
+          details: { company_name, entity_type, state_of_formation, account_type: resolvedAccountType, status: status || "Active", referrer: refName, referral_commission_pct: refPct },
         })
 
-        return { content: [{ type: "text" as const, text: `✅ Account created: ${data.company_name}\nStatus: ${data.status} | Type: ${resolvedAccountType} | State: ${data.state_of_formation || "—"}\nID: ${data.id}` }] }
+        const referralLine = refName
+          ? `\n📎 Referral: ${refName}${refPct ? ` (${refPct}%)` : ""} — status: ${refStatus}${referralAutoFilled ? " (auto-filled from lead)" : ""}`
+          : ""
+
+        return { content: [{ type: "text" as const, text: `✅ Account created: ${data.company_name}\nStatus: ${data.status} | Type: ${resolvedAccountType} | State: ${data.state_of_formation || "—"}\nID: ${data.id}${referralLine}` }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
