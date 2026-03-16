@@ -280,6 +280,7 @@ When a team member (Luca, Antonio, or anyone) communicates that an action has be
 ## Critical Decision Rules
 
 1. **CRM Updates**: ALWAYS `crm_update_record`. NEVER `execute_sql` for writes. Supports 11 tables including leads, deadlines, tax_returns.
+   **STRUCTURAL FIELDS RULE**: When told to change an account's classification, status, or role (e.g., "this is a partner not a client", "this account is cancelled"), you MUST update the **STRUCTURAL fields** that control queries and reports -- not just the notes field. Structural fields include: `account_type` (Client/One-Time/Partner), `status` (Active/Suspended/Cancelled/etc.), `entity_type`, `services_bundle`. Notes are supplementary documentation, NOT the primary record. Similarly for payments: if told a payment was not received, update the `status` field (Pending/Paid/Overdue/etc.), not just a task or note. **The rule is: UPDATE THE FIELD THAT THE SYSTEM QUERIES, not just the field humans read.**
 2. **Client Lookup**: START with `crm_get_client_summary` (returns everything in one call).
 3. **Lead Queries**: `lead_search` for leads, NOT `crm_search_deals`. Deals ≠ Leads.
 4. **Business Rules**: ALWAYS `kb_search` before answering pricing/services/procedures questions.
