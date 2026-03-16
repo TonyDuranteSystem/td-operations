@@ -41,8 +41,6 @@
 import { createMcpHandler } from "mcp-handler"
 import { registerCrmTools } from "@/lib/mcp/tools/crm"
 import { registerQbTools } from "@/lib/mcp/tools/qb"
-// Postmark email tools REMOVED — all email goes through gmail_send now
-// import { registerEmailTools } from "@/lib/mcp/tools/email"
 import { registerDriveTools } from "@/lib/mcp/tools/drive"
 import { registerGmailTools } from "@/lib/mcp/tools/gmail"
 import { registerDocaiTools } from "@/lib/mcp/tools/docai"
@@ -87,7 +85,6 @@ const handler = createMcpHandler(
     registerCheckpointTools(server)
     registerCrmTools(server)
     registerQbTools(server)
-    // registerEmailTools(server) — REMOVED: use gmail_send for all email
     registerDriveTools(server)
     registerGmailTools(server)
     registerDocaiTools(server)
