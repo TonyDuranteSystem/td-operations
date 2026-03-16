@@ -34,11 +34,13 @@ export async function GET(req: NextRequest) {
 
     if (pErr) {
       console.error("[check-wire] Failed to query pending_activations:", pErr.message)
+      await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "error", error_message: pErr.message, executed_at: new Date().toISOString() })
       return NextResponse.json({ error: pErr.message }, { status: 500 })
     }
 
     if (!pendingList || pendingList.length === 0) {
       console.log("[check-wire] No pending wire transfers to check")
+      await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "success", details: { checked: 0, matched: 0, message: "No pending wire transfers" }, executed_at: new Date().toISOString() })
       return NextResponse.json({ ok: true, checked: 0, matched: 0 })
     }
 
@@ -86,6 +88,7 @@ export async function GET(req: NextRequest) {
         } catch (emailErr) {
           console.error("[check-wire] Failed to send QB alert email:", emailErr)
         }
+        await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "error", error_message: "QB API unavailable", executed_at: new Date().toISOString() })
         return NextResponse.json({ error: "QB API unavailable" }, { status: 503 })
       }
     }
@@ -171,6 +174,8 @@ export async function GET(req: NextRequest) {
 
     console.log(`[check-wire] Done. Checked: ${pendingList.length}, Matched: ${matched}`)
 
+    await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "success", details: { checked: pendingList.length, matched, deposits_found: deposits.length }, executed_at: new Date().toISOString() })
+
     return NextResponse.json({
       ok: true,
       checked: pendingList.length,
@@ -180,6 +185,7 @@ export async function GET(req: NextRequest) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[check-wire] Error:", msg)
+    await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "error", error_message: msg, executed_at: new Date().toISOString() }).then(() => {})
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

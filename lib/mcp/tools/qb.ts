@@ -854,4 +854,72 @@ export function registerQbTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // qb_list_accounts
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_list_accounts",
+    "List bank and financial accounts from QuickBooks Online. Shows all connected bank accounts (Mercury, Relay, Airwallex, etc.), credit cards, and other account types. Use to verify which banks are connected, check balances, or audit the chart of accounts.",
+    {
+      account_type: z.enum(["Bank", "Credit Card", "Accounts Receivable", "Accounts Payable", "Other Current Asset", "Fixed Asset", "Other Asset", "Other Current Liability", "Long Term Liability", "Equity", "Income", "Cost of Goods Sold", "Expense", "Other Income", "Other Expense"]).optional().describe("Filter by account type. Use 'Bank' to see connected bank accounts."),
+      active_only: z.boolean().optional().default(true).describe("Only show active accounts (default true)"),
+    },
+    async ({ account_type, active_only }) => {
+      try {
+        let sql = "SELECT * FROM Account"
+        const conditions: string[] = []
+
+        if (account_type) {
+          conditions.push(`AccountType = '${account_type}'`)
+        }
+        if (active_only !== false) {
+          conditions.push("Active = true")
+        }
+
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ")
+        }
+
+        sql += " ORDERBY Name ASC MAXRESULTS 200"
+
+        const query = encodeURIComponent(sql)
+        const result = await qbApiCall(`/query?query=${query}`)
+        const accounts = result.QueryResponse?.Account || []
+
+        if (accounts.length === 0) {
+          return { content: [{ type: "text" as const, text: `No accounts found${account_type ? ` of type "${account_type}"` : ""}.` }] }
+        }
+
+        const lines = accounts.map((acc: Record<string, unknown>) => {
+          const name = acc.Name as string
+          const type = acc.AccountType as string
+          const subType = acc.AccountSubType as string || ""
+          const balance = acc.CurrentBalance as number ?? 0
+          const currency = (acc.CurrencyRef as Record<string, unknown>)?.value || "USD"
+          const active = acc.Active as boolean
+          const bankNum = acc.BankNum as string || ""
+          return `• ${name}${!active ? " [INACTIVE]" : ""}\n  Type: ${type}${subType ? ` / ${subType}` : ""}\n  Balance: ${currency} ${balance.toLocaleString("en-US", { minimumFractionDigits: 2 })}${bankNum ? `\n  Bank#: ...${bankNum.slice(-4)}` : ""}`
+        })
+
+        const totalBalance = accounts
+          .filter((a: Record<string, unknown>) => a.AccountType === "Bank")
+          .reduce((sum: number, a: Record<string, unknown>) => sum + ((a.CurrentBalance as number) || 0), 0)
+
+        let summary = `📊 ${accounts.length} accounts found`
+        if (account_type === "Bank") {
+          summary += `\nTotal bank balance: $${totalBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `${summary}\n\n${lines.join("\n\n")}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error listing accounts: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
 }

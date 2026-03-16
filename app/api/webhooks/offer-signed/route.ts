@@ -48,14 +48,28 @@ export async function POST(req: NextRequest) {
     const hasBank = !!offer.bank_details
     const paymentMethod = hasWhop ? "whop" : hasBank ? "bank_transfer" : "unknown"
 
-    // Calculate total from cost_summary
+    // Calculate total from cost_summary (first section = setup/initial payment)
     let totalAmount = 0
-    if (offer.cost_summary && Array.isArray(offer.cost_summary)) {
-      for (const section of offer.cost_summary) {
-        if (section.total) totalAmount = parseFloat(section.total)
-        else if (section.total_label) {
-          const match = section.total_label.match(/[\d,.]+/)
-          if (match) totalAmount = parseFloat(match[0].replace(",", ""))
+    const summaryArr = Array.isArray(offer.cost_summary)
+      ? offer.cost_summary
+      : typeof offer.cost_summary === "string"
+        ? (() => { try { return JSON.parse(offer.cost_summary) } catch { return [] } })()
+        : []
+
+    if (summaryArr.length > 0) {
+      // Use first section's total (setup payment the client needs to make)
+      const section = summaryArr[0]
+      const raw = section.total || section.total_label || ""
+      // Extract number: strip currency symbols, handle European format (€3.000 = 3000, €2,500 = 2500)
+      const numStr = raw.replace(/[^0-9.,]/g, "").trim()
+      if (numStr) {
+        // Detect European format: "3.000" (dot as thousands) vs "3,000" (comma as thousands)
+        // If has dot followed by 3 digits at end → European thousands separator
+        if (/\.\d{3}$/.test(numStr) && !numStr.includes(",")) {
+          totalAmount = parseFloat(numStr.replace(/\./g, ""))
+        } else {
+          // Standard: remove commas, parse
+          totalAmount = parseFloat(numStr.replace(",", ""))
         }
       }
     }
@@ -69,7 +83,12 @@ export async function POST(req: NextRequest) {
         client_name: offer.client_name,
         client_email: offer.client_email,
         amount: totalAmount || null,
-        currency: offer.language === "it" ? "EUR" : "USD",
+        currency: (() => {
+          // Detect from cost_summary first section
+          const raw = summaryArr[0]?.total || summaryArr[0]?.total_label || ""
+          if (raw.includes("€") || raw.toUpperCase().includes("EUR")) return "EUR"
+          return "USD"
+        })(),
         payment_method: paymentMethod,
         status: "awaiting_payment",
         signed_at: new Date().toISOString(),
