@@ -107,6 +107,15 @@ export async function generateTaxFormPDF(input: TaxFormPDFInput): Promise<Uint8A
     if (y - needed < MARGIN + 20) newPage()
   }
 
+  // Sanitize text for pdf-lib (WinAnsi encoding can't handle \n, \r, \t, etc.)
+  function sanitize(text: string): string {
+    return text
+      .replace(/\r\n/g, " ")
+      .replace(/[\n\r\t]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  }
+
   function wrapText(text: string, maxW: number, size: number, f: PDFFont): string[] {
     const lines: string[] = []
     const words = text.split(" ")
@@ -209,7 +218,7 @@ export async function generateTaxFormPDF(input: TaxFormPDFInput): Promise<Uint8A
       y -= LINE_HEIGHT
 
       // Value (may wrap)
-      const valueStr = String(val)
+      const valueStr = sanitize(String(val))
       const lines = wrapText(valueStr, CONTENT_WIDTH - 24, 10, font)
       for (const ln of lines) {
         check(LINE_HEIGHT)
@@ -253,7 +262,7 @@ export async function generateTaxFormPDF(input: TaxFormPDFInput): Promise<Uint8A
       })
       y -= LINE_HEIGHT
 
-      const lines = wrapText(String(val), CONTENT_WIDTH - 24, 10, font)
+      const lines = wrapText(sanitize(String(val)), CONTENT_WIDTH - 24, 10, font)
       for (const ln of lines) {
         check(LINE_HEIGHT)
         page.drawText(ln, { x: MARGIN + 16, y, size: 10, font })
