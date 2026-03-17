@@ -170,15 +170,22 @@ export default function ServiceAgreement({ offer, token }: Props) {
   }
   if (!fee) fee = 'As specified in the offer'
 
-  // Installments from recurring_costs
+  // Installments from recurring_costs — always English labels in contract
   const rc = Array.isArray(offer.recurring_costs) ? offer.recurring_costs : []
   const installmentLines: { label: string; amount: string }[] = []
   let annualFeeNum = 0
-  for (const item of rc) {
+  for (let idx = 0; idx < rc.length; idx++) {
+    const item = rc[idx]
     const amt = (item as any).amount || (item as any).price || ''
     const numAmt = parseFloat(String(amt).replace(/[^0-9.]/g, ''))
     if (!isNaN(numAmt)) annualFeeNum += numAmt
-    installmentLines.push({ label: item.label || '', amount: String(amt) })
+    // Normalize labels to English for the legal document
+    const rawLabel = (item.label || '').toLowerCase()
+    let engLabel: string
+    if (rawLabel.includes('jan') || rawLabel.includes('genn')) engLabel = 'First Installment (January)'
+    else if (rawLabel.includes('jun') || rawLabel.includes('giugno')) engLabel = 'Second Installment (June)'
+    else engLabel = idx === 0 ? 'First Installment' : 'Second Installment'
+    installmentLines.push({ label: engLabel, amount: String(amt) })
   }
 
   // Services from offer

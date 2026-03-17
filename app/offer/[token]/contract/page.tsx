@@ -311,7 +311,21 @@ export default function ContractPage() {
     if (o.cost_summary && Array.isArray(o.cost_summary) && o.cost_summary.length > 0) {
       const rc = o.cost_summary.find(x => /recommended/i.test(x.label || '')) || o.cost_summary[o.cost_summary.length - 1]
       if (rc.total) fee = rc.total
-      installments = rc.rate || rc.installments || ''
+    }
+    // Derive installments from recurring_costs — always English labels
+    if (o.recurring_costs && Array.isArray(o.recurring_costs) && o.recurring_costs.length >= 2) {
+      const parts: string[] = []
+      for (let idx = 0; idx < o.recurring_costs.length; idx++) {
+        const item = o.recurring_costs[idx]
+        const amt = (item as any).amount || (item as any).price || ''
+        const rawLabel = (item.label || '').toLowerCase()
+        let engLabel: string
+        if (rawLabel.includes('jan') || rawLabel.includes('genn')) engLabel = 'First Installment (January)'
+        else if (rawLabel.includes('jun') || rawLabel.includes('giugno')) engLabel = 'Second Installment (June)'
+        else engLabel = idx === 0 ? 'First Installment' : 'Second Installment'
+        parts.push(`${engLabel}: ${amt}`)
+      }
+      installments = parts.join(' — ')
     }
     if (!installments && fee) {
       installments = `Single payment of ${fee}`
