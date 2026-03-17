@@ -290,6 +290,8 @@ export function registerOfferTools(server: McpServer) {
       bank_details: z.any().optional().describe("Bank transfer details: {beneficiary, iban, bic, bank_name, amount, reference}"),
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
+      // Contract type
+      contract_type: z.enum(["msa", "tax_return"]).optional().describe("Contract type: 'msa' (default — full MSA+SOW for formation/onboarding) or 'tax_return' (lightweight agreement for tax return filing only)"),
       // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
       lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
       account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
@@ -375,6 +377,7 @@ export function registerOfferTools(server: McpServer) {
             },
             effective_date: params.effective_date,
             expires_at: params.expires_at,
+            contract_type: params.contract_type || "msa",
             lead_id: params.lead_id,
             account_id: params.account_id,
             deal_id: params.deal_id,
