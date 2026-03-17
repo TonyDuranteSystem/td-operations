@@ -94,10 +94,17 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ Account not found: ${accErr?.message || "no data"}` }] }
         }
 
-        // Validate state
-        const state = (account.state_of_formation || "").toUpperCase()
+        // Validate state — normalize full name to abbreviation
+        const STATE_MAP: Record<string, string> = {
+          "NEW MEXICO": "NM", "NM": "NM",
+          "WYOMING": "WY", "WY": "WY",
+          "FLORIDA": "FL", "FL": "FL",
+          "DELAWARE": "DE", "DE": "DE",
+        }
+        const rawState = (account.state_of_formation || "").toUpperCase().trim()
+        const state = STATE_MAP[rawState] || rawState
         if (!OA_SUPPORTED_STATES.includes(state as typeof OA_SUPPORTED_STATES[number])) {
-          return { content: [{ type: "text" as const, text: `❌ State "${state}" not supported for OA. Supported: ${OA_SUPPORTED_STATES.join(", ")}` }] }
+          return { content: [{ type: "text" as const, text: `❌ State "${account.state_of_formation}" not supported for OA. Supported: ${OA_SUPPORTED_STATES.join(", ")}` }] }
         }
 
         // ─── 2. FETCH PRIMARY CONTACT ───
