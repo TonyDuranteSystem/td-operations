@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
         // Get account Drive folder
         const { data: acc } = await supabaseAdmin
           .from("accounts")
-          .select("company_name, drive_folder_id, ein, state_of_formation")
+          .select("company_name, drive_folder_id, ein_number, state_of_formation")
           .eq("id", sub.account_id)
           .single()
 
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
 
           const pdfBytes = await generateTaxFormPDF({
             companyName: acc.company_name || companyName,
-            ein: acc.ein || fullSub.submitted_data.ein_number as string || "N/A",
+            ein: acc.ein_number || fullSub.submitted_data.ein_number as string || "N/A",
             state: acc.state_of_formation || fullSub.submitted_data.state_of_incorporation as string || "N/A",
             incorporationDate: fullSub.submitted_data.date_of_incorporation as string || "N/A",
             taxYear: sub.tax_year || "N/A",
