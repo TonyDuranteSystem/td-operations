@@ -2,7 +2,7 @@
  * Offer Tools — Manage client offers/proposals in Supabase
  *
  * Offers are stored in the `offers` table (columns in English).
- * Live at: offerte.tonydurante.us/?t={token}&c={access_code}
+ * Live at: offerte.tonydurante.us/offer/{token}/{access_code}
  * Contract signing at: offerte.tonydurante.us/offer/{token}/contract
  *
  * Workflow: create (draft) → review → send (Gmail send) → client views → signs → pays
@@ -131,7 +131,7 @@ function buildOfferEmail(
   language: string,
   trackingPixelUrl?: string,
 ) {
-  const offerUrl = `https://offerte.tonydurante.us/?t=${encodeURIComponent(token)}&c=${accessCode}`
+  const offerUrl = `https://offerte.tonydurante.us/offer/${encodeURIComponent(token)}/${accessCode}`
 
   const subject = language === "en"
     ? `Your Proposal from Tony Durante LLC`
@@ -249,7 +249,7 @@ export function registerOfferTools(server: McpServer) {
             text: JSON.stringify({
               offer: data,
               contract: contract || null,
-              url: `https://offerte.tonydurante.us/?t=${token}&c=${accessCode}`,
+              url: `https://offerte.tonydurante.us/offer/${token}/${accessCode}`,
             }, null, 2),
           }],
         }
@@ -364,7 +364,13 @@ export function registerOfferTools(server: McpServer) {
             intro_en: params.intro_en,
             intro_it: params.intro_it,
             payment_links: params.payment_links,
-            bank_details: params.bank_details,
+            bank_details: params.bank_details || {
+              beneficiary: "TONY DURANTE L.L.C.",
+              account_number: "200000306770",
+              routing_number: "064209588",
+              bank_name: "Relay Financial",
+              address: "11761 80th Ave, Seminole, FL 33772",
+            },
             effective_date: params.effective_date,
             expires_at: params.expires_at,
             lead_id: params.lead_id,
@@ -396,7 +402,7 @@ export function registerOfferTools(server: McpServer) {
 
         // If lead_id provided, update lead's offer status
         if (params.lead_id) {
-          const offerUrl = `https://offerte.tonydurante.us/?t=${params.token}&c=${accessCode}`
+          const offerUrl = `https://offerte.tonydurante.us/offer/${params.token}/${accessCode}`
           await supabaseAdmin
             .from("leads")
             .update({ offer_link: offerUrl, offer_status: "Draft" })
@@ -410,7 +416,7 @@ export function registerOfferTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer created as DRAFT: ${params.token}\nURL: https://offerte.tonydurante.us/?t=${params.token}&c=${accessCode}${referralLine}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
+            text: `✅ Offer created as DRAFT: ${params.token}\nURL: https://offerte.tonydurante.us/offer/${params.token}/${accessCode}${referralLine}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
           }],
         }
       } catch (err: unknown) {

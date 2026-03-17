@@ -530,7 +530,7 @@ export function registerQbTools(server: McpServer) {
         const bankSection =
           currency === "EUR"
             ? "Banca: Banking Circle (via Wise)\nIBAN: DK8989000023658198\nBIC/SWIFT: SXPYDKKK\nBeneficiario: Tony Durante LLC"
-            : "Bank: Relay Financial\nRouting Number: 064208588\nAccount Number: 200000306770\nBeneficiary: Tony Durante LLC"
+            : "Bank: Relay Financial\nAccount Name: TONY DURANTE L.L.C.\nAddress: 11761 80th Ave, Seminole, FL 33772\nAccount Number: 200000306770\nRouting Number: 064209588\nBeneficiary: Tony Durante LLC"
 
         // 4. Build email content
         const customerName = (inv.CustomerRef?.name as string) || "Customer"
