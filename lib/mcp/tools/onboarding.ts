@@ -57,11 +57,11 @@ export function registerOnboardingTools(server: McpServer) {
           owner_phone: lead.phone || "",
         }
 
-        // 4. If account exists, prefill company info
+        // 4. If account exists, prefill company info + check Drive for existing docs
         if (account_id) {
           const { data: acct } = await supabaseAdmin
             .from("accounts")
-            .select("company_name, state_of_formation, formation_date, ein_number, entity_type")
+            .select("company_name, state_of_formation, formation_date, ein_number, entity_type, drive_folder_id")
             .eq("id", account_id)
             .single()
           if (acct) {
@@ -69,6 +69,52 @@ export function registerOnboardingTools(server: McpServer) {
             if (acct.state_of_formation) prefilled.state_of_formation = acct.state_of_formation
             if (acct.formation_date) prefilled.formation_date = acct.formation_date
             if (acct.ein_number) prefilled.ein = acct.ein_number
+
+            // Auto-detect docs already on file in Drive
+            if (acct.drive_folder_id) {
+              try {
+                const { listFolder } = await import("@/lib/google-drive")
+                const docsOnFile: string[] = []
+
+                // List root folder to find subfolders
+                const rootContents = await listFolder(acct.drive_folder_id)
+                const subfolders = (rootContents?.files || []) as { id: string; name: string; mimeType: string }[]
+
+                // Check "1. Company/" for Articles + EIN Letter
+                const companyFolder = subfolders.find(f =>
+                  f.name.startsWith("1.") && f.mimeType === "application/vnd.google-apps.folder"
+                )
+                if (companyFolder) {
+                  const companyFiles = await listFolder(companyFolder.id)
+                  const fileNames = ((companyFiles?.files || []) as { name: string }[]).map(f => f.name.toLowerCase())
+                  if (fileNames.some(n => n.includes("article") || n.includes("certificate of"))) {
+                    docsOnFile.push("articles_of_organization")
+                  }
+                  if (fileNames.some(n => n.includes("ein") || n.includes("cp 575") || n.includes("cp575"))) {
+                    docsOnFile.push("ein_letter")
+                  }
+                }
+
+                // Check "2. Contacts/" for Passport
+                const contactsFolder = subfolders.find(f =>
+                  f.name.startsWith("2.") && f.mimeType === "application/vnd.google-apps.folder"
+                )
+                if (contactsFolder) {
+                  const contactFiles = await listFolder(contactsFolder.id)
+                  const fileNames = ((contactFiles?.files || []) as { name: string }[]).map(f => f.name.toLowerCase())
+                  if (fileNames.some(n => n.includes("passport") || n.includes("passaporto"))) {
+                    docsOnFile.push("passport_owner")
+                  }
+                }
+
+                if (docsOnFile.length > 0) {
+                  prefilled.docs_on_file = docsOnFile
+                }
+              } catch (driveErr) {
+                // Non-fatal: if Drive check fails, just don't set docs_on_file
+                // Client will see upload fields for all docs
+              }
+            }
           }
         }
 
@@ -146,6 +192,8 @@ export function registerOnboardingTools(server: McpServer) {
               "",
               `   👁️ Admin Preview: ${adminPreviewUrl}`,
               `   🔗 Client URL: ${url}`,
+              "",
+              ...(prefilled.docs_on_file ? [`   📁 Docs on file: ${(prefilled.docs_on_file as string[]).join(", ")}`] : []),
               "",
               `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send`,
             ].join("\n"),
