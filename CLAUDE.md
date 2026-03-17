@@ -187,6 +187,15 @@ Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summa
 ### Claude.ai equivalent
 For Claude.ai (MCP), the same system exists as middleware in `lib/mcp/reminder.ts` — it injects reminders directly into tool responses after 5/10/15 calls. The `session_checkpoint` MCP tool saves to `session_checkpoints` and resets the counter.
 
+## CRM Update Rule — MANDATORY
+Every client-facing action MUST be followed by an IMMEDIATE CRM update in the SAME operation. Never wait to be asked.
+Client-facing actions include: sending emails, creating/uploading documents, generating forms, changing statuses, making calls.
+What to update:
+1. **Account notes** — append a dated log entry (e.g., "2026-03-17: OA + ICA inviati per revisione")
+2. **Task** — create or update a task reflecting the current status (e.g., "Waiting" for client response)
+3. **Record status** — update relevant record statuses (e.g., offer sent, lease sent, OA viewed)
+If you send an email and don't update the CRM, that action is INCOMPLETE. Antonio should NEVER have to remind you.
+
 ## Business Rules
 All business rules live on Supabase in `knowledge_articles` (57) and `sop_runbooks` (14).
 Do NOT put business rules in code comments or local files — they belong on Supabase.
