@@ -459,7 +459,7 @@ export default function ServiceAgreement({ offer, token }: Props) {
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
             <tr><th>Annual Service Fee</th><td>{fee}</td></tr>
-            <tr><th>Payment Schedule</th><td>{paymentScheduleText}</td></tr>
+            <tr><th>Payment Schedule</th><td>Full annual fee due upon signing. From the following year: {paymentScheduleText}</td></tr>
             <tr><th>Late Onboarding</th><td>Clients onboarding after January 1 shall pay the full Annual Service Fee for the initial Contract Year, regardless of start date. The fee will not be prorated.</td></tr>
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
@@ -552,9 +552,10 @@ export default function ServiceAgreement({ offer, token }: Props) {
           <table className="contract-key-terms">
             <tbody>
               <tr><th>Total Annual Fee</th><td>{fee}</td></tr>
-              {installmentLines.map((inst, i) => (
-                <tr key={i}><th>{inst.label}</th><td>{inst.amount}</td></tr>
-              ))}
+              <tr><th>Upon Signing (First Year)</th><td>The full Annual Service Fee of {fee} is due at the time of contract signing.</td></tr>
+              {installmentLines.length >= 2 && (
+                <tr><th>From Following Year</th><td>The Annual Service Fee will be split into two installments:{installmentLines.map((inst, i) => <span key={i}><br />&bull; {inst.label}: {inst.amount}</span>)}</td></tr>
+              )}
             </tbody>
           </table>
           <p style={{ marginTop: 10 }}>All payments are subject to the terms set forth in Section 5 of the MSA.</p>
