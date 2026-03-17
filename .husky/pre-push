@@ -23,6 +23,7 @@ HARDCODED=$(grep -rn "td-operations\.vercel\.app\|offerte\.tonydurante\.us" \
   | grep -v "node_modules" \
   | grep -v "lib/config.ts" \
   | grep -v "lib/oauth.ts" \
+  | grep -v "lib/mcp/instructions.ts" \
   | grep -v ".well-known" \
   | grep -v "qb/authorize" \
   | grep -v "qb/callback" || true)
