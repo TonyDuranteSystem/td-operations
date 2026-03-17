@@ -336,6 +336,9 @@ export const LABELS = {
     uploadFile: 'Upload File',
     financialStatements: 'Financial Statements',
     uploadFinancials: 'Upload Financial Statements (if available)',
+    bankStatementsUpload: 'Bank Statements (Company)',
+    bankStatementsHint: 'Upload all bank statements for the year (PDF, CSV, Excel). You can select multiple files at once or add them one by one.',
+    bankStatementsCsvNote: 'Important: CSV format is strongly preferred. If your bank allows it, please download statements as CSV.',
 
     disclaimer: 'I confirm that I have reviewed all the information in this form, including pre-filled fields, and the data is accurate and complete. I understand that Tony Durante LLC relies on this information to prepare my tax return.',
     disclaimerRequired: 'You must accept the disclaimer to submit',
@@ -485,6 +488,9 @@ export const LABELS = {
     uploadFile: 'Carica File',
     financialStatements: 'Bilanci',
     uploadFinancials: 'Carica Bilanci (se disponibili)',
+    bankStatementsUpload: 'Estratti Conto Bancari (Società)',
+    bankStatementsHint: 'Carica tutti gli estratti conto bancari dell\'anno (PDF, CSV, Excel). Puoi selezionare più file contemporaneamente o aggiungerli uno alla volta.',
+    bankStatementsCsvNote: 'Importante: il formato CSV è fortemente preferito. Se la tua banca lo consente, scarica gli estratti conto in CSV.',
 
     disclaimer: 'Confermo di aver controllato tutte le informazioni presenti in questo modulo, inclusi i campi precompilati, e che i dati sono accurati e completi. Comprendo che Tony Durante LLC si basa su queste informazioni per la preparazione della dichiarazione dei redditi.',
     disclaimerRequired: 'Devi accettare la dichiarazione per inviare',

@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import { listFolder } from "@/lib/google-drive"
 
 export function registerTaxTools(server: McpServer) {
 
@@ -337,14 +338,33 @@ export function registerTaxTools(server: McpServer) {
         const { data: contact, error: conErr } = await contactQuery.single()
         if (conErr || !contact) throw new Error(`Contact not found: ${conErr?.message}`)
 
-        // 3. Check documents on file
+        // 3. Check documents on file (DB first, then Drive fallback)
         const { data: docs } = await supabaseAdmin
           .from("documents")
           .select("document_type_name")
           .eq("account_id", account_id)
           .in("document_type_name", ["Articles of Organization", "EIN Letter", "EIN Confirmation Letter"])
-        const hasArticles = docs?.some(d => d.document_type_name === "Articles of Organization") || false
-        const hasEin = docs?.some(d => ["EIN Letter", "EIN Confirmation Letter"].includes(d.document_type_name)) || false
+        let hasArticles = docs?.some(d => d.document_type_name === "Articles of Organization") || false
+        let hasEin = docs?.some(d => ["EIN Letter", "EIN Confirmation Letter"].includes(d.document_type_name)) || false
+
+        // Drive fallback: list client's folder if docs not found in DB
+        if ((!hasArticles || !hasEin) && account.drive_folder_id) {
+          try {
+            const driveResults = await listFolder(account.drive_folder_id, 100)
+            const files = (driveResults as { files?: { name: string }[] })?.files || []
+            for (const f of files) {
+              const name = f.name.toLowerCase()
+              if (!hasArticles && (name.includes("articles") || name.includes("atto costitutivo"))) {
+                hasArticles = true
+              }
+              if (!hasEin && (name.includes("ein") || name.includes("cp 575") || name.includes("cp575"))) {
+                hasEin = true
+              }
+            }
+          } catch {
+            // Drive search failed — continue with DB-only results
+          }
+        }
 
         // 4. Build prefilled data
         const prefilled: Record<string, unknown> = {
