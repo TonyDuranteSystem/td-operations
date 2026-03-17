@@ -227,7 +227,7 @@ export async function POST(req: NextRequest) {
           results.push({
             step: "pdf_drive_upload",
             status: "skipped",
-            detail: !fullSub?.submitted_data ? "No submitted data" : "No Drive folder on account",
+            detail: `submitted_data=${!!fullSub?.submitted_data}, drive_folder_id=${acc?.drive_folder_id || 'null'}, account_id=${sub.account_id}`,
           })
         }
       } catch (e) {
