@@ -266,7 +266,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_create",
-    `Create a new client offer/proposal in Supabase. Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays.`,
+    `Create a new client offer/proposal in Supabase. Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email — no lead required). Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays.`,
     {
       token: z.string().describe("Unique token (e.g. 'mario-rossi-2026')"),
       client_name: z.string().describe("Client full name"),
@@ -290,8 +290,9 @@ export function registerOfferTools(server: McpServer) {
       bank_details: z.any().optional().describe("Bank transfer details: {beneficiary, iban, bic, bank_name, amount, reference}"),
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
-      // Linking
-      lead_id: z.string().optional().describe("Link to lead UUID"),
+      // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
+      lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
+      account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
       deal_id: z.string().optional().describe("Link to deal UUID"),
       // Referrer tracking
       referrer_name: z.string().optional().describe("Referrer name (who referred this client)"),
@@ -375,6 +376,7 @@ export function registerOfferTools(server: McpServer) {
             effective_date: params.effective_date,
             expires_at: params.expires_at,
             lead_id: params.lead_id,
+            account_id: params.account_id,
             deal_id: params.deal_id,
             referrer_name: refName,
             referrer_email: refEmail,
@@ -398,7 +400,7 @@ export function registerOfferTools(server: McpServer) {
           table_name: "offers",
           record_id: params.token,
           summary: `Created offer: ${params.client_name} (${params.token})${refName ? ` — referral: ${refName}` : ""}`,
-          details: { language: params.language, payment_type: params.payment_type, lead_id: params.lead_id, referrer: refName },
+          details: { language: params.language, payment_type: params.payment_type, lead_id: params.lead_id, account_id: params.account_id, referrer: refName },
         })
 
         // If lead_id provided, update lead's offer status
