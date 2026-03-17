@@ -54,6 +54,9 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/jobs') &&
     !request.nextUrl.pathname.startsWith('/api/track') &&
     !request.nextUrl.pathname.startsWith('/api/tax-quote-completed') &&
+    !request.nextUrl.pathname.startsWith('/api/tax-form-completed') &&
+    !request.nextUrl.pathname.startsWith('/api/lease-signed') &&
+    !request.nextUrl.pathname.startsWith('/api/oa-signed') &&
     !request.nextUrl.pathname.startsWith('/offer') &&
     !request.nextUrl.pathname.startsWith('/tax-form') &&
     !request.nextUrl.pathname.startsWith('/formation-form') &&
