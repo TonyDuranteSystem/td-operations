@@ -79,6 +79,7 @@ function OperatingAgreementCodeContent() {
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
   const sigPadRef = useRef<any>(null)
   const oaBodyRef = useRef<HTMLDivElement>(null)
+  const pdfBlobRef = useRef<Blob | null>(null)
 
   // Derived
   const entityType = oa?.entity_type || 'SMLLC'
@@ -216,6 +217,9 @@ function OperatingAgreementCodeContent() {
         })
         .from(element)
         .outputPdf('blob')
+
+      // 4b. Save blob for client download
+      pdfBlobRef.current = pdfBlob
 
       // 5. Upload to Supabase Storage
       const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
@@ -456,6 +460,31 @@ function OperatingAgreementCodeContent() {
             <p style={{ color: '#4a8a4a', fontSize: 14, marginTop: 8 }}>
               A copy has been saved. Tony Durante LLC will be in touch shortly.
             </p>
+            <button
+              onClick={async () => {
+                try {
+                  let blob = pdfBlobRef.current
+                  if (!blob && oa.signed_at) {
+                    const { data } = await supabasePublic.storage.from('signed-oa').list(token)
+                    const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
+                    if (pdfFile) {
+                      const { data: downloaded } = await supabasePublic.storage.from('signed-oa').download(`${token}/${pdfFile.name}`)
+                      if (downloaded) blob = downloaded
+                    }
+                  }
+                  if (!blob) { alert('PDF not available. Please contact support.'); return }
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`
+                  a.click()
+                  URL.revokeObjectURL(url)
+                } catch { alert('Download failed. Please contact support.') }
+              }}
+              style={{ marginTop: 16, padding: '10px 32px', fontSize: 14, fontWeight: 600, background: '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontFamily: 'Georgia, serif' }}
+            >
+              Download Signed PDF
+            </button>
           </div>
         )}
       </div>

@@ -116,7 +116,72 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    return NextResponse.json({ ok: true, activation_id: activation.id })
+    // ─── AUTO-UPLOAD SIGNED PDF TO DRIVE ───
+    let driveUploadResult = "skipped"
+    try {
+      // Get contract record for pdf_path
+      const { data: contract } = await supabase
+        .from("contracts")
+        .select("pdf_path")
+        .eq("offer_token", offer_token)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      // Get account for drive_folder_id (via lead_id → accounts)
+      let driveFolderId: string | null = null
+      if (offer.lead_id) {
+        const { data: lead } = await supabase
+          .from("leads")
+          .select("account_id")
+          .eq("id", offer.lead_id)
+          .maybeSingle()
+
+        if (lead?.account_id) {
+          const { data: acct } = await supabase
+            .from("accounts")
+            .select("drive_folder_id")
+            .eq("id", lead.account_id)
+            .single()
+          driveFolderId = acct?.drive_folder_id || null
+        }
+      }
+
+      if (contract?.pdf_path && driveFolderId) {
+        const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+
+        // Find "1. Company" subfolder
+        const folderResult = await listFolder(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
+        const companyFolder = folderResult.files?.find(
+          (f: { name: string; mimeType: string }) => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+        )
+        const targetFolderId = companyFolder?.id || driveFolderId
+
+        // Download signed PDF from Storage
+        const { data: blob } = await supabase.storage
+          .from("signed-contracts")
+          .download(contract.pdf_path)
+
+        if (blob) {
+          const arrayBuffer = await blob.arrayBuffer()
+          const fileData = Buffer.from(arrayBuffer)
+          const fileName = `Contract - ${offer.client_name} (Signed).pdf`
+
+          const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+          driveUploadResult = `ok: ${driveResult.id}`
+          console.log(`[offer-signed] Uploaded contract PDF to Drive: ${driveResult.id}`)
+        } else {
+          driveUploadResult = "error: could not download PDF from Storage"
+        }
+      } else {
+        driveUploadResult = `skipped: pdf_path=${!!contract?.pdf_path}, drive=${!!driveFolderId}`
+      }
+    } catch (e) {
+      driveUploadResult = `error: ${e instanceof Error ? e.message : String(e)}`
+      console.error("[offer-signed] Drive upload failed:", driveUploadResult)
+    }
+
+    return NextResponse.json({ ok: true, activation_id: activation.id, drive_upload: driveUploadResult })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[offer-signed] Error:", msg)

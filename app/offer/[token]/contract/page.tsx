@@ -196,6 +196,7 @@ export default function ContractPage() {
   const sigSowRef = useRef<HTMLCanvasElement>(null)
   const sigPadsRef = useRef<Record<string, any>>({})
   const contractBodyRef = useRef<HTMLDivElement>(null)
+  const pdfBlobRef = useRef<Blob | null>(null)
 
   // Load offer
   useEffect(() => {
@@ -391,6 +392,9 @@ export default function ContractPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const pdfBlob = await (html2pdf() as any).set(opt).from(element).outputPdf('blob')
 
+      // Save blob for client download
+      pdfBlobRef.current = pdfBlob
+
       // Upload PDF
       setStatusMsg('Uploading signed contract...')
       const pdfPath = `${offer.token}/contract-signed-${Date.now()}.pdf`
@@ -537,11 +541,36 @@ export default function ContractPage() {
           sh += '</div>'
         }
 
+        sh += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #d4e8d4;">'
+        sh += '<button id="download-pdf-btn" style="padding:10px 32px;font-size:14px;font-weight:600;background:#0A3161;color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:Georgia,serif;">Download Signed PDF</button>'
+        sh += '</div>'
         sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${cl.afterPayment}</p>`
         sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
+
+        // Download PDF handler
+        document.getElementById('download-pdf-btn')?.addEventListener('click', async () => {
+          try {
+            let blob = pdfBlobRef.current
+            if (!blob) {
+              const { data } = await supabasePublic.storage.from('signed-contracts').list(offer.token)
+              const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
+              if (pdfFile) {
+                const { data: downloaded } = await supabasePublic.storage.from('signed-contracts').download(`${offer.token}/${pdfFile.name}`)
+                if (downloaded) blob = downloaded
+              }
+            }
+            if (!blob) { alert('PDF not available. Please contact support.'); return }
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `Tony_Durante_Contract_${offer.token}.pdf`
+            a.click()
+            URL.revokeObjectURL(url)
+          } catch { alert('Download failed. Please contact support.') }
+        })
 
         // Bank choice click handler — show bank panel, hide choice buttons
         if (hasBank) {
