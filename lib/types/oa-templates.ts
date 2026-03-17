@@ -133,6 +133,8 @@ RESOLVED, that the fiscal year of the Company shall end on ${data.fiscal_year_en
 
 RESOLVED, that the principal office of the Company shall be located at ${data.principal_address}, or at such other place as the Manager may from time to time designate;
 
+RESOLVED, that the Manager is authorized to enter into intercompany agreements, including but not limited to Intercompany Transfer Agreements, Intercompany Loan Agreements, and Management Services Agreements, with any Member entity or affiliated entity of the Company, on commercially reasonable terms;
+
 RESOLVED, that the Manager is authorized to take any and all actions necessary to comply with the laws and regulations of the State of ${stateName} and any other jurisdiction in which the Company conducts business.
 
 These resolutions are effective as of the date first set forth above.
@@ -318,7 +320,11 @@ ${members.map(m => `${m.name}: ${m.initial_contribution} (${m.ownership_pct}% in
 
 4.4 Tax Year and Method. The tax year of the Company shall end on ${data.fiscal_year_end}. The Company shall use the ${data.accounting_method.toLowerCase()} method of accounting.
 
-4.5 Tax Matters Partner. ${data.manager_name} shall serve as the Tax Matters Partner (or Partnership Representative under the Bipartisan Budget Act) for federal income tax purposes and shall have all powers and responsibilities associated with that role.`,
+4.5 Tax Matters Partner. ${data.manager_name} shall serve as the Tax Matters Partner (or Partnership Representative under the Bipartisan Budget Act) for federal income tax purposes and shall have all powers and responsibilities associated with that role.
+
+4.6 Non-Pro-Rata Distributions. Notwithstanding Section 4.2, the Manager may authorize non-pro-rata distributions to one or more Members when such distributions serve a legitimate business purpose, including but not limited to intercompany fund transfers between the Company and its Member entities. Any non-pro-rata distribution shall be documented in writing by the Manager and reflected in the Members' capital accounts.
+
+4.7 Intercompany Transfers. Where a Member is a legal entity (e.g., another LLC or corporation), the Manager is authorized to enter into intercompany agreements with such Member entities for the transfer of funds, services, or other consideration between the Company and the Member entity. Such intercompany transactions shall be conducted on commercially reasonable terms, documented in a written Intercompany Transfer Agreement, and properly reflected in the Company's books and records. These transfers may include, without limitation, treasury management, capital contributions, distributions, loans, or service fees.`,
     },
     {
       title: "Article V — Banking and Records",
@@ -333,7 +339,9 @@ ${members.map(m => `${m.name}: ${m.initial_contribution} (${m.ownership_pct}% in
 
 5.3 Title to Assets. All real and personal property owned by the Company shall be held in the name of the Company, not in the name of any Member individually.
 
-5.4 Right to Inspect. Each Member shall have the right to inspect the Company's books and records at reasonable times and upon reasonable notice to the Manager.`,
+5.4 Right to Inspect. Each Member shall have the right to inspect the Company's books and records at reasonable times and upon reasonable notice to the Manager.
+
+5.5 Intercompany Agreements. The Manager is authorized, without the need for further Member approval, to execute Intercompany Transfer Agreements, Intercompany Loan Agreements, or Management Services Agreements with any Member entity or affiliated entity, provided that such agreements are in writing, on commercially reasonable terms, and properly recorded in the Company's books. The Manager shall maintain copies of all intercompany agreements at the Company's principal office.`,
     },
     {
       title: "Article VI — Transfer and Assignment",
