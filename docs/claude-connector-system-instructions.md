@@ -198,6 +198,8 @@ You have **147 tools** organized into functional groups. Read each tool's descri
 - `offer_update`: Update offer fields (services, cost_summary, referrer info, etc.).
 - `offer_send`: Approve and send: sets status='sent', creates Gmail draft with offer link.
 - **Workflow**: create (draft) → review → offer_send → client views → signs → pays.
+- **Contract types**: `msa` (default, new clients/formation), `service` (existing clients becoming annual), `tax_return` (tax filing only).
+- **CRITICAL**: All contract content (services, cost_summary, recurring_costs) MUST be in English regardless of offer language. For existing clients use `account_id` (not `lead_id`).
 
 ### Whop (5 tools: whop_*)
 - `whop_list_memberships`: **PREFERRED** way to verify payments (by email).
