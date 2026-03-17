@@ -61,6 +61,7 @@ export default function OnboardingFormCodePage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({})
+  const [bankStatementFiles, setBankStatementFiles] = useState<File[]>([])
 
   // Dynamic arrays for MMLLC additional members
   const [members, setMembers] = useState<Record<string, string>[]>([])
@@ -242,6 +243,16 @@ export default function OnboardingFormCodePage() {
         if (!upErr) uploadPaths.push(path)
       }
 
+      // 1b. Upload bank statements
+      for (let i = 0; i < bankStatementFiles.length; i++) {
+        const file = bankStatementFiles[i]
+        const path = `${submission.token}/bank_statement_${i}_${file.name}`
+        const { error: upErr } = await supabasePublic.storage
+          .from('onboarding-uploads')
+          .upload(path, file, { cacheControl: '3600', upsert: false })
+        if (!upErr) uploadPaths.push(path)
+      }
+
       // 2. Build submitted data
       const submittedData: Record<string, unknown> = { ...formData }
       if (members.length > 0) submittedData.additional_members = members
@@ -394,6 +405,34 @@ export default function OnboardingFormCodePage() {
     )
   }
 
+  // ─── Doc On File Helpers ────────────────────────────────
+
+  function isDocOnFile(docKey: string): boolean {
+    if (!submission?.prefilled_data?.docs_on_file) return false
+    return (submission.prefilled_data.docs_on_file as string[]).includes(docKey)
+  }
+
+  function renderDocUpload(label: string, docKey: string, accept = '.pdf,.jpg,.jpeg,.png') {
+    if (isDocOnFile(docKey)) {
+      return (
+        <div className="tf-doc-item">
+          <span>{label}</span>
+          <span className="tf-doc-ok">{L.docOnFile}</span>
+        </div>
+      )
+    }
+    return (
+      <div className="tf-doc-item">
+        <span>{label}</span>
+        <div className="tf-doc-upload">
+          <span className="tf-doc-missing">{L.uploadRequired}</span>
+          <input type="file" accept={accept}
+            onChange={e => setUploadFiles(prev => ({ ...prev, [docKey]: e.target.files?.[0] || null }))} />
+        </div>
+      </div>
+    )
+  }
+
   // ─── Render Step Content ────────────────────────────────
 
   function renderStepContent(step: number) {
@@ -408,57 +447,36 @@ export default function OnboardingFormCodePage() {
 
           {/* Document uploads */}
           <div className="tf-docs-section">
-            {/* Passport - required */}
-            <div className="tf-doc-item">
-              <span>{L.passportUpload}</span>
-              <div className="tf-doc-upload">
-                <span className="tf-doc-missing">{L.uploadRequired}</span>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setUploadFiles(prev => ({ ...prev, passport_owner: e.target.files?.[0] || null }))}
-                />
-              </div>
-            </div>
+            {renderDocUpload(L.passportUpload, 'passport_owner')}
+            {renderDocUpload(L.articlesUpload, 'articles_of_organization')}
+            {renderDocUpload(L.einLetterUpload, 'ein_letter')}
 
-            {/* Articles of Organization - required */}
-            <div className="tf-doc-item">
-              <span>{L.articlesUpload}</span>
-              <div className="tf-doc-upload">
-                <span className="tf-doc-missing">{L.uploadRequired}</span>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setUploadFiles(prev => ({ ...prev, articles_of_organization: e.target.files?.[0] || null }))}
-                />
+            {/* MMLLC: Bank Statements (multi-file) */}
+            {submission.entity_type === 'MMLLC' && (
+              <div className="tf-doc-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <span>{L.bankStatementsUpload}</span>
+                  <span className="tf-doc-missing">{L.uploadRequired}</span>
+                </div>
+                <p style={{ fontSize: 13, color: '#6b7280', margin: '6px 0 4px' }}>{L.bankStatementsHint}</p>
+                <p style={{ fontSize: 13, color: '#b8292f', fontWeight: 600, margin: '0 0 10px' }}>{L.bankStatementsCsvNote}</p>
+                <input type="file" accept=".pdf,.csv,.xls,.xlsx,.jpg,.jpeg,.png" multiple
+                  onChange={e => { if (e.target.files) setBankStatementFiles(prev => [...prev, ...Array.from(e.target.files!)]) }} />
+                {bankStatementFiles.length > 0 && (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {bankStatementFiles.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                        <span>{f.name} ({(f.size / 1024).toFixed(0)} KB)</span>
+                        <button type="button" style={{ background: 'none', border: 'none', color: '#b8292f', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                          onClick={() => setBankStatementFiles(prev => prev.filter((_, j) => j !== i))}>
+                          &times;
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-
-            {/* EIN Confirmation Letter - optional */}
-            <div className="tf-doc-item">
-              <span>{L.einLetterUpload}</span>
-              <div className="tf-doc-upload">
-                <span className="tf-doc-optional">{L.uploadOptional}</span>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setUploadFiles(prev => ({ ...prev, ein_letter: e.target.files?.[0] || null }))}
-                />
-              </div>
-            </div>
-
-            {/* SS-4 Form - optional */}
-            <div className="tf-doc-item">
-              <span>{L.ss4Upload}</span>
-              <div className="tf-doc-upload">
-                <span className="tf-doc-optional">{L.uploadOptional}</span>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setUploadFiles(prev => ({ ...prev, ss4_form: e.target.files?.[0] || null }))}
-                />
-              </div>
-            </div>
+            )}
 
             {/* Member passport uploads for MMLLC */}
             {submission.entity_type === 'MMLLC' && members.map((m, i) => (
