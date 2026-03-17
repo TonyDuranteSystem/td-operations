@@ -176,7 +176,7 @@ export async function POST(req: NextRequest) {
 
         if (fullSub?.submitted_data && acc?.drive_folder_id) {
           const { generateTaxFormPDF } = await import("@/lib/pdf/tax-form-pdf")
-          const { searchFiles, createFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const { listFolder, createFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
 
           const pdfBytes = await generateTaxFormPDF({
             companyName: acc.company_name || companyName,
@@ -190,8 +190,9 @@ export async function POST(req: NextRequest) {
           })
 
           // Find or create "5. Tax Returns" subfolder
-          const searchResult = await searchFiles("5. Tax Returns", acc.drive_folder_id)
-          const taxFolder = searchResult.find(
+          const folderContents = await listFolder(acc.drive_folder_id)
+          const files = folderContents?.files || []
+          const taxFolder = files.find(
             (f: { name: string; mimeType: string }) =>
               f.name === "5. Tax Returns" && f.mimeType === "application/vnd.google-apps.folder"
           )
