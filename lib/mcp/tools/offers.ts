@@ -291,7 +291,7 @@ export function registerOfferTools(server: McpServer) {
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
       // Contract type
-      contract_type: z.enum(["msa", "tax_return"]).optional().describe("Contract type: 'msa' (default — full MSA+SOW for formation/onboarding) or 'tax_return' (lightweight agreement for tax return filing only)"),
+      contract_type: z.enum(["msa", "tax_return", "service"]).optional().describe("Contract type: 'msa' (default — full MSA+SOW for new clients with formation timeline), 'tax_return' (lightweight agreement for tax return only), 'service' (MSA+SOW for existing clients becoming annual — same legal terms as MSA but no formation timeline, clear payment schedule)"),
       // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
       lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
       account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
