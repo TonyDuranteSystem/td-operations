@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 
 export function registerTaxTools(server: McpServer) {
 
@@ -297,7 +298,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_form_create",
-    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (https://td-operations.vercel.app/tax-form/{token}). Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
+    "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (${APP_BASE_URL}/tax-form/{token}). Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
@@ -379,7 +380,7 @@ export function registerTaxTools(server: McpServer) {
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Form already exists for ${account.company_name} ${tax_year}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/tax-form/${existing.token}/${existing.access_code}`,
+              text: `⚠️ Form already exists for ${account.company_name} ${tax_year}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: ${APP_BASE_URL}/tax-form/${existing.token}/${existing.access_code}`,
             }],
           }
         }
@@ -415,7 +416,7 @@ export function registerTaxTools(server: McpServer) {
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/tax-form/${token}/${submission.access_code}`
+        const url = `${APP_BASE_URL}/tax-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -510,7 +511,7 @@ export function registerTaxTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/tax-form/${data.token}/${data.access_code}`
+        const formUrl = `${APP_BASE_URL}/tax-form/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")

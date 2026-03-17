@@ -13,6 +13,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 import type { Job, JobResult } from "../queue"
 import { updateJobProgress } from "../queue"
 
@@ -251,7 +252,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       `LLC Names: ${submitted.llc_name_1 || "N/A"}`,
       ``,
       `Review: formation_form_review(token="${p.token}")`,
-      `Admin Preview: https://td-operations.vercel.app/formation-form/${p.token}?preview=td`,
+      `Admin Preview: ${APP_BASE_URL}/formation-form/${p.token}?preview=td`,
     ].join("\n")
 
     const boundary = `boundary_${Date.now()}`

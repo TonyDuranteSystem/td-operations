@@ -10,6 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { SignJWT, importPKCS8 } from "jose"
 import { logAction } from "@/lib/mcp/action-log"
+import { APP_BASE_URL } from "@/lib/config"
 
 // ─── Configuration ──────────────────────────────────────────
 
@@ -607,7 +608,7 @@ export function registerGmailTools(server: McpServer) {
         // Inject tracking pixel if enabled
         let htmlBody = body_html
         if (track_opens !== false) {
-          const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
+          const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
           // Insert pixel before closing </body> or at end
           if (htmlBody.includes("</body>")) {
             htmlBody = htmlBody.replace("</body>", `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" /></body>`)

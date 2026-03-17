@@ -13,8 +13,9 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+import { APP_BASE_URL } from "@/lib/config"
 
-const OA_BASE_URL = "https://td-operations.vercel.app/operating-agreement"
+const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 
 export function registerOaTools(server: McpServer) {
 
@@ -346,7 +347,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
 
         // Generate tracking ID
         const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
+        const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
 
         // HTML email body
         const htmlBody = `

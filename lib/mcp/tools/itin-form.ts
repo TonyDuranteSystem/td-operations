@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 
 export function registerITINFormTools(server: McpServer) {
 
@@ -14,7 +15,7 @@ export function registerITINFormTools(server: McpServer) {
   // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
   server.tool(
     "itin_form_create",
-    "Create an ITIN data collection form for a client. Pre-fills owner info from lead or contact record. Returns the form URL (https://td-operations.vercel.app/itin-form/{token}). Admin preview: append ?preview=td to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
+    `Create an ITIN data collection form for a client. Pre-fills owner info from lead or contact record. Returns the form URL (${APP_BASE_URL}/itin-form/{token}). Admin preview: append ?preview=td to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.`,
     {
       lead_id: z.string().uuid().optional().describe("Lead UUID (use for new clients)"),
       account_id: z.string().uuid().optional().describe("Account UUID (use for existing clients)"),
@@ -126,7 +127,7 @@ export function registerITINFormTools(server: McpServer) {
           return {
             content: [{
               type: "text" as const,
-              text: `‚ö†Ô∏è ITIN form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/itin-form/${existing.token}`,
+              text: `‚ö†Ô∏è ITIN form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: ${APP_BASE_URL}/itin-form/${existing.token}`,
             }],
           }
         }
@@ -150,7 +151,7 @@ export function registerITINFormTools(server: McpServer) {
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/itin-form/${token}`
+        const url = `${APP_BASE_URL}/itin-form/${token}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -252,7 +253,7 @@ export function registerITINFormTools(server: McpServer) {
           lines.push(`   üìé Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/itin-form/${data.token}`
+        const formUrl = `${APP_BASE_URL}/itin-form/${data.token}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")

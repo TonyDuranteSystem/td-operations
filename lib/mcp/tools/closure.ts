@@ -12,6 +12,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 
 export function registerClosureTools(server: McpServer) {
 
@@ -20,7 +21,7 @@ export function registerClosureTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "closure_form_create",
-    `Create a closure data collection form for an LLC dissolution client. Pre-fills owner info from the lead or contact record. Returns the form URL (https://td-operations.vercel.app/closure-form/{token}).
+    `Create a closure data collection form for an LLC dissolution client. Pre-fills owner info from the lead or contact record. Returns the form URL (${APP_BASE_URL}/closure-form/{token}).
 
 Admin preview: append ?preview=td to bypass the email gate.
 ALWAYS provide the admin preview link so Antonio can review before sending to client.
@@ -134,7 +135,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Closure form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/closure-form/${existing.token}/${existing.access_code}\n👁️ Preview: https://td-operations.vercel.app/closure-form/${existing.token}/${existing.access_code}?preview=td`,
+              text: `⚠️ Closure form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: ${APP_BASE_URL}/closure-form/${existing.token}/${existing.access_code}\n👁️ Preview: ${APP_BASE_URL}/closure-form/${existing.token}/${existing.access_code}?preview=td`,
             }],
           }
         }
@@ -155,7 +156,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/closure-form/${token}/${submission.access_code}`
+        const url = `${APP_BASE_URL}/closure-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -250,7 +251,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/closure-form/${data.token}/${data.access_code}`
+        const formUrl = `${APP_BASE_URL}/closure-form/${data.token}/${data.access_code}`
         lines.push("")
         lines.push(`   👁️ Admin Preview: ${formUrl}?preview=td`)
         lines.push(`   🔗 Client URL: ${formUrl}`)

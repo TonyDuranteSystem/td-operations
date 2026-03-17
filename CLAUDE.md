@@ -10,6 +10,19 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 - **Vercel** = Hosting (Pro plan, 60s timeout)
 - **GitHub** = `TonyDuranteSystem/td-operations` (auto-deploy on push)
 
+### Domains (established 2026-03-17)
+Three domains point to the same Vercel deployment:
+- `app.tonydurante.us` — **CLIENT-FACING**: all forms, offers, leases, OA, tracking pixels. Use `APP_BASE_URL` from `lib/config.ts`.
+- `td-operations.vercel.app` — **INTERNAL**: OAuth issuer, QB callback, dashboard. NEVER send to clients.
+- `offerte.tonydurante.us` — **LEGACY**: old offer links still work. New links use `app.tonydurante.us`.
+
+**Rules**:
+- All client-facing URLs MUST use `APP_BASE_URL` from `lib/config.ts` — NEVER hardcode domains
+- The `.husky/pre-push` hook blocks hardcoded domains — only `lib/config.ts` is exempt
+- OAuth ISSUER and QB_REDIRECT_URI stay on `td-operations.vercel.app` (changing would break auth)
+- NEVER remove any domain from Vercel — old links must always work
+- All URLs, tokens, and slugs must be in English
+
 ## Session Start — AUTOMATIC
 When Antonio says "riprendiamo", "dove eravamo", "continua", "resume", or starts a new session:
 1. `sysdoc_read('session-context')` — system state (contains pointers to other docs)

@@ -17,6 +17,26 @@ if [ "$AHEAD" != "0" ] && [ -n "$AHEAD" ]; then
   exit 1
 fi
 
+# Block hardcoded client-facing domains — use APP_BASE_URL from lib/config.ts
+HARDCODED=$(grep -rn "td-operations\.vercel\.app\|offerte\.tonydurante\.us" \
+  --include="*.ts" --include="*.tsx" lib/ app/ 2>/dev/null \
+  | grep -v "node_modules" \
+  | grep -v "lib/config.ts" \
+  | grep -v "lib/oauth.ts" \
+  | grep -v ".well-known" \
+  | grep -v "qb/authorize" \
+  | grep -v "qb/callback" || true)
+
+if [ -n "$HARDCODED" ]; then
+  echo ""
+  echo "❌ PUSH BLOCKED — Hardcoded domain found in client-facing code."
+  echo "   Use APP_BASE_URL from lib/config.ts instead."
+  echo ""
+  echo "$HARDCODED"
+  echo ""
+  exit 1
+fi
+
 echo "🔨 Running build check before push (Node $(node -v))..."
 npm run build > /dev/null 2>&1
 

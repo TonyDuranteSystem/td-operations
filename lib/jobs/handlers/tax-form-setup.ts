@@ -11,6 +11,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 import type { Job, JobResult } from "../queue"
 import { updateJobProgress } from "../queue"
 
@@ -208,7 +209,7 @@ export async function handleTaxFormSetup(job: Job): Promise<JobResult> {
       `Changes: ${changeCount} field(s) modified by client`,
       ``,
       `Review: tax_form_review(token="${p.token}")`,
-      `Admin Preview: https://td-operations.vercel.app/tax-form/${p.token}?preview=td`,
+      `Admin Preview: ${APP_BASE_URL}/tax-form/${p.token}?preview=td`,
     ].join("\n")
 
     const mimeHeaders = [

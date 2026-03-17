@@ -2,8 +2,8 @@
  * Offer Tools — Manage client offers/proposals in Supabase
  *
  * Offers are stored in the `offers` table (columns in English).
- * Live at: offerte.tonydurante.us/offer/{token}/{access_code}
- * Contract signing at: offerte.tonydurante.us/offer/{token}/contract
+ * Live at: app.tonydurante.us/offer/{token}/{access_code}
+ * Contract signing at: app.tonydurante.us/offer/{token}/contract
  *
  * Workflow: create (draft) → review → send (Gmail send) → client views → signs → pays
  */
@@ -14,6 +14,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
+import { APP_BASE_URL } from "@/lib/config"
 
 // ─── JSONB Validation Helpers ───────────────────────────────
 
@@ -131,7 +132,7 @@ function buildOfferEmail(
   language: string,
   trackingPixelUrl?: string,
 ) {
-  const offerUrl = `https://offerte.tonydurante.us/offer/${encodeURIComponent(token)}/${accessCode}`
+  const offerUrl = `${APP_BASE_URL}/offer/${encodeURIComponent(token)}/${accessCode}`
 
   const subject = language === "en"
     ? `Your Proposal from Tony Durante LLC`
@@ -249,7 +250,7 @@ export function registerOfferTools(server: McpServer) {
             text: JSON.stringify({
               offer: data,
               contract: contract || null,
-              url: `https://offerte.tonydurante.us/offer/${token}/${accessCode}`,
+              url: `${APP_BASE_URL}/offer/${token}/${accessCode}`,
             }, null, 2),
           }],
         }
@@ -402,7 +403,7 @@ export function registerOfferTools(server: McpServer) {
 
         // If lead_id provided, update lead's offer status
         if (params.lead_id) {
-          const offerUrl = `https://offerte.tonydurante.us/offer/${params.token}/${accessCode}`
+          const offerUrl = `${APP_BASE_URL}/offer/${params.token}/${accessCode}`
           await supabaseAdmin
             .from("leads")
             .update({ offer_link: offerUrl, offer_status: "Draft" })
@@ -416,7 +417,7 @@ export function registerOfferTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer created as DRAFT: ${params.token}\nURL: https://offerte.tonydurante.us/offer/${params.token}/${accessCode}${referralLine}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
+            text: `✅ Offer created as DRAFT: ${params.token}\nURL: ${APP_BASE_URL}/offer/${params.token}/${accessCode}${referralLine}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
           }],
         }
       } catch (err: unknown) {
@@ -495,7 +496,7 @@ export function registerOfferTools(server: McpServer) {
 
         // Generate tracking ID
         const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
+        const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
 
         // Build email
         const { subject, htmlBody, plainText } = buildOfferEmail(
@@ -648,7 +649,7 @@ export function registerOfferTools(server: McpServer) {
               `🆔 Message ID: ${result.sendResult?.id}`,
               `👁️ Open tracking: ${trackingId}`,
               ``,
-              `🔗 Offer URL: https://offerte.tonydurante.us/?t=${token}&c=${offer.access_code}`,
+              `🔗 Offer URL: ${APP_BASE_URL}/?t=${token}&c=${offer.access_code}`,
               ``,
               result.hasWarnings ? `⚠️ Steps: ${result.steps.map(s => `${s.step}=${s.status}`).join(", ")}` : "",
             ].filter(Boolean).join("\n"),

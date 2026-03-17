@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 
 export async function POST(req: NextRequest) {
   try {
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
         `Suite: ${lease.suite_number}`,
         `Token: ${lease.token}`,
         ``,
-        `Admin Preview: https://td-operations.vercel.app/lease/${lease.token}?preview=td`,
+        `Admin Preview: ${APP_BASE_URL}/lease/${lease.token}?preview=td`,
         ``,
         `Next steps:`,
         `- Upload signed PDF to Drive (Company folder → 1. Company)`,

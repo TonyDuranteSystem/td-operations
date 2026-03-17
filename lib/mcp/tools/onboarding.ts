@@ -7,6 +7,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 
 export function registerOnboardingTools(server: McpServer) {
 
@@ -15,7 +16,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_create",
-    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (https://td-operations.vercel.app/onboarding-form/{token}/{access_code}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
+    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (${APP_BASE_URL}/onboarding-form/{token}/{access_code}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
     {
       lead_id: z.string().uuid().describe("Lead UUID"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type (default: SMLLC)"),
@@ -105,7 +106,7 @@ export function registerOnboardingTools(server: McpServer) {
           return {
             content: [{
               type: "text" as const,
-              text: `⚠️ Onboarding form already exists for ${lead.full_name}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: https://td-operations.vercel.app/onboarding-form/${existing.token}/${existing.access_code}`,
+              text: `⚠️ Onboarding form already exists for ${lead.full_name}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: ${APP_BASE_URL}/onboarding-form/${existing.token}/${existing.access_code}`,
             }],
           }
         }
@@ -131,7 +132,7 @@ export function registerOnboardingTools(server: McpServer) {
           .single()
         if (insErr) throw new Error(insErr.message)
 
-        const url = `https://td-operations.vercel.app/onboarding-form/${token}/${submission.access_code}`
+        const url = `${APP_BASE_URL}/onboarding-form/${token}/${submission.access_code}`
         const adminPreviewUrl = `${url}?preview=td`
         return {
           content: [{
@@ -221,7 +222,7 @@ export function registerOnboardingTools(server: McpServer) {
           lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
-        const formUrl = `https://td-operations.vercel.app/onboarding-form/${data.token}/${data.access_code}`
+        const formUrl = `${APP_BASE_URL}/onboarding-form/${data.token}/${data.access_code}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")

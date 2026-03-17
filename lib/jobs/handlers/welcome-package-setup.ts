@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import type { Job, JobResult } from "../queue"
 import { updateJobProgress } from "../queue"
+import { APP_BASE_URL } from "@/lib/config"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -27,7 +28,7 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
   return { name, status, detail, timestamp: new Date().toISOString() }
 }
 
-const BASE_URL = "https://td-operations.vercel.app"
+const BASE_URL = APP_BASE_URL
 
 export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> {
   const p = job.payload as unknown as WelcomePackagePayload

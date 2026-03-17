@@ -12,8 +12,9 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
+import { APP_BASE_URL } from "@/lib/config"
 
-const LEASE_BASE_URL = "https://td-operations.vercel.app/lease"
+const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
 
 export function registerLeaseTools(server: McpServer) {
 
@@ -34,7 +35,7 @@ Suite number format: "3D-XXX" (e.g. 3D-107). REQUIRED — each client gets a uni
 
 The lease is created as 'draft'. Use lease_send to approve and create the Gmail draft.
 
-Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path segment) to bypass the email gate. Example: https://td-operations.vercel.app/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before sending.
+Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path segment) to bypass the email gate. Example: ${APP_BASE_URL}/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before sending.
 
 Workflow: lease_create → lease_get (review with admin preview link) → lease_send → client views → signs → PDF saved.`,
     {
@@ -391,7 +392,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
 
         // Generate tracking ID
         const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        const pixelUrl = `https://td-operations.vercel.app/api/track/open/${trackingId}`
+        const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
 
         // HTML email body
         const htmlBody = `

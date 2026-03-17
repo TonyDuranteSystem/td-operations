@@ -58,6 +58,14 @@ For tasks that process many records (mass document processing, bulk updates, aud
 - Keep chat responses concise (summary + counts, not full data dumps)
 - This keeps the conversation context small and reduces compaction risk
 
+## Domain Rules — MANDATORY
+
+Client-facing domain: \`app.tonydurante.us\` — ALL links sent to clients (forms, offers, leases, OA, tracking) use this domain.
+Internal domain: \`td-operations.vercel.app\` — dashboard login, OAuth, QuickBooks callback. NEVER send this to clients.
+Legacy domain: \`offerte.tonydurante.us\` — old offer links still work but new ones use \`app.tonydurante.us\`.
+
+All three domains point to the same server. Old links on any domain still work. New links MUST use \`app.tonydurante.us\`.
+
 ## Data Sources — Priority Order
 
 1. Supabase (via CRM and SQL tools) = Single Source of Truth for all client, contact, service, payment, task, and deal data.
@@ -206,8 +214,8 @@ All client forms (formation, onboarding, tax, lease, banking, and any future for
 ALL client-facing form URLs use path-based access codes (NOT query parameters):
 
 \`\`\`
-Format: https://td-operations.vercel.app/{form-type}/{token}/{access_code}
-Example: https://td-operations.vercel.app/lease/ag-group-llc-2026/0b3d352f
+Format: https://app.tonydurante.us/{form-type}/{token}/{access_code}
+Example: https://app.tonydurante.us/lease/ag-group-llc-2026/0b3d352f
 \`\`\`
 
 This applies to: lease, operating-agreement, offer, formation-form, onboarding-form, tax-form, banking-form, closure-form, and any future forms.

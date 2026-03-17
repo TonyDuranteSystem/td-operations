@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { APP_BASE_URL } from "@/lib/config"
 
 export async function POST(req: NextRequest) {
   try {
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
         `- Review submitted data: tax_form_review(token="${sub.token}")`,
         `- If data complete, apply changes and advance pipeline`,
         ``,
-        `Admin Preview: https://td-operations.vercel.app/tax-form/${sub.token}?preview=td`,
+        `Admin Preview: ${APP_BASE_URL}/tax-form/${sub.token}?preview=td`,
       ].join("\n")
 
       const mimeHeaders = [

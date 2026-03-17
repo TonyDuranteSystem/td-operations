@@ -15,8 +15,9 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+import { APP_BASE_URL } from "@/lib/config"
 
-const BASE_URL = "https://td-operations.vercel.app"
+const BASE_URL = APP_BASE_URL
 
 export function registerWelcomePackageTools(server: McpServer) {
   server.tool(
