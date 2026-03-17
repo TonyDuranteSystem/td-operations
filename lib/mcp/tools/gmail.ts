@@ -443,7 +443,9 @@ export function registerGmailTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "gmail_draft",
-    "Create an email draft in Gmail (does NOT send). Default mailbox: support@tonydurante.us. The draft is saved and must be reviewed and sent manually from Gmail. Supports reply threading via reply_to_message_id. For immediate sending, use gmail_send instead.",
+    `Create an email draft in Gmail (does NOT send). Default mailbox: support@tonydurante.us. The draft is saved and must be reviewed and sent manually from Gmail. Supports reply threading via reply_to_message_id. For immediate sending, use gmail_send instead.
+
+Attachments: pass an array of Google Drive file IDs. The files will be downloaded from Drive and attached to the draft as MIME attachments. Example: attachments=[{drive_file_id: "1abc...", filename: "Contract.pdf"}]`,
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -451,9 +453,13 @@ export function registerGmailTools(server: McpServer) {
       cc: z.string().optional().describe("CC recipient(s)"),
       bcc: z.string().optional().describe("BCC recipient(s)"),
       reply_to_message_id: z.string().optional().describe("If replying, the original Gmail message ID to thread with"),
+      attachments: z.array(z.object({
+        drive_file_id: z.string().describe("Google Drive file ID to attach"),
+        filename: z.string().optional().describe("Override filename (auto-detected from Drive if omitted)"),
+      })).optional().describe("Files from Google Drive to attach to the draft"),
       as_user: z.string().optional().describe("Mailbox to create draft in (default: support@tonydurante.us)"),
     },
-    async ({ to, subject, body, cc, bcc, reply_to_message_id, as_user }) => {
+    async ({ to, subject, body, cc, bcc, reply_to_message_id, attachments, as_user }) => {
       try {
         // Sanitize all text content to ASCII before processing
         subject = sanitizeToAscii(subject)
@@ -466,10 +472,10 @@ export function registerGmailTools(server: McpServer) {
           `From: ${fromEmail}`,
           `To: ${to}`,
           `Subject: ${subject}`,
+          "MIME-Version: 1.0",
         ]
         if (cc) headers.push(`Cc: ${cc}`)
         if (bcc) headers.push(`Bcc: ${bcc}`)
-        headers.push("Content-Type: text/plain; charset=utf-8")
 
         // If replying, add threading headers
         let threadId: string | undefined
@@ -489,8 +495,53 @@ export function registerGmailTools(server: McpServer) {
           threadId = original.threadId
         }
 
-        const raw = headers.join("\r\n") + "\r\n\r\n" + body
-        const encodedRaw = Buffer.from(raw).toString("base64url")
+        let rawEmail: string
+
+        if (attachments && attachments.length > 0) {
+          // ─── Multipart MIME with attachments ───
+          const { downloadFileBinary } = await import("@/lib/google-drive")
+          const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`
+          headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`)
+
+          const parts: string[] = []
+
+          // Text body part
+          parts.push(
+            `--${boundary}\r\n` +
+            `Content-Type: text/plain; charset=utf-8\r\n` +
+            `Content-Transfer-Encoding: 7bit\r\n\r\n` +
+            body
+          )
+
+          // Attachment parts
+          const attachedNames: string[] = []
+          for (const att of attachments) {
+            const file = await downloadFileBinary(att.drive_file_id)
+            const name = att.filename || file.fileName || `attachment_${attachedNames.length + 1}`
+            const mimeType = file.mimeType || "application/octet-stream"
+            const b64 = file.buffer.toString("base64")
+
+            // Split base64 into 76-char lines per RFC 2045
+            const b64Lines = b64.match(/.{1,76}/g)?.join("\r\n") || b64
+
+            parts.push(
+              `--${boundary}\r\n` +
+              `Content-Type: ${mimeType}; name="${name}"\r\n` +
+              `Content-Disposition: attachment; filename="${name}"\r\n` +
+              `Content-Transfer-Encoding: base64\r\n\r\n` +
+              b64Lines
+            )
+            attachedNames.push(name)
+          }
+
+          rawEmail = headers.join("\r\n") + "\r\n\r\n" + parts.join("\r\n") + `\r\n--${boundary}--`
+        } else {
+          // ─── Simple plain text (no attachments) ───
+          headers.push("Content-Type: text/plain; charset=utf-8")
+          rawEmail = headers.join("\r\n") + "\r\n\r\n" + body
+        }
+
+        const encodedRaw = Buffer.from(rawEmail).toString("base64url")
 
         const draftPayload: Record<string, unknown> = {
           message: { raw: encodedRaw },
