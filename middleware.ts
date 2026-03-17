@@ -53,6 +53,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/workflows') &&
     !request.nextUrl.pathname.startsWith('/api/jobs') &&
     !request.nextUrl.pathname.startsWith('/api/track') &&
+    !request.nextUrl.pathname.startsWith('/api/tax-quote-completed') &&
     !request.nextUrl.pathname.startsWith('/offer') &&
     !request.nextUrl.pathname.startsWith('/tax-form') &&
     !request.nextUrl.pathname.startsWith('/formation-form') &&
@@ -62,6 +63,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/operating-agreement') &&
     !request.nextUrl.pathname.startsWith('/closure-form') &&
     !request.nextUrl.pathname.startsWith('/itin-form') &&
+    !request.nextUrl.pathname.startsWith('/tax-quote') &&
     !request.nextUrl.pathname.startsWith('/contract-template') &&
     !request.nextUrl.pathname.startsWith('/.well-known') &&
     !request.nextUrl.pathname.startsWith('/oauth')

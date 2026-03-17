@@ -70,6 +70,7 @@ import { registerJobTools } from "@/lib/mcp/tools/jobs"
 import { registerQbExpenseTools } from "@/lib/mcp/tools/qb-expenses"
 import { registerITINFormTools } from "@/lib/mcp/tools/itin-form"
 import { registerClosureTools } from "@/lib/mcp/tools/closure"
+import { registerTaxQuoteTools } from "@/lib/mcp/tools/tax-quote"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -115,6 +116,7 @@ const handler = createMcpHandler(
     registerQbExpenseTools(server)
     registerITINFormTools(server)
     registerClosureTools(server)
+    registerTaxQuoteTools(server)
   },
   {
     capabilities: {},

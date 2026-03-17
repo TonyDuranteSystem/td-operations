@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 150 tools, data source priority,
+ * This guides Claude on how to use the 151 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -97,7 +97,7 @@ All three domains point to the same server. Old links on any domain still work. 
 
 ## Tool Selection — Key Rules
 
-You have 150 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 151 tools in functional groups. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
@@ -125,6 +125,12 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
   Entity types: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120).
 - tax_form_get: Check form status by token or account_id+tax_year. Shows prefilled vs submitted, changed fields.
 - tax_form_review: Review completed submission. Shows diff table. With apply_changes=true: updates CRM + marks tax return as Data Received.
+
+### Tax Return Quotes (1 tool: tax_quote_*)
+- tax_quote_create: Create an intake form link for a new/one-time client requesting a tax return quote.
+  Client fills: LLC name, state, type, tax year. On submit: system auto-creates lead + draft offer.
+  Pricing: SM LLC $1,000, MM LLC / C Corp $1,500.
+  Workflow: tax_quote_create → send link to client → client fills form → auto-creates lead + draft offer → offer_get to review → offer_update if needed → offer_send.
 
 ### Deadlines (3 tools: deadline_*)
 - deadline_search: Search by type, status, state, date range, assignee.
