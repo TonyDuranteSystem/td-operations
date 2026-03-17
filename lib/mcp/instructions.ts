@@ -169,7 +169,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - gmail_search: Search inbox. Default: support@tonydurante.us. Use as_user for Antonio's inbox.
 - gmail_read/gmail_read_thread: Read messages/threads. gmail_read now shows attachments with IDs.
 - gmail_read_attachment: Download attachments from emails. Can list attachments, read text files, or save binary files directly to Google Drive via save_to_drive_folder_id. Workflow: gmail_read → see attachment IDs → gmail_read_attachment(attachment_id, save_to_drive_folder_id).
-- gmail_draft: Create draft (does NOT send). Only for drafts that Antonio needs to review.
+- gmail_draft: Create draft (does NOT send). Supports Drive file attachments via attachments=[{drive_file_id, filename?}] — files are downloaded and attached as MIME multipart. Only for drafts that Antonio needs to review.
 - gmail_track_status: Check open tracking for emails sent via gmail_send. Shows open count, first/last opened.
 - gmail_labels: List Gmail labels with unread counts.
 - RULE: For client emails, ALWAYS use gmail_send (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
