@@ -80,7 +80,7 @@ interface Props {
 export default function ServiceAgreement({ offer, token }: Props) {
   const cl = CL[offer.language || 'en']
   const [signing, setSigning] = useState(false)
-  const [statusMsg, setStatusMsg] = useState(offer.language === 'it' ? 'Compila tutti i campi e firma entrambe le sezioni.' : 'Complete all required fields and sign both sections above.')
+  const [statusMsg, setStatusMsg] = useState('Complete all required fields and sign both sections above.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
   const [form, setForm] = useState<FormData>({ name: offer.client_name || '', email: offer.client_email || '', phone: '', address: '', city: '', state: '', zip: '', country: '', nationality: '', passport: '', passport_exp: '' })
@@ -147,7 +147,7 @@ export default function ServiceAgreement({ offer, token }: Props) {
       setStatusMsg('Missing: ' + missing.join(', '))
       setStatusType('info')
     } else {
-      setStatusMsg(offer.language === 'it' ? 'Pronto per firmare. Clicca il pulsante qui sotto.' : 'Ready to sign. Click the button below.')
+      setStatusMsg('Ready to sign. Click the button below.')
       setStatusType('info')
     }
   }, [offer.language])
@@ -169,6 +169,8 @@ export default function ServiceAgreement({ offer, token }: Props) {
     fee = cs.total || ''
   }
   if (!fee) fee = 'As specified in the offer'
+  // Normalize fee text to English (e.g., "/anno" → "/year")
+  fee = fee.replace(/\/anno/gi, '/year').replace(/\/mese/gi, '/month')
 
   // Installments from recurring_costs — always English labels in contract
   const rc = Array.isArray(offer.recurring_costs) ? offer.recurring_costs : []
@@ -617,7 +619,7 @@ export default function ServiceAgreement({ offer, token }: Props) {
       {/* ACTION BAR */}
       <div className="contract-action-bar" id="action-bar-svc">
         <button className="contract-btn contract-btn-sign" onClick={signContract} disabled={!ready || signing}>
-          {signing ? cl.signing : (offer.language === 'it' ? 'Firma e Invia Contratto' : 'Sign & Submit Contract')}
+          {signing ? 'Generating PDF...' : 'Sign & Submit Contract'}
         </button>
         <div className={`contract-status-msg ${statusType === 'error' ? 'contract-error-msg' : statusType === 'success' ? 'contract-success-msg' : ''}`}>
           {statusMsg}

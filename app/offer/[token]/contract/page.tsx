@@ -336,6 +336,8 @@ export default function ContractPage() {
     }
     if (!llcType) llcType = 'Single-Member LLC (Florida)'
     if (!fee) fee = 'As specified in the offer'
+    // Normalize fee text to English (e.g., "/anno" → "/year")
+    fee = fee.replace(/\/anno/gi, '/year').replace(/\/mese/gi, '/month')
     if (!installments) installments = 'As specified in the offer'
     return { fee, llcType, installments, year }
   }
