@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
+import TaxReturnContract from './tax-return-agreement'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -603,6 +604,16 @@ export default function ContractPage() {
       <>
         <ContractStyles />
         <CheckoutPreview offer={offer} cl={cl} hasCard={!!hasCard} hasBank={hasBank} token={token} />
+      </>
+    )
+  }
+
+  // Tax Return agreement — lightweight contract
+  if ((offer as any).contract_type === 'tax_return') {
+    return (
+      <>
+        <ContractStyles />
+        <TaxReturnContract offer={offer} token={token} />
       </>
     )
   }

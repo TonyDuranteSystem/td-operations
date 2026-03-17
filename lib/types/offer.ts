@@ -122,6 +122,8 @@ export interface Offer {
   referrer_notes?: string
   // Link protection
   access_code?: string
+  // Contract type
+  contract_type?: 'msa' | 'tax_return'
 }
 
 // ─── Contract Interface ─────────────────────────────────────

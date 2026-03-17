@@ -216,6 +216,7 @@ export async function POST(req: NextRequest) {
           },
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           lead_id: leadId,
+          contract_type: "tax_return",
         })
 
       if (offerErr) throw offerErr
