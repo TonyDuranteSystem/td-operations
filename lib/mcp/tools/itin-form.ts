@@ -540,6 +540,39 @@ export function registerITINFormTools(server: McpServer) {
         const oiPdf = await fillScheduleOI(nrData)
         results.push(`✅ Schedule OI generated (${oiPdf.length} bytes)`)
 
+        // 5b. Generate data summary PDF
+        const { generateITINSummaryPDF } = await import("@/lib/pdf/itin-data-summary")
+        const summaryPdf = await generateITINSummaryPDF({
+          first_name: String(submitted.first_name || ""),
+          last_name: String(submitted.last_name || ""),
+          name_at_birth: submitted.name_at_birth ? String(submitted.name_at_birth) : undefined,
+          email: String(submitted.email || ""),
+          phone: String(submitted.phone || ""),
+          dob: String(submitted.dob || ""),
+          country_of_birth: String(submitted.country_of_birth || ""),
+          city_of_birth: String(submitted.city_of_birth || ""),
+          gender: String(submitted.gender || ""),
+          citizenship: String(submitted.citizenship || ""),
+          foreign_street: String(submitted.foreign_street || ""),
+          foreign_city: String(submitted.foreign_city || ""),
+          foreign_state_province: submitted.foreign_state_province ? String(submitted.foreign_state_province) : undefined,
+          foreign_zip: String(submitted.foreign_zip || ""),
+          foreign_country: String(submitted.foreign_country || ""),
+          foreign_tax_id: submitted.foreign_tax_id ? String(submitted.foreign_tax_id) : undefined,
+          us_visa_type: submitted.us_visa_type ? String(submitted.us_visa_type) : undefined,
+          us_visa_number: submitted.us_visa_number ? String(submitted.us_visa_number) : undefined,
+          us_entry_date: submitted.us_entry_date ? String(submitted.us_entry_date) : undefined,
+          passport_number: String(submitted.passport_number || ""),
+          passport_country: String(submitted.passport_country || ""),
+          passport_expiry: String(submitted.passport_expiry || ""),
+          has_previous_itin: String(submitted.has_previous_itin || "No"),
+          previous_itin: submitted.previous_itin ? String(submitted.previous_itin) : undefined,
+          submitted_at: sub.completed_at || new Date().toISOString(),
+          token,
+          upload_count: (sub.upload_paths as string[] || []).length,
+        })
+        results.push(`✅ Data summary generated (${summaryPdf.length} bytes)`)
+
         // 6. Upload to Drive
         const uploadedIds: { name: string; id: string }[] = []
         if (itinFolderId) {
@@ -563,6 +596,13 @@ export function registerITINFormTools(server: McpServer) {
           )
           uploadedIds.push({ name: "Schedule OI", id: oiUpload.id })
           results.push(`📤 Schedule OI uploaded to Drive (${oiUpload.id})`)
+
+          // Upload data summary
+          const summaryUpload = await uploadBinaryToDrive(
+            `ITIN_Data_Summary_${slug}.pdf`, Buffer.from(summaryPdf), "application/pdf", itinFolderId
+          )
+          uploadedIds.push({ name: "Data Summary", id: summaryUpload.id })
+          results.push(`📤 Data summary uploaded to Drive (${summaryUpload.id})`)
 
           // Copy passport scans from Supabase Storage to Drive
           const uploads = sub.upload_paths as string[] | null
@@ -602,47 +642,10 @@ export function registerITINFormTools(server: McpServer) {
               const oiFileId = uploadedIds.find(u => u.name === "Schedule OI")?.id
 
               if (w7FileId && nrFileId && oiFileId) {
-                // Build email body
-                const emailBody = `
-Dear ${submitted.first_name},
+                // Build HTML email
+                const emailHtml = generateITINSigningEmail(String(submitted.first_name || ""))
 
-Your ITIN application documents are ready for your signature.
-
-Attached you will find:
-1. Form W-7 (Application for IRS Individual Taxpayer Identification Number)
-2. Form 1040-NR (U.S. Nonresident Alien Income Tax Return)
-3. Schedule OI (Other Information)
-
-INSTRUCTIONS:
-1. Print all three documents
-2. Sign the W-7 form on the "Signature of applicant" line (wet ink signature required)
-3. Sign the 1040-NR on page 2 "Your signature" line (wet ink signature required)
-4. Mail all signed documents to:
-
-   Tony Durante LLC
-   10225 Ulmerton Rd, Suite 3D
-   Largo, FL 33771
-   United States
-
-Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.
-
-Once we receive your signed documents, we will:
-- Review and certify your passport copy (CAA certification)
-- Submit the complete ITIN application package to the IRS via certified mail
-- The IRS typically processes ITIN applications within 7-11 weeks
-
-If you have any questions, please don't hesitate to contact us.
-
-Best regards,
-Tony Durante LLC
-+1 (727) 452-1093
-support@tonydurante.us
-`.trim()
-
-                // Use gmail_send with Drive attachments
                 const { gmailPost } = await import("@/lib/gmail")
-
-                // Download PDFs from Drive for attachment
                 const { downloadFileBinary } = await import("@/lib/google-drive")
                 const { buffer: w7Buf } = await downloadFileBinary(w7FileId)
                 const { buffer: nrBuf } = await downloadFileBinary(nrFileId)
@@ -652,10 +655,10 @@ support@tonydurante.us
                 const slug2 = clientName.replace(/\s+/g, "_")
                 const parts = [
                   `--${boundary}`,
-                  `Content-Type: text/plain; charset=utf-8`,
+                  `Content-Type: text/html; charset=utf-8`,
                   `Content-Transfer-Encoding: base64`,
                   "",
-                  Buffer.from(emailBody).toString("base64"),
+                  Buffer.from(emailHtml).toString("base64"),
                   `--${boundary}`,
                   `Content-Type: application/pdf; name="W-7_${slug2}.pdf"`,
                   `Content-Transfer-Encoding: base64`,
@@ -711,3 +714,77 @@ support@tonydurante.us
   )
 
 } // end registerITINFormTools
+
+// ─── ITIN Signing Email Template (HTML) ───
+
+function generateITINSigningEmail(firstName: string): string {
+  return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
+
+<p>Dear ${firstName},</p>
+
+<p>Your ITIN application documents are ready. Please find attached:</p>
+
+<ol style="margin:16px 0">
+<li><strong>Form W-7</strong> &mdash; Application for IRS Individual Taxpayer Identification Number</li>
+<li><strong>Form 1040-NR</strong> &mdash; U.S. Nonresident Alien Income Tax Return</li>
+<li><strong>Schedule OI</strong> &mdash; Other Information (attached to 1040-NR)</li>
+</ol>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+
+<p style="font-size:16px"><strong>What you need to do</strong></p>
+
+<table style="border-collapse:collapse;width:100%;margin:12px 0">
+<tr>
+<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;width:32px;text-align:center;color:#1e3a5f">1</td>
+<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Print</strong> all three documents</td>
+</tr>
+<tr>
+<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;text-align:center;color:#1e3a5f">2</td>
+<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Sign the W-7</strong> on the <em>"Signature of applicant"</em> line (wet ink signature required &mdash; no digital signatures)</td>
+</tr>
+<tr>
+<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;text-align:center;color:#1e3a5f">3</td>
+<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Sign the 1040-NR</strong> on page 2, <em>"Your signature"</em> line (wet ink signature required)</td>
+</tr>
+<tr>
+<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;text-align:center;color:#1e3a5f">4</td>
+<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Mail all signed documents</strong> to the address below</td>
+</tr>
+</table>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+
+<p style="font-size:16px"><strong>Mailing address</strong></p>
+
+<div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0;font-size:15px">
+<strong>Tony Durante LLC</strong><br/>
+10225 Ulmerton Rd, Suite 3D<br/>
+Largo, FL 33771<br/>
+United States
+</div>
+
+<p style="color:#b8292f;font-weight:600">Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.</p>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+
+<p style="font-size:16px"><strong>What happens next</strong></p>
+
+<ul style="margin:8px 0;padding-left:20px">
+<li>Once we receive your signed documents, our Certified Acceptance Agent (CAA) will review and certify your passport copy</li>
+<li>We will submit the complete ITIN application package to the IRS via certified mail</li>
+<li>The IRS typically processes ITIN applications within <strong>7&ndash;11 weeks</strong></li>
+<li>You will receive your ITIN number by mail from the IRS, and we will notify you as soon as it is assigned</li>
+</ul>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+
+<p>If you have any questions, please do not hesitate to contact us.</p>
+
+<p>Best regards,<br/>
+<strong>Tony Durante LLC</strong><br/>
+<span style="color:#6b7280">+1 (727) 452-1093</span><br/>
+<a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
+
+</div>`
+}
