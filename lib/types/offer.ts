@@ -29,6 +29,8 @@ export interface OfferService {
   description?: string
   recommended?: boolean
   includes?: string[]
+  optional?: boolean        // If true, client can select/deselect on offer page
+  pipeline_type?: string    // Maps to bundled_pipelines (e.g., "ITIN", "Tax Return")
 }
 
 export interface CostSummaryItem {
@@ -126,6 +128,9 @@ export interface Offer {
   contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin'
   // Pipelines to create when client pays (automation)
   bundled_pipelines?: string[]
+  // Client selections (set when client signs, based on optional services chosen)
+  selected_services?: string[]
+  account_id?: string
 }
 
 // ─── Contract Interface ─────────────────────────────────────
@@ -153,6 +158,7 @@ export interface Contract {
   pdf_path?: string
   status?: 'pending' | 'signed' | 'completed'
   wire_receipt_path?: string
+  selected_services?: string[]  // Services client chose at signing time
   payment_verified?: boolean
   created_at: string
   updated_at: string
