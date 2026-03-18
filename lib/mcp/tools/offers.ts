@@ -220,7 +220,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_get",
-    "Get complete offer details by token (e.g. 'mario-rossi-2026'). Returns all fields including: services, cost_summary, recurring_costs, intro text, payment links, bank details, strategy, next_steps, referrer info, access_code, and signed contract status. Also returns the public URL with access code.",
+    "Get complete offer details by token (e.g. 'mario-rossi-2026'). Returns all fields including: services, cost_summary, recurring_costs, intro text, payment links, bank details, strategy, next_steps, referrer info, access_code, signed contract status, and bundled_pipelines (which service deliveries to create on activation). Also returns the public URL with access code.",
     {
       token: z.string().describe("Offer token (e.g. 'hamid-oumoumen-2026')"),
     },
@@ -266,7 +266,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_create",
-    `Create a new client offer/proposal in Supabase. Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email — no lead required). Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays. IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English, regardless of the offer language. The offer intro and UI follow the offer language, but contract content is always English. Contract types: 'formation' (default, LLC to create), 'onboarding' (LLC already exists), 'tax_return' (standalone tax filing), 'itin' (standalone ITIN application).`,
+    `Create a new client offer/proposal in Supabase. Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email — no lead required). Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays. IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English, regardless of the offer language. The offer intro and UI follow the offer language, but contract content is always English. Contract types: 'formation' (default, LLC to create), 'onboarding' (LLC already exists), 'tax_return' (standalone tax filing), 'itin' (standalone ITIN application). IMPORTANT: Always set bundled_pipelines to list which service deliveries to create when the client pays. Each pipeline type becomes a separate tracked delivery. Example: formation + ITIN = ['Company Formation', 'ITIN'].`,
     {
       token: z.string().describe("Unique token (e.g. 'mario-rossi-2026')"),
       client_name: z.string().describe("Client full name"),
@@ -305,6 +305,8 @@ export function registerOfferTools(server: McpServer) {
       referrer_commission_pct: z.number().optional().describe("Commission percentage (if type=percentage)"),
       referrer_agreed_price: z.number().optional().describe("Partner's agreed price (if type=price_difference)"),
       referrer_notes: z.string().optional().describe("Notes about referrer arrangement"),
+      // Bundled pipelines — which service deliveries to create when client pays
+      bundled_pipelines: z.array(z.string()).optional().describe("Pipeline types to create on activation. Each entry becomes a separate service_delivery. Values: 'Company Formation', 'ITIN', 'Tax Return', 'EIN', 'Company Closure', 'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address'. Example: ['Company Formation', 'ITIN'] for a formation + ITIN bundle."),
     },
     async (params) => {
       try {
@@ -378,6 +380,7 @@ export function registerOfferTools(server: McpServer) {
             effective_date: params.effective_date,
             expires_at: params.expires_at,
             contract_type: params.contract_type || "formation",
+            bundled_pipelines: params.bundled_pipelines || [],
             lead_id: params.lead_id,
             account_id: params.account_id,
             deal_id: params.deal_id,

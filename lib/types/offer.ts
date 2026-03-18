@@ -124,6 +124,8 @@ export interface Offer {
   access_code?: string
   // Contract type
   contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin'
+  // Pipelines to create when client pays (automation)
+  bundled_pipelines?: string[]
 }
 
 // ─── Contract Interface ─────────────────────────────────────
