@@ -392,4 +392,238 @@ Use gmail_send to send the link to the client after Antonio approves.`,
     }
   )
 
+  // ═══════════════════════════════════════
+  // closure_prepare_documents
+  // ═══════════════════════════════════════
+  server.tool(
+    "closure_prepare_documents",
+    "Generate pre-filled dissolution documents for an LLC closure. Supports: Wyoming (Articles of Dissolution), Delaware (Certificate of Cancellation), and IRS EIN Closure Letter (all states). Downloads blank forms from Drive Templates, fills fields with CRM data, uploads to client's Drive folder, and optionally emails to Luca for printing/mailing. Prerequisites: account must exist with company_name, state_of_formation, and at least one linked contact.",
+    {
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      send_email: z.boolean().optional().describe("If true, emails filled documents to support@ for printing"),
+    },
+    async ({ account_id, send_email }) => {
+      try {
+        const { PDFDocument } = await import("pdf-lib")
+        const { downloadFileBinary, uploadBinaryToDrive, listFolder, createFolder } = await import("@/lib/google-drive")
+
+        // Get account + contact data
+        const { data: acc } = await supabaseAdmin
+          .from("accounts")
+          .select("company_name, ein_number, state_of_formation, formation_date, drive_folder_id")
+          .eq("id", account_id)
+          .single()
+        if (!acc) return { content: [{ type: "text" as const, text: "Account not found" }] }
+
+        const { data: links } = await supabaseAdmin
+          .from("account_contacts")
+          .select("contact_id, role")
+          .eq("account_id", account_id)
+          .limit(1)
+        const contactId = links?.[0]?.contact_id
+        const { data: contact } = contactId
+          ? await supabaseAdmin.from("contacts").select("full_name, email, phone").eq("id", contactId).single()
+          : { data: null }
+
+        const llcName = acc.company_name || ""
+        const ownerName = contact?.full_name || ""
+        const ownerEmail = contact?.email || ""
+        const ownerPhone = contact?.phone || ""
+        const ein = acc.ein_number || ""
+        const state = acc.state_of_formation || ""
+        const formationDate = acc.formation_date || ""
+        const today = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+
+        const lines: string[] = []
+        const generatedFiles: { name: string; bytes: Uint8Array }[] = []
+
+        // Drive file IDs for templates
+        const TEMPLATES: Record<string, string> = {
+          Wyoming: "1BzS7vbO-8SWQiwH61zyDkJmIrVNAAp3A",
+          Delaware: "1i06kadcF__Q8wXMH2-e6eVvsB_rjv7a0",
+        }
+
+        // ── State Dissolution Form ──
+        if (state === "Wyoming" && TEMPLATES.Wyoming) {
+          const { buffer: templateBytes } = await downloadFileBinary(TEMPLATES.Wyoming)
+          const pdf = await PDFDocument.load(templateBytes)
+          const form = pdf.getForm()
+
+          form.getTextField("Name of LLC").setText(llcName)
+          form.getCheckBox("Certification check box").check()
+          form.getTextField("Date signed").setText(today)
+          form.getTextField("Printed Name").setText(ownerName)
+          form.getTextField("Title").setText("Manager / Authorized Person")
+          form.getTextField("Contact Person").setText("Tony Durante LLC")
+          form.getTextField("Daytime Phone Number").setText("+1 (727) 452-1093")
+          form.getTextField("Email").setText("support@tonydurante.us")
+
+          form.flatten()
+          const filled = await pdf.save()
+          generatedFiles.push({ name: `Articles_of_Dissolution_${llcName.replace(/\s+/g, "_")}_WY.pdf`, bytes: filled })
+          lines.push("✅ Wyoming Articles of Dissolution filled")
+          lines.push("   Mail to: Wyoming SOS, 122 W 25th St, Cheyenne WY 82002 + $60 check")
+
+        } else if (state === "Delaware" && TEMPLATES.Delaware) {
+          const { buffer: templateBytes } = await downloadFileBinary(TEMPLATES.Delaware)
+          const pdf = await PDFDocument.load(templateBytes)
+          const form = pdf.getForm()
+
+          form.getTextField("The name of the limited liability company is").setText(llcName)
+          form.getTextField("Text1").setText(formationDate || "")
+          form.getTextField("Name").setText(ownerName)
+          form.getTextField("Date").setText(today)
+          // "By" is for signature — leave blank for wet ink
+
+          form.flatten()
+          const filled = await pdf.save()
+          generatedFiles.push({ name: `Certificate_of_Cancellation_${llcName.replace(/\s+/g, "_")}_DE.pdf`, bytes: filled })
+          lines.push("✅ Delaware Certificate of Cancellation filled")
+          lines.push("   Mail to: DE Div of Corporations, 401 Federal St Suite 4, Dover DE 19901 + $220 check")
+
+        } else if (state === "New Mexico") {
+          lines.push("⚠️ New Mexico: File online at https://enterprise.sos.nm.gov (no PDF form)")
+
+        } else if (state === "Florida") {
+          lines.push("⚠️ Florida: File online at https://efile.sunbiz.org/dissolvellc.html (or mail PDF)")
+
+        } else {
+          lines.push(`⚠️ No dissolution template for state: ${state}`)
+        }
+
+        // ── IRS EIN Closure Letter (all states) ──
+        if (ein) {
+          const { PDFDocument: PDFDoc2, StandardFonts, rgb } = await import("pdf-lib")
+          const letterPdf = await PDFDoc2.create()
+          const page = letterPdf.addPage([612, 792])
+          const font = await letterPdf.embedFont(StandardFonts.TimesRoman)
+          const fontBold = await letterPdf.embedFont(StandardFonts.TimesRomanBold)
+          const black = rgb(0, 0, 0)
+
+          let y = 720
+          const write = (text: string, opts?: { bold?: boolean; size?: number }) => {
+            page.drawText(text, { x: 72, y, size: opts?.size || 12, font: opts?.bold ? fontBold : font, color: black })
+            y -= (opts?.size || 12) + 6
+          }
+
+          // Header
+          write("Tony Durante LLC", { bold: true, size: 14 })
+          write("10225 Ulmerton Rd, Suite 3D")
+          write("Largo, FL 33771")
+          write("+1 (727) 452-1093")
+          y -= 12
+          write(today)
+          y -= 12
+          write("Internal Revenue Service")
+          write("Cincinnati, OH 45999")
+          y -= 12
+          write("RE: Request to Close EIN Account", { bold: true })
+          y -= 6
+          write("EIN: " + ein)
+          write("Entity Name: " + llcName)
+          y -= 12
+          write("Dear Sir or Madam,")
+          y -= 6
+          write("I am writing to request the closure of the above-referenced Employer")
+          write("Identification Number (EIN) account. The limited liability company has been")
+          write("dissolved and is no longer conducting business.")
+          y -= 6
+          write("The entity has filed all required tax returns and has no outstanding tax")
+          write("obligations. We respectfully request that the EIN be permanently closed.")
+          y -= 6
+          write("Please send confirmation of the account closure to the address listed above.")
+          y -= 12
+          write("Sincerely,")
+          y -= 24
+          write("_______________________________")
+          write(ownerName)
+          write("Authorized Representative")
+          write(llcName)
+
+          const letterBytes = await letterPdf.save()
+          generatedFiles.push({ name: `EIN_Closure_Letter_${llcName.replace(/\s+/g, "_")}.pdf`, bytes: letterBytes })
+          lines.push("✅ IRS EIN Closure Letter generated")
+          lines.push("   Mail to: IRS, Cincinnati OH 45999")
+        } else {
+          lines.push("⚠️ No EIN on file — cannot generate IRS closure letter")
+        }
+
+        // ── Upload to Drive ──
+        if (acc.drive_folder_id && generatedFiles.length > 0) {
+          try {
+            const contents = await listFolder(acc.drive_folder_id)
+            const companyFolder = contents?.files?.find(
+              (f: { name: string; mimeType: string }) =>
+                f.name === "1. Company" && f.mimeType === "application/vnd.google-apps.folder"
+            )
+            const targetFolder = companyFolder?.id || acc.drive_folder_id
+
+            for (const file of generatedFiles) {
+              const result = await uploadBinaryToDrive(file.name, Buffer.from(file.bytes), "application/pdf", targetFolder)
+              lines.push(`📁 Uploaded: ${file.name} (${result.id})`)
+            }
+          } catch (e) {
+            lines.push(`⚠️ Drive upload error: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+
+        // ── Send email ──
+        if (send_email && generatedFiles.length > 0) {
+          try {
+            const { gmailPost } = await import("@/lib/gmail")
+            const boundary = "closure_" + Date.now()
+            const body = [
+              `Closure documents ready for: ${llcName}`,
+              `State: ${state}`,
+              `EIN: ${ein || "N/A"}`,
+              "",
+              "Please print, prepare shipping labels, and mail:",
+              ...lines.filter(l => l.includes("Mail to:")),
+              "",
+              "Documents are attached to this email and saved to Drive.",
+            ].join("\n")
+
+            const parts = [
+              `--${boundary}`,
+              "Content-Type: text/plain; charset=utf-8",
+              "Content-Transfer-Encoding: base64",
+              "",
+              Buffer.from(body).toString("base64"),
+            ]
+            for (const file of generatedFiles) {
+              parts.push(
+                `--${boundary}`,
+                `Content-Type: application/pdf; name="${file.name}"`,
+                `Content-Transfer-Encoding: base64`,
+                `Content-Disposition: attachment; filename="${file.name}"`,
+                "",
+                Buffer.from(file.bytes).toString("base64")
+              )
+            }
+            parts.push(`--${boundary}--`)
+
+            const mimeMessage = [
+              "From: Tony Durante LLC <support@tonydurante.us>",
+              "To: support@tonydurante.us",
+              `Subject: Closure Documents: ${llcName} (${state})`,
+              "MIME-Version: 1.0",
+              `Content-Type: multipart/mixed; boundary="${boundary}"`,
+              "",
+              ...parts,
+            ].join("\r\n")
+
+            await gmailPost("/messages/send", { raw: Buffer.from(mimeMessage).toString("base64url") })
+            lines.push("📧 Documents emailed to support@tonydurante.us")
+          } catch (e) {
+            lines.push(`⚠️ Email error: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
 } // end registerClosureTools
