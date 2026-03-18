@@ -435,4 +435,279 @@ export function registerITINFormTools(server: McpServer) {
     }
   )
 
+  // ***************************************
+  // itin_prepare_documents
+  // ***************************************
+  server.tool(
+    "itin_prepare_documents",
+    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Uploads all 3 PDFs + passport copies to the client's Google Drive folder (ITIN subfolder). Optionally sends email to client with PDFs attached and mailing instructions. Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) Client must have an account with drive_folder_id (for LLC clients) OR a contact record (for individual clients). Run itin_form_review first to verify data, then use this tool to generate documents.`,
+    {
+      token: z.string().describe("ITIN form token"),
+      send_email: z.boolean().optional().default(false).describe("If true, send email to client with PDFs and mailing instructions"),
+      drive_folder_id: z.string().optional().describe("Override Drive folder ID (auto-detected from account if omitted)"),
+    },
+    async ({ token, send_email, drive_folder_id }) => {
+      try {
+        // 1. Load submission
+        const { data: sub, error } = await supabaseAdmin
+          .from("itin_submissions")
+          .select("*")
+          .eq("token", token)
+          .single()
+        if (error || !sub) throw new Error(`Form not found: ${token}`)
+        if (!["completed", "reviewed"].includes(sub.status)) {
+          return { content: [{ type: "text" as const, text: `⚠️ Form status is "${sub.status}" - must be completed or reviewed first.` }] }
+        }
+
+        const submitted = sub.submitted_data as Record<string, unknown> || {}
+        const clientName = `${submitted.first_name || ""} ${submitted.last_name || ""}`.trim() || token
+
+        const results: string[] = [`📋 ITIN Document Preparation: ${clientName}`, ""]
+
+        // 2. Resolve Drive folder
+        let folderId = drive_folder_id
+        if (!folderId && sub.account_id) {
+          const { data: acc } = await supabaseAdmin
+            .from("accounts")
+            .select("drive_folder_id, company_name")
+            .eq("id", sub.account_id)
+            .single()
+          folderId = acc?.drive_folder_id || undefined
+        }
+
+        // Create ITIN subfolder
+        let itinFolderId: string | undefined
+        if (folderId) {
+          const { listFolder, createFolder } = await import("@/lib/google-drive")
+          const contents = await listFolder(folderId)
+          const existing = contents?.files?.find(
+            (f: { name: string; mimeType: string }) => f.name === "ITIN" && f.mimeType === "application/vnd.google-apps.folder"
+          )
+          if (existing) {
+            itinFolderId = existing.id
+          } else {
+            const newFolder = await createFolder(folderId, "ITIN")
+            itinFolderId = newFolder.id
+          }
+          results.push(`📁 Drive folder: ITIN/ (${itinFolderId})`)
+        } else {
+          results.push("⚠️ No Drive folder found - PDFs will be generated but not uploaded")
+        }
+
+        // 3. Generate W-7
+        const { fillW7 } = await import("@/lib/pdf/w7-fill")
+        const w7Pdf = await fillW7({
+          first_name: String(submitted.first_name || ""),
+          last_name: String(submitted.last_name || ""),
+          name_at_birth: submitted.name_at_birth ? String(submitted.name_at_birth) : undefined,
+          foreign_street: String(submitted.foreign_street || ""),
+          foreign_city: String(submitted.foreign_city || ""),
+          foreign_state_province: submitted.foreign_state_province ? String(submitted.foreign_state_province) : undefined,
+          foreign_zip: String(submitted.foreign_zip || ""),
+          foreign_country: String(submitted.foreign_country || ""),
+          dob: String(submitted.dob || ""),
+          country_of_birth: String(submitted.country_of_birth || ""),
+          city_of_birth: String(submitted.city_of_birth || ""),
+          gender: (submitted.gender as "Male" | "Female") || "Male",
+          citizenship: String(submitted.citizenship || ""),
+          foreign_tax_id: submitted.foreign_tax_id ? String(submitted.foreign_tax_id) : undefined,
+          us_visa_type: submitted.us_visa_type ? String(submitted.us_visa_type) : undefined,
+          us_visa_number: submitted.us_visa_number ? String(submitted.us_visa_number) : undefined,
+          us_entry_date: submitted.us_entry_date ? String(submitted.us_entry_date) : undefined,
+          passport_number: String(submitted.passport_number || ""),
+          passport_country: String(submitted.passport_country || ""),
+          passport_expiry: String(submitted.passport_expiry || ""),
+          has_previous_itin: submitted.has_previous_itin === "Yes",
+          previous_itin: submitted.previous_itin ? String(submitted.previous_itin) : undefined,
+        })
+        results.push(`✅ W-7 generated (${w7Pdf.length} bytes)`)
+
+        // 4. Generate 1040-NR
+        const { fill1040NR, fillScheduleOI } = await import("@/lib/pdf/1040nr-fill")
+        const nrData = {
+          first_name: String(submitted.first_name || ""),
+          last_name: String(submitted.last_name || ""),
+          citizenship: String(submitted.citizenship || ""),
+          foreign_country: String(submitted.foreign_country || ""),
+          foreign_state_province: submitted.foreign_state_province ? String(submitted.foreign_state_province) : undefined,
+          foreign_zip: submitted.foreign_zip ? String(submitted.foreign_zip) : undefined,
+          us_visa_type: submitted.us_visa_type ? String(submitted.us_visa_type) : undefined,
+        }
+        const nrPdf = await fill1040NR(nrData)
+        results.push(`✅ 1040-NR generated (${nrPdf.length} bytes)`)
+
+        // 5. Generate Schedule OI
+        const oiPdf = await fillScheduleOI(nrData)
+        results.push(`✅ Schedule OI generated (${oiPdf.length} bytes)`)
+
+        // 6. Upload to Drive
+        const uploadedIds: { name: string; id: string }[] = []
+        if (itinFolderId) {
+          const { uploadBinaryToDrive } = await import("@/lib/google-drive")
+          const slug = clientName.replace(/\s+/g, "_")
+
+          const w7Upload = await uploadBinaryToDrive(
+            `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", itinFolderId
+          )
+          uploadedIds.push({ name: "W-7", id: w7Upload.id })
+          results.push(`📤 W-7 uploaded to Drive (${w7Upload.id})`)
+
+          const nrUpload = await uploadBinaryToDrive(
+            `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", itinFolderId
+          )
+          uploadedIds.push({ name: "1040-NR", id: nrUpload.id })
+          results.push(`📤 1040-NR uploaded to Drive (${nrUpload.id})`)
+
+          const oiUpload = await uploadBinaryToDrive(
+            `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", itinFolderId
+          )
+          uploadedIds.push({ name: "Schedule OI", id: oiUpload.id })
+          results.push(`📤 Schedule OI uploaded to Drive (${oiUpload.id})`)
+
+          // Copy passport scans from Supabase Storage to Drive
+          const uploads = sub.upload_paths as string[] | null
+          if (uploads && uploads.length > 0) {
+            for (const path of uploads) {
+              try {
+                const fileName = path.split("/").pop() || "passport.pdf"
+                const { data: fileData } = await supabaseAdmin.storage
+                  .from("onboarding-uploads")
+                  .download(path)
+                if (fileData) {
+                  const buf = Buffer.from(await fileData.arrayBuffer())
+                  const passUpload = await uploadBinaryToDrive(
+                    fileName, buf, fileData.type || "application/octet-stream", itinFolderId
+                  )
+                  uploadedIds.push({ name: fileName, id: passUpload.id })
+                  results.push(`📤 Passport copy uploaded (${passUpload.id})`)
+                }
+              } catch (e) {
+                results.push(`⚠️ Failed to copy ${path}: ${e instanceof Error ? e.message : String(e)}`)
+              }
+            }
+          }
+        }
+
+        // 7. Send email to client
+        if (send_email) {
+          const clientEmail = String(submitted.email || "")
+          if (!clientEmail) {
+            results.push("⚠️ Cannot send email: no client email address")
+          } else if (uploadedIds.length < 3) {
+            results.push("⚠️ Cannot send email: PDFs not uploaded to Drive")
+          } else {
+            try {
+              const w7FileId = uploadedIds.find(u => u.name === "W-7")?.id
+              const nrFileId = uploadedIds.find(u => u.name === "1040-NR")?.id
+              const oiFileId = uploadedIds.find(u => u.name === "Schedule OI")?.id
+
+              if (w7FileId && nrFileId && oiFileId) {
+                // Build email body
+                const emailBody = `
+Dear ${submitted.first_name},
+
+Your ITIN application documents are ready for your signature.
+
+Attached you will find:
+1. Form W-7 (Application for IRS Individual Taxpayer Identification Number)
+2. Form 1040-NR (U.S. Nonresident Alien Income Tax Return)
+3. Schedule OI (Other Information)
+
+INSTRUCTIONS:
+1. Print all three documents
+2. Sign the W-7 form on the "Signature of applicant" line (wet ink signature required)
+3. Sign the 1040-NR on page 2 "Your signature" line (wet ink signature required)
+4. Mail all signed documents to:
+
+   Tony Durante LLC
+   10225 Ulmerton Rd, Suite 3D
+   Largo, FL 33771
+   United States
+
+Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.
+
+Once we receive your signed documents, we will:
+- Review and certify your passport copy (CAA certification)
+- Submit the complete ITIN application package to the IRS via certified mail
+- The IRS typically processes ITIN applications within 7-11 weeks
+
+If you have any questions, please don't hesitate to contact us.
+
+Best regards,
+Tony Durante LLC
++1 (727) 452-1093
+support@tonydurante.us
+`.trim()
+
+                // Use gmail_send with Drive attachments
+                const { gmailPost } = await import("@/lib/gmail")
+
+                // Download PDFs from Drive for attachment
+                const { downloadFileBinary } = await import("@/lib/google-drive")
+                const { buffer: w7Buf } = await downloadFileBinary(w7FileId)
+                const { buffer: nrBuf } = await downloadFileBinary(nrFileId)
+                const { buffer: oiBuf } = await downloadFileBinary(oiFileId)
+
+                const boundary = "boundary_" + Date.now()
+                const slug2 = clientName.replace(/\s+/g, "_")
+                const parts = [
+                  `--${boundary}`,
+                  `Content-Type: text/plain; charset=utf-8`,
+                  `Content-Transfer-Encoding: base64`,
+                  "",
+                  Buffer.from(emailBody).toString("base64"),
+                  `--${boundary}`,
+                  `Content-Type: application/pdf; name="W-7_${slug2}.pdf"`,
+                  `Content-Transfer-Encoding: base64`,
+                  `Content-Disposition: attachment; filename="W-7_${slug2}.pdf"`,
+                  "",
+                  Buffer.from(w7Buf).toString("base64"),
+                  `--${boundary}`,
+                  `Content-Type: application/pdf; name="1040-NR_${slug2}.pdf"`,
+                  `Content-Transfer-Encoding: base64`,
+                  `Content-Disposition: attachment; filename="1040-NR_${slug2}.pdf"`,
+                  "",
+                  Buffer.from(nrBuf).toString("base64"),
+                  `--${boundary}`,
+                  `Content-Type: application/pdf; name="Schedule_OI_${slug2}.pdf"`,
+                  `Content-Transfer-Encoding: base64`,
+                  `Content-Disposition: attachment; filename="Schedule_OI_${slug2}.pdf"`,
+                  "",
+                  Buffer.from(oiBuf).toString("base64"),
+                  `--${boundary}--`,
+                ]
+
+                const mimeMessage = [
+                  `From: Tony Durante LLC <support@tonydurante.us>`,
+                  `To: ${clientEmail}`,
+                  `Subject: Your ITIN Application Documents - Ready for Signature`,
+                  `MIME-Version: 1.0`,
+                  `Content-Type: multipart/mixed; boundary="${boundary}"`,
+                  "",
+                  ...parts,
+                ].join("\r\n")
+
+                const encodedRaw = Buffer.from(mimeMessage).toString("base64url")
+                await gmailPost("/messages/send", { raw: encodedRaw })
+                results.push(`📧 Email sent to ${clientEmail} with 3 PDF attachments`)
+              }
+            } catch (e) {
+              results.push(`⚠️ Email failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
+          }
+        }
+
+        results.push("")
+        results.push("---")
+        if (!send_email) {
+          results.push("Documents generated and uploaded. To send to client, run again with send_email=true")
+        }
+
+        return { content: [{ type: "text" as const, text: results.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
 } // end registerITINFormTools
