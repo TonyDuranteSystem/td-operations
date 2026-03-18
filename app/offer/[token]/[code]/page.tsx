@@ -325,6 +325,25 @@ export default function OfferPageWithCode() {
   const isSigned = o.status === 'signed' || o.status === 'completed'
   const ptype = o.payment_type || 'none'
 
+  // Compute dynamic payment amount based on optional service selections
+  const dynamicPaymentAmount = (() => {
+    const baseAmount = o.bank_details?.amount || ''
+    if (!o.services?.some((sv: any) => sv.optional)) return baseAmount
+    // Parse base price from required services
+    let totalCents = 0
+    const currency = baseAmount.match(/[$\u20ac\u00a3]/)?.[0] || '\u20ac'
+    o.services?.forEach((sv: any) => {
+      if (sv.optional && !selectedOptional.has(sv.name)) return // skip deselected
+      const priceMatch = sv.price?.match(/[\d.,]+/)
+      if (priceMatch && !sv.price?.toLowerCase().includes('inclus') && !sv.price?.toLowerCase().includes('year') && !sv.price?.toLowerCase().includes('anno')) {
+        totalCents += Math.round(parseFloat(priceMatch[0].replace(/\./g, '').replace(',', '.')) * 100)
+      }
+    })
+    if (totalCents === 0) return baseAmount
+    const formatted = (totalCents / 100).toLocaleString('de-DE')
+    return `${currency}${formatted}`
+  })()
+
   return (
     <>
       <OfferStyles />
@@ -558,7 +577,7 @@ export default function OfferPageWithCode() {
                     <div className="offer-pay-info-or">{lang === 'it' ? 'oppure' : 'or'}</div>
                     <div className="offer-pay-info-row">
                       <span>&#127974; {L.payByTransfer}</span>
-                      <span className="offer-pay-info-price">{o.bank_details.amount}</span>
+                      <span className="offer-pay-info-price">{dynamicPaymentAmount}</span>
                     </div>
                   </>
                 ) : o.payment_links?.length ? (
@@ -569,7 +588,7 @@ export default function OfferPageWithCode() {
                 ) : o.bank_details ? (
                   <div className="offer-pay-info-row">
                     <span>&#127974; {L.payByTransfer}</span>
-                    <span className="offer-pay-info-price">{o.bank_details.amount}</span>
+                    <span className="offer-pay-info-price">{dynamicPaymentAmount}</span>
                   </div>
                 ) : null}
                 <p className="offer-pay-info-note">{lang === 'it' ? 'Sceglierai il metodo di pagamento dopo la firma del contratto.' : 'You will choose your payment method after signing the contract.'}</p>
