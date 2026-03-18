@@ -688,6 +688,192 @@ export function registerTaxTools(server: McpServer) {
     }
   )
 
+  // ═══════════════════════════════════════
+  // tax_extension_list
+  // ═══════════════════════════════════════
+  server.tool(
+    "tax_extension_list",
+    "Generate the list of ALL clients needing a tax extension for a given tax year. Returns CSV-ready data: company name, EIN, entity type, state, return type. Use this in February to prepare the bulk extension list for the India team. Optionally sends the list via email to a specified address.",
+    {
+      tax_year: z.number().describe("Tax year (e.g., 2025)"),
+      send_to_email: z.string().optional().describe("If provided, sends the extension list to this email address"),
+    },
+    async ({ tax_year, send_to_email }) => {
+      try {
+        // Get all tax returns for this year that don't have extension filed
+        const { data: returns, error } = await supabaseAdmin
+          .from("tax_returns")
+          .select("id, account_id, contact_id, return_type, status, extension_filed, extension_submission_id")
+          .eq("tax_year", tax_year)
+          .order("return_type")
+
+        if (error) throw new Error(error.message)
+        if (!returns || returns.length === 0) {
+          return { content: [{ type: "text" as const, text: `No tax returns found for ${tax_year}.` }] }
+        }
+
+        // Get account details for each
+        const accountIds = Array.from(new Set(returns.filter(r => r.account_id).map(r => r.account_id!)))
+        const { data: accounts } = await supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, ein_number, entity_type, state_of_formation")
+          .in("id", accountIds)
+
+        const accMap = new Map((accounts || []).map(a => [a.id, a]))
+
+        // Build the list
+        const needExtension = returns.filter(r => !r.extension_filed)
+        const alreadyFiled = returns.filter(r => r.extension_filed)
+
+        const csvLines = ["Company Name,EIN,Entity Type,State,Return Type,Tax Return ID"]
+        const tableLines: string[] = []
+
+        for (const r of needExtension) {
+          const acc = r.account_id ? accMap.get(r.account_id) : null
+          const name = acc?.company_name || "(Individual)"
+          const ein = acc?.ein_number || "N/A"
+          const entity = acc?.entity_type || "N/A"
+          const state = acc?.state_of_formation || "N/A"
+          csvLines.push(`${name},${ein},${entity},${state},${r.return_type || "N/A"},${r.id}`)
+          tableLines.push(`| ${name} | ${ein} | ${entity} | ${state} | ${r.return_type || "N/A"} |`)
+        }
+
+        const lines = [
+          `═══════════════════════════════════════`,
+          `  Tax Extension List — ${tax_year}`,
+          `═══════════════════════════════════════`,
+          "",
+          `Total tax returns: ${returns.length}`,
+          `Need extension: ${needExtension.length}`,
+          `Already filed: ${alreadyFiled.length}`,
+          "",
+        ]
+
+        if (needExtension.length > 0) {
+          lines.push("| Company | EIN | Entity | State | Return Type |")
+          lines.push("|---------|-----|--------|-------|-------------|")
+          lines.push(...tableLines)
+        }
+
+        // Send email if requested
+        if (send_to_email && needExtension.length > 0) {
+          try {
+            const { gmailPost } = await import("@/lib/gmail")
+            const csvContent = csvLines.join("\n")
+            const boundary = "boundary_" + Date.now()
+            const emailBody = [
+              `Tax Extension List for ${tax_year}`,
+              "",
+              `Total clients needing extension: ${needExtension.length}`,
+              `Already filed: ${alreadyFiled.length}`,
+              "",
+              "Please file Form 7004 for all clients in the attached CSV.",
+              "Return the filing IDs (Submission ID) for each client once completed.",
+              "",
+              "Tony Durante LLC",
+            ].join("\n")
+
+            const parts = [
+              `--${boundary}`,
+              `Content-Type: text/plain; charset=utf-8`,
+              `Content-Transfer-Encoding: base64`,
+              "",
+              Buffer.from(emailBody).toString("base64"),
+              `--${boundary}`,
+              `Content-Type: text/csv; name="Tax_Extensions_${tax_year}.csv"`,
+              `Content-Transfer-Encoding: base64`,
+              `Content-Disposition: attachment; filename="Tax_Extensions_${tax_year}.csv"`,
+              "",
+              Buffer.from(csvContent).toString("base64"),
+              `--${boundary}--`,
+            ]
+
+            const mimeMessage = [
+              `From: Tony Durante LLC <support@tonydurante.us>`,
+              `To: ${send_to_email}`,
+              `Subject: Tax Extension List ${tax_year} — ${needExtension.length} clients`,
+              `MIME-Version: 1.0`,
+              `Content-Type: multipart/mixed; boundary="${boundary}"`,
+              "",
+              ...parts,
+            ].join("\r\n")
+
+            await gmailPost("/messages/send", { raw: Buffer.from(mimeMessage).toString("base64url") })
+            lines.push("")
+            lines.push(`📧 Extension list sent to ${send_to_email}`)
+          } catch (e) {
+            lines.push(`⚠️ Email failed: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // tax_extension_update
+  // ═══════════════════════════════════════
+  server.tool(
+    "tax_extension_update",
+    "Bulk update extension filing status for tax returns. Use after receiving filing IDs from the India team. Accepts an array of {tax_return_id, submission_id} pairs and marks each as extension_filed=true with the confirmation ID.",
+    {
+      tax_year: z.number().describe("Tax year"),
+      extensions: z.array(z.object({
+        tax_return_id: z.string().uuid().describe("Tax return UUID"),
+        submission_id: z.string().describe("Filing/Submission ID from India team"),
+      })).describe("Array of {tax_return_id, submission_id} pairs"),
+    },
+    async ({ tax_year, extensions }) => {
+      try {
+        let updated = 0
+        let failed = 0
+        const errors: string[] = []
+
+        for (const ext of extensions) {
+          try {
+            const { error } = await supabaseAdmin
+              .from("tax_returns")
+              .update({
+                extension_filed: true,
+                extension_confirmed_date: new Date().toISOString().slice(0, 10),
+                extension_submission_id: ext.submission_id,
+              })
+              .eq("id", ext.tax_return_id)
+              .eq("tax_year", tax_year)
+
+            if (error) {
+              errors.push(`${ext.tax_return_id}: ${error.message}`)
+              failed++
+            } else {
+              updated++
+            }
+          } catch (e) {
+            errors.push(`${ext.tax_return_id}: ${e instanceof Error ? e.message : String(e)}`)
+            failed++
+          }
+        }
+
+        const lines = [
+          `✅ Extension update complete for ${tax_year}`,
+          `   Updated: ${updated}`,
+          `   Failed: ${failed}`,
+        ]
+        if (errors.length > 0) {
+          lines.push("")
+          lines.push("Errors:")
+          errors.forEach(e => lines.push(`   • ${e}`))
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
 } // end registerTaxTools
 
 function daysSince(dateStr: string): number {
