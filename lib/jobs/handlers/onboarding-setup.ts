@@ -156,6 +156,31 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("doc_copy", "skipped", "No uploads"))
       }
 
+      // Generate data summary PDF
+      if (driveFolderId && submitted && Object.keys(submitted).length > 0) {
+        try {
+          const { generateFormSummaryPDF } = await import("@/lib/form-to-drive")
+          const { FORM_CONFIGS } = await import("@/lib/form-to-drive")
+          const config = FORM_CONFIGS["onboarding"]
+          const summaryPdf = await generateFormSummaryPDF(config, submitted, {
+            token,
+            submittedAt: now,
+            companyName: company_name,
+            uploadCount: (p.upload_paths || []).length,
+          })
+          const slug = company_name.replace(/\s+/g, "_")
+          const uploadResult = await uploadBinaryToDrive(
+            `Onboarding_Data_${slug}.pdf`,
+            Buffer.from(summaryPdf),
+            "application/pdf",
+            driveFolderId
+          ) as { id: string }
+          result.steps.push(step("data_summary_pdf", "ok", `Uploaded: ${uploadResult.id}`))
+        } catch (e) {
+          result.steps.push(step("data_summary_pdf", "error", e instanceof Error ? e.message : String(e)))
+        }
+      }
+
       await updateJobProgress(job.id, result)
     } catch (e) {
       result.steps.push(step("drive_folder", "error", e instanceof Error ? e.message : String(e)))
