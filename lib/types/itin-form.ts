@@ -1,5 +1,5 @@
 /**
- * ITIN Form Types ‚Äî Field configs, bilingual labels, tooltips
+ * ITIN Form Types - Field configs, bilingual labels, tooltips
  * Used by: app/itin-form/[token]/page.tsx, lib/mcp/tools/itin-form.ts
  *
  * ITIN = Individual Taxpayer Identification Number (IRS Form W-7)
@@ -10,14 +10,15 @@
  *   Step 3: Documents & Review (passport upload + review)
  *
  * The form can be linked to a lead (pre-formation) or account+contact (existing client).
- * Antonio is IRS Certified Acceptance Agent (CAA) ‚Äî prepares COA.
+ * Antonio is IRS Certified Acceptance Agent (CAA) - prepares COA.
  */
 
-// ‚îÄ‚îÄ‚îÄ DB Record ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === DB Record ===
 
 export interface ITINSubmission {
   id: string
   token: string
+  access_code: string | null
   lead_id: string | null
   account_id: string | null
   contact_id: string | null
@@ -38,7 +39,7 @@ export interface ITINSubmission {
   updated_at: string
 }
 
-// ‚îÄ‚îÄ‚îÄ Field Config ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === Field Config ===
 
 export type FieldType = 'text' | 'email' | 'phone' | 'number' | 'date' | 'select' | 'textarea' | 'country'
 
@@ -52,19 +53,17 @@ export interface FieldConfig {
   options?: string[]
 }
 
-// ‚îÄ‚îÄ‚îÄ Step Labels ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === Step Labels ===
 
 export const STEPS = {
   en: ['Personal Information', 'Foreign Address & Entry Info', 'Documents & Review'],
   it: ['Informazioni Personali', 'Indirizzo Estero e Info Ingresso', 'Documenti e Revisione'],
 } as const
 
-// ‚îÄ‚îÄ‚îÄ Field Definitions ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === Field Definitions ===
 
 export const FORM_FIELDS: FieldConfig[] = [
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
   // STEP 1: Personal Information (W-7 Lines 1-3)
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
   { key: 'first_name', type: 'text', required: true, step: 1, prefillFrom: 'leads.full_name' },
   { key: 'last_name', type: 'text', required: true, step: 1 },
   { key: 'name_at_birth', type: 'text', required: false, step: 1 },
@@ -76,9 +75,7 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'gender', type: 'select', required: true, step: 1, options: ['Male', 'Female'] },
   { key: 'citizenship', type: 'country', required: true, step: 1, prefillFrom: 'contacts.citizenship' },
 
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
   // STEP 2: Foreign Address & Entry Info (W-7 Lines 4-6)
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
   { key: 'foreign_street', type: 'text', required: true, step: 2 },
   { key: 'foreign_city', type: 'text', required: true, step: 2 },
   { key: 'foreign_state_province', type: 'text', required: false, step: 2 },
@@ -94,18 +91,16 @@ export const FORM_FIELDS: FieldConfig[] = [
   { key: 'has_previous_itin', type: 'select', required: true, step: 2, options: ['Yes', 'No'] },
   { key: 'previous_itin', type: 'text', required: false, step: 2 },
 
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
-  // STEP 3: Documents & Review (no input fields ‚Äî handled in UI)
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // STEP 3: Documents & Review (no input fields - handled in UI)
 ]
 
-// ‚îÄ‚îÄ‚îÄ Get fields for a specific step ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === Get fields for a specific step ===
 
 export function getFieldsForStep(step: number): FieldConfig[] {
   return FORM_FIELDS.filter(f => f.step === step)
 }
 
-// ‚îÄ‚îÄ‚îÄ Bilingual Labels ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === Bilingual Labels ===
 
 export const LABELS = {
   en: {
@@ -198,7 +193,7 @@ export const LABELS = {
     changed: 'Modificato',
 
     // Email gate
-    emailGateTitle: 'Verifica la tua identit√†',
+    emailGateTitle: 'Verifica la tua identita',
     emailGateMessage: 'Inserisci l\'indirizzo email associato a questo modulo per accedervi.',
     emailGateButton: 'Accedi al Modulo',
     emailGateError: 'L\'email non corrisponde ai nostri dati. Riprova.',
@@ -213,14 +208,14 @@ export const LABELS = {
     phone: 'Numero di Telefono',
     dob: 'Data di Nascita',
     country_of_birth: 'Paese di Nascita',
-    city_of_birth: 'Citt√† / Luogo di Nascita',
+    city_of_birth: 'Citta / Luogo di Nascita',
     gender: 'Sesso',
     citizenship: 'Paese di Cittadinanza',
 
     // Step 2: Indirizzo Estero e Info Ingresso
     step2Title: 'Indirizzo Estero e Informazioni di Ingresso',
     foreign_street: 'Indirizzo (Estero)',
-    foreign_city: 'Citt√†',
+    foreign_city: 'Citta',
     foreign_state_province: 'Stato / Provincia',
     foreign_zip: 'CAP / Codice Postale',
     foreign_country: 'Paese',
@@ -242,7 +237,7 @@ export const LABELS = {
     uploadRequired: 'Obbligatorio',
 
     // Disclaimer
-    disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC, in qualit√† di Agente di Accettazione Certificato IRS (CAA), utilizzer√† questi dati per preparare e inviare il modulo W-7 per la mia richiesta ITIN. Dovr√≤ anche firmare il modulo W-7 e la dichiarazione dei redditi 1040-NR con firma autografa e spedirli a Tony Durante LLC.',
+    disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC, in qualita di Agente di Accettazione Certificato IRS (CAA), utilizzera questi dati per preparare e inviare il modulo W-7 per la mia richiesta ITIN. Dovro anche firmare il modulo W-7 e la dichiarazione dei redditi 1040-NR con firma autografa e spedirli a Tony Durante LLC.',
     disclaimerRequired: 'Devi accettare la dichiarazione per inviare',
 
     // Success
@@ -252,17 +247,17 @@ export const LABELS = {
 
     // Errors
     notFound: 'Modulo Non Trovato',
-    notFoundMessage: 'Questo link non √® valido o √® scaduto.',
+    notFoundMessage: 'Questo link non e valido o e scaduto.',
     loading: 'Caricamento modulo...',
-    errorSubmit: 'Si √® verificato un errore durante l\'invio. Riprova.',
-    alreadySubmitted: 'Questo modulo √® gi√† stato inviato.',
+    errorSubmit: 'Si e verificato un errore durante l\'invio. Riprova.',
+    alreadySubmitted: 'Questo modulo e gia stato inviato.',
     alreadySubmittedMessage: 'Se hai bisogno di modifiche, contattaci.',
   },
 } as const
 
 export type LabelKey = keyof typeof LABELS.en
 
-// ‚îÄ‚îÄ‚îÄ Bilingual Tooltips ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+// === Bilingual Tooltips ===
 
 export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   first_name: {
@@ -283,7 +278,7 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   },
   city_of_birth: {
     en: 'The city and state/province where you were born, as on your passport.',
-    it: 'La citt√† e stato/provincia dove sei nato, come appare sul passaporto.',
+    it: 'La citta e stato/provincia dove sei nato, come appare sul passaporto.',
   },
   citizenship: {
     en: 'Your country of citizenship as shown on your passport.',
@@ -311,7 +306,7 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   },
   has_previous_itin: {
     en: 'Select Yes if you have ever had an ITIN number before, even if it has expired.',
-    it: 'Seleziona S√¨ se hai mai avuto un numero ITIN in precedenza, anche se √® scaduto.',
+    it: 'Seleziona Si se hai mai avuto un numero ITIN in precedenza, anche se e scaduto.',
   },
   passportUpload: {
     en: 'Upload a clear color scan or photo of your passport data page. Two copies are required by the IRS.',

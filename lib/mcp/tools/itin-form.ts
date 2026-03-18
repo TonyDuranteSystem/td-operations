@@ -1,5 +1,5 @@
 /**
- * ITIN Form Tools ‚Äî Create, retrieve, and review ITIN data collection forms.
+ * ITIN Form Tools - Create, retrieve, and review ITIN data collection forms.
  * Follows the same pattern as formation form tools (formation.ts).
  */
 
@@ -10,9 +10,9 @@ import { APP_BASE_URL } from "@/lib/config"
 
 export function registerITINFormTools(server: McpServer) {
 
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // ***************************************
   // itin_form_create
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // ***************************************
   server.tool(
     "itin_form_create",
     `Create an ITIN data collection form for a client. Pre-fills owner info from lead or contact record. Returns the form URL (${APP_BASE_URL}/itin-form/{token}). Admin preview: append ?preview=td to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.`,
@@ -127,13 +127,13 @@ export function registerITINFormTools(server: McpServer) {
           return {
             content: [{
               type: "text" as const,
-              text: `‚ö†Ô∏è ITIN form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: ${APP_BASE_URL}/itin-form/${existing.token}`,
+              text: `⚠️ ITIN form already exists for ${fullName}\nToken: ${existing.token}\nStatus: ${existing.status}\nURL: ${APP_BASE_URL}/itin-form/${existing.token}`,
             }],
           }
         }
 
-        // Determine language
-        const formLang = language || (detectedLang as "en" | "it")
+        // ITIN form is English-only per business rule
+        const formLang = "en" as const
 
         // Insert
         const { data: submission, error: insErr } = await supabaseAdmin
@@ -157,16 +157,16 @@ export function registerITINFormTools(server: McpServer) {
           content: [{
             type: "text" as const,
             text: [
-              `‚úÖ ITIN form created for ${fullName}`,
+              `✅ ITIN form created for ${fullName}`,
               `   Lang: ${formLang}`,
               `   ${lead_id ? `Lead: ${lead_id}` : `Account: ${account_id}`}`,
               `   Token: ${token}`,
               `   ID: ${submission.id}`,
               "",
-              `   üëÅÔ∏è Admin Preview: ${adminPreviewUrl}`,
-              `   üîó Client URL: ${url}`,
+              `   👁 Admin Preview: ${adminPreviewUrl}`,
+              `   🌐 Client URL: ${url}`,
               "",
-              `‚ö†Ô∏è Review the admin preview FIRST, then send the client URL via gmail_send`,
+              `⚠️ Review the admin preview FIRST, then send the client URL via gmail_send`,
             ].join("\n"),
           }],
         }
@@ -176,9 +176,9 @@ export function registerITINFormTools(server: McpServer) {
     }
   )
 
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // ***************************************
   // itin_form_get
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // ***************************************
   server.tool(
     "itin_form_get",
     "Get an ITIN data collection form by token, lead_id, or account_id. Returns prefilled data, submitted data, status, timestamps, and changed fields.",
@@ -226,7 +226,7 @@ export function registerITINFormTools(server: McpServer) {
         const changedCount = data.changed_fields ? Object.keys(data.changed_fields as object).length : 0
 
         const lines = [
-          `üìã ITIN Form: ${data.token}`,
+          `📋 ITIN Form: ${data.token}`,
           `   Client: ${clientName}`,
           `   Lang: ${data.language}`,
           `   Status: ${data.status}`,
@@ -242,23 +242,23 @@ export function registerITINFormTools(server: McpServer) {
 
         if (changedCount > 0) {
           lines.push("")
-          lines.push("   üîÑ Changes detected:")
+          lines.push("   📝 Changes detected:")
           for (const [key, val] of Object.entries(data.changed_fields as Record<string, { old: unknown; new: unknown }>)) {
-            lines.push(`      ${key}: "${val.old}" ‚Üí "${val.new}"`)
+            lines.push(`      ${key}: "${val.old}" -> "${val.new}"`)
           }
         }
 
         if (data.upload_paths && (data.upload_paths as string[]).length > 0) {
           lines.push("")
-          lines.push(`   üìé Uploads: ${(data.upload_paths as string[]).length} files`)
+          lines.push(`   📎 Uploads: ${(data.upload_paths as string[]).length} files`)
         }
 
         const formUrl = `${APP_BASE_URL}/itin-form/${data.token}`
         const adminPreviewUrl = `${formUrl}?preview=td`
 
         lines.push("")
-        lines.push(`   üëÅÔ∏è Admin Preview: ${adminPreviewUrl}`)
-        lines.push(`   üîó Client URL: ${formUrl}`)
+        lines.push(`   👁 Admin Preview: ${adminPreviewUrl}`)
+        lines.push(`   🌐 Client URL: ${formUrl}`)
         lines.push(`   ID: ${data.id}`)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -268,9 +268,9 @@ export function registerITINFormTools(server: McpServer) {
     }
   )
 
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // ***************************************
   // itin_form_review
-  // ‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê
+  // ***************************************
   server.tool(
     "itin_form_review",
     "Review a completed ITIN form submission. Shows diff table of changed fields (pre-filled vs submitted). If apply_changes=true, updates CRM contact record with submitted data (DOB, nationality, address, passport info) and creates a task for W-7 preparation. Always run without apply_changes first to review, then confirm with Antonio before applying.",
@@ -288,7 +288,7 @@ export function registerITINFormTools(server: McpServer) {
         if (error || !sub) throw new Error(`Form not found: ${token}`)
 
         if (sub.status !== "completed") {
-          return { content: [{ type: "text" as const, text: `‚ö†Ô∏è Form status is "${sub.status}" ‚Äî not yet completed by client.` }] }
+          return { content: [{ type: "text" as const, text: `⚠️ Form status is "${sub.status}" - not yet completed by client.` }] }
         }
 
         const changes = sub.changed_fields as Record<string, { old: unknown; new: unknown }> | null
@@ -307,15 +307,15 @@ export function registerITINFormTools(server: McpServer) {
         }
 
         const lines = [
-          `‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê`,
-          `  üìã ITIN FORM REVIEW: ${clientName}`,
+          `***************************************`,
+          `  📋 ITIN FORM REVIEW: ${clientName}`,
           `  Language: ${sub.language}`,
-          `‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê‚ïê`,
+          `***************************************`,
           "",
         ]
 
         // Show submitted data summary
-        lines.push("üìù Personal Information:")
+        lines.push("👤 Personal Information:")
         lines.push(`   Name: ${submitted.first_name || ""} ${submitted.last_name || ""}`)
         if (submitted.name_at_birth) lines.push(`   Name at Birth: ${submitted.name_at_birth}`)
         lines.push(`   Email: ${submitted.email || ""}`)
@@ -327,7 +327,7 @@ export function registerITINFormTools(server: McpServer) {
         lines.push(`   Citizenship: ${submitted.citizenship || ""}`)
 
         lines.push("")
-        lines.push("üìç Foreign Address:")
+        lines.push("🏠 Foreign Address:")
         lines.push(`   ${submitted.foreign_street || ""}, ${submitted.foreign_city || ""} ${submitted.foreign_zip || ""}`)
         lines.push(`   ${submitted.foreign_state_province || ""} ${submitted.foreign_country || ""}`)
         if (submitted.foreign_tax_id) lines.push(`   Foreign Tax ID: ${submitted.foreign_tax_id}`)
@@ -340,7 +340,7 @@ export function registerITINFormTools(server: McpServer) {
         }
 
         lines.push("")
-        lines.push("üõÇ Passport Information:")
+        lines.push("📄 Passport Information:")
         lines.push(`   Number: ${submitted.passport_number || ""}`)
         lines.push(`   Country: ${submitted.passport_country || ""}`)
         lines.push(`   Expires: ${submitted.passport_expiry || ""}`)
@@ -349,9 +349,9 @@ export function registerITINFormTools(server: McpServer) {
         lines.push("")
 
         if (changeCount === 0) {
-          lines.push("‚úÖ No changes detected ‚Äî all pre-filled data was confirmed by client.")
+          lines.push("✅ No changes detected - all pre-filled data was confirmed by client.")
         } else {
-          lines.push(`üîÑ ${changeCount} field(s) changed from pre-filled:`)
+          lines.push(`📝 ${changeCount} field(s) changed from pre-filled:`)
           lines.push("")
           lines.push("| Field | Pre-filled | Client Value |")
           lines.push("|-------|-----------|-------------|")
@@ -366,9 +366,9 @@ export function registerITINFormTools(server: McpServer) {
         const uploads = sub.upload_paths as string[] | null
         if (uploads && uploads.length > 0) {
           lines.push("")
-          lines.push(`üìé ${uploads.length} file(s) uploaded:`)
+          lines.push(`📎 ${uploads.length} file(s) uploaded:`)
           for (const path of uploads) {
-            lines.push(`   ‚Ä¢ ${path}`)
+            lines.push(`   • ${path}`)
           }
         }
 
@@ -377,7 +377,7 @@ export function registerITINFormTools(server: McpServer) {
 
         if (apply_changes) {
           lines.push("")
-          lines.push("‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ")
+          lines.push("===================================")
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
@@ -397,7 +397,7 @@ export function registerITINFormTools(server: McpServer) {
                 .from("contacts")
                 .update(contactUpdates)
                 .eq("id", sub.contact_id)
-              lines.push(`‚úÖ Contact updated (${Object.keys(contactUpdates).length} fields)`)
+              lines.push(`✅ Contact updated (${Object.keys(contactUpdates).length} fields)`)
             }
           }
 
@@ -414,7 +414,7 @@ export function registerITINFormTools(server: McpServer) {
               status: "To Do",
               account_id: accountId,
             })
-          lines.push("‚úÖ Task created: Prepare W-7 form")
+          lines.push("✅ Task created: Prepare W-7 form")
 
           // Mark form as reviewed
           await supabaseAdmin
@@ -425,7 +425,7 @@ export function registerITINFormTools(server: McpServer) {
               reviewed_by: "claude",
             })
             .eq("id", sub.id)
-          lines.push("‚úÖ Form marked as reviewed")
+          lines.push("✅ Form marked as reviewed")
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
