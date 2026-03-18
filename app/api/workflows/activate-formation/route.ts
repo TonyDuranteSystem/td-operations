@@ -259,6 +259,73 @@ export async function POST(req: NextRequest) {
         .eq("id", pending_activation_id)
     }
 
+    // ─── CREATE SERVICE DELIVERIES FROM BUNDLED PIPELINES ─────
+    const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
+    try {
+      // Get the offer to read bundled_pipelines
+      const { data: offerData } = await supabase
+        .from("offers")
+        .select("bundled_pipelines, account_id")
+        .eq("token", activation.offer_token)
+        .single()
+
+      const pipelines: string[] = Array.isArray(offerData?.bundled_pipelines) ? offerData.bundled_pipelines : []
+
+      if (pipelines.length > 0) {
+        // Get first pipeline stage for each type
+        const { data: allStages } = await supabase
+          .from("pipeline_stages")
+          .select("service_type, stage_name, stage_order")
+          .in("service_type", pipelines)
+          .order("stage_order", { ascending: true })
+
+        const firstStage = new Map<string, string>()
+        if (allStages) {
+          for (const s of allStages) {
+            if (!firstStage.has(s.service_type)) firstStage.set(s.service_type, s.stage_name)
+          }
+        }
+
+        // Resolve account_id (from offer or lead)
+        let accountId = offerData?.account_id || null
+        if (!accountId && leadId) {
+          const { data: lead } = await supabase.from("leads").select("account_id").eq("id", leadId).maybeSingle()
+          accountId = lead?.account_id || null
+        }
+
+        for (const pipeline of pipelines) {
+          try {
+            const stage = firstStage.get(pipeline) || "Pending"
+            const { data: sd, error: sdErr } = await supabase
+              .from("service_deliveries")
+              .insert({
+                service_type: pipeline,
+                service_name: `${pipeline} - ${activation.client_name}`,
+                account_id: accountId,
+                contact_id: contactId,
+                current_stage: stage,
+                status: "active",
+                assigned_to: "Luca",
+                notes: `Auto-created from offer ${activation.offer_token}`,
+              })
+              .select("id")
+              .single()
+
+            if (sdErr) {
+              sdResults.push({ pipeline, status: "error", id: sdErr.message })
+            } else {
+              sdResults.push({ pipeline, status: "created", id: sd?.id })
+            }
+          } catch (e) {
+            sdResults.push({ pipeline, status: "error", id: e instanceof Error ? e.message : String(e) })
+          }
+        }
+        steps.push({ step: "pipelines", status: "done", detail: `Created ${sdResults.filter(r => r.status === "created").length}/${pipelines.length} service deliveries` })
+      }
+    } catch (e) {
+      steps.push({ step: "pipelines", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
+
     // Log action
     await supabase.from("action_log").insert({
       action_type: "formation_activated",

@@ -190,9 +190,12 @@ export default function ServiceAgreement({ offer, token }: Props) {
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
 
-  // Services from offer
+  // Services from offer — filter by client selections if available
+  const selectedSet = new Set((offer as any).selected_services || [])
   const servicesList = offer.services && Array.isArray(offer.services)
-    ? offer.services.map(svc => ({ name: svc.name || '', desc: svc.description || '', includes: svc.includes || [] }))
+    ? offer.services
+        .filter(svc => selectedSet.size === 0 || selectedSet.has(svc.name) || !(svc as any).optional)
+        .map(svc => ({ name: svc.name || '', desc: svc.description || '', includes: svc.includes || [] }))
     : []
 
   // LLC type

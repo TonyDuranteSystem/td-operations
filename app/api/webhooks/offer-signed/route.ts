@@ -103,6 +103,24 @@ export async function POST(req: NextRequest) {
 
     console.log(`[offer-signed] Created pending_activation ${activation.id} for ${offer.client_name} (${paymentMethod})`)
 
+    // Update bundled_pipelines based on selected_services (remove deselected optional service pipelines)
+    if (offer.selected_services && Array.isArray(offer.selected_services) && offer.bundled_pipelines) {
+      const selectedNames = new Set(offer.selected_services)
+      const services = Array.isArray(offer.services) ? offer.services : []
+      // Find optional services that were deselected
+      const deselectedPipelines = new Set<string>()
+      for (const svc of services) {
+        if ((svc as any).optional && !selectedNames.has(svc.name) && (svc as any).pipeline_type) {
+          deselectedPipelines.add((svc as any).pipeline_type)
+        }
+      }
+      if (deselectedPipelines.size > 0) {
+        const finalPipelines = (offer.bundled_pipelines as string[]).filter(p => !deselectedPipelines.has(p))
+        await supabase.from("offers").update({ bundled_pipelines: finalPipelines }).eq("token", offer_token)
+        console.log(`[offer-signed] Updated bundled_pipelines: removed ${Array.from(deselectedPipelines).join(", ")}`)
+      }
+    }
+
     // Log action
     await supabase.from("action_log").insert({
       action_type: "offer_signed",
