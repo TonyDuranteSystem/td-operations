@@ -184,6 +184,47 @@ export async function POST(req: NextRequest) {
       results.push({ step: "review_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
+    // --- 4. SAVE FORM DATA + UPLOADS TO DRIVE ---
+    const accountId = sub.account_id
+    if (accountId) {
+      try {
+        const { data: acc } = await supabaseAdmin
+          .from("accounts")
+          .select("drive_folder_id")
+          .eq("id", accountId)
+          .single()
+
+        if (acc?.drive_folder_id) {
+          // Get full submission data
+          const { data: fullSub } = await supabaseAdmin
+            .from("itin_submissions")
+            .select("submitted_data, upload_paths, completed_at")
+            .eq("id", submission_id)
+            .single()
+
+          if (fullSub?.submitted_data) {
+            const { saveFormToDrive } = await import("@/lib/form-to-drive")
+            const driveResult = await saveFormToDrive(
+              "itin",
+              fullSub.submitted_data as Record<string, unknown>,
+              (fullSub.upload_paths as string[]) || [],
+              acc.drive_folder_id,
+              { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName: displayName }
+            )
+            if (driveResult.summaryFileId) {
+              results.push({ step: "drive_save", status: "ok", detail: `Data summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
+            } else {
+              results.push({ step: "drive_save", status: "error", detail: driveResult.errors.join(", ") })
+            }
+          }
+        } else {
+          results.push({ step: "drive_save", status: "skipped", detail: "No drive_folder_id on account" })
+        }
+      } catch (e) {
+        results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
     return NextResponse.json({ ok: true, results })
   } catch (err) {
     console.error("[itin-form-completed]", err)

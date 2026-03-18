@@ -157,86 +157,41 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 4. GENERATE PDF & UPLOAD TO DRIVE ───
+    // ─── 4. SAVE FORM DATA + UPLOADS TO DRIVE ───
     if (sub.account_id) {
       try {
-        // Get full submission data for PDF
         const { data: fullSub } = await supabaseAdmin
           .from("tax_return_submissions")
           .select("submitted_data, upload_paths, completed_at")
           .eq("id", submission_id)
           .single()
 
-        // Get account Drive folder
         const { data: acc } = await supabaseAdmin
           .from("accounts")
-          .select("company_name, drive_folder_id, ein_number, state_of_formation")
+          .select("drive_folder_id")
           .eq("id", sub.account_id)
           .single()
 
         if (fullSub?.submitted_data && acc?.drive_folder_id) {
-          const { generateTaxFormPDF } = await import("@/lib/pdf/tax-form-pdf")
-          const { listFolder, createFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
-
-          const pdfBytes = await generateTaxFormPDF({
-            companyName: acc.company_name || companyName,
-            ein: acc.ein_number || fullSub.submitted_data.ein_number as string || "N/A",
-            state: acc.state_of_formation || fullSub.submitted_data.state_of_incorporation as string || "N/A",
-            incorporationDate: fullSub.submitted_data.date_of_incorporation as string || "N/A",
-            taxYear: sub.tax_year || "N/A",
-            submittedAt: fullSub.completed_at || new Date().toISOString(),
-            submittedData: fullSub.submitted_data as Record<string, unknown>,
-            uploadPaths: (fullSub.upload_paths as string[]) || [],
-          })
-
-          // Find or create "5. Tax Returns" subfolder
-          const folderContents = await listFolder(acc.drive_folder_id)
-          const files = folderContents?.files || []
-          const taxFolder = files.find(
-            (f: { name: string; mimeType: string }) =>
-              f.name === "5. Tax Returns" && f.mimeType === "application/vnd.google-apps.folder"
+          const { saveFormToDrive } = await import("@/lib/form-to-drive")
+          const driveResult = await saveFormToDrive(
+            "tax_return",
+            fullSub.submitted_data as Record<string, unknown>,
+            (fullSub.upload_paths as string[]) || [],
+            acc.drive_folder_id,
+            { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName }
           )
-          let taxFolderId = taxFolder?.id
-
-          if (!taxFolderId) {
-            const newFolder = await createFolder(acc.drive_folder_id, "5. Tax Returns")
-            taxFolderId = newFolder.id
+          if (driveResult.summaryFileId) {
+            results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
           }
-
-          if (taxFolderId) {
-            const pdfName = `Tax Data Collection - ${acc.company_name} - ${sub.tax_year}.pdf`
-            const uploadResult = await uploadBinaryToDrive(
-              pdfName,
-              Buffer.from(pdfBytes),
-              "application/pdf",
-              taxFolderId,
-            )
-
-            results.push({
-              step: "pdf_drive_upload",
-              status: "ok",
-              detail: `Uploaded "${pdfName}" to Drive (${uploadResult.id})`,
-            })
-          } else {
-            results.push({
-              step: "pdf_drive_upload",
-              status: "error",
-              detail: "Could not find or create '5. Tax Returns' folder",
-            })
+          if (driveResult.errors.length > 0) {
+            results.push({ step: "drive_save", status: "error", detail: driveResult.errors.join(", ") })
           }
         } else {
-          results.push({
-            step: "pdf_drive_upload",
-            status: "skipped",
-            detail: `submitted_data=${!!fullSub?.submitted_data}, drive_folder_id=${acc?.drive_folder_id || 'null'}, account_id=${sub.account_id}`,
-          })
+          results.push({ step: "drive_save", status: "skipped", detail: `No data or no drive_folder_id` })
         }
       } catch (e) {
-        results.push({
-          step: "pdf_drive_upload",
-          status: "error",
-          detail: e instanceof Error ? e.message : String(e),
-        })
+        results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 
