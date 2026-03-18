@@ -161,6 +161,7 @@ export default function OfferPageWithCode() {
   const [emailInput, setEmailInput] = useState('')
   const [emailError, setEmailError] = useState(false)
   const [lang, setLang] = useState<'en' | 'it'>('it')
+  const [selectedOptional, setSelectedOptional] = useState<Set<string>>(new Set())
 
   const L = LABELS[lang]
 
@@ -199,6 +200,13 @@ export default function OfferPageWithCode() {
       setOffer(o)
       setLang(o.language || 'it')
       setLoading(false)
+
+      // Pre-select recommended optional services
+      const recommended = new Set<string>()
+      o.services?.forEach(sv => {
+        if ((sv as any).optional && (sv as any).recommended) recommended.add(sv.name)
+      })
+      if (recommended.size > 0) setSelectedOptional(recommended)
 
       // Check if already verified via cookie, admin preview, or valid access code in URL
       const hasValidCode = !!(accessCode && o.access_code && accessCode === o.access_code)
@@ -397,8 +405,27 @@ export default function OfferPageWithCode() {
                 <p style={{ marginBottom: 20, fontSize: 15, color: '#6b7280' }}>{L.servicesIntro}</p>
               )}
               <div className="offer-servizi-grid">
-                {o.services?.map((sv, i) => (
-                  <div key={i} className={`offer-servizio-card${sv.recommended ? ' offer-recommended' : ''}`}>
+                {o.services?.map((sv, i) => {
+                  const isOpt = !!(sv as any).optional
+                  const isSelected = !isOpt || selectedOptional.has(sv.name)
+                  return (
+                  <div key={i} className={`offer-servizio-card${sv.recommended ? ' offer-recommended' : ''}${isOpt && !isSelected ? ' offer-optional-dimmed' : ''}${isOpt ? ' offer-optional' : ''}`}
+                    onClick={isOpt ? () => {
+                      setSelectedOptional(prev => {
+                        const next = new Set(prev)
+                        if (next.has(sv.name)) next.delete(sv.name)
+                        else next.add(sv.name)
+                        return next
+                      })
+                    } : undefined}
+                    style={isOpt ? { cursor: 'pointer' } : undefined}
+                  >
+                    {isOpt && (
+                      <div className="offer-optional-checkbox">
+                        <input type="checkbox" checked={isSelected} readOnly style={{ width: 18, height: 18, accentColor: '#1e40af', cursor: 'pointer' }} />
+                        <span className="offer-optional-label">{lang === 'it' ? 'OPZIONALE' : 'OPTIONAL'}</span>
+                      </div>
+                    )}
                     {sv.recommended && <div className="offer-badge-recommended">{L.recommended}</div>}
                     <h3>{sv.name}</h3>
                     <div className="offer-price">{sv.price}</div>
@@ -413,7 +440,8 @@ export default function OfferPageWithCode() {
                       </>
                     )}
                   </div>
-                ))}
+                  )
+                })}
                 {o.additional_services?.map((sv, i) => (
                   <div key={`addon-${i}`} className="offer-servizio-card offer-addon">
                     <h3>{sv.name}</h3>
@@ -530,7 +558,17 @@ export default function OfferPageWithCode() {
             {/* Contract signing */}
             {!isSigned && (
               <div className="offer-contract-cta">
-                <a href={`/offer/${encodeURIComponent(token)}/contract`} className="offer-accept-btn">&#9997;&#65039; {L.acceptAndSign}</a>
+                <a href={`/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`}
+                  className="offer-accept-btn"
+                  onClick={async () => {
+                    const allSelected = (o.services || [])
+                      .filter(sv => !(sv as any).optional || selectedOptional.has(sv.name))
+                      .map(sv => sv.name)
+                    try {
+                      await supabasePublic.from('offers').update({ selected_services: allSelected }).eq('token', token)
+                    } catch { /* non-blocking */ }
+                  }}
+                >&#9997;&#65039; {L.acceptAndSign}</a>
               </div>
             )}
 
@@ -638,6 +676,11 @@ function OfferStyles() {
       .offer-servizio-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,.08); }
       .offer-servizio-card.offer-recommended { border-color: var(--offer-blue); border-width: 2px; background: var(--offer-blue-lighter); }
       .offer-servizio-card.offer-addon { grid-column: 1 / -1; }
+      .offer-servizio-card.offer-optional { border-style: dashed; transition: opacity .2s, border-color .2s; }
+      .offer-servizio-card.offer-optional:hover { border-color: var(--offer-blue); }
+      .offer-servizio-card.offer-optional-dimmed { opacity: 0.5; border-color: var(--offer-gray-200); }
+      .offer-optional-checkbox { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+      .offer-optional-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--offer-blue); }
       .offer-badge-recommended { position: absolute; top: -12px; right: 20px; background: var(--offer-blue); color: #fff; padding: 4px 14px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: 2px; }
       .offer-servizio-card h3 { font-size: 18px; font-weight: 700; color: var(--offer-dark); margin-bottom: 8px; }
       .offer-price { font-size: 28px; font-weight: 700; color: var(--offer-blue); }
