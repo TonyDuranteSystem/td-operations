@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, AlertTriangle, Loader2, Clock, AlertCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, AlertTriangle, Loader2, Clock, AlertCircle, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TaskCard } from './task-card'
-import type { GroupedTasks, TaskStats } from '@/lib/types'
+import { CreateTaskDialog } from './create-task-dialog'
+import { EditTaskDialog } from './edit-task-dialog'
+import type { Task, GroupedTasks, TaskStats } from '@/lib/types'
 
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
@@ -69,15 +71,27 @@ export function TaskBoard({
   stats: TaskStats
   today: string
 }) {
+  const [showCreate, setShowCreate] = useState(false)
+  const [editingTask, setEditingTask] = useState<Task | null>(null)
+
   return (
     <div className="space-y-6">
-      {/* Summary bar */}
-      <div className="flex gap-3 flex-wrap">
+      {/* Summary bar + New Task button */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex gap-3 flex-wrap flex-1">
         <StatCard label="Totale Attivi" value={stats.total} color="text-foreground" />
         <StatCard label="Urgenti" value={stats.urgent} color="text-red-600" />
         <StatCard label="In Attesa" value={stats.waiting} color="text-amber-600" />
         <StatCard label="Scaduti" value={stats.overdue} color="text-red-600" />
         <StatCard label="In Corso" value={stats.inProgress} color="text-blue-600" />
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 shrink-0"
+        >
+          <Plus className="h-4 w-4" />
+          New Task
+        </button>
       </div>
 
       {/* Sections */}
@@ -92,7 +106,7 @@ export function TaskBoard({
             <p className="text-sm text-muted-foreground pl-6">Nessun task urgente</p>
           ) : (
             tasks.urgente.map(task => (
-              <TaskCard key={task.id} task={task} today={today} />
+              <TaskCard key={task.id} task={task} today={today} onEdit={setEditingTask} />
             ))
           )}
         </Section>
@@ -107,7 +121,7 @@ export function TaskBoard({
             <p className="text-sm text-muted-foreground pl-6">Nessun task in corso</p>
           ) : (
             tasks.inCorso.map(task => (
-              <TaskCard key={task.id} task={task} today={today} />
+              <TaskCard key={task.id} task={task} today={today} onEdit={setEditingTask} />
             ))
           )}
         </Section>
@@ -123,11 +137,21 @@ export function TaskBoard({
             <p className="text-sm text-muted-foreground pl-6">Nessun task</p>
           ) : (
             tasks.normale.map(task => (
-              <TaskCard key={task.id} task={task} today={today} />
+              <TaskCard key={task.id} task={task} today={today} onEdit={setEditingTask} />
             ))
           )}
         </Section>
       </div>
+
+      {/* Dialogs */}
+      <CreateTaskDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      {editingTask && (
+        <EditTaskDialog
+          task={editingTask}
+          open={!!editingTask}
+          onClose={() => setEditingTask(null)}
+        />
+      )}
     </div>
   )
 }

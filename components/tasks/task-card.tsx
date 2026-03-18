@@ -7,6 +7,7 @@ import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
 import type { Task } from '@/lib/types'
 import { differenceInDays, parseISO } from 'date-fns'
+import { toast } from 'sonner'
 
 function getDaysLabel(dueDate: string, today: string): { text: string; overdue: boolean } {
   const due = parseISO(dueDate)
@@ -25,7 +26,7 @@ function isFollowUp(task: Task, today: string): boolean {
   return differenceInDays(now, updated) >= 5
 }
 
-export function TaskCard({ task, today }: { task: Task; today: string }) {
+export function TaskCard({ task, today, onEdit }: { task: Task; today: string; onEdit?: (task: Task) => void }) {
   const [isPending, startTransition] = useTransition()
   const [showActions, setShowActions] = useState(false)
 
@@ -33,19 +34,28 @@ export function TaskCard({ task, today }: { task: Task; today: string }) {
   const followUp = isFollowUp(task, today)
 
   const handleComplete = () => {
-    startTransition(() => updateTaskStatus(task.id, 'Done'))
+    startTransition(async () => {
+      const result = await updateTaskStatus(task.id, 'Done', task.updated_at)
+      if (!result.success) toast.error(result.error)
+    })
   }
 
   const handleReassign = () => {
     const next = task.assigned_to === 'Luca' ? 'Antonio' : 'Luca'
-    startTransition(() => updateTaskAssignee(task.id, next))
+    startTransition(async () => {
+      const result = await updateTaskAssignee(task.id, next, task.updated_at)
+      if (!result.success) toast.error(result.error)
+    })
   }
 
   const handlePriorityUp = () => {
     const order = ['Low', 'Normal', 'High', 'Urgent']
     const idx = order.indexOf(task.priority)
     if (idx < order.length - 1) {
-      startTransition(() => updateTaskPriority(task.id, order[idx + 1]))
+      startTransition(async () => {
+        const result = await updateTaskPriority(task.id, order[idx + 1], task.updated_at)
+        if (!result.success) toast.error(result.error)
+      })
     }
   }
 
@@ -53,7 +63,10 @@ export function TaskCard({ task, today }: { task: Task; today: string }) {
     const order = ['Low', 'Normal', 'High', 'Urgent']
     const idx = order.indexOf(task.priority)
     if (idx > 0) {
-      startTransition(() => updateTaskPriority(task.id, order[idx - 1]))
+      startTransition(async () => {
+        const result = await updateTaskPriority(task.id, order[idx - 1], task.updated_at)
+        if (!result.success) toast.error(result.error)
+      })
     }
   }
 
@@ -95,9 +108,13 @@ export function TaskCard({ task, today }: { task: Task; today: string }) {
       </div>
 
       {/* Title */}
-      <p className="text-sm font-medium leading-snug mb-2 line-clamp-2">
+      <button
+        type="button"
+        onClick={() => onEdit?.(task)}
+        className="text-sm font-medium leading-snug mb-2 line-clamp-2 text-left hover:underline cursor-pointer"
+      >
         {task.task_title}
-      </p>
+      </button>
 
       {/* Bottom row: assignee + SLA + actions */}
       <div className="flex items-center justify-between">
