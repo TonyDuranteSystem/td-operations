@@ -25,3 +25,4 @@
  */
 
 export const APP_BASE_URL = "https://app.tonydurante.us"
+export const PORTAL_BASE_URL = "https://portal.tonydurante.us"
