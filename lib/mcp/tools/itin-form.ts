@@ -221,48 +221,19 @@ export function registerITINFormTools(server: McpServer) {
           ? "Richiesta ITIN — Compila il modulo di raccolta dati"
           : "ITIN Application — Please complete the data collection form"
 
-        // Send email with passport example attached
         const { gmailPost } = await import("@/lib/gmail")
-        const { downloadFileBinary } = await import("@/lib/google-drive")
 
-        const PASSPORT_EXAMPLE_ID = "1RU-ndib5pH9_tMILZZksFU6ZYRiomK1g"
-        let passportBuf: Buffer | null = null
-        try {
-          const dl = await downloadFileBinary(PASSPORT_EXAMPLE_ID)
-          passportBuf = dl.buffer
-        } catch { /* skip */ }
-
-        const boundary = "boundary_" + Date.now()
-        const parts = [
-          `--${boundary}`,
-          `Content-Type: text/html; charset=utf-8`,
-          `Content-Transfer-Encoding: base64`,
-          "",
-          Buffer.from(emailHtml).toString("base64"),
-        ]
-        if (passportBuf) {
-          parts.push(
-            `--${boundary}`,
-            `Content-Type: image/png; name="Passport_Example_ITIN.png"`,
-            `Content-Transfer-Encoding: base64`,
-            `Content-Disposition: attachment; filename="Passport_Example_ITIN.png"`,
-            "",
-            passportBuf.toString("base64"),
-          )
-        }
-        parts.push(`--${boundary}--`)
-
-        const mimeMessage = [
+        // Simple HTML email — no attachments needed for form link
+        const mimeHeaders = [
           `From: Tony Durante LLC <support@tonydurante.us>`,
           `To: ${clientEmail}`,
           `Subject: ${subject}`,
           `MIME-Version: 1.0`,
-          `Content-Type: multipart/mixed; boundary="${boundary}"`,
-          "",
-          ...parts,
-        ].join("\r\n")
-
-        const encodedRaw = Buffer.from(mimeMessage).toString("base64url")
+          `Content-Type: text/html; charset=utf-8`,
+          `Content-Transfer-Encoding: base64`,
+        ]
+        const rawEmail = [...mimeHeaders, "", Buffer.from(emailHtml).toString("base64")].join("\r\n")
+        const encodedRaw = Buffer.from(rawEmail).toString("base64url")
         await gmailPost("/messages/send", { raw: encodedRaw })
 
         // Update status to sent
@@ -278,7 +249,7 @@ export function registerITINFormTools(server: McpServer) {
               `✅ ITIN form link sent to ${clientEmail}`,
               `   Subject: ${subject}`,
               `   Language: ${lang}`,
-              `   Passport example: ${passportBuf ? "attached" : "not attached"}`,
+              `   Attachments: none (form link only)`,
               `   Form status: sent`,
             ].join("\n"),
           }],
@@ -830,7 +801,6 @@ support@tonydurante.us
 function generateITINFormLinkEmail(firstName: string, formUrl: string, lang: "en" | "it"): string {
   const hr = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
   const btnStyle = 'style="display:inline-block;padding:14px 32px;background:#1e3a5f;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px"'
-  const info = 'style="background:#f0f5fb;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin:16px 0"'
 
   if (lang === "it") {
     return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
@@ -839,7 +809,7 @@ function generateITINFormLinkEmail(firstName: string, formUrl: string, lang: "en
 
 <p>per procedere con la tua richiesta di <strong>ITIN (Individual Taxpayer Identification Number)</strong>, abbiamo bisogno di alcune informazioni personali.</p>
 
-<p>Clicca il pulsante qui sotto per accedere al modulo di raccolta dati:</p>
+<p>Clicca il pulsante qui sotto per compilare il modulo:</p>
 
 <p style="text-align:center;margin:24px 0">
 <a href="${formUrl}" ${btnStyle}>Compila il Modulo ITIN</a>
@@ -849,52 +819,35 @@ ${hr}
 
 <p style="font-size:16px"><strong>Cosa ti chiederemo</strong></p>
 
-<p>Il modulo e diviso in 3 semplici passaggi:</p>
+<p>Il modulo raccoglie le informazioni necessarie per preparare la tua richiesta ITIN presso l'IRS:</p>
 
 <ol style="margin:8px 0">
 <li><strong>Informazioni personali</strong> — nome, data di nascita, cittadinanza, contatti</li>
-<li><strong>Indirizzo estero e informazioni di ingresso</strong> — il tuo indirizzo di residenza fuori dagli USA, informazioni sul passaporto, eventuale visto USA</li>
-<li><strong>Revisione e invio</strong> — revisione finale di tutti i dati e conferma</li>
+<li><strong>Indirizzo estero e dati di ingresso</strong> — il tuo indirizzo di residenza, dati del passaporto, eventuale visto USA</li>
+<li><strong>Revisione e invio</strong> — verifica i dati inseriti e conferma</li>
 </ol>
 
-${hr}
-
-<p style="font-size:16px"><strong>Copia del passaporto</strong></p>
-
-<p>Insieme ai documenti firmati, dovrai stampare e spedire <strong>due copie a colori chiare</strong> del tuo passaporto. In allegato trovi un esempio di come devono apparire le copie.</p>
-
-<div ${info}>
-<ul style="margin:0;padding-left:20px">
-<li>Scansione <strong>a colori</strong> (NO bianco e nero)</li>
-<li>Pagina dei dati (con foto, nome, numero passaporto)</li>
-<li><strong>Nessuna ostruzione</strong> — niente dita, ombre o riflessi</li>
-<li>Tutti e quattro i bordi della pagina visibili</li>
-</ul>
-</div>
+<p>Una volta ricevuti i tuoi dati, prepareremo i documenti necessari (W-7 e 1040-NR) e ti invieremo una seconda email con tutte le istruzioni per la firma e la spedizione.</p>
 
 ${hr}
-
-<p>Una volta ricevuti i tuoi dati, prepareremo i moduli <strong>W-7</strong> e <strong>1040-NR</strong> e te li invieremo per la firma.</p>
 
 <p>Per qualsiasi domanda, non esitare a contattarci.</p>
 
 <p>Cordiali saluti,<br/>
 <strong>Tony Durante LLC</strong><br/>
-<span style="color:#6b7280">Certified Acceptance Agent (CAA) — IRS ITIN Program</span><br/>
 <span style="color:#6b7280">+1 (727) 452-1093</span><br/>
 <a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
 
 </div>`
   }
 
-  // English version
   return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
 
 <p>Dear ${firstName},</p>
 
 <p>To proceed with your <strong>ITIN (Individual Taxpayer Identification Number)</strong> application, we need some personal information from you.</p>
 
-<p>Click the button below to access the data collection form:</p>
+<p>Click the button below to complete the form:</p>
 
 <p style="text-align:center;margin:24px 0">
 <a href="${formUrl}" ${btnStyle}>Complete ITIN Form</a>
@@ -904,38 +857,22 @@ ${hr}
 
 <p style="font-size:16px"><strong>What we will ask</strong></p>
 
-<p>The form has 3 simple steps:</p>
+<p>The form collects the information needed to prepare your ITIN application with the IRS:</p>
 
 <ol style="margin:8px 0">
 <li><strong>Personal information</strong> — name, date of birth, citizenship, contact details</li>
-<li><strong>Foreign address and entry information</strong> — your residential address outside the US, passport details, US visa if applicable</li>
-<li><strong>Review and submit</strong> — review all entered data and confirm</li>
+<li><strong>Foreign address and entry details</strong> — your residential address, passport details, US visa if applicable</li>
+<li><strong>Review and submit</strong> — verify all entered data and confirm</li>
 </ol>
 
-${hr}
-
-<p style="font-size:16px"><strong>Passport copy</strong></p>
-
-<p>Along with the signed documents, you will need to print and mail <strong>two clear, full-color copies</strong> of your passport. Please see the attached example of how the copies should look.</p>
-
-<div ${info}>
-<ul style="margin:0;padding-left:20px">
-<li><strong>Full color</strong> scan (NO black and white)</li>
-<li>Data page (with photo, name, passport number)</li>
-<li><strong>No obstructions</strong> — no fingers, shadows, or glare</li>
-<li>All four edges of the page must be visible</li>
-</ul>
-</div>
+<p>Once we receive your data, we will prepare the necessary documents (W-7 and 1040-NR) and send you a second email with all instructions for signing and mailing.</p>
 
 ${hr}
-
-<p>Once we receive your data, we will prepare the <strong>W-7</strong> and <strong>1040-NR</strong> forms and send them to you for signature.</p>
 
 <p>If you have any questions, please do not hesitate to contact us.</p>
 
 <p>Best regards,<br/>
 <strong>Tony Durante LLC</strong><br/>
-<span style="color:#6b7280">Certified Acceptance Agent (CAA) — IRS ITIN Program</span><br/>
 <span style="color:#6b7280">+1 (727) 452-1093</span><br/>
 <a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
 
