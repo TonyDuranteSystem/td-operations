@@ -1,10 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
+import { isAdmin } from '@/lib/auth'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 export default async function AccountDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const admin = user ? isAdmin(user) : false
   const today = new Date().toISOString().split('T')[0]
 
   // Fetch account
@@ -69,6 +72,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         deals={deals}
         taxReturns={taxReturns}
         today={today}
+        isAdmin={admin}
       />
     </div>
   )

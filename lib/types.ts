@@ -98,6 +98,7 @@ export interface Contact {
   passport_on_file: boolean | null
   notes: string | null
   role?: string | null
+  updated_at: string
 }
 
 export interface Service {

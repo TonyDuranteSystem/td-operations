@@ -8,7 +8,10 @@ import {
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
+import { EditableField } from './editable-field'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
+import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -66,9 +69,10 @@ interface AccountDetailProps {
   deals: Deal[]
   taxReturns: TaxReturn[]
   today: string
+  isAdmin?: boolean
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, today }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, today, isAdmin = false }: AccountDetailProps) {
   const [activeTab, setActiveTab] = useState('panoramica')
 
   const activeServices = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
@@ -156,7 +160,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'panoramica' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} isAdmin={isAdmin} />
       )}
       {activeTab === 'servizi' && (
         <ServiziTab services={services} today={today} />
@@ -176,32 +180,70 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals }: { account: Account; contacts: Contact[]; deals: Deal[] }) {
+function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account; contacts: Contact[]; deals: Deal[]; isAdmin: boolean }) {
+  const [noteText, setNoteText] = useState('')
+  const [addingNote, setAddingNote] = useState(false)
+
+  const makeAccountSaver = (field: string) => async (value: string) => {
+    const result = await updateAccountField(account.id, field, value, account.updated_at)
+    if (result.success) toast.success('Saved')
+    else toast.error(result.error ?? 'Failed')
+    return result
+  }
+
+  const makeContactSaver = (contactId: string, field: string, contactUpdatedAt: string) => async (value: string) => {
+    const result = await updateContactField(contactId, field, value, contactUpdatedAt, account.id)
+    if (result.success) toast.success('Saved')
+    else toast.error(result.error ?? 'Failed')
+    return result
+  }
+
+  const handleAddNote = async () => {
+    if (!noteText.trim()) return
+    setAddingNote(true)
+    const result = await addAccountNote(account.id, noteText, account.updated_at)
+    setAddingNote(false)
+    if (result.success) {
+      toast.success('Note added')
+      setNoteText('')
+    } else {
+      toast.error(result.error ?? 'Failed')
+    }
+  }
+
+  const ENTITY_OPTIONS = [
+    { label: 'Single Member LLC', value: 'Single Member LLC' },
+    { label: 'Multi Member LLC', value: 'Multi Member LLC' },
+    { label: 'C-Corp Elected', value: 'C-Corp Elected' },
+    { label: 'Corporation', value: 'Corporation' },
+    { label: 'Partnership', value: 'Partnership' },
+  ]
+
+  const STATUS_OPTIONS = [
+    { label: 'Active', value: 'Active' },
+    { label: 'Inactive', value: 'Inactive' },
+    { label: 'Closed', value: 'Closed' },
+    { label: 'Suspended', value: 'Suspended' },
+  ]
+
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       {/* Company Info */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Informazioni Azienda</h3>
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
         <div className="grid gap-3 text-sm">
-          <InfoRow icon={Building2} label="Entity Type" value={account.entity_type ?? '—'} />
-          <InfoRow icon={MapPin} label="Stato" value={account.state_of_formation ?? '—'} />
-          <InfoRow icon={Calendar} label="Formazione" value={formatDate(account.formation_date)} />
-          <InfoRow icon={Shield} label="EIN" value={account.ein_number ?? '—'} />
-          <InfoRow icon={FileText} label="Filing ID" value={account.filing_id ?? '—'} />
-          <InfoRow icon={Shield} label="Registered Agent" value={account.registered_agent ?? '—'} />
-          <InfoRow icon={Calendar} label="RA Renewal" value={formatDate(account.ra_renewal_date)} />
-          {account.physical_address && (
-            <InfoRow icon={MapPin} label="Indirizzo" value={account.physical_address} />
-          )}
+          <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} readOnly={!isAdmin} onSave={makeAccountSaver('entity_type')} />
+          <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('state_of_formation')} />
+          <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeAccountSaver('formation_date')} />
+          <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('ein_number')} />
+          <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('filing_id')} />
+          <EditableField icon={Shield} label="Registered Agent" value={account.registered_agent ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('registered_agent')} />
+          <EditableField icon={Calendar} label="RA Renewal" value={account.ra_renewal_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeAccountSaver('ra_renewal_date')} />
+          <EditableField icon={MapPin} label="Address" value={account.physical_address ?? ''} type="textarea" readOnly={!isAdmin} onSave={makeAccountSaver('physical_address')} />
           {account.gdrive_folder_url && (
             <div className="flex items-center gap-2">
               <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
-              <a
-                href={account.gdrive_folder_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-600 hover:underline text-sm"
-              >
+              <a href={account.gdrive_folder_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-sm">
                 Google Drive Folder
               </a>
             </div>
@@ -212,35 +254,25 @@ function PanoramicaTab({ account, contacts, deals }: { account: Account; contact
       {/* Contacts */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          Contatti ({contacts.length})
+          Contacts ({contacts.length})
         </h3>
         {contacts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nessun contatto collegato</p>
+          <p className="text-sm text-muted-foreground">No linked contacts</p>
         ) : (
           <div className="space-y-4">
             {contacts.map(c => (
-              <div key={c.id} className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center shrink-0">
-                  <User className="h-4 w-4 text-zinc-500" />
+              <div key={c.id} className="space-y-2 pb-3 border-b last:border-b-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-full bg-zinc-100 flex items-center justify-center shrink-0">
+                    <User className="h-3.5 w-3.5 text-zinc-500" />
+                  </div>
+                  <span className="font-medium text-sm">{c.full_name}</span>
+                  {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
                 </div>
-                <div className="min-w-0 text-sm">
-                  <p className="font-medium">{c.full_name}</p>
-                  {c.role && <p className="text-xs text-muted-foreground">{c.role}</p>}
-                  {c.email && (
-                    <p className="flex items-center gap-1 text-muted-foreground">
-                      <Mail className="h-3 w-3" /> {c.email}
-                    </p>
-                  )}
-                  {c.phone && (
-                    <p className="flex items-center gap-1 text-muted-foreground">
-                      <Phone className="h-3 w-3" /> {c.phone}
-                    </p>
-                  )}
-                  {c.language && (
-                    <p className="flex items-center gap-1 text-muted-foreground">
-                      <Globe className="h-3 w-3" /> {c.language}
-                    </p>
-                  )}
+                <div className="pl-9 grid gap-1.5">
+                  <EditableField icon={Mail} label="Email" value={c.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
+                  <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
+                  <EditableField icon={Globe} label="Language" value={c.language ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
                 </div>
               </div>
             ))}
@@ -249,12 +281,33 @@ function PanoramicaTab({ account, contacts, deals }: { account: Account; contact
       </div>
 
       {/* Notes */}
-      {account.notes && (
-        <div className="bg-white rounded-lg border p-5 space-y-2 lg:col-span-2">
-          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Note</h3>
-          <p className="text-sm whitespace-pre-wrap">{account.notes}</p>
-        </div>
-      )}
+      <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Notes</h3>
+        {account.notes && (
+          <p className="text-sm whitespace-pre-wrap bg-zinc-50 p-3 rounded-md">{account.notes}</p>
+        )}
+        {isAdmin && (
+          <div className="flex gap-2">
+            <textarea
+              value={noteText}
+              onChange={e => setNoteText(e.target.value)}
+              placeholder="Add a note..."
+              rows={2}
+              className="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+            <button
+              onClick={handleAddNote}
+              disabled={addingNote || !noteText.trim()}
+              className="px-3 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 self-end"
+            >
+              {addingNote ? 'Adding...' : 'Add'}
+            </button>
+          </div>
+        )}
+        {!account.notes && !isAdmin && (
+          <p className="text-sm text-muted-foreground">No notes</p>
+        )}
+      </div>
 
       {/* Deals */}
       {deals.length > 0 && (
@@ -268,7 +321,7 @@ function PanoramicaTab({ account, contacts, deals }: { account: Account; contact
                 <div>
                   <p className="font-medium">{d.deal_name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {d.stage} · {d.deal_category ?? d.deal_type ?? '—'}
+                    {d.stage} · {d.deal_category ?? d.deal_type ?? '\u2014'}
                   </p>
                 </div>
                 <div className="text-right">
