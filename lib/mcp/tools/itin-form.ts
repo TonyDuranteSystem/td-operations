@@ -177,6 +177,119 @@ export function registerITINFormTools(server: McpServer) {
   )
 
   // ***************************************
+  // itin_form_send
+  // ***************************************
+  server.tool(
+    "itin_form_send",
+    `Send the ITIN form link to the client via email with a professional bilingual template. Attaches the passport example image. Updates form status to 'sent'. Requires itin_form_create first. The email explains what the client needs to do, includes the form link, and shows how the passport should look.`,
+    {
+      token: z.string().describe("ITIN form token"),
+    },
+    async ({ token }) => {
+      try {
+        const { data: sub, error } = await supabaseAdmin
+          .from("itin_submissions")
+          .select("*, access_code")
+          .eq("token", token)
+          .single()
+        if (error || !sub) throw new Error(`Form not found: ${token}`)
+
+        if (sub.status !== "pending" && sub.status !== "sent") {
+          return { content: [{ type: "text" as const, text: `⚠️ Form status is "${sub.status}" — expected "pending" or "sent".` }] }
+        }
+
+        const prefilled = sub.prefilled_data as Record<string, unknown> || {}
+        const clientEmail = String(prefilled.email || "")
+        const firstName = String(prefilled.first_name || "")
+        if (!clientEmail) {
+          return { content: [{ type: "text" as const, text: `❌ No client email found in prefilled data.` }] }
+        }
+
+        // Detect language from contact or lead
+        let lang: "en" | "it" = "en"
+        if (sub.contact_id) {
+          const { data: c } = await supabaseAdmin.from("contacts").select("language").eq("id", sub.contact_id).single()
+          if (c?.language === "Italian" || c?.language === "it") lang = "it"
+        } else if (sub.lead_id) {
+          const { data: l } = await supabaseAdmin.from("leads").select("language").eq("id", sub.lead_id).single()
+          if (l?.language === "Italian" || l?.language === "it") lang = "it"
+        }
+
+        const formUrl = `${APP_BASE_URL}/itin-form/${token}/${sub.access_code || ""}`
+        const emailHtml = generateITINFormLinkEmail(firstName, formUrl, lang)
+        const subject = lang === "it"
+          ? "Richiesta ITIN — Compila il modulo di raccolta dati"
+          : "ITIN Application — Please complete the data collection form"
+
+        // Send email with passport example attached
+        const { gmailPost } = await import("@/lib/gmail")
+        const { downloadFileBinary } = await import("@/lib/google-drive")
+
+        const PASSPORT_EXAMPLE_ID = "1RU-ndib5pH9_tMILZZksFU6ZYRiomK1g"
+        let passportBuf: Buffer | null = null
+        try {
+          const dl = await downloadFileBinary(PASSPORT_EXAMPLE_ID)
+          passportBuf = dl.buffer
+        } catch { /* skip */ }
+
+        const boundary = "boundary_" + Date.now()
+        const parts = [
+          `--${boundary}`,
+          `Content-Type: text/html; charset=utf-8`,
+          `Content-Transfer-Encoding: base64`,
+          "",
+          Buffer.from(emailHtml).toString("base64"),
+        ]
+        if (passportBuf) {
+          parts.push(
+            `--${boundary}`,
+            `Content-Type: image/png; name="Passport_Example_ITIN.png"`,
+            `Content-Transfer-Encoding: base64`,
+            `Content-Disposition: attachment; filename="Passport_Example_ITIN.png"`,
+            "",
+            passportBuf.toString("base64"),
+          )
+        }
+        parts.push(`--${boundary}--`)
+
+        const mimeMessage = [
+          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `To: ${clientEmail}`,
+          `Subject: ${subject}`,
+          `MIME-Version: 1.0`,
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+          "",
+          ...parts,
+        ].join("\r\n")
+
+        const encodedRaw = Buffer.from(mimeMessage).toString("base64url")
+        await gmailPost("/messages/send", { raw: encodedRaw })
+
+        // Update status to sent
+        await supabaseAdmin
+          .from("itin_submissions")
+          .update({ status: "sent", sent_at: new Date().toISOString() })
+          .eq("id", sub.id)
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ ITIN form link sent to ${clientEmail}`,
+              `   Subject: ${subject}`,
+              `   Language: ${lang}`,
+              `   Passport example: ${passportBuf ? "attached" : "not attached"}`,
+              `   Form status: sent`,
+            ].join("\n"),
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ***************************************
   // itin_form_get
   // ***************************************
   server.tool(
@@ -416,31 +529,6 @@ export function registerITINFormTools(server: McpServer) {
             })
           lines.push("✅ Task created: Prepare W-7 form")
 
-          // Save form data + uploads to Drive
-          try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.account_id
-              ? (await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()).data?.drive_folder_id
-              : null
-            if (driveFolderId) {
-              const driveResult = await saveFormToDrive(
-                "itin",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token }
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
-            } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
-            }
-          } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
-          }
-
           // Mark form as reviewed
           await supabaseAdmin
             .from("itin_submissions")
@@ -565,39 +653,6 @@ export function registerITINFormTools(server: McpServer) {
         const oiPdf = await fillScheduleOI(nrData)
         results.push(`✅ Schedule OI generated (${oiPdf.length} bytes)`)
 
-        // 5b. Generate data summary PDF
-        const { generateITINSummaryPDF } = await import("@/lib/pdf/itin-data-summary")
-        const summaryPdf = await generateITINSummaryPDF({
-          first_name: String(submitted.first_name || ""),
-          last_name: String(submitted.last_name || ""),
-          name_at_birth: submitted.name_at_birth ? String(submitted.name_at_birth) : undefined,
-          email: String(submitted.email || ""),
-          phone: String(submitted.phone || ""),
-          dob: String(submitted.dob || ""),
-          country_of_birth: String(submitted.country_of_birth || ""),
-          city_of_birth: String(submitted.city_of_birth || ""),
-          gender: String(submitted.gender || ""),
-          citizenship: String(submitted.citizenship || ""),
-          foreign_street: String(submitted.foreign_street || ""),
-          foreign_city: String(submitted.foreign_city || ""),
-          foreign_state_province: submitted.foreign_state_province ? String(submitted.foreign_state_province) : undefined,
-          foreign_zip: String(submitted.foreign_zip || ""),
-          foreign_country: String(submitted.foreign_country || ""),
-          foreign_tax_id: submitted.foreign_tax_id ? String(submitted.foreign_tax_id) : undefined,
-          us_visa_type: submitted.us_visa_type ? String(submitted.us_visa_type) : undefined,
-          us_visa_number: submitted.us_visa_number ? String(submitted.us_visa_number) : undefined,
-          us_entry_date: submitted.us_entry_date ? String(submitted.us_entry_date) : undefined,
-          passport_number: String(submitted.passport_number || ""),
-          passport_country: String(submitted.passport_country || ""),
-          passport_expiry: String(submitted.passport_expiry || ""),
-          has_previous_itin: String(submitted.has_previous_itin || "No"),
-          previous_itin: submitted.previous_itin ? String(submitted.previous_itin) : undefined,
-          submitted_at: sub.completed_at || new Date().toISOString(),
-          token,
-          upload_count: (sub.upload_paths as string[] || []).length,
-        })
-        results.push(`✅ Data summary generated (${summaryPdf.length} bytes)`)
-
         // 6. Upload to Drive
         const uploadedIds: { name: string; id: string }[] = []
         if (itinFolderId) {
@@ -621,13 +676,6 @@ export function registerITINFormTools(server: McpServer) {
           )
           uploadedIds.push({ name: "Schedule OI", id: oiUpload.id })
           results.push(`📤 Schedule OI uploaded to Drive (${oiUpload.id})`)
-
-          // Upload data summary
-          const summaryUpload = await uploadBinaryToDrive(
-            `ITIN_Data_Summary_${slug}.pdf`, Buffer.from(summaryPdf), "application/pdf", itinFolderId
-          )
-          uploadedIds.push({ name: "Data Summary", id: summaryUpload.id })
-          results.push(`📤 Data summary uploaded to Drive (${summaryUpload.id})`)
 
           // Copy passport scans from Supabase Storage to Drive
           const uploads = sub.upload_paths as string[] | null
@@ -667,32 +715,60 @@ export function registerITINFormTools(server: McpServer) {
               const oiFileId = uploadedIds.find(u => u.name === "Schedule OI")?.id
 
               if (w7FileId && nrFileId && oiFileId) {
-                // Build HTML email
-                const emailLang = (sub.language === "it" ? "it" : "en") as "en" | "it"
-                const emailHtml = generateITINSigningEmail(String(submitted.first_name || ""), emailLang)
+                // Build email body
+                const emailBody = `
+Dear ${submitted.first_name},
 
+Your ITIN application documents are ready for your signature.
+
+Attached you will find:
+1. Form W-7 (Application for IRS Individual Taxpayer Identification Number)
+2. Form 1040-NR (U.S. Nonresident Alien Income Tax Return)
+3. Schedule OI (Other Information)
+
+INSTRUCTIONS:
+1. Print all three documents
+2. Sign the W-7 form on the "Signature of applicant" line (wet ink signature required)
+3. Sign the 1040-NR on page 2 "Your signature" line (wet ink signature required)
+4. Mail all signed documents to:
+
+   Tony Durante LLC
+   10225 Ulmerton Rd, Suite 3D
+   Largo, FL 33771
+   United States
+
+Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.
+
+Once we receive your signed documents, we will:
+- Review and certify your passport copy (CAA certification)
+- Submit the complete ITIN application package to the IRS via certified mail
+- The IRS typically processes ITIN applications within 7-11 weeks
+
+If you have any questions, please don't hesitate to contact us.
+
+Best regards,
+Tony Durante LLC
++1 (727) 452-1093
+support@tonydurante.us
+`.trim()
+
+                // Use gmail_send with Drive attachments
                 const { gmailPost } = await import("@/lib/gmail")
+
+                // Download PDFs from Drive for attachment
                 const { downloadFileBinary } = await import("@/lib/google-drive")
                 const { buffer: w7Buf } = await downloadFileBinary(w7FileId)
                 const { buffer: nrBuf } = await downloadFileBinary(nrFileId)
                 const { buffer: oiBuf } = await downloadFileBinary(oiFileId)
 
-                // Download passport example image for attachment
-                const PASSPORT_EXAMPLE_ID = "1RU-ndib5pH9_tMILZZksFU6ZYRiomK1g"
-                let passportExampleBuf: Buffer | null = null
-                try {
-                  const dl = await downloadFileBinary(PASSPORT_EXAMPLE_ID)
-                  passportExampleBuf = dl.buffer
-                } catch { /* skip if not available */ }
-
                 const boundary = "boundary_" + Date.now()
                 const slug2 = clientName.replace(/\s+/g, "_")
                 const parts = [
                   `--${boundary}`,
-                  `Content-Type: text/html; charset=utf-8`,
+                  `Content-Type: text/plain; charset=utf-8`,
                   `Content-Transfer-Encoding: base64`,
                   "",
-                  Buffer.from(emailHtml).toString("base64"),
+                  Buffer.from(emailBody).toString("base64"),
                   `--${boundary}`,
                   `Content-Type: application/pdf; name="W-7_${slug2}.pdf"`,
                   `Content-Transfer-Encoding: base64`,
@@ -711,24 +787,13 @@ export function registerITINFormTools(server: McpServer) {
                   `Content-Disposition: attachment; filename="Schedule_OI_${slug2}.pdf"`,
                   "",
                   Buffer.from(oiBuf).toString("base64"),
+                  `--${boundary}--`,
                 ]
-                // Attach passport example image
-                if (passportExampleBuf) {
-                  parts.push(
-                    `--${boundary}`,
-                    `Content-Type: image/png; name="Passport_Example_ITIN.png"`,
-                    `Content-Transfer-Encoding: base64`,
-                    `Content-Disposition: attachment; filename="Passport_Example_ITIN.png"`,
-                    "",
-                    passportExampleBuf.toString("base64"),
-                  )
-                }
-                parts.push(`--${boundary}--`)
 
                 const mimeMessage = [
                   `From: Tony Durante LLC <support@tonydurante.us>`,
                   `To: ${clientEmail}`,
-                  `Subject: ${emailLang === "it" ? "Documenti ITIN pronti per la firma" : "Your ITIN Application Documents - Ready for Signature"}`,
+                  `Subject: Your ITIN Application Documents - Ready for Signature`,
                   `MIME-Version: 1.0`,
                   `Content-Type: multipart/mixed; boundary="${boundary}"`,
                   "",
@@ -760,7 +825,124 @@ export function registerITINFormTools(server: McpServer) {
 
 } // end registerITINFormTools
 
-// ─── ITIN Signing Email Template (HTML) ───
+// ─── Email Template: ITIN Form Link (sent when form is created) ───
+
+function generateITINFormLinkEmail(firstName: string, formUrl: string, lang: "en" | "it"): string {
+  const hr = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
+  const btnStyle = 'style="display:inline-block;padding:14px 32px;background:#1e3a5f;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px"'
+  const info = 'style="background:#f0f5fb;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin:16px 0"'
+
+  if (lang === "it") {
+    return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
+
+<p>Gentile ${firstName},</p>
+
+<p>per procedere con la tua richiesta di <strong>ITIN (Individual Taxpayer Identification Number)</strong>, abbiamo bisogno di alcune informazioni personali.</p>
+
+<p>Clicca il pulsante qui sotto per accedere al modulo di raccolta dati:</p>
+
+<p style="text-align:center;margin:24px 0">
+<a href="${formUrl}" ${btnStyle}>Compila il Modulo ITIN</a>
+</p>
+
+${hr}
+
+<p style="font-size:16px"><strong>Cosa ti chiederemo</strong></p>
+
+<p>Il modulo e diviso in 3 semplici passaggi:</p>
+
+<ol style="margin:8px 0">
+<li><strong>Informazioni personali</strong> — nome, data di nascita, cittadinanza, contatti</li>
+<li><strong>Indirizzo estero e informazioni di ingresso</strong> — il tuo indirizzo di residenza fuori dagli USA, informazioni sul passaporto, eventuale visto USA</li>
+<li><strong>Documenti e revisione</strong> — caricamento della copia del passaporto e revisione finale dei dati</li>
+</ol>
+
+${hr}
+
+<p style="font-size:16px"><strong>Copia del passaporto</strong></p>
+
+<p>Durante la compilazione del modulo, ti verra chiesto di caricare una <strong>copia a colori chiara</strong> del tuo passaporto. In allegato trovi un esempio di come deve apparire la copia.</p>
+
+<div ${info}>
+<ul style="margin:0;padding-left:20px">
+<li>Scansione <strong>a colori</strong> (NO bianco e nero)</li>
+<li>Pagina dei dati (con foto, nome, numero passaporto)</li>
+<li><strong>Nessuna ostruzione</strong> — niente dita, ombre o riflessi</li>
+<li>Tutti e quattro i bordi della pagina visibili</li>
+</ul>
+</div>
+
+${hr}
+
+<p>Una volta ricevuti i tuoi dati, prepareremo i moduli <strong>W-7</strong> e <strong>1040-NR</strong> e te li invieremo per la firma.</p>
+
+<p>Per qualsiasi domanda, non esitare a contattarci.</p>
+
+<p>Cordiali saluti,<br/>
+<strong>Tony Durante LLC</strong><br/>
+<span style="color:#6b7280">Certified Acceptance Agent (CAA) — IRS ITIN Program</span><br/>
+<span style="color:#6b7280">+1 (727) 452-1093</span><br/>
+<a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
+
+</div>`
+  }
+
+  // English version
+  return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
+
+<p>Dear ${firstName},</p>
+
+<p>To proceed with your <strong>ITIN (Individual Taxpayer Identification Number)</strong> application, we need some personal information from you.</p>
+
+<p>Click the button below to access the data collection form:</p>
+
+<p style="text-align:center;margin:24px 0">
+<a href="${formUrl}" ${btnStyle}>Complete ITIN Form</a>
+</p>
+
+${hr}
+
+<p style="font-size:16px"><strong>What we will ask</strong></p>
+
+<p>The form has 3 simple steps:</p>
+
+<ol style="margin:8px 0">
+<li><strong>Personal information</strong> — name, date of birth, citizenship, contact details</li>
+<li><strong>Foreign address and entry information</strong> — your residential address outside the US, passport details, US visa if applicable</li>
+<li><strong>Documents and review</strong> — upload your passport copy and review all entered data</li>
+</ol>
+
+${hr}
+
+<p style="font-size:16px"><strong>Passport copy</strong></p>
+
+<p>During the form, you will be asked to upload a <strong>clear, full-color copy</strong> of your passport. Please see the attached example of how the passport copy should look.</p>
+
+<div ${info}>
+<ul style="margin:0;padding-left:20px">
+<li><strong>Full color</strong> scan (NO black and white)</li>
+<li>Data page (with photo, name, passport number)</li>
+<li><strong>No obstructions</strong> — no fingers, shadows, or glare</li>
+<li>All four edges of the page must be visible</li>
+</ul>
+</div>
+
+${hr}
+
+<p>Once we receive your data, we will prepare the <strong>W-7</strong> and <strong>1040-NR</strong> forms and send them to you for signature.</p>
+
+<p>If you have any questions, please do not hesitate to contact us.</p>
+
+<p>Best regards,<br/>
+<strong>Tony Durante LLC</strong><br/>
+<span style="color:#6b7280">Certified Acceptance Agent (CAA) — IRS ITIN Program</span><br/>
+<span style="color:#6b7280">+1 (727) 452-1093</span><br/>
+<a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
+
+</div>`
+}
+
+// ─── Email Template: ITIN Signing (sent with W-7 + 1040-NR attached) ───
 
 function generateITINSigningEmail(firstName: string, lang: "en" | "it"): string {
   const hr = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
@@ -802,79 +984,57 @@ ${hr}
 
 <p style="font-size:16px"><strong>Requisiti per la copia del passaporto</strong></p>
 
-<p>Devi includere <strong>DUE copie a colori chiare e di alta qualita</strong> del tuo passaporto. L'IRS e molto rigoroso sulla qualita delle copie. Le copie che non soddisfano questi requisiti verranno respinte.</p>
+<p>Devi includere <strong>DUE copie a colori chiare e di alta qualita</strong> del tuo passaporto.</p>
 
 <div ${info}>
 <p style="margin:0 0 12px 0"><strong>Cosa includere:</strong></p>
 <ul style="margin:0;padding-left:20px">
-<li><strong>Pagina dei dati</strong> (la pagina con foto, nome, data di nascita, numero passaporto e scadenza)</li>
+<li><strong>Pagina dei dati</strong> (con foto, nome, data di nascita, numero passaporto e scadenza)</li>
 <li><strong>Pagina della firma</strong> (se il tuo passaporto ha una pagina separata per la firma)</li>
-<li>Se hai un <strong>visto USA</strong>, includi anche la/le pagina/e con il visto</li>
 </ul>
-
 <p style="margin:16px 0 0 0"><strong>Requisiti di qualita:</strong></p>
 <ul style="margin:0;padding-left:20px">
 <li><strong>A colori</strong> &mdash; le copie in bianco e nero NON sono accettate</li>
-<li><strong>Nitide e chiare</strong> &mdash; tutto il testo, la foto e gli elementi di sicurezza devono essere completamente leggibili</li>
-<li><strong>Scansione piatta</strong> &mdash; appoggia il passaporto piatto sullo scanner, non fotografarlo di lato</li>
-<li><strong>Nessuna ostruzione</strong> &mdash; niente dita, ombre, riflessi o oggetti che coprano qualsiasi parte della pagina</li>
-<li><strong>Pagina intera visibile</strong> &mdash; tutti e quattro i bordi della pagina del passaporto devono essere visibili</li>
-<li><strong>Alta risoluzione</strong> &mdash; scansione minima a 300 DPI raccomandata</li>
+<li><strong>Nitide e chiare</strong> &mdash; testo, foto e elementi di sicurezza completamente leggibili</li>
+<li><strong>Scansione piatta</strong> &mdash; niente dita, ombre, riflessi o oggetti</li>
+<li><strong>Pagina intera visibile</strong> &mdash; tutti e quattro i bordi visibili</li>
 </ul>
 </div>
 
-<p><em>In allegato trovi un esempio di come deve apparire la copia del passaporto.</em></p>
-
 ${hr}
 
-<p style="font-size:16px"><strong>Checklist completa per la spedizione</strong></p>
-
-<p>La busta deve contenere:</p>
+<p style="font-size:16px"><strong>Checklist spedizione</strong></p>
 <ol style="margin:8px 0">
 <li>DUE copie firmate del Form W-7</li>
 <li>DUE copie firmate del Form 1040-NR (con Schedule OI allegato)</li>
-<li>DUE copie a colori chiare del passaporto (pagina dati + pagina firma)</li>
+<li>DUE copie a colori del passaporto (pagina dati + pagina firma)</li>
 </ol>
 
 ${hr}
 
 <p style="font-size:16px"><strong>Indirizzo di spedizione</strong></p>
-
-<div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0;font-size:15px">
-<strong>Tony Durante LLC</strong><br/>
-10225 Ulmerton Rd, Suite 3D<br/>
-Largo, FL 33771<br/>
-United States
+<div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0">
+<strong>Tony Durante LLC</strong><br/>10225 Ulmerton Rd, Suite 3D<br/>Largo, FL 33771<br/>United States
 </div>
-
 <p style="color:#b8292f;font-weight:600">Utilizza un metodo di spedizione tracciabile (FedEx, DHL, UPS) e condividi il numero di tracking con noi.</p>
 
 ${hr}
 
 <p style="font-size:16px"><strong>Cosa succede dopo</strong></p>
-
 <ol style="margin:8px 0;padding-left:20px">
-<li>Una volta ricevuti i tuoi documenti firmati, il nostro <strong>Certified Acceptance Agent (CAA)</strong> verifichera tutto e certifichera le copie del passaporto</li>
-<li>Prepareremo il <strong>Certificate of Accuracy (Form W-7 COA)</strong> e lo allegheremo alla tua richiesta</li>
-<li>Invieremo il pacchetto completo della richiesta ITIN al <strong>Centro di Elaborazione IRS di Austin</strong> tramite posta certificata con tracciamento</li>
-<li>L'IRS elabora le richieste ITIN tipicamente entro <strong>7&ndash;11 settimane</strong></li>
-<li>Riceverai il tuo numero ITIN per posta direttamente dall'IRS, e ti avviseremo non appena sara assegnato</li>
+<li>Il nostro <strong>Certified Acceptance Agent (CAA)</strong> verifichera tutto e certifichera le copie del passaporto</li>
+<li>Prepareremo il <strong>Certificate of Accuracy (Form W-7 COA)</strong></li>
+<li>Invieremo il pacchetto completo al <strong>Centro di Elaborazione IRS di Austin</strong> tramite posta certificata</li>
+<li>L'IRS elabora le richieste ITIN entro <strong>7&ndash;11 settimane</strong></li>
+<li>Riceverai il tuo numero ITIN per posta dall'IRS</li>
 </ol>
 
 ${hr}
-
 <p>Per qualsiasi domanda, non esitare a contattarci.</p>
-
-<p>Cordiali saluti,<br/>
-<strong>Tony Durante LLC</strong><br/>
-<span style="color:#6b7280">Certified Acceptance Agent (CAA) &mdash; IRS ITIN Program</span><br/>
-<span style="color:#6b7280">+1 (727) 452-1093</span><br/>
-<a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
-
+<p>Cordiali saluti,<br/><strong>Tony Durante LLC</strong><br/><span style="color:#6b7280">Certified Acceptance Agent (CAA) &mdash; IRS ITIN Program</span><br/><span style="color:#6b7280">+1 (727) 452-1093</span><br/><a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
 </div>`
   }
 
-  // English version
   return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
 
 <p>Dear ${firstName},</p>
@@ -899,7 +1059,7 @@ ${hr}
 <tr><td ${sTd}>1</td><td ${bTd}><strong>Print TWO copies</strong> of all three documents (W-7, 1040-NR, Schedule OI)</td></tr>
 <tr><td ${sTd}>2</td><td ${bTd}><strong>Sign the W-7</strong> on both copies, on the <em>"Signature of applicant"</em> line.<br/><span style="color:#991b1b">Wet ink signature required &mdash; no digital or electronic signatures accepted by the IRS.</span></td></tr>
 <tr><td ${sTd}>3</td><td ${bTd}><strong>Sign the 1040-NR</strong> on both copies, on page 2, <em>"Your signature"</em> line (wet ink)</td></tr>
-<tr><td ${sTd}>4</td><td ${bTd}><strong>Prepare your passport copies</strong> (see passport requirements below)</td></tr>
+<tr><td ${sTd}>4</td><td ${bTd}><strong>Prepare your passport copies</strong> (see requirements below)</td></tr>
 <tr><td ${sTd}>5</td><td ${bTd}><strong>Mail everything</strong> to the address below</td></tr>
 </table>
 
@@ -907,34 +1067,26 @@ ${hr}
 
 <p style="font-size:16px"><strong>Passport Copy Requirements</strong></p>
 
-<p>You must include <strong>TWO clear, high-quality color copies</strong> of your passport. The IRS is very strict about passport copy quality. Copies that do not meet these requirements will be rejected.</p>
+<p>You must include <strong>TWO clear, high-quality color copies</strong> of your passport.</p>
 
 <div ${info}>
 <p style="margin:0 0 12px 0"><strong>What to include:</strong></p>
 <ul style="margin:0;padding-left:20px">
-<li><strong>Data page</strong> (the page with your photo, name, date of birth, passport number, and expiry date)</li>
-<li><strong>Signature page</strong> (if your passport has a separate signature page)</li>
-<li>If you have a <strong>U.S. visa</strong>, also include the page(s) showing your visa</li>
+<li><strong>Data page</strong> (with photo, name, date of birth, passport number, expiry)</li>
+<li><strong>Signature page</strong> (if separate)</li>
 </ul>
-
-<p style="margin:16px 0 0 0"><strong>Quality requirements:</strong></p>
+<p style="margin:16px 0 0 0"><strong>Quality:</strong></p>
 <ul style="margin:0;padding-left:20px">
-<li><strong>Full color</strong> &mdash; black and white copies are NOT accepted</li>
-<li><strong>Clear and sharp</strong> &mdash; all text, photo, and security features must be fully legible</li>
-<li><strong>Flat scan</strong> &mdash; place passport flat on the scanner, do not photograph at an angle</li>
-<li><strong>No obstructions</strong> &mdash; no fingers, shadows, glare, or objects covering any part of the page</li>
-<li><strong>Full page visible</strong> &mdash; all four edges of the passport page must be visible</li>
-<li><strong>High resolution</strong> &mdash; minimum 300 DPI scan recommended</li>
+<li><strong>Full color</strong> &mdash; black and white NOT accepted</li>
+<li><strong>Clear and sharp</strong> &mdash; all text and security features legible</li>
+<li><strong>Flat scan</strong> &mdash; no fingers, shadows, glare, or obstructions</li>
+<li><strong>Full page visible</strong> &mdash; all four edges visible</li>
 </ul>
 </div>
-
-<p><em>Please see the attached example of how the passport copy should look.</em></p>
 
 ${hr}
 
 <p style="font-size:16px"><strong>Complete mailing checklist</strong></p>
-
-<p>Your envelope should contain:</p>
 <ol style="margin:8px 0">
 <li>TWO signed copies of Form W-7</li>
 <li>TWO signed copies of Form 1040-NR (with Schedule OI attached)</li>
@@ -944,37 +1096,24 @@ ${hr}
 ${hr}
 
 <p style="font-size:16px"><strong>Mailing address</strong></p>
-
-<div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0;font-size:15px">
-<strong>Tony Durante LLC</strong><br/>
-10225 Ulmerton Rd, Suite 3D<br/>
-Largo, FL 33771<br/>
-United States
+<div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0">
+<strong>Tony Durante LLC</strong><br/>10225 Ulmerton Rd, Suite 3D<br/>Largo, FL 33771<br/>United States
 </div>
-
 <p style="color:#b8292f;font-weight:600">Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.</p>
 
 ${hr}
 
 <p style="font-size:16px"><strong>What happens next</strong></p>
-
 <ol style="margin:8px 0;padding-left:20px">
-<li>Once we receive your signed documents, our <strong>Certified Acceptance Agent (CAA)</strong> will review everything and certify your passport copies</li>
-<li>We will prepare the <strong>Certificate of Accuracy (Form W-7 COA)</strong> and attach it to your application</li>
-<li>We will submit the complete ITIN application package to the <strong>IRS Austin Processing Center</strong> via certified mail with tracking</li>
-<li>The IRS typically processes ITIN applications within <strong>7&ndash;11 weeks</strong></li>
-<li>You will receive your ITIN number by mail directly from the IRS, and we will notify you as soon as it is assigned</li>
+<li>Our <strong>Certified Acceptance Agent (CAA)</strong> will review everything and certify your passport copies</li>
+<li>We will prepare the <strong>Certificate of Accuracy (Form W-7 COA)</strong></li>
+<li>We will submit the complete package to the <strong>IRS Austin Processing Center</strong> via certified mail</li>
+<li>The IRS processes ITIN applications within <strong>7&ndash;11 weeks</strong></li>
+<li>You will receive your ITIN number by mail from the IRS</li>
 </ol>
 
 ${hr}
-
 <p>If you have any questions, please do not hesitate to contact us.</p>
-
-<p>Best regards,<br/>
-<strong>Tony Durante LLC</strong><br/>
-<span style="color:#6b7280">Certified Acceptance Agent (CAA) &mdash; IRS ITIN Program</span><br/>
-<span style="color:#6b7280">+1 (727) 452-1093</span><br/>
-<a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
-
+<p>Best regards,<br/><strong>Tony Durante LLC</strong><br/><span style="color:#6b7280">Certified Acceptance Agent (CAA) &mdash; IRS ITIN Program</span><br/><span style="color:#6b7280">+1 (727) 452-1093</span><br/><a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
 </div>`
 }
