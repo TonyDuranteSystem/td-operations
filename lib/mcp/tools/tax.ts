@@ -666,7 +666,7 @@ export function registerTaxTools(server: McpServer) {
                   submitted,
                   (sub.upload_paths as string[]) || [],
                   acc.drive_folder_id,
-                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName }
+                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year }
                 )
                 if (driveResult.summaryFileId) lines.push(`✅ Tax data summary saved to Drive (${driveResult.summaryFileId})`)
                 if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)

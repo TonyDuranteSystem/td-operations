@@ -447,7 +447,7 @@ export async function saveFormToDrive(
   submittedData: Record<string, unknown>,
   uploadPaths: string[],
   driveFolderId: string,
-  meta: { token: string; submittedAt: string; companyName?: string }
+  meta: { token: string; submittedAt: string; companyName?: string; year?: string | number }
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }> {
   const config = FORM_CONFIGS[formType]
   if (!config) {
@@ -470,6 +470,22 @@ export async function saveFormToDrive(
     } else {
       const newFolder = await createFolder(driveFolderId, config.driveSubfolder)
       targetFolderId = newFolder.id
+    }
+
+    // For tax_return: create year subfolder inside "3. Tax/"
+    if (formType === "tax_return" && meta.year) {
+      const yearStr = String(meta.year)
+      const yearContents = await listFolder(targetFolderId)
+      const yearFolder = yearContents?.files?.find(
+        (f: { name: string; mimeType: string }) =>
+          f.name === yearStr && f.mimeType === "application/vnd.google-apps.folder"
+      )
+      if (yearFolder) {
+        targetFolderId = yearFolder.id
+      } else {
+        const newYear = await createFolder(targetFolderId, yearStr)
+        targetFolderId = newYear.id
+      }
     }
   } catch (e) {
     errors.push(`Subfolder error: ${e instanceof Error ? e.message : String(e)}`)

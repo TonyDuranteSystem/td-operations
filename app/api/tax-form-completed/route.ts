@@ -179,7 +179,7 @@ export async function POST(req: NextRequest) {
             fullSub.submitted_data as Record<string, unknown>,
             (fullSub.upload_paths as string[]) || [],
             acc.drive_folder_id,
-            { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName }
+            { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year }
           )
           if (driveResult.summaryFileId) {
             results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId}, ${driveResult.copied.length} files copied` })
