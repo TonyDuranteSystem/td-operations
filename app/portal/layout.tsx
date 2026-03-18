@@ -5,6 +5,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { Providers } from '@/components/providers'
+import { NotificationBell } from '@/components/portal/notification-bell'
 import { cookies } from 'next/headers'
 
 export default async function PortalLayout({
@@ -47,6 +48,12 @@ export default async function PortalLayout({
         />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />
+          {/* Notification bell - top right on desktop */}
+          {selectedAccountId && (
+            <div className="hidden lg:flex justify-end px-8 pt-4">
+              <NotificationBell accountId={selectedAccountId} />
+            </div>
+          )}
           {children}
         </main>
       </div>

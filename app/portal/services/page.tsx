@@ -1,0 +1,135 @@
+import { createClient } from '@/lib/supabase/server'
+import { redirect } from 'next/navigation'
+import { getClientContactId } from '@/lib/portal-auth'
+import { getPortalAccounts, getPortalServices } from '@/lib/portal/queries'
+import { cookies } from 'next/headers'
+import { cn } from '@/lib/utils'
+import { Activity, CheckCircle2, AlertCircle, Clock, Cog } from 'lucide-react'
+
+const STATUS_COLORS: Record<string, string> = {
+  'Not Started': 'bg-zinc-100 text-zinc-600',
+  'In Progress': 'bg-blue-100 text-blue-700',
+  'Blocked': 'bg-red-100 text-red-700',
+  'Completed': 'bg-emerald-100 text-emerald-700',
+}
+
+const STATUS_ICONS: Record<string, React.ElementType> = {
+  'Not Started': Clock,
+  'In Progress': Activity,
+  'Blocked': AlertCircle,
+  'Completed': CheckCircle2,
+}
+
+export default async function PortalServicesPage() {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/portal/login')
+
+  const contactId = getClientContactId(user)
+  if (!contactId) redirect('/portal')
+
+  const accounts = await getPortalAccounts(contactId)
+  const cookieStore = cookies()
+  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  if (!selectedAccountId) redirect('/portal')
+
+  const services = await getPortalServices(selectedAccountId)
+  const active = services.filter(s => s.status !== 'Completed')
+  const completed = services.filter(s => s.status === 'Completed')
+
+  return (
+    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Services</h1>
+        <p className="text-zinc-500 text-sm mt-1">Track the status of your active services</p>
+      </div>
+
+      {services.length === 0 ? (
+        <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
+          <Cog className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
+          <h3 className="text-lg font-medium text-zinc-900 mb-1">No services</h3>
+          <p className="text-sm text-zinc-500">Your active services will appear here.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Active */}
+          {active.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Active ({active.length})</h2>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {active.map(s => {
+                  const Icon = STATUS_ICONS[s.status ?? ''] ?? Activity
+                  const progress = s.current_step && s.total_steps ? (s.current_step / s.total_steps) * 100 : 0
+                  return (
+                    <div key={s.id} className={cn(
+                      'bg-white rounded-xl border shadow-sm p-5',
+                      s.blocked_waiting_external && 'border-red-200'
+                    )}>
+                      <div className="flex items-start justify-between gap-2 mb-3">
+                        <div className="flex items-center gap-2">
+                          <Icon className={cn('h-5 w-5', s.status === 'Blocked' ? 'text-red-500' : 'text-blue-500')} />
+                          <div>
+                            <p className="font-medium text-sm text-zinc-900">{s.service_name}</p>
+                            <p className="text-xs text-zinc-500">{s.service_type}</p>
+                          </div>
+                        </div>
+                        <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[s.status ?? ''] ?? 'bg-zinc-100')}>
+                          {s.status}
+                        </span>
+                      </div>
+
+                      {s.current_step != null && s.total_steps != null && (
+                        <div className="mb-2">
+                          <div className="flex items-center justify-between text-xs text-zinc-500 mb-1.5">
+                            <span>Step {s.current_step} of {s.total_steps}</span>
+                            <span>{Math.round(progress)}%</span>
+                          </div>
+                          <div className="h-2 bg-zinc-100 rounded-full overflow-hidden">
+                            <div
+                              className={cn('h-full rounded-full transition-all', s.status === 'Blocked' ? 'bg-red-400' : 'bg-blue-500')}
+                              style={{ width: `${Math.min(progress, 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {s.current_stage && (
+                        <p className="text-xs text-zinc-500 mt-2">Current stage: <span className="font-medium">{s.current_stage}</span></p>
+                      )}
+
+                      {s.blocked_waiting_external && s.blocked_reason && (
+                        <div className="mt-2 p-2 rounded-lg bg-red-50 text-xs text-red-700">
+                          <span className="font-medium">Blocked:</span> {s.blocked_reason}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Completed */}
+          {completed.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Completed ({completed.length})</h2>
+              <div className="grid gap-2">
+                {completed.map(s => (
+                  <div key={s.id} className="bg-white rounded-xl border shadow-sm p-4 flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-zinc-900 truncate">{s.service_name}</p>
+                      <p className="text-xs text-zinc-500">{s.service_type}</p>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Completed</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
