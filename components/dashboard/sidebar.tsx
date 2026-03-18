@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
+  LayoutDashboard,
   MessageSquare,
   ClipboardList,
   FileText,
@@ -19,21 +20,53 @@ import {
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
-const navigation = [
-  { name: 'Inbox', href: '/inbox', icon: MessageSquare },
-  { name: 'Task Board', href: '/tasks', icon: ClipboardList },
-  { name: 'Tax Returns', href: '/tax-returns', icon: FileText },
-  { name: 'Accounts', href: '/accounts', icon: Building2 },
-  { name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
-  { name: 'Services', href: '/services', icon: Cog },
-  { name: 'Payments', href: '/payments', icon: CreditCard },
-  { name: 'Calendar', href: '/calendar', icon: Calendar },
-]
+interface NavItem {
+  name: string
+  href: string
+  icon: React.ElementType
+  badge?: number
+  adminOnly?: boolean
+  featureFlag?: string
+}
 
-export function Sidebar({ user }: { user: { email?: string } }) {
+interface SidebarProps {
+  user: { email?: string }
+  isAdmin?: boolean
+  badgeCounts?: { inbox: number; tasks: number }
+  enabledFeatures?: string[]
+}
+
+export function Sidebar({
+  user,
+  isAdmin = false,
+  badgeCounts,
+  enabledFeatures = [],
+}: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
+
+  const navigation: NavItem[] = [
+    { name: 'Home', href: '/', icon: LayoutDashboard },
+    { name: 'Inbox', href: '/inbox', icon: MessageSquare, badge: badgeCounts?.inbox },
+    { name: 'Task Board', href: '/tasks', icon: ClipboardList, badge: badgeCounts?.tasks },
+    { name: 'Tax Returns', href: '/tax-returns', icon: FileText },
+    { name: 'Accounts', href: '/accounts', icon: Building2 },
+    { name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
+    { name: 'Services', href: '/services', icon: Cog },
+    { name: 'Payments', href: '/payments', icon: CreditCard },
+    { name: 'Calendar', href: '/calendar', icon: Calendar },
+    // Phase 2+ items gated by feature flags — add here when ready:
+    // { name: 'Invoices', href: '/invoices', icon: Receipt, featureFlag: 'FEATURE_INVOICES' },
+    // { name: 'Leads', href: '/leads', icon: Users, featureFlag: 'FEATURE_LEADS' },
+    // { name: 'Offers', href: '/offers', icon: FileSignature, featureFlag: 'FEATURE_OFFERS' },
+  ]
+
+  const visibleNav = navigation.filter(item => {
+    if (item.adminOnly && !isAdmin) return false
+    if (item.featureFlag && !enabledFeatures.includes(item.featureFlag)) return false
+    return true
+  })
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -42,7 +75,7 @@ export function Sidebar({ user }: { user: { email?: string } }) {
     router.refresh()
   }
 
-  const displayName = user.email?.split('@')[0] ?? 'Utente'
+  const displayName = user.email?.split('@')[0] ?? 'User'
 
   return (
     <>
@@ -85,8 +118,10 @@ export function Sidebar({ user }: { user: { email?: string } }) {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {navigation.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+          {visibleNav.map((item) => {
+            const isActive = item.href === '/'
+              ? pathname === '/'
+              : pathname === item.href || pathname.startsWith(item.href + '/')
             return (
               <Link
                 key={item.href}
@@ -100,11 +135,23 @@ export function Sidebar({ user }: { user: { email?: string } }) {
                 )}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                {item.name}
+                <span className="flex-1">{item.name}</span>
+                {item.badge != null && item.badge > 0 && (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-600 text-white min-w-[20px] text-center">
+                    {item.badge > 99 ? '99+' : item.badge}
+                  </span>
+                )}
               </Link>
             )
           })}
         </nav>
+
+        {/* Keyboard shortcut hint */}
+        <div className="px-6 py-2 border-t border-sidebar-border">
+          <p className="text-[10px] text-sidebar-foreground/40">
+            Press <kbd className="px-1 py-0.5 bg-sidebar-accent rounded text-[9px]">{'\u2318'}K</kbd> to search
+          </p>
+        </div>
 
         {/* Footer */}
         <div className="px-3 py-4 border-t border-sidebar-border">
@@ -116,7 +163,7 @@ export function Sidebar({ user }: { user: { email?: string } }) {
             <button
               onClick={handleLogout}
               className="p-1.5 rounded hover:bg-sidebar-accent shrink-0"
-              title="Esci"
+              title="Sign out"
             >
               <LogOut className="h-4 w-4" />
             </button>
