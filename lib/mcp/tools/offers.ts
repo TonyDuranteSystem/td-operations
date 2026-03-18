@@ -373,7 +373,7 @@ export function registerOfferTools(server: McpServer) {
               account_number: "200000306770",
               routing_number: "064209588",
               bank_name: "Relay Financial",
-              address: "11761 80th Ave, Seminole, FL 33772",
+              address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
             },
             effective_date: params.effective_date,
             expires_at: params.expires_at,
