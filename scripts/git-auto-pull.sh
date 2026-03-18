@@ -9,6 +9,17 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_DIR" || exit 0
 
+# ── iCloud .nosync setup ──
+# node_modules must use the .nosync trick to prevent iCloud from syncing it.
+# If node_modules is a real directory (not a symlink), convert it automatically.
+if [ -d node_modules ] && [ ! -L node_modules ]; then
+  mv node_modules node_modules.nosync 2>/dev/null
+  ln -s node_modules.nosync node_modules 2>/dev/null
+elif [ ! -e node_modules ] && [ -d node_modules.nosync ]; then
+  # Symlink was broken/removed, recreate it
+  ln -s node_modules.nosync node_modules 2>/dev/null
+fi
+
 # Check for uncommitted changes
 if ! /usr/bin/git diff --quiet HEAD 2>/dev/null; then
   # Notify user about uncommitted changes (macOS notification)
