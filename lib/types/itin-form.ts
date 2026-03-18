@@ -56,8 +56,8 @@ export interface FieldConfig {
 // === Step Labels ===
 
 export const STEPS = {
-  en: ['Personal Information', 'Foreign Address & Entry Info', 'Documents & Review'],
-  it: ['Informazioni Personali', 'Indirizzo Estero e Info Ingresso', 'Documenti e Revisione'],
+  en: ['Personal Information', 'Foreign Address & Entry Info', 'Review & Submit'],
+  it: ['Informazioni Personali', 'Indirizzo Estero e Info Ingresso', 'Revisione e Invio'],
 } as const
 
 // === Field Definitions ===
@@ -154,15 +154,11 @@ export const LABELS = {
     has_previous_itin: 'Have you previously had an ITIN?',
     previous_itin: 'Previous ITIN Number',
 
-    // Step 3: Documents & Review
-    step3Title: 'Documents & Review',
-    passportUpload: 'Passport Scan (color copy, data page)',
-    passportUpload2: 'Passport Scan (second copy)',
-    uploadFile: 'Upload File',
-    uploadRequired: 'Required',
+    // Step 3: Review & Submit
+    step3Title: 'Review & Submit',
 
     // Disclaimer
-    disclaimer: 'I confirm that the information provided is accurate and complete. I understand that Tony Durante LLC, as an IRS Certified Acceptance Agent (CAA), will use this data to prepare and submit the W-7 form for my ITIN application. I will also need to sign the W-7 form and 1040-NR tax return in wet ink and mail them to Tony Durante LLC.',
+    disclaimer: 'I confirm that the information provided is accurate and complete. I understand that Tony Durante LLC, as an IRS Certified Acceptance Agent (CAA), will use this data to prepare and submit the W-7 form for my ITIN application. I will also need to sign the W-7 form and 1040-NR tax return in wet ink, print two clear color copies of my passport, and mail everything to Tony Durante LLC.',
     disclaimerRequired: 'You must accept the disclaimer to submit',
 
     // Success
@@ -229,15 +225,11 @@ export const LABELS = {
     has_previous_itin: 'Hai avuto un ITIN in precedenza?',
     previous_itin: 'Numero ITIN Precedente',
 
-    // Step 3: Documenti e Revisione
-    step3Title: 'Documenti e Revisione',
-    passportUpload: 'Scansione Passaporto (copia a colori, pagina dati)',
-    passportUpload2: 'Scansione Passaporto (seconda copia)',
-    uploadFile: 'Carica File',
-    uploadRequired: 'Obbligatorio',
+    // Step 3: Revisione e Invio
+    step3Title: 'Revisione e Invio',
 
     // Disclaimer
-    disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC, in qualita di Agente di Accettazione Certificato IRS (CAA), utilizzera questi dati per preparare e inviare il modulo W-7 per la mia richiesta ITIN. Dovro anche firmare il modulo W-7 e la dichiarazione dei redditi 1040-NR con firma autografa e spedirli a Tony Durante LLC.',
+    disclaimer: 'Confermo che le informazioni fornite sono accurate e complete. Comprendo che Tony Durante LLC, in qualita di Agente di Accettazione Certificato IRS (CAA), utilizzera questi dati per preparare e inviare il modulo W-7 per la mia richiesta ITIN. Dovro anche firmare il modulo W-7 e la dichiarazione dei redditi 1040-NR con firma autografa, stampare due copie a colori del passaporto e spedire tutto a Tony Durante LLC.',
     disclaimerRequired: 'Devi accettare la dichiarazione per inviare',
 
     // Success
@@ -307,9 +299,5 @@ export const TOOLTIPS: Record<string, { en: string; it: string }> = {
   has_previous_itin: {
     en: 'Select Yes if you have ever had an ITIN number before, even if it has expired.',
     it: 'Seleziona Si se hai mai avuto un numero ITIN in precedenza, anche se e scaduto.',
-  },
-  passportUpload: {
-    en: 'Upload a clear color scan or photo of your passport data page. Two copies are required by the IRS.',
-    it: 'Carica una scansione a colori chiara o foto della pagina dati del tuo passaporto. L\'IRS richiede due copie.',
   },
 }

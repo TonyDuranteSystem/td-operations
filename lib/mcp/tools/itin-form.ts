@@ -854,14 +854,14 @@ ${hr}
 <ol style="margin:8px 0">
 <li><strong>Informazioni personali</strong> — nome, data di nascita, cittadinanza, contatti</li>
 <li><strong>Indirizzo estero e informazioni di ingresso</strong> — il tuo indirizzo di residenza fuori dagli USA, informazioni sul passaporto, eventuale visto USA</li>
-<li><strong>Documenti e revisione</strong> — caricamento della copia del passaporto e revisione finale dei dati</li>
+<li><strong>Revisione e invio</strong> — revisione finale di tutti i dati e conferma</li>
 </ol>
 
 ${hr}
 
 <p style="font-size:16px"><strong>Copia del passaporto</strong></p>
 
-<p>Durante la compilazione del modulo, ti verra chiesto di caricare una <strong>copia a colori chiara</strong> del tuo passaporto. In allegato trovi un esempio di come deve apparire la copia.</p>
+<p>Insieme ai documenti firmati, dovrai stampare e spedire <strong>due copie a colori chiare</strong> del tuo passaporto. In allegato trovi un esempio di come devono apparire le copie.</p>
 
 <div ${info}>
 <ul style="margin:0;padding-left:20px">
@@ -909,14 +909,14 @@ ${hr}
 <ol style="margin:8px 0">
 <li><strong>Personal information</strong> — name, date of birth, citizenship, contact details</li>
 <li><strong>Foreign address and entry information</strong> — your residential address outside the US, passport details, US visa if applicable</li>
-<li><strong>Documents and review</strong> — upload your passport copy and review all entered data</li>
+<li><strong>Review and submit</strong> — review all entered data and confirm</li>
 </ol>
 
 ${hr}
 
 <p style="font-size:16px"><strong>Passport copy</strong></p>
 
-<p>During the form, you will be asked to upload a <strong>clear, full-color copy</strong> of your passport. Please see the attached example of how the passport copy should look.</p>
+<p>Along with the signed documents, you will need to print and mail <strong>two clear, full-color copies</strong> of your passport. Please see the attached example of how the copies should look.</p>
 
 <div ${info}>
 <ul style="margin:0;padding-left:20px">

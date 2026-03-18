@@ -79,7 +79,7 @@ export default function ITINFormCodePage() {
   const [submitted, setSubmitted] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
-  const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({})
+  // No file uploads — passport is mailed physically by the client
 
   const L = LABELS[lang]
 
@@ -203,26 +203,12 @@ export default function ITINFormCodePage() {
   async function handleSubmit() {
     if (!submission || !disclaimerAccepted) return
 
-    // Check passport upload
-    if (!uploadFiles.passport_owner) {
-      setSubmitError(lang === 'en' ? 'Passport scan is required.' : 'La scansione del passaporto e obbligatoria.')
-      return
-    }
-
     setSubmitting(true)
     setSubmitError(null)
 
     try {
-      // 1. Upload files to Supabase Storage
+      // No file uploads — passport is mailed physically
       const uploadPaths: string[] = []
-      for (const [key, file] of Object.entries(uploadFiles)) {
-        if (!file) continue
-        const path = `${submission.token}/${key}_${file.name}`
-        const { error: upErr } = await supabasePublic.storage
-          .from('onboarding-uploads')
-          .upload(path, file, { cacheControl: '3600', upsert: false })
-        if (!upErr) uploadPaths.push(path)
-      }
 
       // 2. Build submitted data
       const submittedData: Record<string, unknown> = { ...formData }
@@ -359,51 +345,11 @@ export default function ITINFormCodePage() {
     if (!submission) return null
 
     if (step === 3) {
-      // Documents & Review step
+      // Review & Submit step
       const allFields = FORM_FIELDS.filter(f => f.step === 1 || f.step === 2)
       return (
         <div className="tf-step-content">
           <h2 className="tf-step-title">{L.step3Title}</h2>
-
-          {/* Passport uploads */}
-          <div className="tf-docs-section">
-            <div className="tf-doc-item">
-              <div>
-                <span className="tf-doc-label">{L.passportUpload}</span>
-                <span className="tf-doc-req"> *</span>
-              </div>
-              <div className="tf-doc-upload">
-                {uploadFiles.passport_owner ? (
-                  <span className="tf-doc-ok">{uploadFiles.passport_owner.name}</span>
-                ) : (
-                  <span className="tf-doc-missing">{L.uploadRequired}</span>
-                )}
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setUploadFiles(prev => ({ ...prev, passport_owner: e.target.files?.[0] || null }))}
-                />
-              </div>
-            </div>
-
-            <div className="tf-doc-item">
-              <div>
-                <span className="tf-doc-label">{L.passportUpload2}</span>
-              </div>
-              <div className="tf-doc-upload">
-                {uploadFiles.passport_owner_2 ? (
-                  <span className="tf-doc-ok">{uploadFiles.passport_owner_2.name}</span>
-                ) : (
-                  <span className="tf-doc-optional">{lang === 'en' ? 'Optional' : 'Opzionale'}</span>
-                )}
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setUploadFiles(prev => ({ ...prev, passport_owner_2: e.target.files?.[0] || null }))}
-                />
-              </div>
-            </div>
-          </div>
 
           {/* Data summary */}
           <div className="tf-review-summary">
@@ -577,7 +523,7 @@ export default function ITINFormCodePage() {
             <button
               className="tf-nav-btn tf-nav-submit"
               onClick={handleSubmit}
-              disabled={!disclaimerAccepted || submitting || !uploadFiles.passport_owner}
+              disabled={!disclaimerAccepted || submitting}
             >
               {submitting ? L.submitting : L.submit}
             </button>
