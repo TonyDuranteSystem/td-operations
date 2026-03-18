@@ -1,0 +1,137 @@
+'use client'
+
+import { useState, useRef, useEffect } from 'react'
+import { Send, Loader2, MessageCircle } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { usePortalChat } from '@/lib/hooks/use-portal-chat'
+import { toast } from 'sonner'
+import { format, parseISO, isToday, isYesterday } from 'date-fns'
+
+function formatMessageDate(dateStr: string): string {
+  const date = parseISO(dateStr)
+  if (isToday(date)) return 'Today'
+  if (isYesterday(date)) return 'Yesterday'
+  return format(date, 'MMMM d, yyyy')
+}
+
+function formatTime(dateStr: string): string {
+  return format(parseISO(dateStr), 'h:mm a')
+}
+
+export function PortalChat({ accountId, userId }: { accountId: string; userId: string }) {
+  const { messages, loading, sending, sendMessage } = usePortalChat(accountId)
+  const [input, setInput] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages])
+
+  const handleSend = async () => {
+    if (!input.trim() || sending) return
+    const msg = input
+    setInput('')
+    try {
+      await sendMessage(msg)
+    } catch {
+      toast.error('Failed to send message')
+      setInput(msg) // Restore on error
+    }
+    inputRef.current?.focus()
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  // Group messages by date
+  let lastDate = ''
+
+  return (
+    <div className="flex-1 flex flex-col bg-white rounded-xl border shadow-sm overflow-hidden">
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-1">
+        {loading ? (
+          <div className="flex items-center justify-center h-full">
+            <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-zinc-400">
+            <MessageCircle className="h-12 w-12 mb-3" />
+            <p className="text-sm font-medium">No messages yet</p>
+            <p className="text-xs mt-1">Send a message to start the conversation</p>
+          </div>
+        ) : (
+          messages.map((msg) => {
+            const messageDate = formatMessageDate(msg.created_at)
+            const showDateHeader = messageDate !== lastDate
+            lastDate = messageDate
+            const isOwn = msg.sender_id === userId
+
+            return (
+              <div key={msg.id}>
+                {showDateHeader && (
+                  <div className="flex items-center justify-center my-4">
+                    <span className="text-[10px] text-zinc-400 bg-zinc-100 px-3 py-1 rounded-full">
+                      {messageDate}
+                    </span>
+                  </div>
+                )}
+                <div className={cn('flex mb-1', isOwn ? 'justify-end' : 'justify-start')}>
+                  <div className={cn(
+                    'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
+                    isOwn
+                      ? 'bg-blue-600 text-white rounded-br-md'
+                      : 'bg-zinc-100 text-zinc-900 rounded-bl-md'
+                  )}>
+                    {!isOwn && (
+                      <p className="text-[10px] font-medium text-zinc-500 mb-0.5">
+                        {msg.sender_type === 'admin' ? 'Tony Durante Team' : 'You'}
+                      </p>
+                    )}
+                    <p className="whitespace-pre-wrap break-words">{msg.message}</p>
+                    <p className={cn(
+                      'text-[10px] mt-1',
+                      isOwn ? 'text-blue-200' : 'text-zinc-400'
+                    )}>
+                      {formatTime(msg.created_at)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="border-t p-3">
+        <div className="flex items-center gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type a message..."
+            className="flex-1 px-4 py-2.5 text-sm border rounded-full bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
+          />
+          <button
+            onClick={handleSend}
+            disabled={!input.trim() || sending}
+            className="p-2.5 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
