@@ -12,6 +12,11 @@ export function isAdmin(user: User | null): boolean {
   return user.user_metadata?.role === "admin"
 }
 
+export function isClient(user: User | null): boolean {
+  if (!user) return false
+  return user.app_metadata?.role === "client"
+}
+
 export function getUserDisplayName(user: User): string {
   return user.email?.split("@")[0] ?? "User"
 }

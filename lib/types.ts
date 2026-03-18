@@ -173,6 +173,114 @@ export interface AccountListItem {
   payment_overdue: number
 }
 
+// ─── Portal Types ────────────────────────────────────────
+
+export interface PortalAccount {
+  id: string
+  company_name: string
+  entity_type: string | null
+  state_of_formation: string | null
+  ein_number: string | null
+  formation_date: string | null
+  status: string
+  physical_address: string | null
+}
+
+export interface PortalDocument {
+  id: string
+  file_name: string
+  document_type_name: string | null
+  category: number | null
+  account_id: string
+  drive_file_id: string | null
+  processed_at: string | null
+  created_at: string
+}
+
+export interface PortalService {
+  id: string
+  service_name: string
+  service_type: string
+  status: string | null
+  current_step: number | null
+  total_steps: number | null
+  current_stage: string | null
+  blocked_waiting_external: boolean | null
+  blocked_reason: string | null
+  start_date: string | null
+}
+
+export interface ClientCustomer {
+  id: string
+  account_id: string
+  name: string
+  email: string | null
+  address: string | null
+  vat_number: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ClientInvoice {
+  id: string
+  account_id: string
+  customer_id: string
+  invoice_number: string
+  status: string
+  currency: 'USD' | 'EUR'
+  subtotal: number
+  discount: number
+  total: number
+  issue_date: string
+  due_date: string | null
+  paid_date: string | null
+  notes: string | null
+  message: string | null
+  recurring_frequency: string | null
+  recurring_next_date: string | null
+  recurring_end_date: string | null
+  recurring_parent_id: string | null
+  created_at: string
+  updated_at: string
+  // Joined
+  customer_name?: string
+}
+
+export interface ClientInvoiceItem {
+  id: string
+  invoice_id: string
+  description: string
+  quantity: number
+  unit_price: number
+  amount: number
+  sort_order: number
+}
+
+export interface PortalMessage {
+  id: string
+  account_id: string
+  sender_type: 'client' | 'admin'
+  sender_id: string
+  message: string
+  attachment_url: string | null
+  attachment_name: string | null
+  read_at: string | null
+  created_at: string
+}
+
+export interface PortalNotification {
+  id: string
+  account_id: string
+  contact_id: string
+  type: string
+  title: string
+  body: string
+  link: string | null
+  read_at: string | null
+  created_at: string
+}
+
 // ─── Inbox Types ─────────────────────────────────────────
 
 export type InboxChannel = 'whatsapp' | 'telegram' | 'gmail'

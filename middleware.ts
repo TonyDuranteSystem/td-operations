@@ -1,6 +1,63 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+// --- Public paths (no auth required) ---
+const PUBLIC_PREFIXES = [
+  // Auth pages
+  '/login',
+  '/auth',
+  '/portal/login',
+  '/portal/forgot-password',
+  '/portal/reset-password',
+  // API: external webhooks, cron, sync
+  '/api/qb',
+  '/api/mcp',
+  '/api/sse',
+  '/api/message',
+  '/api/sync-drive',
+  '/api/sync-airtable',
+  '/api/sync-hubspot',
+  '/api/webhooks',
+  '/api/cron',
+  '/api/workflows',
+  '/api/jobs',
+  '/api/track',
+  '/api/tax-quote-completed',
+  '/api/tax-form-completed',
+  '/api/lease-signed',
+  '/api/oa-signed',
+  // Client-facing forms (email-gated, no Supabase auth)
+  '/offer',
+  '/tax-form',
+  '/formation-form',
+  '/onboarding-form',
+  '/banking-form',
+  '/lease',
+  '/operating-agreement',
+  '/closure-form',
+  '/itin-form',
+  '/tax-quote',
+  '/contract-template',
+  // OAuth and well-known
+  '/.well-known',
+  '/oauth',
+]
+
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PREFIXES.some(prefix => pathname.startsWith(prefix))
+}
+
+function isPortalPath(pathname: string): boolean {
+  return pathname.startsWith('/portal')
+}
+
+function isDashboardPath(pathname: string): boolean {
+  // Dashboard pages are everything under (dashboard) route group
+  // which includes /, /tasks, /accounts, /inbox, etc.
+  // But NOT /portal, /offer, /login, /api, etc.
+  return !isPortalPath(pathname) && !pathname.startsWith('/api') && !pathname.startsWith('/login')
+}
+
 export async function middleware(request: NextRequest) {
   // Legacy rewrite: /?t=TOKEN → /offer/TOKEN (must happen before auth check)
   if (request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('t')) {
@@ -36,49 +93,52 @@ export async function middleware(request: NextRequest) {
   )
 
   const { data: { user } } = await supabase.auth.getUser()
+  const pathname = request.nextUrl.pathname
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth') &&
-    !request.nextUrl.pathname.startsWith('/api/qb') &&
-    !request.nextUrl.pathname.startsWith('/api/mcp') &&
-    !request.nextUrl.pathname.startsWith('/api/sse') &&
-    !request.nextUrl.pathname.startsWith('/api/message') &&
-    !request.nextUrl.pathname.startsWith('/api/sync-drive') &&
-    !request.nextUrl.pathname.startsWith('/api/sync-airtable') &&
-    !request.nextUrl.pathname.startsWith('/api/sync-hubspot') &&
-    !request.nextUrl.pathname.startsWith('/api/webhooks') &&
-    !request.nextUrl.pathname.startsWith('/api/cron') &&
-    !request.nextUrl.pathname.startsWith('/api/workflows') &&
-    !request.nextUrl.pathname.startsWith('/api/jobs') &&
-    !request.nextUrl.pathname.startsWith('/api/track') &&
-    !request.nextUrl.pathname.startsWith('/api/tax-quote-completed') &&
-    !request.nextUrl.pathname.startsWith('/api/tax-form-completed') &&
-    !request.nextUrl.pathname.startsWith('/api/lease-signed') &&
-    !request.nextUrl.pathname.startsWith('/api/oa-signed') &&
-    !request.nextUrl.pathname.startsWith('/offer') &&
-    !request.nextUrl.pathname.startsWith('/tax-form') &&
-    !request.nextUrl.pathname.startsWith('/formation-form') &&
-    !request.nextUrl.pathname.startsWith('/onboarding-form') &&
-    !request.nextUrl.pathname.startsWith('/banking-form') &&
-    !request.nextUrl.pathname.startsWith('/lease') &&
-    !request.nextUrl.pathname.startsWith('/operating-agreement') &&
-    !request.nextUrl.pathname.startsWith('/closure-form') &&
-    !request.nextUrl.pathname.startsWith('/itin-form') &&
-    !request.nextUrl.pathname.startsWith('/tax-quote') &&
-    !request.nextUrl.pathname.startsWith('/contract-template') &&
-    !request.nextUrl.pathname.startsWith('/.well-known') &&
-    !request.nextUrl.pathname.startsWith('/oauth')
-  ) {
+  // --- Public paths: no auth required ---
+  if (isPublicPath(pathname)) {
+    return supabaseResponse
+  }
+
+  // --- No user: redirect to appropriate login ---
+  if (!user) {
     const url = request.nextUrl.clone()
-    url.pathname = '/login'
+    if (isPortalPath(pathname)) {
+      url.pathname = '/portal/login'
+    } else {
+      url.pathname = '/login'
+    }
     return NextResponse.redirect(url)
   }
 
-  if (user && request.nextUrl.pathname === '/login') {
+  const role = user.app_metadata?.role
+
+  // --- Portal paths: require client role ---
+  if (isPortalPath(pathname)) {
+    if (role !== 'client') {
+      // Admin accessing portal — allow for debugging (they can see client view)
+      // If you want to block admins from portal, uncomment:
+      // const url = request.nextUrl.clone()
+      // url.pathname = '/'
+      // return NextResponse.redirect(url)
+    }
+    return supabaseResponse
+  }
+
+  // --- Dashboard paths: require admin (non-client) ---
+  if (isDashboardPath(pathname)) {
+    if (role === 'client') {
+      // Client trying to access admin dashboard — redirect to portal
+      const url = request.nextUrl.clone()
+      url.pathname = '/portal'
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // --- Logged-in user on /login: redirect to home ---
+  if (pathname === '/login') {
     const url = request.nextUrl.clone()
-    url.pathname = '/'
+    url.pathname = role === 'client' ? '/portal' : '/'
     return NextResponse.redirect(url)
   }
 
