@@ -463,20 +463,44 @@ export default function OfferPageWithCode() {
           )}
 
           {/* Cost Summary */}
-          {((o.cost_summary && o.cost_summary.length > 0) || (o.recurring_costs && o.recurring_costs.length > 0)) && (
+          {((o.cost_summary && o.cost_summary.length > 0) || (o.recurring_costs && o.recurring_costs.length > 0)) && (() => {
+            // Build set of deselected optional service names for filtering cost items
+            const deselectedNames = new Set<string>()
+            o.services?.forEach(sv => {
+              if ((sv as any).optional && !selectedOptional.has(sv.name)) deselectedNames.add(sv.name)
+            })
+            return (
             <div className="offer-section">
               <div className="offer-section-title">{L.costSummary}</div>
               <div className="offer-riepilogo-box">
-                {o.cost_summary?.map((r, i) => (
+                {o.cost_summary?.map((r, i) => {
+                  // Filter items: hide cost lines matching deselected optional services
+                  const visibleItems = r.items?.filter(item =>
+                    !Array.from(deselectedNames).some(name => item.name.toLowerCase().includes(name.toLowerCase().split(' ')[0]))
+                  ) || []
+                  // Recalculate total if items were filtered
+                  let displayTotal = r.total
+                  if (deselectedNames.size > 0 && visibleItems.length !== (r.items?.length || 0)) {
+                    // Remove the optional price from the displayed total
+                    const removedItems = r.items?.filter(item =>
+                      Array.from(deselectedNames).some(name => item.name.toLowerCase().includes(name.toLowerCase().split(' ')[0]))
+                    ) || []
+                    if (removedItems.length > 0) {
+                      // Simple approach: show only the base price from visible items
+                      displayTotal = visibleItems.length === 1 ? visibleItems[0].price : r.total
+                    }
+                  }
+                  return (
                   <div key={i} className="offer-riepilogo-section">
                     <h4>{r.label}</h4>
                     <div className="offer-riepilogo-line" />
-                    {r.items?.map((item, j) => (
+                    {visibleItems.map((item, j) => (
                       <div key={j} className="offer-riepilogo-row"><span>{item.name}</span><span className="offer-riepilogo-price">{item.price}</span></div>
                     ))}
-                    <div className="offer-riepilogo-total"><span>{r.total_label || L.total}</span><span>{r.total}</span></div>
+                    <div className="offer-riepilogo-total"><span>{r.total_label || L.total}</span><span>{displayTotal}</span></div>
                   </div>
-                ))}
+                  )
+                })}
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
@@ -487,7 +511,8 @@ export default function OfferPageWithCode() {
                 )}
               </div>
             </div>
-          )}
+            )
+          })()}
 
           {/* Future Developments */}
           {o.future_developments && o.future_developments.length > 0 && (
