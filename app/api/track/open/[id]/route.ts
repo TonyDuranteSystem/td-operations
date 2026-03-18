@@ -39,7 +39,7 @@ export async function GET(
   }
 
   // Return 1x1 transparent GIF with cache-busting headers
-  return new NextResponse(PIXEL, {
+  return new NextResponse(new Uint8Array(PIXEL), {
     status: 200,
     headers: {
       "Content-Type": "image/gif",

@@ -559,7 +559,7 @@ export async function uploadBinaryToDrive(
         Authorization: `Bearer ${token}`,
         "Content-Type": `multipart/related; boundary=${boundary}`,
       },
-      body,
+      body: new Uint8Array(body),
     },
   )
 
