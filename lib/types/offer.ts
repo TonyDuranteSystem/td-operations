@@ -123,7 +123,7 @@ export interface Offer {
   // Link protection
   access_code?: string
   // Contract type
-  contract_type?: 'msa' | 'tax_return' | 'service'
+  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin'
 }
 
 // ─── Contract Interface ─────────────────────────────────────

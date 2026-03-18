@@ -266,7 +266,7 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_create",
-    `Create a new client offer/proposal in Supabase. Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email — no lead required). Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays. IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English, regardless of the offer language. The offer intro and UI follow the offer language, but contract content is always English. Contract types: 'msa' (default, new clients/formation), 'service' (existing clients becoming annual), 'tax_return' (tax filing only).`,
+    `Create a new client offer/proposal in Supabase. Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email — no lead required). Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays. IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English, regardless of the offer language. The offer intro and UI follow the offer language, but contract content is always English. Contract types: 'formation' (default, LLC to create), 'onboarding' (LLC already exists), 'tax_return' (standalone tax filing), 'itin' (standalone ITIN application).`,
     {
       token: z.string().describe("Unique token (e.g. 'mario-rossi-2026')"),
       client_name: z.string().describe("Client full name"),
@@ -291,7 +291,7 @@ export function registerOfferTools(server: McpServer) {
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
       // Contract type
-      contract_type: z.enum(["msa", "tax_return", "service"]).optional().describe("Contract type: 'msa' (default — full MSA+SOW for new clients with formation timeline), 'tax_return' (lightweight agreement for tax return only), 'service' (MSA+SOW for existing clients becoming annual — same legal terms as MSA but no formation timeline, clear payment schedule)"),
+      contract_type: z.enum(["formation", "onboarding", "tax_return", "itin"]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement)."),
       // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
       lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
       account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
@@ -377,7 +377,7 @@ export function registerOfferTools(server: McpServer) {
             },
             effective_date: params.effective_date,
             expires_at: params.expires_at,
-            contract_type: params.contract_type || "msa",
+            contract_type: params.contract_type || "formation",
             lead_id: params.lead_id,
             account_id: params.account_id,
             deal_id: params.deal_id,

@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
-import TaxReturnContract from './tax-return-agreement'
+import StandaloneServiceAgreement from './standalone-service-agreement'
 import ServiceAgreement from './service-agreement'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -659,13 +659,23 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <TaxReturnContract offer={offer} token={token} />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="tax_return" />
       </>
     )
   }
 
-  // Service agreement — MSA+SOW for existing clients (no formation timeline)
-  if ((offer as any).contract_type === 'service') {
+  // ITIN agreement — standalone ITIN application
+  if ((offer as any).contract_type === 'itin') {
+    return (
+      <>
+        <ContractStyles />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="itin" />
+      </>
+    )
+  }
+
+  // Onboarding agreement — MSA+SOW for existing LLC clients (no formation timeline)
+  if ((offer as any).contract_type === 'onboarding') {
     return (
       <>
         <ContractStyles />

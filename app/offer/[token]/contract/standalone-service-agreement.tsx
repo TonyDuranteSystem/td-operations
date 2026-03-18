@@ -17,12 +17,102 @@ function esc(v: string) {
   return d.innerHTML
 }
 
-interface TaxReturnContractProps {
+interface StandaloneServiceAgreementProps {
   offer: Offer
   token: string
+  contractType?: 'tax_return' | 'itin'
 }
 
-export default function TaxReturnContract({ offer, token }: TaxReturnContractProps) {
+// Service-specific content based on contract type
+const SERVICE_CONTENT = {
+  tax_return: {
+    title: 'Tax Return Filing Agreement',
+    shortTitle: 'Tax Return Filing Agreement',
+    pdfPrefix: 'Tax_Agreement',
+    scope: {
+      intro: "The Service Provider agrees to prepare and file the Client's LLC federal tax return for the tax year specified above. This includes:",
+      items: [
+        'Preparation of the applicable IRS form(s) based on the LLC type;',
+        'Electronic filing (e-filing) of the tax return with the IRS;',
+        'Filing of a tax extension (Form 7004) if the return cannot be completed before the original deadline;',
+        'Signature by a Certified Tax Preparer (PTIN holder).',
+      ],
+      closing: 'This Agreement covers one (1) tax return filing for the specified tax year only. Any additional tax years or services require a separate agreement.',
+    },
+    procedure: {
+      intro: 'The tax return preparation follows this process:',
+      steps: [
+        { title: 'Data Collection', desc: 'The Service Provider sends the Client a tax intake form to gather all necessary LLC information and financial data.' },
+        { title: 'Extension Filing', desc: 'If the original filing deadline (typically March 15 for partnerships, April 15 for corporations) has passed or insufficient time remains, the Service Provider files an automatic extension (Form 7004), extending the deadline to September 15 or October 15 respectively.' },
+        { title: 'Preparation', desc: 'The Service Provider prepares the tax return based on the data provided by the Client.' },
+        { title: 'Review & Approval', desc: 'The completed return is sent to the Client for review before filing.' },
+        { title: 'Filing', desc: 'Upon Client approval, the return is electronically filed with the IRS. The Client receives confirmation of acceptance.' },
+      ],
+    },
+    commitments: [
+      'Prepare the tax return in compliance with applicable IRS rules and regulations;',
+      'File a tax extension on behalf of the Client if the return cannot be completed before the original deadline, ensuring no late-filing penalties;',
+      'Complete and file the tax return within a reasonable timeframe after receiving all required data from the Client;',
+      'Provide the Client with a copy of the filed return and IRS acceptance confirmation.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Provide accurate and complete financial data', rest: ' for the LLC, including but not limited to: income, expenses, bank statements, and any other records required for the tax return;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request;' },
+        { bold: 'Certify the accuracy', rest: " of all information provided. The Service Provider relies on the Client's data and is not responsible for errors resulting from incomplete or inaccurate information;" },
+        { bold: 'Notify the Service Provider promptly', rest: ' of any changes to the LLC structure, ownership, or financial activity that may affect the tax return.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Tax Return Filing Agreement. I acknowledge my responsibility to provide accurate and complete financial data for the tax return preparation.',
+    successNote: 'Once payment is received, we will begin working on your tax return immediately.',
+  },
+  itin: {
+    title: 'ITIN Application Service Agreement',
+    shortTitle: 'ITIN Application Service Agreement',
+    pdfPrefix: 'ITIN_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to prepare and submit the ITIN application on behalf of the Client. This includes:',
+      items: [
+        'Preparation of IRS Form W-7 (Application for IRS Individual Taxpayer Identification Number);',
+        'Preparation of a supporting federal tax return (Form 1040-NR) as required by the IRS;',
+        'Review and certification by a Certified Acceptance Agent (CAA);',
+        'Submission of the complete application package to the IRS via certified mail.',
+      ],
+      closing: 'This Agreement covers one (1) ITIN application only. Any additional applications or services require a separate agreement.',
+    },
+    procedure: {
+      intro: 'The ITIN application process follows these steps:',
+      steps: [
+        { title: 'Data Collection', desc: 'The Service Provider sends the Client a secure intake form to collect personal information, passport details, and foreign address.' },
+        { title: 'Document Preparation', desc: 'The Service Provider prepares Form W-7 and the supporting Form 1040-NR based on the data provided.' },
+        { title: 'CAA Review', desc: 'A Certified Acceptance Agent reviews and certifies the application, verifying the Client\'s identity documents (passport).' },
+        { title: 'Submission', desc: 'The complete application package is sent to the IRS via certified mail with tracking.' },
+        { title: 'Follow-up', desc: 'The Service Provider monitors the application status. The IRS typically processes ITIN applications within 7-11 weeks.' },
+      ],
+    },
+    commitments: [
+      'Prepare the W-7 and 1040-NR forms in compliance with applicable IRS rules and regulations;',
+      'Ensure the application is reviewed and certified by a Certified Acceptance Agent (CAA);',
+      'Submit the application to the IRS via certified mail with tracking;',
+      'Provide the Client with the ITIN number upon receipt from the IRS.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Provide accurate and complete personal information', rest: ', including full legal name, date of birth, country of citizenship, and foreign address;' },
+        { bold: 'Provide a valid passport', rest: ' (or certified copy) for identity verification by the Certified Acceptance Agent;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request;' },
+        { bold: 'Acknowledge processing times', rest: ' are determined by the IRS (typically 7-11 weeks) and are outside the Service Provider\'s control.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this ITIN Application Service Agreement. I acknowledge my responsibility to provide accurate and complete personal information for the application.',
+    successNote: 'Once payment is received, we will begin preparing your ITIN application immediately.',
+  },
+} as const
+
+export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return' }: StandaloneServiceAgreementProps) {
+  const ct = SERVICE_CONTENT[contractType]
   const [signing, setSigning] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Enter your name, email, and sign below.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
@@ -121,7 +211,7 @@ export default function TaxReturnContract({ offer, token }: TaxReturnContractPro
       // Generate PDF
       const opt = {
         margin: [0.5, 0.6, 0.7, 0.6] as [number, number, number, number],
-        filename: `Tony_Durante_Tax_Agreement_${token}.pdf`,
+        filename: `Tony_Durante_${ct.pdfPrefix}_${token}.pdf`,
         image: { type: 'jpeg' as const, quality: 0.95 },
         html2canvas: { scale: 2, useCORS: true, letterRendering: true },
         jsPDF: { unit: 'in' as const, format: 'letter' as const, orientation: 'portrait' as const },
@@ -228,7 +318,7 @@ export default function TaxReturnContract({ offer, token }: TaxReturnContractPro
           sh += '</div></div></div>'
         }
 
-        sh += '<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">Once payment is received, we will begin working on your tax return immediately.</p>'
+        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${ct.successNote}</p>`
         sh += `<a href="/offer/${encodeURIComponent(token)}" class="contract-success-link">&larr; Back to Offer</a>`
         sh += '</div>'
         successEl.innerHTML = sh
@@ -307,11 +397,11 @@ export default function TaxReturnContract({ offer, token }: TaxReturnContractPro
         <div className="contract-header">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/logo.jpg" alt="Tony Durante LLC" />
-          <h1>Tax Return Filing Agreement</h1>
+          <h1>{ct.title}</h1>
         </div>
 
         {/* PARTIES */}
-        <p>This Tax Return Filing Agreement (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
+        <p>This {ct.shortTitle} (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
         <p style={{ margin: '14px 0' }}><strong>Tony Durante LLC</strong>, a Florida limited liability company (&ldquo;<strong>Service Provider</strong>&rdquo;), and</p>
         <p style={{ margin: '14px 0' }}><strong>{name || '[Client Name]'}</strong> (&ldquo;<strong>Client</strong>&rdquo;).</p>
 
@@ -331,38 +421,28 @@ export default function TaxReturnContract({ offer, token }: TaxReturnContractPro
         {/* SECTION 1 — SCOPE */}
         <div className="contract-section">
           <h3>1. Scope of Service</h3>
-          <p>The Service Provider agrees to prepare and file the Client&rsquo;s LLC federal tax return for the tax year specified above. This includes:</p>
+          <p>{ct.scope.intro}</p>
           <ul>
-            <li>Preparation of the applicable IRS form(s) based on the LLC type;</li>
-            <li>Electronic filing (e-filing) of the tax return with the IRS;</li>
-            <li>Filing of a tax extension (Form 7004) if the return cannot be completed before the original deadline;</li>
-            <li>Signature by a Certified Tax Preparer (PTIN holder).</li>
+            {ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}
           </ul>
-          <p>This Agreement covers <strong>one (1) tax return filing</strong> for the specified tax year only. Any additional tax years or services require a separate agreement.</p>
+          <p><strong>{ct.scope.closing}</strong></p>
         </div>
 
         {/* SECTION 2 — CLIENT RESPONSIBILITIES */}
         <div className="contract-section">
           <h3>2. Client Responsibilities</h3>
-          <p>The Client agrees to:</p>
+          <p>{ct.clientDuties.intro}</p>
           <ol type="a">
-            <li><strong>Provide accurate and complete financial data</strong> for the LLC, including but not limited to: income, expenses, bank statements, and any other records required for the tax return;</li>
-            <li><strong>Respond to requests for information</strong> within five (5) business days of receiving the request;</li>
-            <li><strong>Certify the accuracy</strong> of all information provided. The Service Provider relies on the Client&rsquo;s data and is not responsible for errors resulting from incomplete or inaccurate information;</li>
-            <li><strong>Notify the Service Provider promptly</strong> of any changes to the LLC structure, ownership, or financial activity that may affect the tax return.</li>
+            {ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong>{item.rest}</li>)}
           </ol>
         </div>
 
         {/* SECTION 3 — PROCEDURE */}
         <div className="contract-section">
-          <h3>3. Tax Filing Procedure</h3>
-          <p>The tax return preparation follows this process:</p>
+          <h3>3. Service Procedure</h3>
+          <p>{ct.procedure.intro}</p>
           <ol>
-            <li><strong>Data Collection</strong> &mdash; The Service Provider sends the Client a tax intake form to gather all necessary LLC information and financial data.</li>
-            <li><strong>Extension Filing</strong> &mdash; If the original filing deadline (typically March 15 for partnerships, April 15 for corporations) has passed or insufficient time remains, the Service Provider files an automatic extension (Form 7004), extending the deadline to September 15 or October 15 respectively.</li>
-            <li><strong>Preparation</strong> &mdash; The Service Provider prepares the tax return based on the data provided by the Client.</li>
-            <li><strong>Review &amp; Approval</strong> &mdash; The completed return is sent to the Client for review before filing.</li>
-            <li><strong>Filing</strong> &mdash; Upon Client approval, the return is electronically filed with the IRS. The Client receives confirmation of acceptance.</li>
+            {ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; {step.desc}</li>)}
           </ol>
         </div>
 
@@ -371,10 +451,7 @@ export default function TaxReturnContract({ offer, token }: TaxReturnContractPro
           <h3>4. Service Provider Commitments</h3>
           <p>The Service Provider agrees to:</p>
           <ol type="a">
-            <li>Prepare the tax return in compliance with applicable IRS rules and regulations;</li>
-            <li>File a tax extension on behalf of the Client if the return cannot be completed before the original deadline, ensuring no late-filing penalties;</li>
-            <li>Complete and file the tax return within a reasonable timeframe after receiving all required data from the Client;</li>
-            <li>Provide the Client with a copy of the filed return and IRS acceptance confirmation.</li>
+            {ct.commitments.map((item, i) => <li key={i}>{item}</li>)}
           </ol>
         </div>
 
@@ -422,8 +499,7 @@ export default function TaxReturnContract({ offer, token }: TaxReturnContractPro
         <div className="contract-sig-section">
           <h3 style={{ textAlign: 'center' }}>Acceptance &amp; Signature</h3>
           <p className="contract-text-center contract-text-muted" style={{ marginBottom: 16, fontSize: '9.5pt' }}>
-            By signing below, I confirm that I have read and agree to the terms of this Tax Return Filing Agreement.
-            I acknowledge my responsibility to provide accurate and complete financial data for the tax return preparation.
+            {ct.signatureText}
           </p>
           <div className="contract-sig-grid">
             <div className="contract-sig-block">
