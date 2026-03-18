@@ -306,6 +306,59 @@ export function registerFormationTools(server: McpServer) {
         if (apply_changes) {
           lines.push("")
           lines.push("───────────────────────────────────")
+          lines.push("APPLYING CHANGES...")
+          lines.push("")
+
+          // Save form data + uploads to Drive
+          try {
+            const { saveFormToDrive } = await import("@/lib/form-to-drive")
+            const driveFolderId = sub.lead_id
+              ? await (async () => {
+                  // Try to find account via contact linked to lead
+                  const { data: contact } = await supabaseAdmin
+                    .from("contacts")
+                    .select("id")
+                    .eq("email", String(submitted.owner_email || ""))
+                    .maybeSingle()
+                  if (contact?.id) {
+                    const { data: ac } = await supabaseAdmin
+                      .from("account_contacts")
+                      .select("account_id")
+                      .eq("contact_id", contact.id)
+                      .limit(1)
+                      .maybeSingle()
+                    if (ac?.account_id) {
+                      const { data: acct } = await supabaseAdmin
+                        .from("accounts")
+                        .select("drive_folder_id")
+                        .eq("id", ac.account_id)
+                        .single()
+                      return acct?.drive_folder_id || null
+                    }
+                  }
+                  return null
+                })()
+              : null
+            if (driveFolderId) {
+              const driveResult = await saveFormToDrive(
+                "formation",
+                submitted,
+                (sub.upload_paths as string[]) || [],
+                driveFolderId,
+                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName || token }
+              )
+              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
+              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
+              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
+              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+            } else {
+              lines.push("⚠️ No Drive folder found — data not saved to Drive")
+            }
+          } catch (driveErr) {
+            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+          }
+
+          lines.push("")
           lines.push("ENQUEUING BACKGROUND JOB...")
           lines.push("")
 

@@ -649,6 +649,36 @@ export function registerTaxTools(server: McpServer) {
           lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${jobId}')`)
+
+          // Save form data + uploads to Drive
+          if (sub.account_id) {
+            try {
+              const { data: acc } = await supabaseAdmin
+                .from("accounts")
+                .select("drive_folder_id")
+                .eq("id", sub.account_id)
+                .single()
+              if (acc?.drive_folder_id) {
+                const { saveFormToDrive } = await import("@/lib/form-to-drive")
+                const submitted = sub.submitted_data as Record<string, unknown> || {}
+                const driveResult = await saveFormToDrive(
+                  "tax_return",
+                  submitted,
+                  (sub.upload_paths as string[]) || [],
+                  acc.drive_folder_id,
+                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName }
+                )
+                if (driveResult.summaryFileId) lines.push(`✅ Tax data summary saved to Drive (${driveResult.summaryFileId})`)
+                if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
+                if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
+                if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+              } else {
+                lines.push("⚠️ No Drive folder — data not saved to Drive")
+              }
+            } catch (e) {
+              lines.push(`⚠️ Drive save failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
+          }
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

@@ -347,6 +347,31 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         lines.push(`Submitted: ${sub.completed_at}`)
 
         if (mark_reviewed) {
+          // Save form data + uploads to Drive
+          try {
+            const { saveFormToDrive } = await import("@/lib/form-to-drive")
+            const driveFolderId = sub.account_id
+              ? (await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()).data?.drive_folder_id
+              : null
+            if (driveFolderId) {
+              const driveResult = await saveFormToDrive(
+                "closure",
+                submitted,
+                (sub.upload_paths as string[]) || [],
+                driveFolderId,
+                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token }
+              )
+              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
+              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
+              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
+              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+            } else {
+              lines.push("⚠️ No Drive folder found — data not saved to Drive")
+            }
+          } catch (driveErr) {
+            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+          }
+
           await supabaseAdmin
             .from("closure_submissions")
             .update({ status: "reviewed", reviewed_at: new Date().toISOString(), reviewed_by: "claude" })
