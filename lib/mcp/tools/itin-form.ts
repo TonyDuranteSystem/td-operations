@@ -643,13 +643,22 @@ export function registerITINFormTools(server: McpServer) {
 
               if (w7FileId && nrFileId && oiFileId) {
                 // Build HTML email
-                const emailHtml = generateITINSigningEmail(String(submitted.first_name || ""))
+                const emailLang = (sub.language === "it" ? "it" : "en") as "en" | "it"
+                const emailHtml = generateITINSigningEmail(String(submitted.first_name || ""), emailLang)
 
                 const { gmailPost } = await import("@/lib/gmail")
                 const { downloadFileBinary } = await import("@/lib/google-drive")
                 const { buffer: w7Buf } = await downloadFileBinary(w7FileId)
                 const { buffer: nrBuf } = await downloadFileBinary(nrFileId)
                 const { buffer: oiBuf } = await downloadFileBinary(oiFileId)
+
+                // Download passport example image for attachment
+                const PASSPORT_EXAMPLE_ID = "1RU-ndib5pH9_tMILZZksFU6ZYRiomK1g"
+                let passportExampleBuf: Buffer | null = null
+                try {
+                  const dl = await downloadFileBinary(PASSPORT_EXAMPLE_ID)
+                  passportExampleBuf = dl.buffer
+                } catch { /* skip if not available */ }
 
                 const boundary = "boundary_" + Date.now()
                 const slug2 = clientName.replace(/\s+/g, "_")
@@ -677,13 +686,24 @@ export function registerITINFormTools(server: McpServer) {
                   `Content-Disposition: attachment; filename="Schedule_OI_${slug2}.pdf"`,
                   "",
                   Buffer.from(oiBuf).toString("base64"),
-                  `--${boundary}--`,
                 ]
+                // Attach passport example image
+                if (passportExampleBuf) {
+                  parts.push(
+                    `--${boundary}`,
+                    `Content-Type: image/png; name="Passport_Example_ITIN.png"`,
+                    `Content-Transfer-Encoding: base64`,
+                    `Content-Disposition: attachment; filename="Passport_Example_ITIN.png"`,
+                    "",
+                    passportExampleBuf.toString("base64"),
+                  )
+                }
+                parts.push(`--${boundary}--`)
 
                 const mimeMessage = [
                   `From: Tony Durante LLC <support@tonydurante.us>`,
                   `To: ${clientEmail}`,
-                  `Subject: Your ITIN Application Documents - Ready for Signature`,
+                  `Subject: ${emailLang === "it" ? "Documenti ITIN pronti per la firma" : "Your ITIN Application Documents - Ready for Signature"}`,
                   `MIME-Version: 1.0`,
                   `Content-Type: multipart/mixed; boundary="${boundary}"`,
                   "",
@@ -717,7 +737,119 @@ export function registerITINFormTools(server: McpServer) {
 
 // ─── ITIN Signing Email Template (HTML) ───
 
-function generateITINSigningEmail(firstName: string): string {
+function generateITINSigningEmail(firstName: string, lang: "en" | "it"): string {
+  const hr = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
+  const sTd = 'style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;width:32px;text-align:center;color:#1e3a5f"'
+  const bTd = 'style="padding:10px 12px;border:1px solid #d1d5db"'
+  const alert = 'style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px 20px;margin:16px 0;color:#991b1b"'
+  const info = 'style="background:#f0f5fb;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin:16px 0"'
+
+  if (lang === "it") {
+    return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
+
+<p>Gentile ${firstName},</p>
+
+<p>I documenti per la tua richiesta ITIN sono pronti. In allegato trovi:</p>
+
+<ol style="margin:16px 0">
+<li><strong>Form W-7</strong> &mdash; Richiesta di Numero di Identificazione Fiscale Individuale (ITIN)</li>
+<li><strong>Form 1040-NR</strong> &mdash; Dichiarazione dei Redditi per Non Residenti USA</li>
+<li><strong>Schedule OI</strong> &mdash; Altre Informazioni (allegato al 1040-NR)</li>
+</ol>
+
+<div ${alert}>
+<strong>IMPORTANTE:</strong> Devi stampare e firmare <strong>DUE copie complete</strong> di ciascun documento. L'IRS ne richiede una per l'elaborazione e una per i nostri archivi come Certified Acceptance Agent.
+</div>
+
+${hr}
+
+<p style="font-size:16px"><strong>Cosa devi fare</strong></p>
+
+<table style="border-collapse:collapse;width:100%;margin:12px 0">
+<tr><td ${sTd}>1</td><td ${bTd}><strong>Stampa DUE copie</strong> di tutti e tre i documenti (W-7, 1040-NR, Schedule OI)</td></tr>
+<tr><td ${sTd}>2</td><td ${bTd}><strong>Firma il W-7</strong> su entrambe le copie, sulla riga <em>"Signature of applicant"</em>.<br/><span style="color:#991b1b">Firma autografa con inchiostro &mdash; le firme digitali o elettroniche NON sono accettate dall'IRS.</span></td></tr>
+<tr><td ${sTd}>3</td><td ${bTd}><strong>Firma il 1040-NR</strong> su entrambe le copie, a pagina 2, sulla riga <em>"Your signature"</em> (firma autografa)</td></tr>
+<tr><td ${sTd}>4</td><td ${bTd}><strong>Prepara le copie del passaporto</strong> (vedi requisiti sotto)</td></tr>
+<tr><td ${sTd}>5</td><td ${bTd}><strong>Spedisci tutto</strong> all'indirizzo indicato sotto</td></tr>
+</table>
+
+${hr}
+
+<p style="font-size:16px"><strong>Requisiti per la copia del passaporto</strong></p>
+
+<p>Devi includere <strong>DUE copie a colori chiare e di alta qualita</strong> del tuo passaporto. L'IRS e molto rigoroso sulla qualita delle copie. Le copie che non soddisfano questi requisiti verranno respinte.</p>
+
+<div ${info}>
+<p style="margin:0 0 12px 0"><strong>Cosa includere:</strong></p>
+<ul style="margin:0;padding-left:20px">
+<li><strong>Pagina dei dati</strong> (la pagina con foto, nome, data di nascita, numero passaporto e scadenza)</li>
+<li><strong>Pagina della firma</strong> (se il tuo passaporto ha una pagina separata per la firma)</li>
+<li>Se hai un <strong>visto USA</strong>, includi anche la/le pagina/e con il visto</li>
+</ul>
+
+<p style="margin:16px 0 0 0"><strong>Requisiti di qualita:</strong></p>
+<ul style="margin:0;padding-left:20px">
+<li><strong>A colori</strong> &mdash; le copie in bianco e nero NON sono accettate</li>
+<li><strong>Nitide e chiare</strong> &mdash; tutto il testo, la foto e gli elementi di sicurezza devono essere completamente leggibili</li>
+<li><strong>Scansione piatta</strong> &mdash; appoggia il passaporto piatto sullo scanner, non fotografarlo di lato</li>
+<li><strong>Nessuna ostruzione</strong> &mdash; niente dita, ombre, riflessi o oggetti che coprano qualsiasi parte della pagina</li>
+<li><strong>Pagina intera visibile</strong> &mdash; tutti e quattro i bordi della pagina del passaporto devono essere visibili</li>
+<li><strong>Alta risoluzione</strong> &mdash; scansione minima a 300 DPI raccomandata</li>
+</ul>
+</div>
+
+<p><em>In allegato trovi un esempio di come deve apparire la copia del passaporto.</em></p>
+
+${hr}
+
+<p style="font-size:16px"><strong>Checklist completa per la spedizione</strong></p>
+
+<p>La busta deve contenere:</p>
+<ol style="margin:8px 0">
+<li>DUE copie firmate del Form W-7</li>
+<li>DUE copie firmate del Form 1040-NR (con Schedule OI allegato)</li>
+<li>DUE copie a colori chiare del passaporto (pagina dati + pagina firma)</li>
+</ol>
+
+${hr}
+
+<p style="font-size:16px"><strong>Indirizzo di spedizione</strong></p>
+
+<div style="background:#f7f8fa;border:1px solid #d1d5db;border-radius:8px;padding:16px 20px;margin:12px 0;font-size:15px">
+<strong>Tony Durante LLC</strong><br/>
+10225 Ulmerton Rd, Suite 3D<br/>
+Largo, FL 33771<br/>
+United States
+</div>
+
+<p style="color:#b8292f;font-weight:600">Utilizza un metodo di spedizione tracciabile (FedEx, DHL, UPS) e condividi il numero di tracking con noi.</p>
+
+${hr}
+
+<p style="font-size:16px"><strong>Cosa succede dopo</strong></p>
+
+<ol style="margin:8px 0;padding-left:20px">
+<li>Una volta ricevuti i tuoi documenti firmati, il nostro <strong>Certified Acceptance Agent (CAA)</strong> verifichera tutto e certifichera le copie del passaporto</li>
+<li>Prepareremo il <strong>Certificate of Accuracy (Form W-7 COA)</strong> e lo allegheremo alla tua richiesta</li>
+<li>Invieremo il pacchetto completo della richiesta ITIN al <strong>Centro di Elaborazione IRS di Austin</strong> tramite posta certificata con tracciamento</li>
+<li>L'IRS elabora le richieste ITIN tipicamente entro <strong>7&ndash;11 settimane</strong></li>
+<li>Riceverai il tuo numero ITIN per posta direttamente dall'IRS, e ti avviseremo non appena sara assegnato</li>
+</ol>
+
+${hr}
+
+<p>Per qualsiasi domanda, non esitare a contattarci.</p>
+
+<p>Cordiali saluti,<br/>
+<strong>Tony Durante LLC</strong><br/>
+<span style="color:#6b7280">Certified Acceptance Agent (CAA) &mdash; IRS ITIN Program</span><br/>
+<span style="color:#6b7280">+1 (727) 452-1093</span><br/>
+<a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
+
+</div>`
+  }
+
+  // English version
   return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1a1a;max-width:640px;margin:0 auto">
 
 <p>Dear ${firstName},</p>
@@ -730,30 +862,61 @@ function generateITINSigningEmail(firstName: string): string {
 <li><strong>Schedule OI</strong> &mdash; Other Information (attached to 1040-NR)</li>
 </ol>
 
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+<div ${alert}>
+<strong>IMPORTANT:</strong> You must print and sign <strong>TWO complete copies</strong> of each document. The IRS requires one copy for processing and one copy for our records as your Certified Acceptance Agent.
+</div>
+
+${hr}
 
 <p style="font-size:16px"><strong>What you need to do</strong></p>
 
 <table style="border-collapse:collapse;width:100%;margin:12px 0">
-<tr>
-<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;width:32px;text-align:center;color:#1e3a5f">1</td>
-<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Print</strong> all three documents</td>
-</tr>
-<tr>
-<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;text-align:center;color:#1e3a5f">2</td>
-<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Sign the W-7</strong> on the <em>"Signature of applicant"</em> line (wet ink signature required &mdash; no digital signatures)</td>
-</tr>
-<tr>
-<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;text-align:center;color:#1e3a5f">3</td>
-<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Sign the 1040-NR</strong> on page 2, <em>"Your signature"</em> line (wet ink signature required)</td>
-</tr>
-<tr>
-<td style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;text-align:center;color:#1e3a5f">4</td>
-<td style="padding:10px 12px;border:1px solid #d1d5db"><strong>Mail all signed documents</strong> to the address below</td>
-</tr>
+<tr><td ${sTd}>1</td><td ${bTd}><strong>Print TWO copies</strong> of all three documents (W-7, 1040-NR, Schedule OI)</td></tr>
+<tr><td ${sTd}>2</td><td ${bTd}><strong>Sign the W-7</strong> on both copies, on the <em>"Signature of applicant"</em> line.<br/><span style="color:#991b1b">Wet ink signature required &mdash; no digital or electronic signatures accepted by the IRS.</span></td></tr>
+<tr><td ${sTd}>3</td><td ${bTd}><strong>Sign the 1040-NR</strong> on both copies, on page 2, <em>"Your signature"</em> line (wet ink)</td></tr>
+<tr><td ${sTd}>4</td><td ${bTd}><strong>Prepare your passport copies</strong> (see passport requirements below)</td></tr>
+<tr><td ${sTd}>5</td><td ${bTd}><strong>Mail everything</strong> to the address below</td></tr>
 </table>
 
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+${hr}
+
+<p style="font-size:16px"><strong>Passport Copy Requirements</strong></p>
+
+<p>You must include <strong>TWO clear, high-quality color copies</strong> of your passport. The IRS is very strict about passport copy quality. Copies that do not meet these requirements will be rejected.</p>
+
+<div ${info}>
+<p style="margin:0 0 12px 0"><strong>What to include:</strong></p>
+<ul style="margin:0;padding-left:20px">
+<li><strong>Data page</strong> (the page with your photo, name, date of birth, passport number, and expiry date)</li>
+<li><strong>Signature page</strong> (if your passport has a separate signature page)</li>
+<li>If you have a <strong>U.S. visa</strong>, also include the page(s) showing your visa</li>
+</ul>
+
+<p style="margin:16px 0 0 0"><strong>Quality requirements:</strong></p>
+<ul style="margin:0;padding-left:20px">
+<li><strong>Full color</strong> &mdash; black and white copies are NOT accepted</li>
+<li><strong>Clear and sharp</strong> &mdash; all text, photo, and security features must be fully legible</li>
+<li><strong>Flat scan</strong> &mdash; place passport flat on the scanner, do not photograph at an angle</li>
+<li><strong>No obstructions</strong> &mdash; no fingers, shadows, glare, or objects covering any part of the page</li>
+<li><strong>Full page visible</strong> &mdash; all four edges of the passport page must be visible</li>
+<li><strong>High resolution</strong> &mdash; minimum 300 DPI scan recommended</li>
+</ul>
+</div>
+
+<p><em>Please see the attached example of how the passport copy should look.</em></p>
+
+${hr}
+
+<p style="font-size:16px"><strong>Complete mailing checklist</strong></p>
+
+<p>Your envelope should contain:</p>
+<ol style="margin:8px 0">
+<li>TWO signed copies of Form W-7</li>
+<li>TWO signed copies of Form 1040-NR (with Schedule OI attached)</li>
+<li>TWO clear color copies of your passport (data page + signature page)</li>
+</ol>
+
+${hr}
 
 <p style="font-size:16px"><strong>Mailing address</strong></p>
 
@@ -766,23 +929,25 @@ United States
 
 <p style="color:#b8292f;font-weight:600">Please use a trackable shipping method (FedEx, DHL, UPS) and share the tracking number with us.</p>
 
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+${hr}
 
 <p style="font-size:16px"><strong>What happens next</strong></p>
 
-<ul style="margin:8px 0;padding-left:20px">
-<li>Once we receive your signed documents, our Certified Acceptance Agent (CAA) will review and certify your passport copy</li>
-<li>We will submit the complete ITIN application package to the IRS via certified mail</li>
+<ol style="margin:8px 0;padding-left:20px">
+<li>Once we receive your signed documents, our <strong>Certified Acceptance Agent (CAA)</strong> will review everything and certify your passport copies</li>
+<li>We will prepare the <strong>Certificate of Accuracy (Form W-7 COA)</strong> and attach it to your application</li>
+<li>We will submit the complete ITIN application package to the <strong>IRS Austin Processing Center</strong> via certified mail with tracking</li>
 <li>The IRS typically processes ITIN applications within <strong>7&ndash;11 weeks</strong></li>
-<li>You will receive your ITIN number by mail from the IRS, and we will notify you as soon as it is assigned</li>
-</ul>
+<li>You will receive your ITIN number by mail directly from the IRS, and we will notify you as soon as it is assigned</li>
+</ol>
 
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
+${hr}
 
 <p>If you have any questions, please do not hesitate to contact us.</p>
 
 <p>Best regards,<br/>
 <strong>Tony Durante LLC</strong><br/>
+<span style="color:#6b7280">Certified Acceptance Agent (CAA) &mdash; IRS ITIN Program</span><br/>
 <span style="color:#6b7280">+1 (727) 452-1093</span><br/>
 <a href="mailto:support@tonydurante.us" style="color:#2563eb">support@tonydurante.us</a></p>
 
