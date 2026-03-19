@@ -4,11 +4,10 @@ import { useState, useRef } from 'react'
 import { Upload, FileText, Loader2, X, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.csv']
 const MAX_SIZE_MB = 10
-
-const DOC_TYPES = ['Receipt', 'Bank Statement', 'Income Record', 'Tax Form', 'Other']
 
 interface TaxDocumentUploadProps {
   accountId: string
@@ -17,6 +16,7 @@ interface TaxDocumentUploadProps {
 
 export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const fileRef = useRef<HTMLInputElement>(null)
   const [taxYear, setTaxYear] = useState(taxYears[0]?.toString() ?? new Date().getFullYear().toString())
   const [docType, setDocType] = useState('Receipt')
@@ -24,6 +24,14 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
   const [uploading, setUploading] = useState(false)
   const [uploaded, setUploaded] = useState<string[]>([])
   const [dragOver, setDragOver] = useState(false)
+
+  const DOC_TYPES = [
+    { value: 'Receipt', label: t('taxUpload.receipt') },
+    { value: 'Bank Statement', label: t('taxUpload.bankStatement') },
+    { value: 'Income Record', label: t('taxUpload.incomeRecord') },
+    { value: 'Tax Form', label: t('taxUpload.taxForm') },
+    { value: 'Other', label: t('taxUpload.other') },
+  ]
 
   const addFiles = (newFiles: FileList | File[]) => {
     const valid: File[] = []
@@ -84,7 +92,7 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
     setUploading(false)
 
     if (results.length > 0) {
-      toast.success(`${results.length} file${results.length > 1 ? 's' : ''} uploaded`)
+      toast.success(`${results.length} file${results.length > 1 ? 's' : ''} ${t('taxUpload.uploaded')}`)
       router.refresh()
     }
   }
@@ -94,7 +102,7 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
       {/* Tax year + doc type */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Tax Year</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('taxUpload.taxYear')}</label>
           <select
             value={taxYear}
             onChange={e => setTaxYear(e.target.value)}
@@ -106,14 +114,14 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Document Type</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('taxUpload.docType')}</label>
           <select
             value={docType}
             onChange={e => setDocType(e.target.value)}
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            {DOC_TYPES.map(t => (
-              <option key={t} value={t}>{t}</option>
+            {DOC_TYPES.map(dt => (
+              <option key={dt.value} value={dt.value}>{dt.label}</option>
             ))}
           </select>
         </div>
@@ -130,8 +138,8 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
         }`}
       >
         <Upload className="h-8 w-8 text-zinc-300 mx-auto mb-2" />
-        <p className="text-sm text-zinc-600">Drop files here or click to browse</p>
-        <p className="text-xs text-zinc-400 mt-1">PDF, Images, Excel, Word — max {MAX_SIZE_MB}MB per file, up to 10 files</p>
+        <p className="text-sm text-zinc-600">{t('taxUpload.dropFiles')}</p>
+        <p className="text-xs text-zinc-400 mt-1">{t('taxUpload.fileTypes')}</p>
       </div>
 
       <input
@@ -164,7 +172,7 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
             className="flex items-center gap-2 px-5 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            Upload {files.length} file{files.length > 1 ? 's' : ''}
+            {t('taxUpload.upload')} {files.length} file{files.length > 1 ? 's' : ''}
           </button>
         </div>
       )}
@@ -173,7 +181,7 @@ export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProp
       {uploaded.length > 0 && files.length === 0 && (
         <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-          <p className="text-sm text-emerald-700">{uploaded.length} file{uploaded.length > 1 ? 's' : ''} uploaded successfully</p>
+          <p className="text-sm text-emerald-700">{uploaded.length} file{uploaded.length > 1 ? 's' : ''} {t('taxUpload.uploaded')}</p>
         </div>
       )}
     </div>

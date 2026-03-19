@@ -1,9 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Save, Landmark } from 'lucide-react'
+import { Loader2, Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface BankDetails {
   account_holder?: string
@@ -22,6 +23,7 @@ interface BankDetailsFormProps {
 
 export function BankDetailsForm({ accountId, initialData }: BankDetailsFormProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const [saving, setSaving] = useState(false)
   const [data, setData] = useState<BankDetails>({
     account_holder: initialData?.account_holder ?? '',
@@ -46,10 +48,10 @@ export function BankDetailsForm({ accountId, initialData }: BankDetailsFormProps
         body: JSON.stringify({ account_id: accountId, bank_details: data }),
       })
       if (!res.ok) throw new Error('Failed to save')
-      toast.success('Bank details saved')
+      toast.success(t('bank.saved'))
       router.refresh()
     } catch {
-      toast.error('Failed to save bank details')
+      toast.error(t('bank.failed'))
     } finally {
       setSaving(false)
     }
@@ -58,22 +60,22 @@ export function BankDetailsForm({ accountId, initialData }: BankDetailsFormProps
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Account Holder" value={data.account_holder ?? ''} onChange={v => update('account_holder', v)} placeholder="John Doe" />
-        <Field label="Bank Name" value={data.bank_name ?? ''} onChange={v => update('bank_name', v)} placeholder="Chase, Deutsche Bank..." />
-        <Field label="IBAN" value={data.iban ?? ''} onChange={v => update('iban', v)} placeholder="DE89 3704 0044 0532 0130 00" />
-        <Field label="SWIFT / BIC" value={data.swift_bic ?? ''} onChange={v => update('swift_bic', v)} placeholder="COBADEFFXXX" />
-        <Field label="Account Number" value={data.account_number ?? ''} onChange={v => update('account_number', v)} placeholder="For domestic transfers" />
-        <Field label="Routing Number" value={data.routing_number ?? ''} onChange={v => update('routing_number', v)} placeholder="For US domestic transfers" />
+        <Field label={t('bank.accountHolder')} value={data.account_holder ?? ''} onChange={v => update('account_holder', v)} placeholder="John Doe" />
+        <Field label={t('bank.bankName')} value={data.bank_name ?? ''} onChange={v => update('bank_name', v)} placeholder="Chase, Deutsche Bank..." />
+        <Field label={t('bank.iban')} value={data.iban ?? ''} onChange={v => update('iban', v)} placeholder="DE89 3704 0044 0532 0130 00" />
+        <Field label={t('bank.swiftBic')} value={data.swift_bic ?? ''} onChange={v => update('swift_bic', v)} placeholder="COBADEFFXXX" />
+        <Field label={t('bank.accountNumber')} value={data.account_number ?? ''} onChange={v => update('account_number', v)} placeholder="For domestic transfers" />
+        <Field label={t('bank.routingNumber')} value={data.routing_number ?? ''} onChange={v => update('routing_number', v)} placeholder="For US domestic transfers" />
       </div>
-      <Field label="Additional Notes" value={data.notes ?? ''} onChange={v => update('notes', v)} placeholder="Payment reference, special instructions..." />
-      <p className="text-xs text-zinc-400">These details will appear on your invoices automatically.</p>
+      <Field label={t('bank.notes')} value={data.notes ?? ''} onChange={v => update('notes', v)} placeholder="Payment reference, special instructions..." />
+      <p className="text-xs text-zinc-400">{t('bank.autoNote')}</p>
       <button
         onClick={handleSave}
         disabled={saving}
         className="flex items-center gap-2 px-5 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
       >
         {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-        Save Bank Details
+        {t('bank.save')}
       </button>
     </div>
   )

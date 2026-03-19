@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import { Upload, X, FileText, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.doc', '.docx']
 const MAX_SIZE_MB = 10
@@ -16,6 +17,7 @@ interface DocumentUploadDialogProps {
 
 export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploadDialogProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const fileRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [category, setCategory] = useState('5') // Default: Correspondence
@@ -82,7 +84,7 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
       {/* Dialog */}
       <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-zinc-900">Upload Document</h2>
+          <h2 className="text-lg font-semibold text-zinc-900">{t('docUpload.title')}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-zinc-100">
             <X className="h-5 w-5" />
           </button>
@@ -117,8 +119,8 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
           ) : (
             <>
               <Upload className="h-10 w-10 text-zinc-300 mx-auto mb-2" />
-              <p className="text-sm text-zinc-600">Drop a file here or click to browse</p>
-              <p className="text-xs text-zinc-400 mt-1">PDF, JPEG, PNG, DOCX — max {MAX_SIZE_MB}MB</p>
+              <p className="text-sm text-zinc-600">{t('docUpload.dropFile')}</p>
+              <p className="text-xs text-zinc-400 mt-1">{t('docUpload.fileTypes')}</p>
             </>
           )}
         </div>
@@ -133,17 +135,17 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
 
         {/* Category */}
         <div className="mt-4">
-          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Category</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('docUpload.category')}</label>
           <select
             value={category}
             onChange={e => setCategory(e.target.value)}
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            <option value="1">Company</option>
-            <option value="2">Contacts</option>
-            <option value="3">Tax</option>
-            <option value="4">Banking</option>
-            <option value="5">Correspondence</option>
+            <option value="1">{t('docUpload.company')}</option>
+            <option value="2">{t('docUpload.contacts')}</option>
+            <option value="3">{t('docUpload.tax')}</option>
+            <option value="4">{t('docUpload.banking')}</option>
+            <option value="5">{t('docUpload.correspondence')}</option>
           </select>
         </div>
 
@@ -153,7 +155,7 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
             onClick={onClose}
             className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleUpload}
@@ -161,7 +163,7 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
             className="flex items-center gap-2 px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            Upload
+            {t('documents.upload')}
           </button>
         </div>
       </div>
