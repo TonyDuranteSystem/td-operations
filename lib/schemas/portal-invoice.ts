@@ -46,6 +46,23 @@ export const updateInvoiceSchema = z.object({
   items: z.array(invoiceItemSchema).optional(),
 })
 
+// Template schemas
+export const templateItemSchema = z.object({
+  description: z.string().min(1),
+  quantity: z.number().min(0.01),
+  unit_price: z.number().min(0),
+})
+
+export const createTemplateSchema = z.object({
+  account_id: z.string().uuid(),
+  name: z.string().min(1, 'Template name is required').max(100),
+  customer_id: z.string().uuid().optional().nullable(),
+  currency: z.enum(['USD', 'EUR']),
+  items: z.array(templateItemSchema).min(1),
+  message: z.string().optional().nullable(),
+})
+
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>
 export type UpdateInvoiceInput = z.infer<typeof updateInvoiceSchema>
+export type CreateTemplateInput = z.infer<typeof createTemplateSchema>

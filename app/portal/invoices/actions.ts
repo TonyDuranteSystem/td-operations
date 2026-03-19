@@ -3,8 +3,8 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
-import { createInvoiceSchema, updateInvoiceSchema, createCustomerSchema } from '@/lib/schemas/portal-invoice'
-import type { CreateInvoiceInput, UpdateInvoiceInput, CreateCustomerInput } from '@/lib/schemas/portal-invoice'
+import { createInvoiceSchema, updateInvoiceSchema, createCustomerSchema, createTemplateSchema } from '@/lib/schemas/portal-invoice'
+import type { CreateInvoiceInput, UpdateInvoiceInput, CreateCustomerInput, CreateTemplateInput } from '@/lib/schemas/portal-invoice'
 import { generateInvoiceNumber } from '@/lib/portal/invoice-number'
 
 export async function createCustomer(input: CreateCustomerInput): Promise<ActionResult<{ id: string }>> {
@@ -129,4 +129,50 @@ export async function markInvoiceAsPaid(invoiceId: string, paidDate: string): Pr
     action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
     summary: 'Invoice marked as paid',
   })
+}
+
+// --- Template actions ---
+
+export async function createTemplate(input: CreateTemplateInput): Promise<ActionResult<{ id: string }>> {
+  const parsed = createTemplateSchema.safeParse(input)
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+
+  return safeAction(async () => {
+    const { data, error } = await supabaseAdmin
+      .from('client_invoice_templates')
+      .insert(parsed.data)
+      .select('id')
+      .single()
+    if (error) throw new Error(error.message)
+    revalidatePath('/portal/invoices')
+    return data
+  }, {
+    action_type: 'create', table_name: 'client_invoice_templates', account_id: parsed.data.account_id,
+    summary: `Template created: ${parsed.data.name}`,
+  })
+}
+
+export async function deleteTemplate(id: string, accountId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { error } = await supabaseAdmin
+      .from('client_invoice_templates')
+      .delete()
+      .eq('id', id)
+      .eq('account_id', accountId)
+    if (error) throw new Error(error.message)
+    revalidatePath('/portal/invoices')
+  }, {
+    action_type: 'delete', table_name: 'client_invoice_templates', record_id: id,
+    summary: 'Template deleted',
+  })
+}
+
+export async function listTemplates(accountId: string) {
+  const { data } = await supabaseAdmin
+    .from('client_invoice_templates')
+    .select('id, name, customer_id, currency, items, message, created_at')
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: false })
+
+  return data ?? []
 }

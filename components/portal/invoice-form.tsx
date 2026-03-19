@@ -20,9 +20,19 @@ interface LineItem {
   amount: number
 }
 
+interface Template {
+  id: string
+  name: string
+  customer_id: string | null
+  currency: string
+  items: { description: string; quantity: number; unit_price: number }[]
+  message: string | null
+}
+
 interface InvoiceFormProps {
   accountId: string
   customers: Customer[]
+  templates?: Template[]
   mode: 'create' | 'edit'
   initialData?: {
     id?: string
@@ -37,7 +47,7 @@ interface InvoiceFormProps {
   }
 }
 
-export function InvoiceForm({ accountId, customers, mode, initialData }: InvoiceFormProps) {
+export function InvoiceForm({ accountId, customers, templates, mode, initialData }: InvoiceFormProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -185,6 +195,30 @@ export function InvoiceForm({ accountId, customers, mode, initialData }: Invoice
       </div>
 
       <div className="bg-white rounded-xl border shadow-sm p-6 space-y-6">
+        {/* From Template */}
+        {mode === 'create' && templates && templates.length > 0 && (
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">From Template</label>
+            <select
+              onChange={e => {
+                const tmpl = templates.find(t => t.id === e.target.value)
+                if (!tmpl) return
+                if (tmpl.customer_id) setCustomerId(tmpl.customer_id)
+                setCurrency(tmpl.currency as 'USD' | 'EUR')
+                setItems(tmpl.items.map(i => ({ ...i, amount: i.quantity * i.unit_price })))
+                if (tmpl.message) setMessage(tmpl.message)
+              }}
+              defaultValue=""
+              className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Select a template...</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name} ({t.items.length} items, {t.currency})</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Customer + Currency Row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>

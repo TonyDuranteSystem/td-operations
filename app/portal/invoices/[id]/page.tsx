@@ -5,14 +5,15 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Send, CheckCircle2, Loader2, FileText,
-  Calendar, User, Receipt, Clock, Pencil, Bell,
+  Calendar, User, Receipt, Clock, Pencil, Bell, BookmarkPlus, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoiceAsPaid } from '../actions'
+import { markInvoiceAsPaid, createTemplate } from '../actions'
 import { format, parseISO } from 'date-fns'
 
 interface InvoiceDetail {
   id: string
+  account_id: string
   invoice_number: string
   status: string
   currency: string
@@ -52,6 +53,9 @@ export default function InvoiceDetailPage() {
   const [downloading, setDownloading] = useState(false)
   const [sending, setSending] = useState(false)
   const [reminding, setReminding] = useState(false)
+  const [showTemplateModal, setShowTemplateModal] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [savingTemplate, setSavingTemplate] = useState(false)
   const [isPending, startTransition] = useTransition()
 
   useEffect(() => {
@@ -131,6 +135,27 @@ export default function InvoiceDetailPage() {
       toast.error('Failed to send reminder')
     } finally {
       setReminding(false)
+    }
+  }
+
+  const handleSaveTemplate = async () => {
+    if (!templateName.trim() || !invoice) return
+    setSavingTemplate(true)
+    const result = await createTemplate({
+      account_id: invoice.account_id ?? '',
+      name: templateName.trim(),
+      customer_id: invoice.customer ? undefined : undefined,
+      currency: invoice.currency as 'USD' | 'EUR',
+      items: invoice.items.map(i => ({ description: i.description, quantity: i.quantity, unit_price: i.unit_price })),
+      message: invoice.message,
+    })
+    setSavingTemplate(false)
+    if (result.success) {
+      toast.success('Template saved')
+      setShowTemplateModal(false)
+      setTemplateName('')
+    } else {
+      toast.error(result.error ?? 'Failed to save template')
     }
   }
 
@@ -223,8 +248,48 @@ export default function InvoiceDetailPage() {
               </button>
             </>
           )}
+
+          <button
+            onClick={() => { setTemplateName(invoice.customer?.name ?? 'Template'); setShowTemplateModal(true) }}
+            className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+          >
+            <BookmarkPlus className="h-4 w-4" />
+            Save Template
+          </button>
         </div>
       </div>
+
+      {/* Save as Template Modal */}
+      {showTemplateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowTemplateModal(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-zinc-900">Save as Template</h3>
+              <button onClick={() => setShowTemplateModal(false)} className="p-1 hover:bg-zinc-100 rounded"><X className="h-4 w-4" /></button>
+            </div>
+            <input
+              type="text"
+              value={templateName}
+              onChange={e => setTemplateName(e.target.value)}
+              placeholder="Template name"
+              autoFocus
+              className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowTemplateModal(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+              <button
+                onClick={handleSaveTemplate}
+                disabled={!templateName.trim() || savingTemplate}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookmarkPlus className="h-4 w-4" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Invoice Card */}
       <div className="bg-white rounded-xl border shadow-sm">
