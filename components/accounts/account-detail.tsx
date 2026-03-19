@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
+import { PortalUserButton } from './portal-user-button'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
@@ -107,6 +108,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             )}>
               {account.status}
             </span>
+            {isAdmin && (
+              <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
+            )}
           </div>
           <p className="text-muted-foreground text-sm mt-1">
             {account.state_of_formation && `${account.state_of_formation} · `}
