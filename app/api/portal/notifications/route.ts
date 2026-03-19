@@ -54,6 +54,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'ids array required' }, { status: 400 })
   }
 
+  // Verify client owns all notifications before marking as read
+  const contactId = getClientContactId(user)
+  if (contactId) {
+    const accountIds = await getClientAccountIds(contactId)
+    const { data: notifs } = await supabaseAdmin
+      .from('portal_notifications')
+      .select('id, account_id')
+      .in('id', ids)
+
+    if (notifs?.some(n => !accountIds.includes(n.account_id))) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+  }
+
   await supabaseAdmin
     .from('portal_notifications')
     .update({ read_at: new Date().toISOString() })

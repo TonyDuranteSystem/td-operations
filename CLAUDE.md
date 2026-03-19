@@ -11,10 +11,20 @@ This repo contains: MCP server (78 tools), CRM dashboard, OAuth 2.1, offer syste
 - **GitHub** = `TonyDuranteSystem/td-operations` (auto-deploy on push)
 
 ### Domains (established 2026-03-17)
-Three domains point to the same Vercel deployment:
+Four domains point to the same Vercel deployment:
 - `app.tonydurante.us` — **CLIENT-FACING**: all forms, offers, leases, OA, tracking pixels. Use `APP_BASE_URL` from `lib/config.ts`.
-- `td-operations.vercel.app` — **INTERNAL**: OAuth issuer, QB callback, dashboard. NEVER send to clients.
+- `portal.tonydurante.us` — **CLIENT PORTAL**: where clients log in to see their services, documents, invoices, chat. Use `PORTAL_BASE_URL` from `lib/config.ts`.
+- `td-operations.vercel.app` — **INTERNAL**: OAuth issuer, QB callback, CRM dashboard. NEVER send to clients.
 - `offerte.tonydurante.us` — **LEGACY**: old offer links still work. New links use `app.tonydurante.us`.
+
+### Two Products in One Repo — Know the Difference
+| Term | What it is | Domain | Code location | Who uses it |
+|------|-----------|--------|---------------|-------------|
+| **CRM Dashboard** | Internal ops dashboard for Antonio & Luca | `td-operations.vercel.app` | `app/(dashboard)/`, `components/tasks/`, `components/accounts/` | Staff only |
+| **Client Portal** (or just "portal") | Client-facing app where clients log in | `portal.tonydurante.us` | `app/portal/`, `lib/portal/`, `components/portal/` | Clients |
+
+When Antonio says "portal" or "client portal" → he means the client-facing portal, NOT the CRM dashboard.
+When Antonio says "dashboard" or "CRM" → he means the internal ops dashboard.
 
 **Rules**:
 - All client-facing URLs MUST use `APP_BASE_URL` from `lib/config.ts` — NEVER hardcode domains
