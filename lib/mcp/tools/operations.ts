@@ -1005,6 +1005,24 @@ export function registerOperationsTools(server: McpServer) {
           details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, tasks_created: createdTasks, notes },
         })
 
+        // ─── AUTO-TRIGGER: Portal notification for client ───
+        if (delivery.account_id) {
+          const { createPortalNotification } = await import("@/lib/portal/notifications")
+          const title = isCompleted
+            ? `${delivery.service_name || delivery.service_type} is complete!`
+            : `${delivery.service_name || delivery.service_type} update`
+          const body = isCompleted
+            ? "Your service has been completed."
+            : `Status updated to: ${targetStage.stage_name}`
+          createPortalNotification({
+            account_id: delivery.account_id,
+            type: "service",
+            title,
+            body,
+            link: "/portal/services",
+          }).catch(() => {})
+        }
+
         // ─── AUTO-TRIGGER: Tax Return — sync tax_returns record with SD stage ───
         if (delivery.service_type === "Tax Return Filing" && delivery.account_id) {
           try {

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { createPortalNotification } from '@/lib/portal/notifications'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -87,6 +88,17 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Notify client when admin sends a message
+  if (senderType === 'admin') {
+    createPortalNotification({
+      account_id,
+      type: 'chat',
+      title: 'New message from Tony Durante Team',
+      body: message.trim().slice(0, 100),
+      link: '/portal/chat',
+    }).catch(() => {}) // fire-and-forget
+  }
 
   return NextResponse.json({ message: data })
 }

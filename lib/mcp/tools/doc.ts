@@ -232,6 +232,18 @@ export function registerDocTools(server: McpServer) {
             details: { type: result.type, category: result.category, confidence: result.confidence, status: result.status },
           })
 
+          // Notify client via portal
+          if (account_id) {
+            const { createPortalNotification } = await import("@/lib/portal/notifications")
+            createPortalNotification({
+              account_id,
+              type: "document",
+              title: "New document uploaded",
+              body: result.fileName,
+              link: "/portal/documents",
+            }).catch(() => {})
+          }
+
           const lines = [
             `✅ Processed: ${result.fileName}`,
             "",
