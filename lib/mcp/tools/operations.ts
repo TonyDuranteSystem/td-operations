@@ -482,7 +482,7 @@ export function registerOperationsTools(server: McpServer) {
       client_message: z.string().optional().describe("Summary of what the client said"),
       response_sent: z.string().optional().describe("Summary of the response sent"),
       response_language: z.string().optional().describe("Language of the response (en, it)"),
-      direction: z.string().optional().describe("Direction: inbound or outbound"),
+      direction: z.enum(["Inbound", "Outbound"]).optional().describe("Direction: Inbound or Outbound"),
       handled_by: z.string().optional().describe("Who handled it (Antonio, Luca, Claude)"),
       internal_notes: z.string().optional().describe("Internal notes (not visible to client)"),
     },
