@@ -41,24 +41,31 @@ export async function POST(req: NextRequest) {
     const companyName = prefilled.business_name || token
     const providerName = sub.provider === "relay" ? "Relay (USD)" : "Payset (EUR)"
 
-    // ─── 1. EMAIL NOTIFICATION TO SUPPORT ───
+    // ─── 1. EMAIL NOTIFICATION TO SUPPORT (HTML) ───
     try {
       const { gmailPost } = await import("@/lib/gmail")
 
       const subject = `Banking Form Completed: ${companyName} — ${providerName}`
-      const emailBody = [
-        `The ${providerName} banking form for ${companyName} has been submitted by the client.`,
-        ``,
-        `Provider: ${sub.provider}`,
-        `Token: ${sub.token}`,
-        ``,
-        `Next steps:`,
-        sub.provider === "relay"
-          ? `- Review data and submit Relay application`
-          : `- Schedule live Payset application session (WhatsApp/Telegram)`,
-        ``,
-        `Review: banking_form_review(token="${sub.token}")`,
-      ].join("\n")
+      const nextStepsHtml = sub.provider === "relay"
+        ? `<li>Review submitted data via <code>banking_form_review(token="${sub.token}")</code></li>
+           <li>Submit Relay application via Relay dashboard (per SOP)</li>
+           <li>Monitor approval status (typically 1-3 business days)</li>`
+        : `<li>Review submitted data via <code>banking_form_review(token="${sub.token}")</code></li>
+           <li>Schedule live Payset session with client (WhatsApp/Telegram) for OTP verification</li>
+           <li>Complete Payset application during live session (per SOP)</li>`
+
+      const emailHtml = `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <h2 style="color:#1e3a5f;">Banking Form Submitted</h2>
+          <p>The <strong>${providerName}</strong> banking form for <strong>${companyName}</strong> has been submitted by the client.</p>
+          <table style="border-collapse:collapse;width:100%;margin:16px 0;">
+            <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Provider</td><td style="padding:6px 12px;">${providerName}</td></tr>
+            <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Token</td><td style="padding:6px 12px;">${sub.token}</td></tr>
+            <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Account ID</td><td style="padding:6px 12px;">${sub.account_id || "N/A"}</td></tr>
+          </table>
+          <h3 style="color:#1e3a5f;">Next Steps</h3>
+          <ol>${nextStepsHtml}</ol>
+        </div>`
 
       const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
       const mimeHeaders = [
@@ -66,10 +73,10 @@ export async function POST(req: NextRequest) {
         `To: support@tonydurante.us`,
         `Subject: ${encodedSubject}`,
         "MIME-Version: 1.0",
-        `Content-Type: text/plain; charset=utf-8`,
+        `Content-Type: text/html; charset=utf-8`,
         "Content-Transfer-Encoding: base64",
       ]
-      const rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
+      const rawEmail = [...mimeHeaders, "", Buffer.from(emailHtml).toString("base64")].join("\r\n")
       const encodedRaw = Buffer.from(rawEmail).toString("base64url")
 
       await gmailPost("/messages/send", { raw: encodedRaw })
@@ -123,6 +130,83 @@ export async function POST(req: NextRequest) {
         }
       } catch (e) {
         results.push({ step: "task_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 3. ADVANCE SERVICE DELIVERY (Banking Fintech) ───
+    if (sub.account_id) {
+      try {
+        const { data: sd } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, stage, stage_history")
+          .eq("account_id", sub.account_id)
+          .eq("service_type", "Banking Fintech")
+          .eq("status", "active")
+          .limit(1)
+          .maybeSingle()
+
+        if (sd && sd.stage === "Data Collection") {
+          const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
+          history.push({
+            event: "banking_form_submitted",
+            at: new Date().toISOString(),
+            note: `${providerName} banking form submitted by client`,
+          })
+
+          await supabaseAdmin
+            .from("service_deliveries")
+            .update({ stage: "Application Submitted", stage_history: history, updated_at: new Date().toISOString() })
+            .eq("id", sd.id)
+
+          results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} advanced: Data Collection → Application Submitted` })
+        } else if (sd) {
+          results.push({ step: "sd_advance", status: "skipped", detail: `SD stage is "${sd.stage}", not "Data Collection"` })
+        } else {
+          results.push({ step: "sd_advance", status: "skipped", detail: "No active Banking Fintech SD found" })
+        }
+      } catch (e) {
+        results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 4. SAVE FORM DATA TO DRIVE ───
+    if (sub.account_id) {
+      try {
+        const { data: acct } = await supabaseAdmin
+          .from("accounts")
+          .select("drive_folder_id")
+          .eq("id", sub.account_id)
+          .single()
+
+        if (acct?.drive_folder_id) {
+          const { data: fullSub } = await supabaseAdmin
+            .from("banking_submissions")
+            .select("submitted_data, upload_paths, completed_at")
+            .eq("id", submission_id)
+            .single()
+
+          if (fullSub?.submitted_data) {
+            const { saveFormToDrive } = await import("@/lib/form-to-drive")
+            const driveResult = await saveFormToDrive(
+              "banking",
+              fullSub.submitted_data as Record<string, unknown>,
+              (fullSub.upload_paths as string[]) || [],
+              acct.drive_folder_id,
+              { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName }
+            )
+            results.push({
+              step: "save_to_drive",
+              status: driveResult.errors.length ? "partial" : "ok",
+              detail: `PDF: ${driveResult.summaryFileId || "none"}, copied: ${driveResult.copied.length}, failed: ${driveResult.failed.length}`,
+            })
+          } else {
+            results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
+          }
+        } else {
+          results.push({ step: "save_to_drive", status: "skipped", detail: "No drive_folder_id on account" })
+        }
+      } catch (e) {
+        results.push({ step: "save_to_drive", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 

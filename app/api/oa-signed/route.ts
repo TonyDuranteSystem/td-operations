@@ -97,12 +97,23 @@ export async function POST(req: NextRequest) {
             note: `Operating Agreement signed for ${oa.company_name}`,
           })
 
+          // If we're at a post-formation stage, add a note that OA is complete
+          const postFormationStages = ["Post-Formation", "EIN Received", "Welcome Package", "Client Onboarding"]
+          const isPostFormation = postFormationStages.some(s => sd.stage?.includes(s))
+          if (isPostFormation) {
+            history.push({
+              event: "oa_milestone",
+              at: new Date().toISOString(),
+              note: `OA signed during ${sd.stage} — post-formation document complete`,
+            })
+          }
+
           await supabaseAdmin
             .from("service_deliveries")
-            .update({ stage_history: history })
+            .update({ stage_history: history, updated_at: new Date().toISOString() })
             .eq("id", sd.id)
 
-          results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history (stage: ${sd.stage})` })
+          results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history (stage: ${sd.stage})${isPostFormation ? " + post-formation milestone" : ""}` })
         } else {
           results.push({ step: "sd_history", status: "skipped", detail: "No active Company Formation SD found" })
         }

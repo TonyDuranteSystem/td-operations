@@ -111,7 +111,70 @@ export async function POST(req: NextRequest) {
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
-      // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
+      // ─── 3. ADVANCE CMRA MAILING ADDRESS SD ───
+      try {
+        const { data: cmraSd } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, stage, stage_history")
+          .eq("account_id", lease.account_id)
+          .eq("service_type", "CMRA Mailing Address")
+          .eq("status", "active")
+          .limit(1)
+          .maybeSingle()
+
+        if (cmraSd && cmraSd.stage === "Lease Created") {
+          const history = Array.isArray(cmraSd.stage_history) ? cmraSd.stage_history : []
+          history.push({
+            event: "lease_signed",
+            at: new Date().toISOString(),
+            note: `Lease signed for ${lease.tenant_company} (Suite ${lease.suite_number})`,
+          })
+
+          await supabaseAdmin
+            .from("service_deliveries")
+            .update({ stage: "Lease Signed", stage_history: history, updated_at: new Date().toISOString() })
+            .eq("id", cmraSd.id)
+
+          results.push({ step: "cmra_sd_advance", status: "ok", detail: `SD ${cmraSd.id} advanced: Lease Created → Lease Signed` })
+        } else if (cmraSd) {
+          results.push({ step: "cmra_sd_advance", status: "skipped", detail: `CMRA SD stage is "${cmraSd.stage}", not "Lease Created"` })
+        } else {
+          results.push({ step: "cmra_sd_advance", status: "skipped", detail: "No active CMRA Mailing Address SD found" })
+        }
+      } catch (e) {
+        results.push({ step: "cmra_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+
+      // ─── 4. CREATE TASK: PREPARE USPS FORM 1583 ───
+      try {
+        const taskTitle = `Prepare USPS Form 1583 - ${lease.tenant_company}`
+        const { data: existingTask } = await supabaseAdmin
+          .from("tasks")
+          .select("id")
+          .eq("task_title", taskTitle)
+          .eq("account_id", lease.account_id)
+          .maybeSingle()
+
+        if (!existingTask) {
+          await supabaseAdmin.from("tasks").insert({
+            task_title: taskTitle,
+            description: "Lease signed. Next: prepare Form 1583, collect IDs, notarize (Antonio).",
+            assigned_to: "Luca",
+            priority: "High",
+            category: "CMRA",
+            status: "To Do",
+            account_id: lease.account_id,
+            created_by: "System",
+          })
+          results.push({ step: "task_form_1583", status: "ok", detail: taskTitle })
+        } else {
+          results.push({ step: "task_form_1583", status: "skipped", detail: "Task already exists" })
+        }
+      } catch (e) {
+        results.push({ step: "task_form_1583", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+
+      // ─── 5. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
       try {
         const { data: acct } = await supabaseAdmin
           .from("accounts")
