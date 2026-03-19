@@ -28,6 +28,8 @@ export async function POST(request: NextRequest) {
   const file = formData.get('file') as File | null
   const accountId = formData.get('account_id') as string | null
   const category = formData.get('category') as string | null
+  const taxYear = formData.get('tax_year') as string | null
+  const docType = formData.get('doc_type') as string | null
 
   if (!file || !accountId) {
     return NextResponse.json({ error: 'file and account_id required' }, { status: 400 })
@@ -75,6 +77,10 @@ export async function POST(request: NextRequest) {
 
     // Record in documents table
     const categoryNum = category ? parseInt(category) : 5 // Default: Correspondence
+    const typeName = taxYear
+      ? `${docType || 'Tax Document'} - ${taxYear}`
+      : 'Client Upload'
+
     const { data: doc } = await supabaseAdmin
       .from('documents')
       .insert({
@@ -82,12 +88,32 @@ export async function POST(request: NextRequest) {
         drive_file_id: driveFile.id,
         account_id: accountId,
         category: categoryNum,
-        document_type_name: 'Client Upload',
+        document_type_name: typeName,
         status: 'classified',
         confidence: 1.0,
       })
       .select('id')
       .single()
+
+    // For tax documents: create task + notification for admin
+    if (taxYear) {
+      await supabaseAdmin.from('tasks').insert({
+        task_title: `Review tax document: ${file.name} (${taxYear})`,
+        assigned_to: 'Luca',
+        category: 'Document',
+        account_id: accountId,
+        status: 'To Do',
+        priority: 'Normal',
+        description: `Client uploaded ${file.name} (${docType || 'Tax Document'}) for tax year ${taxYear} via portal.`,
+      })
+
+      await supabaseAdmin.from('portal_notifications').insert({
+        account_id: accountId,
+        type: 'tax_document_uploaded',
+        title: `Tax document uploaded for ${taxYear}`,
+        body: `${file.name} uploaded for tax year ${taxYear}`,
+      })
+    }
 
     return NextResponse.json({
       success: true,
