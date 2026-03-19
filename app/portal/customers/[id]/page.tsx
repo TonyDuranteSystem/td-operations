@@ -14,8 +14,15 @@ import { cn } from '@/lib/utils'
 interface Customer {
   id: string
   name: string
+  first_name: string | null
+  last_name: string | null
+  company_name: string | null
   email: string | null
+  phone: string | null
   address: string | null
+  city: string | null
+  region: string | null
+  country: string | null
   vat_number: string | null
   notes: string | null
 }
@@ -137,9 +144,15 @@ export default function CustomerDetailPage() {
       <div className="bg-white rounded-xl border shadow-sm p-6">
         {editing && editData ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <EditField label="Name" value={editData.name} onChange={v => setEditData({ ...editData, name: v })} />
+            <EditField label="First Name" value={editData.first_name ?? ''} onChange={v => setEditData({ ...editData, first_name: v })} />
+            <EditField label="Last Name" value={editData.last_name ?? ''} onChange={v => setEditData({ ...editData, last_name: v })} />
+            <EditField label="Company" value={editData.company_name ?? ''} onChange={v => setEditData({ ...editData, company_name: v })} />
             <EditField label="Email" value={editData.email ?? ''} onChange={v => setEditData({ ...editData, email: v })} />
+            <EditField label="Phone" value={editData.phone ?? ''} onChange={v => setEditData({ ...editData, phone: v })} />
             <EditField label="Address" value={editData.address ?? ''} onChange={v => setEditData({ ...editData, address: v })} />
+            <EditField label="City" value={editData.city ?? ''} onChange={v => setEditData({ ...editData, city: v })} />
+            <EditField label="Region" value={editData.region ?? ''} onChange={v => setEditData({ ...editData, region: v })} />
+            <EditField label="Country" value={editData.country ?? ''} onChange={v => setEditData({ ...editData, country: v })} />
             <EditField label="VAT Number" value={editData.vat_number ?? ''} onChange={v => setEditData({ ...editData, vat_number: v })} />
             <div className="sm:col-span-2">
               <EditField label="Notes" value={editData.notes ?? ''} onChange={v => setEditData({ ...editData, notes: v })} />
@@ -147,9 +160,13 @@ export default function CustomerDetailPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            <InfoRow icon={User} label="Name" value={customer.name} />
+            {customer.first_name && <InfoRow icon={User} label="First Name" value={customer.first_name} />}
+            {customer.last_name && <InfoRow icon={User} label="Last Name" value={customer.last_name} />}
+            {customer.company_name && <InfoRow icon={User} label="Company" value={customer.company_name} />}
+            {!customer.first_name && !customer.company_name && <InfoRow icon={User} label="Name" value={customer.name} />}
             <InfoRow icon={Mail} label="Email" value={customer.email ?? '\u2014'} />
-            <InfoRow icon={MapPin} label="Address" value={customer.address ?? '\u2014'} />
+            {customer.phone && <InfoRow icon={Mail} label="Phone" value={customer.phone} />}
+            <InfoRow icon={MapPin} label="Address" value={[customer.address, customer.city, customer.region, customer.country].filter(Boolean).join(', ') || '\u2014'} />
             <InfoRow icon={FileText} label="VAT" value={customer.vat_number ?? '\u2014'} />
             {customer.notes && <div className="sm:col-span-2"><InfoRow icon={FileText} label="Notes" value={customer.notes} /></div>}
           </div>

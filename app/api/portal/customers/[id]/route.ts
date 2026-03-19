@@ -74,11 +74,20 @@ export async function PATCH(
   }
 
   const updates: Record<string, unknown> = {}
-  if (body.name !== undefined) updates.name = body.name
+  if (body.first_name !== undefined) updates.first_name = body.first_name || null
+  if (body.last_name !== undefined) updates.last_name = body.last_name || null
+  if (body.company_name !== undefined) updates.company_name = body.company_name || null
   if (body.email !== undefined) updates.email = body.email || null
+  if (body.phone !== undefined) updates.phone = body.phone || null
   if (body.address !== undefined) updates.address = body.address || null
+  if (body.city !== undefined) updates.city = body.city || null
+  if (body.region !== undefined) updates.region = body.region || null
+  if (body.country !== undefined) updates.country = body.country || null
   if (body.vat_number !== undefined) updates.vat_number = body.vat_number || null
   if (body.notes !== undefined) updates.notes = body.notes || null
+  const displayName = (body.company_name || '').trim()
+    || `${(body.first_name || '').trim()} ${(body.last_name || '').trim()}`.trim()
+  if (displayName) updates.name = displayName
   updates.updated_at = new Date().toISOString()
 
   const { error } = await supabaseAdmin
