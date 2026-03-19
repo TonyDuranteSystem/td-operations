@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, MessageCircle } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -22,9 +22,11 @@ function formatTime(dateStr: string): string {
 export function PortalChat({ accountId, userId }: { accountId: string; userId: string }) {
   const { messages, loading, sending, sendMessage } = usePortalChat(accountId)
   const [input, setInput] = useState('')
+  const [uploading, setUploading] = useState(false)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -50,6 +52,28 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    }
+  }
+
+  const handleFileUpload = async (file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File too large (max 10MB)')
+      return
+    }
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('account_id', accountId)
+      const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+      if (!res.ok) throw new Error('Upload failed')
+      const { url, name } = await res.json()
+      await sendMessage(input || '', { url, name })
+      setInput('')
+    } catch {
+      toast.error('Failed to upload file')
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -98,7 +122,22 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
                         {msg.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
                       </p>
                     )}
-                    <p className="whitespace-pre-wrap break-words">{msg.message}</p>
+                    {msg.attachment_url && (
+                      <a
+                        href={msg.attachment_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={cn(
+                          'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
+                          isOwn ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                        )}
+                      >
+                        <FileText className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    )}
+                    {msg.message && <p className="whitespace-pre-wrap break-words">{msg.message}</p>}
                     <p className={cn(
                       'text-[10px] mt-1',
                       isOwn ? 'text-blue-200' : 'text-zinc-400'
@@ -116,6 +155,19 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
       {/* Input */}
       <div className="border-t p-3">
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="p-2.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 transition-colors"
+          >
+            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
+            className="hidden"
+          />
           <input
             ref={inputRef}
             type="text"

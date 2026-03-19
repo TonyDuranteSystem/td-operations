@@ -65,15 +65,20 @@ export function usePortalChat(accountId: string) {
   }, [accountId])
 
   // Send message
-  const sendMessage = useCallback(async (message: string) => {
-    if (!message.trim() || sending) return
+  const sendMessage = useCallback(async (message: string, attachment?: { url: string; name: string }) => {
+    if ((!message.trim() && !attachment) || sending) return
 
     setSending(true)
     try {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, message }),
+        body: JSON.stringify({
+          account_id: accountId,
+          message: message || (attachment ? `[Attachment: ${attachment.name}]` : ''),
+          attachment_url: attachment?.url,
+          attachment_name: attachment?.name,
+        }),
       })
 
       if (!res.ok) {

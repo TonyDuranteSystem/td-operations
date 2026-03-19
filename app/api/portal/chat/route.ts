@@ -55,10 +55,10 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, message } = body
+  const { account_id, message, attachment_url, attachment_name } = body
 
-  if (!account_id || !message?.trim()) {
-    return NextResponse.json({ error: 'account_id and message required' }, { status: 400 })
+  if (!account_id || (!message?.trim() && !attachment_url)) {
+    return NextResponse.json({ error: 'account_id and message (or attachment) required' }, { status: 400 })
   }
 
   // Determine sender type
@@ -82,7 +82,9 @@ export async function POST(request: NextRequest) {
       account_id,
       sender_type: senderType,
       sender_id: user.id,
-      message: message.trim(),
+      message: (message || '').trim(),
+      attachment_url: attachment_url || null,
+      attachment_name: attachment_name || null,
     })
     .select()
     .single()
