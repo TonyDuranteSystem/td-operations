@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Send, CheckCircle2, Loader2, FileText,
-  Calendar, User, Receipt, Clock, Pencil,
+  Calendar, User, Receipt, Clock, Pencil, Bell,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { markInvoiceAsPaid } from '../actions'
@@ -51,6 +51,7 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
   const [sending, setSending] = useState(false)
+  const [reminding, setReminding] = useState(false)
   const [isPending, startTransition] = useTransition()
 
   useEffect(() => {
@@ -114,6 +115,23 @@ export default function InvoiceDetailPage() {
         toast.error(result.error ?? 'Failed to update')
       }
     })
+  }
+
+  const handleRemind = async () => {
+    if (!invoice?.customer?.email) {
+      toast.error('Customer has no email address')
+      return
+    }
+    setReminding(true)
+    try {
+      const res = await fetch(`/api/portal/invoices/${invoiceId}/remind`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to send reminder')
+      toast.success(`Reminder sent to ${invoice.customer.email}`)
+    } catch {
+      toast.error('Failed to send reminder')
+    } finally {
+      setReminding(false)
+    }
   }
 
   if (loading) {
@@ -186,14 +204,24 @@ export default function InvoiceDetailPage() {
           )}
 
           {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
-            <button
-              onClick={handleMarkPaid}
-              disabled={isPending}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              Mark Paid
-            </button>
+            <>
+              <button
+                onClick={handleRemind}
+                disabled={reminding}
+                className="flex items-center gap-2 px-4 py-2 text-sm border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 disabled:opacity-50"
+              >
+                {reminding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}
+                Remind
+              </button>
+              <button
+                onClick={handleMarkPaid}
+                disabled={isPending}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Mark Paid
+              </button>
+            </>
           )}
         </div>
       </div>

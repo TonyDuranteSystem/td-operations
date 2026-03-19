@@ -7,7 +7,6 @@ import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 
 export default function PortalSettingsPage() {
-  const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -32,7 +31,6 @@ export default function PortalSettingsPage() {
       toast.error(error.message)
     } else {
       toast.success('Password updated')
-      setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')
     }
