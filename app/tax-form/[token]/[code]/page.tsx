@@ -507,6 +507,20 @@ export default function TaxFormCodePage() {
             )}
 
             {submission.entity_type === 'MMLLC' && (
+              <div className="tf-doc-item">
+                <span>{L.priorYearReturn}</span>
+                <div className="tf-doc-upload">
+                  <span className="tf-doc-optional">{L.priorYearReturnOptional}</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={e => setUploadFiles(prev => ({ ...prev, prior_year_return: e.target.files?.[0] || null }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            {submission.entity_type === 'MMLLC' && (
               <div className="tf-doc-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                   <span>{L.bankStatementsUpload}</span>

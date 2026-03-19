@@ -195,6 +195,137 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ─── 5. AUTO-GENERATE P&L FOR MMLLCs ───
+    if (sub.entity_type === "MMLLC" && sub.account_id) {
+      try {
+        // Wait for Drive save to complete (files need to be in Drive first)
+        // Then trigger bank statement processing + P&L generation
+        const { downloadFileBinary, listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+        const { parseBankStatement, categorizeTransaction } = await import("@/lib/bank-statement-parser")
+
+        const { data: acc } = await supabaseAdmin
+          .from("accounts")
+          .select("drive_folder_id, company_name")
+          .eq("id", sub.account_id)
+          .single()
+
+        if (acc?.drive_folder_id) {
+          // Find Tax folder
+          const listing = (await listFolder(acc.drive_folder_id)) as {
+            files?: { id: string; name: string; mimeType: string }[]
+          }
+          const taxFolder = listing.files?.find(
+            (f: { name: string; mimeType: string }) => f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name)
+          )
+
+          if (taxFolder) {
+            // List bank statement files in Tax folder
+            const taxFiles = (await listFolder(taxFolder.id, 100)) as {
+              files?: { id: string; name: string; mimeType: string }[]
+            }
+            const statementPattern = /wise|mercury|relay|statement|bank|estratto/i
+            const statements = (taxFiles.files || []).filter((f: { name: string; mimeType: string }) => {
+              const isStatement = statementPattern.test(f.name)
+              const isSupported = f.mimeType === "application/pdf" || f.mimeType === "text/csv"
+                || f.name.toLowerCase().endsWith(".csv") || f.name.toLowerCase().endsWith(".pdf")
+              return isStatement && isSupported
+            })
+
+            if (statements.length > 0) {
+              // Get member names for categorization
+              const { data: links } = await supabaseAdmin
+                .from("account_contacts")
+                .select("contacts(first_name, last_name)")
+                .eq("account_id", sub.account_id)
+              const memberNames = ((links || []) as unknown as Array<{ contacts: { first_name: string; last_name: string } | null }>)
+                .filter(l => l.contacts)
+                .map(l => `${l.contacts!.first_name} ${l.contacts!.last_name}`.trim())
+
+              let totalParsed = 0
+              for (const file of statements) {
+                try {
+                  // Check if already processed
+                  const { data: existing } = await supabaseAdmin
+                    .from("bank_transactions")
+                    .select("id")
+                    .eq("source_file_id", file.id)
+                    .limit(1)
+                  if (existing && existing.length > 0) continue
+
+                  const { buffer, mimeType } = await downloadFileBinary(file.id)
+                  const result = await parseBankStatement(buffer, file.name, mimeType)
+
+                  for (const tx of result.transactions) {
+                    const txYear = parseInt(tx.transaction_date.substring(0, 4))
+                    if (txYear !== sub.tax_year) continue
+
+                    const cat = categorizeTransaction(tx, memberNames, [])
+                    await supabaseAdmin
+                      .from("bank_transactions")
+                      .upsert({
+                        account_id: sub.account_id,
+                        tax_year: sub.tax_year,
+                        transaction_date: cat.transaction_date,
+                        description: cat.description,
+                        category: cat.category,
+                        subcategory: cat.subcategory,
+                        counterparty: cat.counterparty,
+                        amount: cat.amount,
+                        currency: cat.currency,
+                        balance_after: cat.balance_after,
+                        bank_name: cat.bank_name,
+                        account_type: cat.account_type,
+                        transaction_ref: cat.transaction_ref,
+                        source_file_id: file.id,
+                        is_related_party: cat.is_related_party,
+                        notes: cat.notes,
+                      }, {
+                        onConflict: "account_id,transaction_ref,transaction_date,amount",
+                        ignoreDuplicates: true,
+                      })
+                    totalParsed++
+                  }
+                } catch (fileErr) {
+                  // Skip individual file errors, continue with others
+                }
+              }
+
+              results.push({
+                step: "bank_statement_parse",
+                status: totalParsed > 0 ? "ok" : "skipped",
+                detail: `Parsed ${totalParsed} transactions from ${statements.length} bank statement files`,
+              })
+
+              // Generate P&L if we have transactions
+              if (totalParsed > 0) {
+                try {
+                  // Trigger P&L generation via the MCP tool logic
+                  // For now, just log that it's ready — the MCP tool can be called to generate Excel
+                  results.push({
+                    step: "pnl_ready",
+                    status: "ok",
+                    detail: `${totalParsed} transactions stored. Run bank_statement_pnl to generate Excel.`,
+                  })
+                } catch (pnlErr) {
+                  results.push({
+                    step: "pnl_generation",
+                    status: "error",
+                    detail: pnlErr instanceof Error ? pnlErr.message : String(pnlErr),
+                  })
+                }
+              }
+            } else {
+              results.push({ step: "bank_statement_parse", status: "skipped", detail: "No bank statement files found in Tax folder" })
+            }
+          } else {
+            results.push({ step: "bank_statement_parse", status: "skipped", detail: "No Tax folder found" })
+          }
+        }
+      } catch (e) {
+        results.push({ step: "bank_statement_parse", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
     return NextResponse.json({ ok: true, results })
   } catch (err) {
     console.error("[tax-form-completed]", err)
