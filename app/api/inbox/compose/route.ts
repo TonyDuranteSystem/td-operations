@@ -22,12 +22,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Build RFC 2822 message
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
     const headers = [
       `From: support@tonydurante.us`,
       `To: ${to}`,
       ...(cc ? [`Cc: ${cc}`] : []),
       ...(bcc ? [`Bcc: ${bcc}`] : []),
-      `Subject: ${subject}`,
+      `Subject: ${encodedSubject}`,
       "Content-Type: text/plain; charset=utf-8",
     ]
 

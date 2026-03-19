@@ -224,10 +224,11 @@ export function registerITINFormTools(server: McpServer) {
         const { gmailPost } = await import("@/lib/gmail")
 
         // Simple HTML email — no attachments needed for form link
+        const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
         const mimeHeaders = [
           `From: Tony Durante LLC <support@tonydurante.us>`,
           `To: ${clientEmail}`,
-          `Subject: ${subject}`,
+          `Subject: ${encodedSubject}`,
           `MIME-Version: 1.0`,
           `Content-Type: text/html; charset=utf-8`,
           `Content-Transfer-Encoding: base64`,

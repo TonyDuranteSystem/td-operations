@@ -250,10 +250,11 @@ export function registerOperationsTools(server: McpServer) {
               `</div>`,
             ].filter(Boolean).join("\n")
 
+            const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
             const raw = Buffer.from(
               `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
               `To: ${assigneeEmail}\r\n` +
-              `Subject: ${subject}\r\n` +
+              `Subject: ${encodedSubject}\r\n` +
               `MIME-Version: 1.0\r\n` +
               `Content-Type: text/html; charset=utf-8\r\n\r\n` +
               body

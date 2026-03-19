@@ -98,10 +98,11 @@ export async function POST(req: NextRequest) {
           ? origSubject
           : `Fwd: ${origSubject}`
 
+        const encodedFwdSubject = `=?utf-8?B?${Buffer.from(fwdSubject).toString("base64")}?=`
         const headers = [
           `From: support@tonydurante.us`,
           `To: ${forwardTo}`,
-          `Subject: ${fwdSubject}`,
+          `Subject: ${encodedFwdSubject}`,
           "Content-Type: text/plain; charset=utf-8",
         ]
 

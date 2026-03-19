@@ -39,10 +39,11 @@ export async function POST(req: NextRequest) {
       const replyTo = from // Reply to whoever sent last message
       const replySubject = subject.startsWith("Re:") ? subject : `Re: ${subject}`
 
+      const encodedReplySubject = `=?utf-8?B?${Buffer.from(replySubject).toString("base64")}?=`
       const headers = [
         `From: support@tonydurante.us`,
         `To: ${replyTo}`,
-        `Subject: ${replySubject}`,
+        `Subject: ${encodedReplySubject}`,
         `In-Reply-To: ${messageId}`,
         `References: ${references ? references + " " : ""}${messageId}`,
         "Content-Type: text/plain; charset=utf-8",

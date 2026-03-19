@@ -92,11 +92,12 @@ async function sendNotificationEmail(accountId: string, title: string, body: str
       </div>
     `
 
+    const encodedSubject = `=?utf-8?B?${Buffer.from(title).toString("base64")}?=`
     const boundary = `boundary_${Date.now()}`
     const rawEmail = [
       `From: TD Portal <support@tonydurante.us>`,
       `To: ${contact.email}`,
-      `Subject: ${title}`,
+      `Subject: ${encodedSubject}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       '',

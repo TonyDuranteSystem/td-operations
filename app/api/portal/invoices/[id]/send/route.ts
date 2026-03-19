@@ -178,10 +178,11 @@ function createRawEmail({ from, to, subject, html, attachment }: {
     ? `multipart/mixed; boundary="${boundary}"`
     : `multipart/alternative; boundary="${boundary}"`
 
+  const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const parts = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodedSubject}`,
     `MIME-Version: 1.0`,
     `Content-Type: ${contentType}`,
     '',

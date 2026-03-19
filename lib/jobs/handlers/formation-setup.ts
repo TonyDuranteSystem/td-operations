@@ -256,10 +256,11 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     ].join("\n")
 
     const boundary = `boundary_${Date.now()}`
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
     const mimeHeaders = [
       `From: Tony Durante LLC <support@tonydurante.us>`,
       `To: support@tonydurante.us`,
-      `Subject: ${subject}`,
+      `Subject: ${encodedSubject}`,
       "MIME-Version: 1.0",
       `Content-Type: text/plain; charset=utf-8`,
       "Content-Transfer-Encoding: base64",

@@ -106,11 +106,12 @@ export async function POST(
   `
 
   try {
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
     const boundary = `boundary_${Date.now()}`
     const rawEmail = [
       `From: ${companyName} <support@tonydurante.us>`,
       `To: ${customer.email}`,
-      `Subject: ${subject}`,
+      `Subject: ${encodedSubject}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       '',
