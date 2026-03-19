@@ -399,7 +399,7 @@ export function registerFormationTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "formation_confirm",
-    `Review and confirm supervised formation steps. When a new client pays, activate-formation prepares steps (QB invoice, formation form) but waits for confirmation before executing. Use this tool to:
+    `Review and confirm supervised service activation steps. When a new client pays, activate-service prepares steps (QB invoice, data collection form) but waits for confirmation before executing. Works for ALL contract types: formation, onboarding, tax_return, itin. Use this tool to:
 1. View prepared steps (without execute=true)
 2. Confirm and execute all steps (with execute=true)
 

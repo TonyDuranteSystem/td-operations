@@ -239,7 +239,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
           ? `https://${process.env.VERCEL_URL}`
           : "http://localhost:3000"
-        await fetch(`${baseUrl}/api/workflows/activate-formation`, {
+        await fetch(`${baseUrl}/api/workflows/activate-service`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -248,7 +248,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
           body: JSON.stringify({ pending_activation_id: pending.id }),
         })
       } catch (e) {
-        console.error("[whop-webhook] Failed to trigger activate-formation:", e)
+        console.error("[whop-webhook] Failed to trigger activate-service:", e)
       }
     } else {
       // No pending activation — create follow-up task as before

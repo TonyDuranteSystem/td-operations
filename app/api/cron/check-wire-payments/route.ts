@@ -4,7 +4,7 @@
  *
  * Checks QuickBooks bank deposits for pending wire transfers.
  * Matches deposits against pending_activations (status = awaiting_payment, payment_method = bank_transfer).
- * When a match is found → triggers activate-formation workflow.
+ * When a match is found → triggers activate-service workflow.
  *
  * Match logic: compare QB deposit amounts with pending_activation amounts (±5% tolerance)
  * and check if deposit memo/description contains client name or offer reference.
@@ -154,7 +154,7 @@ export async function GET(req: NextRequest) {
           // Trigger activation
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`
           try {
-            await fetch(`${baseUrl}/api/workflows/activate-formation`, {
+            await fetch(`${baseUrl}/api/workflows/activate-service`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
