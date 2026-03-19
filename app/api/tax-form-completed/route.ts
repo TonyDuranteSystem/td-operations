@@ -51,39 +51,58 @@ export async function POST(req: NextRequest) {
       if (acc) companyName = acc.company_name
     }
 
-    // ─── 1. EMAIL NOTIFICATION TO SUPPORT ───
+    // ─── 1. DETAILED EMAIL TO LUCA + ANTONIO ───
     try {
       const { gmailPost } = await import("@/lib/gmail")
 
-      const subject = `Tax Form Completed: ${companyName} (${sub.tax_year})`
-      const emailBody = [
-        `The tax data collection form for ${companyName} has been submitted by the client.`,
-        ``,
-        `Tax Year: ${sub.tax_year}`,
-        `Entity Type: ${sub.entity_type}`,
-        `Token: ${sub.token}`,
-        ``,
-        `Next steps:`,
-        `- Review submitted data: tax_form_review(token="${sub.token}")`,
-        `- If data complete, apply changes and advance pipeline`,
-        ``,
-        `Admin Preview: ${APP_BASE_URL}/tax-form/${sub.token}?preview=td`,
-      ].join("\n")
+      const { data: fullSubEmail } = await supabaseAdmin
+        .from("tax_return_submissions")
+        .select("submitted_data, upload_paths")
+        .eq("id", submission_id)
+        .single()
 
-      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-      const mimeHeaders = [
-        `From: Tony Durante LLC <support@tonydurante.us>`,
-        `To: support@tonydurante.us`,
-        `Subject: ${encodedSubject}`,
-        "MIME-Version: 1.0",
-        `Content-Type: text/plain; charset=utf-8`,
-        "Content-Transfer-Encoding: base64",
-      ]
-      const rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
-      const encodedRaw = Buffer.from(rawEmail).toString("base64url")
+      const sd = (fullSubEmail?.submitted_data || {}) as Record<string, unknown>
+      const uploads = (fullSubEmail?.upload_paths || []) as string[]
 
-      await gmailPost("/messages/send", { raw: encodedRaw })
-      results.push({ step: "email_notification", status: "ok", detail: `Notified support@ about ${companyName}` })
+      const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
+<h2>[TASK] Tax Form Completed - ${companyName} (${sub.tax_year})</h2>
+<p>Client <strong>${companyName}</strong> has submitted the tax data collection form for ${sub.tax_year}.</p>
+
+<table style="border-collapse:collapse;width:100%">
+<tr><td style="padding:4px 8px;font-weight:bold">Entity type:</td><td style="padding:4px 8px">${sub.entity_type}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Revenue reported:</td><td style="padding:4px 8px">${sd.total_revenue || sd.gross_revenue || "N/A"}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Expenses reported:</td><td style="padding:4px 8px">${sd.total_expenses || "N/A"}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Bank accounts used:</td><td style="padding:4px 8px">${sd.bank_accounts_used || sd.banks_used || "N/A"}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Documents uploaded:</td><td style="padding:4px 8px">${uploads.length} files</td></tr>
+</table>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+
+<h3>Next Steps (per Tax Return SOP v4.0)</h3>
+<ol>
+<li>Review data: <code>tax_form_review(token="${sub.token}")</code></li>
+<li>If complete, apply changes: <code>tax_form_review(token="${sub.token}", apply_changes=true)</code></li>
+${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>bank_statement_review(account_id="${sub.account_id}")</code></li>
+<li>Generate P&L: <code>bank_statement_pnl(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code></li>` : ""}
+<li>Check if 2nd installment is paid (Stage 6 gate)</li>
+<li>When ready, send to India: <code>tax@adasglobus.com</code></li>
+</ol>
+
+<p style="font-size:12px;color:#6b7280">Token: ${sub.token} | Admin: ${APP_BASE_URL}/tax-form/${sub.token}?preview=td</p>
+</div>`
+
+      const raw = Buffer.from(
+        `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
+        `To: support@tonydurante.us\r\n` +
+        `Cc: antonio.durante@tonydurante.us\r\n` +
+        `Subject: [TASK] Tax Form Completed - ${companyName} (${sub.tax_year})\r\n` +
+        `MIME-Version: 1.0\r\n` +
+        `Content-Type: text/html; charset=utf-8\r\n\r\n` +
+        emailBody
+      ).toString("base64url")
+
+      await gmailPost("/messages/send", { raw })
+      results.push({ step: "email_notification", status: "ok", detail: `Detailed email sent to support@ + antonio@` })
     } catch (e) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
@@ -95,7 +114,7 @@ export async function POST(req: NextRequest) {
           .from("service_deliveries")
           .select("id, stage, stage_order, stage_history, service_type")
           .eq("account_id", sub.account_id)
-          .eq("service_type", "Tax Return Filing")
+          .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
           .eq("status", "active")
           .limit(1)
           .maybeSingle()
@@ -158,7 +177,60 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 4. SAVE FORM DATA + UPLOADS TO DRIVE ───
+    // ─── 4. UPDATE tax_returns STATUS ───
+    if (sub.account_id) {
+      try {
+        const { data: tr } = await supabaseAdmin
+          .from("tax_returns")
+          .select("id, status")
+          .eq("account_id", sub.account_id)
+          .eq("tax_year", sub.tax_year)
+          .maybeSingle()
+
+        if (tr) {
+          await supabaseAdmin
+            .from("tax_returns")
+            .update({
+              data_received: true,
+              data_received_date: new Date().toISOString().split("T")[0],
+              status: "Data Received",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", tr.id)
+          results.push({ step: "tax_return_status", status: "ok", detail: `tax_returns ${tr.id} -> Data Received` })
+        } else {
+          results.push({ step: "tax_return_status", status: "skipped", detail: "No tax_returns record found" })
+        }
+      } catch (e) {
+        results.push({ step: "tax_return_status", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 4B. ADVANCE SD to "Data Received" ───
+    if (sub.account_id) {
+      try {
+        const { data: sd } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, current_stage")
+          .eq("account_id", sub.account_id)
+          .eq("service_type", "Tax Return")
+          .eq("status", "active")
+          .limit(1)
+          .maybeSingle()
+
+        if (sd && (sd.current_stage === "Data Link Sent" || sd.current_stage === "Activated")) {
+          await supabaseAdmin
+            .from("service_deliveries")
+            .update({ current_stage: "Data Received", updated_at: new Date().toISOString() })
+            .eq("id", sd.id)
+          results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Received` })
+        }
+      } catch (e) {
+        results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 5. SAVE FORM DATA + UPLOADS TO DRIVE ───
     if (sub.account_id) {
       try {
         const { data: fullSub } = await supabaseAdmin
