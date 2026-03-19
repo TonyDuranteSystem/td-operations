@@ -31,10 +31,20 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
   return safeAction(async () => {
-    const { items, ...invoiceData } = parsed.data
+    const { items, recurring_frequency, recurring_end_date, ...invoiceData } = parsed.data
     const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
     const total = subtotal - (invoiceData.discount || 0)
     const invoiceNumber = await generateInvoiceNumber(invoiceData.account_id)
+
+    // Calculate next recurring date if frequency is set
+    let recurringNextDate: string | null = null
+    if (recurring_frequency && invoiceData.issue_date) {
+      const issueDate = new Date(invoiceData.issue_date)
+      if (recurring_frequency === 'monthly') issueDate.setMonth(issueDate.getMonth() + 1)
+      else if (recurring_frequency === 'quarterly') issueDate.setMonth(issueDate.getMonth() + 3)
+      else if (recurring_frequency === 'yearly') issueDate.setFullYear(issueDate.getFullYear() + 1)
+      recurringNextDate = issueDate.toISOString().split('T')[0]
+    }
 
     // Create invoice
     const { data: invoice, error } = await supabaseAdmin
@@ -45,6 +55,9 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
         subtotal,
         total: Math.max(total, 0),
         status: 'Draft',
+        recurring_frequency: recurring_frequency || null,
+        recurring_next_date: recurringNextDate,
+        recurring_end_date: recurring_end_date || null,
       })
       .select('id, invoice_number')
       .single()

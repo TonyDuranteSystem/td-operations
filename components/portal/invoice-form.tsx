@@ -55,6 +55,8 @@ export function InvoiceForm({ accountId, customers, mode, initialData }: Invoice
   const [dueDate, setDueDate] = useState(initialData?.dueDate ?? '')
   const [notes, setNotes] = useState(initialData?.notes ?? '')
   const [message, setMessage] = useState(initialData?.message ?? '')
+  const [recurringFrequency, setRecurringFrequency] = useState<string>('')
+  const [recurringEndDate, setRecurringEndDate] = useState('')
 
   // Line items
   const [items, setItems] = useState<LineItem[]>(
@@ -156,6 +158,8 @@ export function InvoiceForm({ accountId, customers, mode, initialData }: Invoice
           due_date: dueDate || undefined,
           notes: notes || undefined,
           message: message || undefined,
+          recurring_frequency: (recurringFrequency as 'monthly' | 'quarterly' | 'yearly') || null,
+          recurring_end_date: recurringEndDate || null,
           items: itemsPayload,
         })
         if (result.success) {
@@ -258,6 +262,35 @@ export function InvoiceForm({ accountId, customers, mode, initialData }: Invoice
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+        </div>
+
+        {/* Recurring */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">Recurring</label>
+            <select
+              value={recurringFrequency}
+              onChange={e => setRecurringFrequency(e.target.value)}
+              className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">One-time</option>
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
+              <option value="yearly">Yearly</option>
+            </select>
+          </div>
+          {recurringFrequency && (
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-zinc-700 mb-1.5">End Date (optional)</label>
+              <input
+                type="date"
+                value={recurringEndDate}
+                onChange={e => setRecurringEndDate(e.target.value)}
+                className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-zinc-400 mt-1">Leave empty for indefinite recurring</p>
+            </div>
+          )}
         </div>
 
         {/* Line Items */}

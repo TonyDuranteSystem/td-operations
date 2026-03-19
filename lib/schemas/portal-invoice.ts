@@ -26,6 +26,8 @@ export const createInvoiceSchema = z.object({
   due_date: z.string().optional(),
   notes: z.string().optional(),
   message: z.string().optional(),
+  recurring_frequency: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
+  recurring_end_date: z.string().nullable().optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item is required'),
 })
 
