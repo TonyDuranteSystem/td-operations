@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 
@@ -20,6 +21,10 @@ const ALLOWED_TYPES = [
  * Body: multipart/form-data with file + account_id + category
  */
 export async function POST(request: NextRequest) {
+  // Rate limit: 10 uploads per minute per IP
+  const rl = checkRateLimit(getRateLimitKey(request), 10, 60_000)
+  if (!rl.allowed) return NextResponse.json({ error: 'Too many uploads. Try again later.' }, { status: 429 })
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

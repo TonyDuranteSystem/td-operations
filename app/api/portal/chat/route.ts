@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { createPortalNotification } from '@/lib/portal/notifications'
+import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -50,6 +51,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Rate limit: 30 messages per minute per IP
+  const rl = checkRateLimit(getRateLimitKey(request), 30, 60_000)
+  if (!rl.allowed) return NextResponse.json({ error: 'Too many messages. Slow down.' }, { status: 429 })
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
