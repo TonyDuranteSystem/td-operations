@@ -377,6 +377,48 @@ export async function POST(req: NextRequest) {
         .eq("id", pending_activation_id)
     }
 
+    // ─── STEP 5: Notify Luca + Antonio via email ──────────
+    try {
+      const { gmailPost } = await import("@/lib/gmail")
+      const sdList = sdResults.map(r => `- ${r.pipeline}: ${r.status}${r.id ? ` (${r.id.slice(0,8)})` : ""}`).join("\n")
+      const supervisedList = preparedSteps.map(p => `- ${p.description}`).join("\n")
+
+      const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
+<h2>[NEW CLIENT] ${activation.client_name} -- Payment Confirmed</h2>
+<table style="border-collapse:collapse">
+<tr><td style="padding:4px 8px;font-weight:bold">Contract type:</td><td style="padding:4px 8px">${contractType}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Amount:</td><td style="padding:4px 8px">${activation.currency} ${activation.amount}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Payment:</td><td style="padding:4px 8px">${activation.payment_method}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Email:</td><td style="padding:4px 8px">${activation.client_email}</td></tr>
+<tr><td style="padding:4px 8px;font-weight:bold">Contact ID:</td><td style="padding:4px 8px">${contactId || "N/A"}</td></tr>
+</table>
+
+<h3>Service Deliveries Created</h3>
+<pre style="background:#f3f4f6;padding:12px;border-radius:6px">${sdList || "None"}</pre>
+
+${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
+<pre style="background:#fef3c7;padding:12px;border-radius:6px">${supervisedList}</pre>
+<p>Use <code>formation_confirm(activation_id)</code> in Claude to review and execute these steps.</p>` : ""}
+
+<p style="font-size:12px;color:#6b7280">Activation ID: ${pending_activation_id} | Offer: ${activation.offer_token}</p>
+</div>`
+
+      const raw = Buffer.from(
+        `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
+        `To: support@tonydurante.us\r\n` +
+        `Cc: antonio.durante@tonydurante.us\r\n` +
+        `Subject: [NEW CLIENT] ${activation.client_name} -- ${contractType} -- Payment Confirmed\r\n` +
+        `MIME-Version: 1.0\r\n` +
+        `Content-Type: text/html; charset=utf-8\r\n\r\n` +
+        emailBody
+      ).toString("base64url")
+
+      await gmailPost("/messages/send", { raw })
+      steps.push({ step: "team_notification", status: "ok", detail: "Email sent to support@ + antonio@" })
+    } catch (e) {
+      steps.push({ step: "team_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
+
     // Log action
     await supabase.from("action_log").insert({
       action_type: "service_activated",
