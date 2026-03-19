@@ -9,7 +9,7 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import Link from 'next/link'
 import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankDetailsForm } from '@/components/portal/bank-details-form'
-import { PaymentSettings } from '@/components/portal/payment-settings'
+import { PaymentLinks } from '@/components/portal/payment-links'
 import { ProfileEditor } from '@/components/portal/profile-editor'
 
 export default async function PortalProfilePage() {
@@ -104,18 +104,14 @@ export default async function PortalProfilePage() {
         </div>
       )}
 
-      {/* Payment Gateway */}
+      {/* Payment Links */}
       {account && selectedAccountId && (
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <CreditCard className="h-5 w-5 text-blue-600" />
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Payment Gateway</h2>
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Payment Links</h2>
           </div>
-          <PaymentSettings
-            accountId={selectedAccountId}
-            currentGateway={(account as Record<string, unknown>).payment_gateway as string | null}
-            currentLink={(account as Record<string, unknown>).payment_link as string | null}
-          />
+          <PaymentLinks accountId={selectedAccountId} />
         </div>
       )}
 
