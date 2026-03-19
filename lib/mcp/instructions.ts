@@ -97,7 +97,7 @@ All three domains point to the same server. Old links on any domain still work. 
 
 ## Tool Selection — Key Rules
 
-You have 164 tools across 32 modules. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 168 tools across 33 modules. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
