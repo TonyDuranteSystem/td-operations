@@ -185,6 +185,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'guide.notificationsDesc': 'Stay informed about important updates — service completions, deadline reminders, and new documents.',
     'guide.help': 'Need help? Use the Chat section to reach our team.',
 
+    // Templates
+    'templates.title': 'Saved Templates',
+    'templates.deleted': 'Template deleted',
+
     // Common
     'common.cancel': 'Cancel',
     'common.save': 'Save',
@@ -379,6 +383,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'guide.notificationsTitle': 'Notifiche',
     'guide.notificationsDesc': 'Resta informato sugli aggiornamenti importanti \u2014 completamento servizi, promemoria scadenze e nuovi documenti.',
     'guide.help': 'Hai bisogno di aiuto? Usa la sezione Chat per contattare il nostro team.',
+
+    // Templates
+    'templates.title': 'Template Salvati',
+    'templates.deleted': 'Template eliminato',
 
     // Common
     'common.cancel': 'Annulla',

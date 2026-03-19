@@ -5,9 +5,11 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { InvoiceList } from '@/components/portal/invoice-list'
+import { TemplateList } from '@/components/portal/template-list'
 import { Receipt, Plus } from 'lucide-react'
 import { t, getLocale } from '@/lib/portal/i18n'
 import Link from 'next/link'
+import { listTemplates } from './actions'
 
 export default async function PortalInvoicesPage() {
   const supabase = createClient()
@@ -32,6 +34,8 @@ export default async function PortalInvoicesPage() {
     .limit(100)
 
   const locale = getLocale(user)
+  const templates = await listTemplates(selectedAccountId)
+
   // Stats
   const all = invoices ?? []
   const stats = {
@@ -53,7 +57,7 @@ export default async function PortalInvoicesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale)}</h1>
-          <p className="text-zinc-500 text-sm mt-1">Create and manage invoices for your customers</p>
+          <p className="text-zinc-500 text-sm mt-1">{t('invoices.subtitle', locale)}</p>
         </div>
         <Link
           href="/portal/invoices/new"
@@ -71,7 +75,7 @@ export default async function PortalInvoicesPage() {
           <p className="text-xl font-semibold text-zinc-900 mt-1">${stats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
         </div>
         <div className="bg-white rounded-xl border shadow-sm p-4">
-          <p className="text-xs text-zinc-500 uppercase tracking-wide">Paid</p>
+          <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.paid', locale)}</p>
           <p className="text-xl font-semibold text-emerald-600 mt-1">${stats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
         </div>
         <div className="bg-white rounded-xl border shadow-sm p-4">
@@ -84,18 +88,21 @@ export default async function PortalInvoicesPage() {
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <Receipt className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
           <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('invoices.noInvoices', locale)}</h3>
-          <p className="text-sm text-zinc-500 mb-4">Create your first invoice to get started.</p>
+          <p className="text-sm text-zinc-500 mb-4">{t('invoices.createFirst', locale)}</p>
           <Link
             href="/portal/invoices/new"
             className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
           >
             <Plus className="h-4 w-4" />
-            Create Invoice
+            {t('invoices.new', locale)}
           </Link>
         </div>
       ) : (
         <InvoiceList invoices={mapped} />
       )}
+
+      {/* Templates section */}
+      <TemplateList templates={templates} accountId={selectedAccountId} />
     </div>
   )
 }
