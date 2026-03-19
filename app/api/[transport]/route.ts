@@ -67,6 +67,7 @@ import { registerOaTools } from "@/lib/mcp/tools/oa"
 import { registerWelcomePackageTools } from "@/lib/mcp/tools/welcome-package"
 import { registerBankingFormTools } from "@/lib/mcp/tools/banking-form"
 import { registerJobTools } from "@/lib/mcp/tools/jobs"
+import { registerPortalTools } from "@/lib/mcp/tools/portal"
 import { registerQbExpenseTools } from "@/lib/mcp/tools/qb-expenses"
 import { registerITINFormTools } from "@/lib/mcp/tools/itin-form"
 import { registerClosureTools } from "@/lib/mcp/tools/closure"
@@ -114,6 +115,7 @@ const handler = createMcpHandler(
     registerBankingFormTools(server)
     registerWelcomePackageTools(server)
     registerJobTools(server)
+    registerPortalTools(server)
     registerQbExpenseTools(server)
     registerITINFormTools(server)
     registerClosureTools(server)
