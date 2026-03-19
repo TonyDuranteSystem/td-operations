@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Trash2, ArrowLeft, Loader2, Save } from 'lucide-react'
+import { Plus, Trash2, ArrowLeft, Loader2, Save, Landmark } from 'lucide-react'
 import { toast } from 'sonner'
 import { createInvoice, updateInvoice, createCustomer } from '@/app/portal/invoices/actions'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -44,6 +44,7 @@ interface InvoiceFormProps {
     dueDate: string
     notes: string
     message: string
+    bankAccountId?: string | null
     items: LineItem[]
   }
 }
@@ -69,6 +70,25 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   const [message, setMessage] = useState(initialData?.message ?? '')
   const [recurringFrequency, setRecurringFrequency] = useState<string>('')
   const [recurringEndDate, setRecurringEndDate] = useState('')
+
+  // Bank account
+  const [bankAccountId, setBankAccountId] = useState<string>(initialData?.bankAccountId ?? '')
+  const [bankAccounts, setBankAccounts] = useState<{ id: string; label: string; currency: string }[]>([])
+
+  useEffect(() => {
+    fetch(`/api/portal/bank-accounts?account_id=${accountId}`)
+      .then(r => r.json())
+      .then(data => {
+        const list = Array.isArray(data) ? data : []
+        setBankAccounts(list)
+        // Auto-select the show_on_invoice account if none selected
+        if (!bankAccountId && list.length > 0) {
+          const defaultAcc = list.find((a: { show_on_invoice?: boolean }) => a.show_on_invoice) || list[0]
+          setBankAccountId(defaultAcc.id)
+        }
+      })
+      .catch(() => {})
+  }, [accountId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Line items
   const [items, setItems] = useState<LineItem[]>(
@@ -152,6 +172,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           due_date: dueDate || undefined,
           notes: notes || undefined,
           message: message || undefined,
+          bank_account_id: bankAccountId || null,
           items: itemsPayload,
         })
         if (result.success) {
@@ -172,6 +193,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           message: message || undefined,
           recurring_frequency: (recurringFrequency as 'monthly' | 'quarterly' | 'yearly') || null,
           recurring_end_date: recurringEndDate || null,
+          bank_account_id: bankAccountId || null,
           items: itemsPayload,
         })
         if (result.success) {
@@ -427,6 +449,29 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
         </div>
+
+        {/* Bank Account for Invoice */}
+        {bankAccounts.length > 0 && (
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">
+              <Landmark className="h-4 w-4 inline mr-1.5 -mt-0.5" />
+              {t('bank.showOnInvoice') || 'Bank Account on Invoice'}
+            </label>
+            <select
+              value={bankAccountId}
+              onChange={e => setBankAccountId(e.target.value)}
+              className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">None — no bank details on invoice</option>
+              {bankAccounts.map(ba => (
+                <option key={ba.id} value={ba.id}>{ba.label} ({ba.currency})</option>
+              ))}
+            </select>
+            <p className="text-xs text-zinc-400 mt-1">
+              {t('bank.autoNote') || 'Choose which bank account details appear on this invoice'}
+            </p>
+          </div>
+        )}
 
         {/* Notes (internal) */}
         <div>

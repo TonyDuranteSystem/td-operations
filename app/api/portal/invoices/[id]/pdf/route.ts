@@ -213,13 +213,25 @@ export async function GET(
     if (line) page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
   }
 
-  // Bank details — fetch from client_bank_accounts (show_on_invoice = true)
-  const { data: bankAccount } = await supabaseAdmin
-    .from('client_bank_accounts')
-    .select('*')
-    .eq('account_id', invoice.account_id)
-    .eq('show_on_invoice', true)
-    .maybeSingle()
+  // Bank details — use invoice's selected bank account, fallback to show_on_invoice default
+  let bankAccount = null
+  if (invoice.bank_account_id) {
+    const { data } = await supabaseAdmin
+      .from('client_bank_accounts')
+      .select('*')
+      .eq('id', invoice.bank_account_id)
+      .maybeSingle()
+    bankAccount = data
+  }
+  if (!bankAccount) {
+    const { data } = await supabaseAdmin
+      .from('client_bank_accounts')
+      .select('*')
+      .eq('account_id', invoice.account_id)
+      .eq('show_on_invoice', true)
+      .maybeSingle()
+    bankAccount = data
+  }
 
   if (bankAccount) {
     y -= 30

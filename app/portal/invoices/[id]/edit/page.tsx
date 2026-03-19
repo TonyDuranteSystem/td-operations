@@ -23,6 +23,7 @@ export default function EditInvoicePage() {
       dueDate: string
       notes: string
       message: string
+      bankAccountId?: string | null
       items: { description: string; quantity: number; unit_price: number; amount: number }[]
     }
   } | null>(null)
@@ -53,6 +54,7 @@ export default function EditInvoicePage() {
           dueDate: data.due_date || '',
           notes: data.notes || '',
           message: data.message || '',
+          bankAccountId: data.bank_account_id || null,
           items: data.items.map((item: { description: string; quantity: number; unit_price: number; amount: number }) => ({
             description: item.description,
             quantity: item.quantity,

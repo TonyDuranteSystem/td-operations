@@ -53,13 +53,25 @@ export async function POST(
     .eq('id', invoice.account_id)
     .single()
 
-  // Get bank account marked for invoices
-  const { data: bankAccount } = await supabaseAdmin
-    .from('client_bank_accounts')
-    .select('*')
-    .eq('account_id', invoice.account_id)
-    .eq('show_on_invoice', true)
-    .maybeSingle()
+  // Get bank account — use invoice's selected account, fallback to default
+  let bankAccount = null
+  if (invoice.bank_account_id) {
+    const { data } = await supabaseAdmin
+      .from('client_bank_accounts')
+      .select('*')
+      .eq('id', invoice.bank_account_id)
+      .maybeSingle()
+    bankAccount = data
+  }
+  if (!bankAccount) {
+    const { data } = await supabaseAdmin
+      .from('client_bank_accounts')
+      .select('*')
+      .eq('account_id', invoice.account_id)
+      .eq('show_on_invoice', true)
+      .maybeSingle()
+    bankAccount = data
+  }
 
   // Get default payment link
   const { data: defaultLink } = await supabaseAdmin

@@ -28,6 +28,7 @@ export const createInvoiceSchema = z.object({
   message: z.string().optional(),
   recurring_frequency: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
   recurring_end_date: z.string().nullable().optional(),
+  bank_account_id: z.string().uuid().nullable().optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item is required'),
 })
 
@@ -43,6 +44,7 @@ export const updateInvoiceSchema = z.object({
   message: z.string().optional().nullable(),
   status: z.enum(['Draft', 'Sent', 'Paid', 'Overdue', 'Cancelled']).optional(),
   paid_date: z.string().optional().nullable(),
+  bank_account_id: z.string().uuid().nullable().optional(),
   items: z.array(invoiceItemSchema).optional(),
 })
 
