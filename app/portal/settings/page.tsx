@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
+import { PushToggle } from '@/components/portal/push-toggle'
 
 export default function PortalSettingsPage() {
+  const [accountId, setAccountId] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -36,11 +38,17 @@ export default function PortalSettingsPage() {
     }
   }
 
+  useEffect(() => {
+    // Read account ID from cookie (set by company switcher)
+    const match = document.cookie.match(/portal_account_id=([^;]+)/)
+    if (match) setAccountId(match[1])
+  }, [])
+
   return (
     <div className="p-6 lg:p-8 max-w-lg mx-auto space-y-6">
       <div className="flex items-center gap-3">
         <Link href="/portal/profile" className="p-2 rounded-lg hover:bg-zinc-100"><ArrowLeft className="h-5 w-5" /></Link>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Change Password</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Settings</h1>
       </div>
 
       <form onSubmit={handleSubmit} className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
@@ -57,6 +65,15 @@ export default function PortalSettingsPage() {
           {loading ? 'Updating...' : 'Update Password'}
         </button>
       </form>
+
+      {/* Push Notifications */}
+      {accountId && (
+        <div className="bg-white rounded-xl border shadow-sm p-6 space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Notifications</h2>
+          <p className="text-sm text-zinc-500">Get notified when something important happens with your account.</p>
+          <PushToggle accountId={accountId} />
+        </div>
+      )}
     </div>
   )
 }

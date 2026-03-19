@@ -1,9 +1,11 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { sendPushToAccount } from './web-push'
 
 /**
  * Create a portal notification for a client.
  * Called by MCP tools, API routes, and cron jobs when something happens
  * that the client should know about.
+ * Also sends a Web Push notification if the client has subscribed.
  */
 export async function createPortalNotification(params: {
   account_id: string
@@ -19,7 +21,18 @@ export async function createPortalNotification(params: {
 
   if (error) {
     console.error('Failed to create portal notification:', error.message)
+    return
   }
+
+  // Send Web Push (fire-and-forget, don't block on failure)
+  sendPushToAccount(params.account_id, {
+    title: params.title,
+    body: params.body || '',
+    url: params.link || '/portal',
+    tag: params.type,
+  }).catch(() => {
+    // Push failure is non-critical — client still has in-app notification
+  })
 }
 
 /**
