@@ -22,7 +22,7 @@ export async function GET() {
   if (firstAccountId) {
     const { data, error } = await supabaseAdmin
       .from('accounts')
-      .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link')
+      .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link')
       .eq('id', firstAccountId)
       .single()
     directDetail = { data: data ? { id: data.id, name: data.company_name } : null, error: error?.message }

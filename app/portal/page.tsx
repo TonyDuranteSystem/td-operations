@@ -113,7 +113,7 @@ export default async function PortalDashboardPage() {
             <InfoRow icon={Calendar} label="Formation" value={formatDate(account.formation_date)} />
             <InfoRow icon={Shield} label="EIN" value={maskEin(account.ein_number)} />
             {account.filing_id && <InfoRow icon={FileText} label="Filing ID" value={account.filing_id} />}
-            {account.registered_agent && <InfoRow icon={Shield} label="Registered Agent" value={account.registered_agent} />}
+            {account.registered_agent_provider && <InfoRow icon={Shield} label="Registered Agent" value={account.registered_agent_provider} />}
             {account.physical_address && <InfoRow icon={MapPin} label="Address" value={account.physical_address} />}
           </div>
         </div>
