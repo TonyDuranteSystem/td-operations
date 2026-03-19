@@ -8,6 +8,7 @@ import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
+import { PasswordGate } from '@/components/portal/password-gate'
 import { cookies } from 'next/headers'
 
 export default async function PortalLayout({
@@ -18,7 +19,7 @@ export default async function PortalLayout({
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // No user — render children without shell (login/forgot-password pages handle their own UI)
+  // No user — render children without shell (login/forgot-password/change-password pages handle their own UI)
   if (!user) {
     return <>{children}</>
   }
@@ -40,13 +41,15 @@ export default async function PortalLayout({
     ?? ''
 
   // Show onboarding wizard on first login
-  const showOnboarding = isClient(user) && !user.user_metadata?.onboarding_completed
+  const mustChangePassword = !!user.user_metadata?.must_change_password
+  const showOnboarding = isClient(user) && !mustChangePassword && !user.user_metadata?.onboarding_completed
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
 
   return (
     <Providers>
       <LocaleProvider locale={locale}>
+        <PasswordGate mustChangePassword={mustChangePassword} />
         {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
         <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
           <PortalSidebar
