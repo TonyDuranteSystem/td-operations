@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     const storagePath = `chat-attachments/${accountId}/${Date.now()}.${ext}`
 
     const { error: uploadError } = await supabaseAdmin.storage
-      .from('public-assets')
+      .from('assets')
       .upload(storagePath, buffer, {
         contentType: file.type,
         upsert: false,
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
     if (uploadError) throw uploadError
 
     const { data: urlData } = supabaseAdmin.storage
-      .from('public-assets')
+      .from('assets')
       .getPublicUrl(storagePath)
 
     return NextResponse.json({
