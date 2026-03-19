@@ -4,6 +4,18 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
 
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB
+const ALLOWED_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain',
+  'text/csv',
+]
 
 /**
  * POST /api/portal/chat/upload — Upload file attachment for chat
@@ -25,6 +37,10 @@ export async function POST(request: NextRequest) {
 
   if (file.size > MAX_SIZE) {
     return NextResponse.json({ error: 'File too large (max 10MB)' }, { status: 400 })
+  }
+
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    return NextResponse.json({ error: 'File type not allowed. Use PDF, images, Word, Excel, or text files.' }, { status: 400 })
   }
 
   // Access control for client users

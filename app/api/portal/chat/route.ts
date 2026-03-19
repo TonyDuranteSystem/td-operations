@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
       account_id,
       type: 'chat',
       title: 'New message from Tony Durante Team',
-      body: message.trim().slice(0, 100),
+      body: (message || '').trim().slice(0, 100),
       link: '/portal/chat',
     }).catch(() => {}) // fire-and-forget
   }

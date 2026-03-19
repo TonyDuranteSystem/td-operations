@@ -99,7 +99,7 @@ export async function POST(
           </tr>` : ''}
           <tr>
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Total Amount</td>
-            <td style="padding: 8px 12px; font-size: 18px; font-weight: bold; color: #2563eb;">${csym}${invoice.total.toFixed(2)}</td>
+            <td style="padding: 8px 12px; font-size: 18px; font-weight: bold; color: #2563eb;">${csym}${(invoice.total ?? 0).toFixed(2)}</td>
           </tr>
         </table>
 

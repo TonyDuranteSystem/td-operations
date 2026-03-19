@@ -18,12 +18,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Language must be en or it' }, { status: 400 })
   }
 
-  await supabaseAdmin.auth.admin.updateUserById(user.id, {
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
     user_metadata: {
       ...user.user_metadata,
       portal_language: language,
     },
   })
+
+  if (error) {
+    return NextResponse.json({ error: 'Failed to update language preference' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true })
 }

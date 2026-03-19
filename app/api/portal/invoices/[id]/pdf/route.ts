@@ -154,8 +154,8 @@ export async function GET(
     const desc = item.description.length > 55 ? item.description.slice(0, 55) + '...' : item.description
     page.drawText(desc, { x: 55, y, size: 9, font: helvetica, color: black })
     page.drawText(String(item.quantity), { x: 345, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${item.unit_price.toFixed(2)}`, { x: 395, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${item.amount.toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
+    page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 395, y, size: 9, font: helvetica, color: black })
+    page.drawText(`${csym}${(item.amount ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
     y -= 18
     page.drawLine({ start: { x: 50, y: y + 6 }, end: { x: 545, y: y + 6 }, thickness: 0.3, color: lightGray })
   }
@@ -163,18 +163,18 @@ export async function GET(
   // Totals
   y -= 15
   page.drawText('Subtotal', { x: 400, y, size: 9, font: helvetica, color: gray })
-  page.drawText(`${csym}${invoice.subtotal.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
+  page.drawText(`${csym}${(invoice.subtotal ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
 
-  if (invoice.discount > 0) {
+  if ((invoice.discount ?? 0) > 0) {
     y -= 16
     page.drawText('Discount', { x: 400, y, size: 9, font: helvetica, color: gray })
-    page.drawText(`-${csym}${invoice.discount.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.8, 0.2, 0.2) })
+    page.drawText(`-${csym}${(invoice.discount ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.8, 0.2, 0.2) })
   }
 
   y -= 20
   page.drawLine({ start: { x: 395, y: y + 8 }, end: { x: 545, y: y + 8 }, thickness: 1, color: blue })
   page.drawText('TOTAL', { x: 400, y, size: 11, font: helveticaBold, color: blue })
-  page.drawText(`${csym}${invoice.total.toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: blue })
+  page.drawText(`${csym}${(invoice.total ?? 0).toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: blue })
 
   // Message / payment terms
   if (invoice.message) {

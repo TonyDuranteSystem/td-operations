@@ -89,7 +89,7 @@ export async function POST(
           </tr>
           <tr>
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Amount Due</td>
-            <td style="padding: 8px 12px; font-size: 18px; font-weight: bold; color: ${isOverdue ? '#dc2626' : '#f59e0b'};">${csym}${invoice.total.toFixed(2)}</td>
+            <td style="padding: 8px 12px; font-size: 18px; font-weight: bold; color: ${isOverdue ? '#dc2626' : '#f59e0b'};">${csym}${(invoice.total ?? 0).toFixed(2)}</td>
           </tr>
           ${invoice.due_date ? `<tr style="background: #f8fafc;">
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Due Date</td>
