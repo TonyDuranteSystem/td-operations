@@ -225,7 +225,8 @@ export function registerOperationsTools(server: McpServer) {
           try {
             const { gmailPost } = await import("@/lib/gmail")
             const taskPriority = priority || "Normal"
-            const priorityIcon = taskPriority === "Urgent" ? "🔴" : taskPriority === "High" ? "🟠" : "🔵"
+            const priorityTag = taskPriority === "Urgent" ? "[URGENT]" : taskPriority === "High" ? "[HIGH]" : "[TASK]"
+            const priorityColor = taskPriority === "Urgent" ? "#dc2626" : taskPriority === "High" ? "#ea580c" : "#2563eb"
 
             // Get company name if account_id provided
             let companyName = ""
@@ -234,10 +235,10 @@ export function registerOperationsTools(server: McpServer) {
               if (acc) companyName = acc.company_name
             }
 
-            const subject = `${priorityIcon} New Task: ${task_title}${companyName ? ` — ${companyName}` : ""}`
+            const subject = `${priorityTag} ${task_title}${companyName ? " - " + companyName : ""}`
             const body = [
               `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">`,
-              `<h2 style="margin:0 0 12px;color:#1e3a5f">${priorityIcon} ${task_title}</h2>`,
+              `<h2 style="margin:0 0 12px;color:${priorityColor}">${priorityTag} ${task_title}</h2>`,
               companyName ? `<p><strong>Client:</strong> ${companyName}</p>` : "",
               `<p><strong>Assigned to:</strong> ${assigned_to}</p>`,
               `<p><strong>Priority:</strong> ${taskPriority}</p>`,
