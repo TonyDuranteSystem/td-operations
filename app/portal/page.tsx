@@ -8,12 +8,9 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
-function maskEin(ein: string | null): string {
+function formatEin(ein: string | null): string {
   if (!ein) return '\u2014'
-  // Show last 4 digits only: **-***2516
-  const digits = ein.replace(/\D/g, '')
-  if (digits.length < 4) return ein
-  return `**-***${digits.slice(-4)}`
+  return ein
 }
 
 function formatDate(d: string | null): string {
@@ -111,7 +108,7 @@ export default async function PortalDashboardPage() {
             <InfoRow icon={Building2} label="Entity Type" value={account.entity_type ?? '\u2014'} />
             <InfoRow icon={MapPin} label="State" value={account.state_of_formation ?? '\u2014'} />
             <InfoRow icon={Calendar} label="Formation" value={formatDate(account.formation_date)} />
-            <InfoRow icon={Shield} label="EIN" value={maskEin(account.ein_number)} />
+            <InfoRow icon={Shield} label="EIN" value={formatEin(account.ein_number)} />
             {account.filing_id && <InfoRow icon={FileText} label="Filing ID" value={account.filing_id} />}
             {account.registered_agent_provider && <InfoRow icon={Shield} label="Registered Agent" value={account.registered_agent_provider} />}
             {account.physical_address && <InfoRow icon={MapPin} label="Address" value={account.physical_address} />}

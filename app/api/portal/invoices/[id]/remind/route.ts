@@ -51,7 +51,7 @@ export async function POST(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, bank_details')
+    .select('company_name')
     .eq('id', invoice.account_id)
     .single()
 

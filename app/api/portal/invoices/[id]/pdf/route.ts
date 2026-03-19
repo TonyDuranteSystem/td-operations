@@ -47,7 +47,7 @@ export async function GET(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, invoice_logo_url, bank_details, physical_address, ein_number, state_of_formation')
+    .select('company_name, invoice_logo_url, physical_address, ein_number, state_of_formation')
     .eq('id', invoice.account_id)
     .single()
 
@@ -213,19 +213,25 @@ export async function GET(
     if (line) page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
   }
 
-  // Bank details
-  const bankDetails = account?.bank_details as Record<string, string> | null
-  if (bankDetails && Object.values(bankDetails).some(v => v)) {
+  // Bank details — fetch from client_bank_accounts (show_on_invoice = true)
+  const { data: bankAccount } = await supabaseAdmin
+    .from('client_bank_accounts')
+    .select('*')
+    .eq('account_id', invoice.account_id)
+    .eq('show_on_invoice', true)
+    .maybeSingle()
+
+  if (bankAccount) {
     y -= 30
-    page.drawText('Bank Details', { x: 50, y, size: 9, font: helveticaBold, color: gray })
+    page.drawText(`Bank Details — ${bankAccount.label}`, { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
     const bankFields = [
-      ['Account Holder', bankDetails.account_holder],
-      ['Bank', bankDetails.bank_name],
-      ['IBAN', bankDetails.iban],
-      ['SWIFT/BIC', bankDetails.swift_bic],
-      ['Account No.', bankDetails.account_number],
-      ['Routing No.', bankDetails.routing_number],
+      ['Account Holder', bankAccount.account_holder],
+      ['Bank', bankAccount.bank_name],
+      ['IBAN', bankAccount.iban],
+      ['SWIFT/BIC', bankAccount.swift_bic],
+      ['Account No.', bankAccount.account_number],
+      ['Routing No.', bankAccount.routing_number],
     ]
     for (const [label, value] of bankFields) {
       if (value) {
@@ -233,8 +239,8 @@ export async function GET(
         y -= 12
       }
     }
-    if (bankDetails.notes) {
-      page.drawText(bankDetails.notes, { x: 50, y, size: 8, font: helvetica, color: gray })
+    if (bankAccount.notes) {
+      page.drawText(bankAccount.notes, { x: 50, y, size: 8, font: helvetica, color: gray })
       y -= 12
     }
   }

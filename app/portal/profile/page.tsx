@@ -8,7 +8,7 @@ import { User, Building2, Landmark, CreditCard } from 'lucide-react'
 import { t, getLocale } from '@/lib/portal/i18n'
 import Link from 'next/link'
 import { LogoUpload } from '@/components/portal/logo-upload'
-import { BankDetailsForm } from '@/components/portal/bank-details-form'
+import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
 import { ProfileEditor } from '@/components/portal/profile-editor'
 
@@ -70,7 +70,7 @@ export default async function PortalProfilePage() {
             <InfoField label="Company Name" value={account.company_name ?? '\u2014'} />
             <InfoField label="Entity Type" value={account.entity_type ?? '\u2014'} />
             <InfoField label="State" value={account.state_of_formation ?? '\u2014'} />
-            <InfoField label="EIN" value={account.ein_number ? `**-***${account.ein_number.replace(/\D/g, '').slice(-4)}` : '\u2014'} />
+            <InfoField label="EIN" value={account.ein_number || '\u2014'} />
             <InfoField label="Formation Date" value={account.formation_date ?? '\u2014'} />
             <InfoField label="Filing ID" value={account.filing_id ?? '\u2014'} />
             {account.physical_address && (
@@ -93,14 +93,14 @@ export default async function PortalProfilePage() {
         </div>
       )}
 
-      {/* Bank Details */}
+      {/* Bank Accounts */}
       {account && selectedAccountId && (
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Landmark className="h-5 w-5 text-blue-600" />
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Bank Details</h2>
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Bank Accounts</h2>
           </div>
-          <BankDetailsForm accountId={selectedAccountId} initialData={(account as Record<string, unknown>).bank_details as Record<string, string> | null} />
+          <BankAccounts accountId={selectedAccountId} />
         </div>
       )}
 
