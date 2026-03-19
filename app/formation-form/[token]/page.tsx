@@ -226,6 +226,23 @@ export default function FormationFormPage() {
 
   async function handleSubmit() {
     if (!submission || !disclaimerAccepted) return
+
+    // Validate passport upload is mandatory
+    if (!uploadFiles.passport_owner) {
+      setSubmitError(lang === 'it' ? 'Il passaporto del titolare è obbligatorio. Carica una copia del passaporto per procedere.' : 'Owner passport is required. Please upload a copy of your passport to proceed.')
+      return
+    }
+
+    // For MMLLC, validate all member passports
+    if (submission.entity_type === 'MMLLC' && members.length > 0) {
+      for (let i = 0; i < members.length; i++) {
+        if (!uploadFiles[`passport_member_${i}`]) {
+          setSubmitError(lang === 'it' ? `Il passaporto del membro ${members[i].member_first_name || ''} ${members[i].member_last_name || ''} è obbligatorio.` : `Passport for member ${members[i].member_first_name || ''} ${members[i].member_last_name || ''} is required.`)
+          return
+        }
+      }
+    }
+
     setSubmitting(true)
     setSubmitError(null)
 
@@ -408,9 +425,9 @@ export default function FormationFormPage() {
           {/* Passport upload */}
           <div className="tf-docs-section">
             <div className="tf-doc-item">
-              <span>{L.passportUpload}</span>
+              <span>{L.passportUpload} <span style={{color:'#dc2626'}}>*</span></span>
               <div className="tf-doc-upload">
-                <span className="tf-doc-missing">{L.uploadRequired}</span>
+                <span className="tf-doc-missing" style={{color: uploadFiles.passport_owner ? '#16a34a' : '#dc2626'}}>{uploadFiles.passport_owner ? (lang === 'it' ? 'Caricato' : 'Uploaded') : (lang === 'it' ? 'Obbligatorio' : 'Required')}</span>
                 <input
                   type="file"
                   accept=".pdf,.jpg,.jpeg,.png"
