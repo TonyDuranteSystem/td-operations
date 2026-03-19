@@ -5,6 +5,7 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
+import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { cookies } from 'next/headers'
 
 export default async function PortalLayout({
@@ -36,8 +37,13 @@ export default async function PortalLayout({
     ?? accounts[0]?.id
     ?? ''
 
+  // Show onboarding wizard on first login
+  const showOnboarding = isClient(user) && !user.user_metadata?.onboarding_completed
+  const userName = user.user_metadata?.full_name || ''
+
   return (
     <Providers>
+      {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
       <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
         <PortalSidebar
           user={user}
