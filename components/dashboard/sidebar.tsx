@@ -16,6 +16,7 @@ import {
   LogOut,
   Menu,
   X,
+  MessagesSquare,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -56,6 +57,7 @@ export function Sidebar({
     { name: 'Services', href: '/services', icon: Cog },
     { name: 'Payments', href: '/payments', icon: CreditCard },
     { name: 'Calendar', href: '/calendar', icon: Calendar },
+    { name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, adminOnly: true },
     // Phase 2+ items gated by feature flags — add here when ready:
     // { name: 'Invoices', href: '/invoices', icon: Receipt, featureFlag: 'FEATURE_INVOICES' },
     // { name: 'Leads', href: '/leads', icon: Users, featureFlag: 'FEATURE_LEADS' },
