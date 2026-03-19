@@ -47,9 +47,19 @@ export async function GET(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, invoice_logo_url, bank_details, payment_link')
+    .select('company_name, invoice_logo_url, bank_details')
     .eq('id', invoice.account_id)
     .single()
+
+  // Get default payment link from payment_links table
+  const { data: defaultLink } = await supabaseAdmin
+    .from('payment_links')
+    .select('url, label')
+    .eq('account_id', invoice.account_id)
+    .eq('is_default', true)
+    .maybeSingle()
+
+  const paymentLinkUrl = defaultLink?.url || null
 
   // Generate PDF
   const pdfDoc = await PDFDocument.create()
@@ -214,11 +224,11 @@ export async function GET(
   }
 
   // Payment link
-  if (account?.payment_link && invoice.status !== 'Paid') {
+  if (paymentLinkUrl && invoice.status !== 'Paid') {
     y -= 20
     page.drawText('Pay online:', { x: 50, y, size: 9, font: helveticaBold, color: blue })
     y -= 14
-    page.drawText(account.payment_link, { x: 50, y, size: 9, font: helvetica, color: blue })
+    page.drawText(paymentLinkUrl, { x: 50, y, size: 9, font: helvetica, color: blue })
   }
 
   // Footer

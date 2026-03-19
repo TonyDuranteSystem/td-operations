@@ -51,10 +51,18 @@ export async function POST(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, bank_details, payment_link')
+    .select('company_name, bank_details')
     .eq('id', invoice.account_id)
     .single()
 
+  const { data: defaultLink } = await supabaseAdmin
+    .from('payment_links')
+    .select('url')
+    .eq('account_id', invoice.account_id)
+    .eq('is_default', true)
+    .maybeSingle()
+
+  const paymentLinkUrl = defaultLink?.url || null
   const companyName = account?.company_name ?? 'Our Company'
   const csym = invoice.currency === 'EUR' ? '\u20AC' : '$'
   const isOverdue = invoice.status === 'Overdue'
@@ -92,8 +100,8 @@ export async function POST(
           <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase; font-weight: bold;">Payment Details</p>
           <p style="margin: 8px 0 0; font-size: 14px; white-space: pre-wrap;">${invoice.message}</p>
         </div>` : ''}
-        ${account?.payment_link ? `<div style="text-align: center; margin-top: 20px;">
-          <a href="${account.payment_link}" style="display: inline-block; padding: 14px 32px; background: ${isOverdue ? '#dc2626' : '#f59e0b'}; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
+        ${paymentLinkUrl ? `<div style="text-align: center; margin-top: 20px;">
+          <a href="${paymentLinkUrl}" style="display: inline-block; padding: 14px 32px; background: ${isOverdue ? '#dc2626' : '#f59e0b'}; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
             Pay Now
           </a>
         </div>` : ''}

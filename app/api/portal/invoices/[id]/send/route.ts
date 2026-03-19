@@ -49,9 +49,19 @@ export async function POST(
   // Get account name for from line
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, bank_details, payment_link')
+    .select('company_name, bank_details')
     .eq('id', invoice.account_id)
     .single()
+
+  // Get default payment link
+  const { data: defaultLink } = await supabaseAdmin
+    .from('payment_links')
+    .select('url')
+    .eq('account_id', invoice.account_id)
+    .eq('is_default', true)
+    .maybeSingle()
+
+  const paymentLinkUrl = defaultLink?.url || null
 
   // Generate PDF inline (call own endpoint)
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
@@ -116,8 +126,8 @@ export async function POST(
           </div>`
         })()}
 
-        ${account?.payment_link ? `<div style="text-align: center; margin-top: 20px;">
-          <a href="${account.payment_link}" style="display: inline-block; padding: 14px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
+        ${paymentLinkUrl ? `<div style="text-align: center; margin-top: 20px;">
+          <a href="${paymentLinkUrl}" style="display: inline-block; padding: 14px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
             Pay Now
           </a>
         </div>` : ''}
