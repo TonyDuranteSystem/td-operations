@@ -35,6 +35,31 @@ async function whopPost(path: string, body: Record<string, unknown>) {
   return res.json()
 }
 
+async function whopPatch(path: string, body: Record<string, unknown>) {
+  const res = await fetch(`${WHOP_API}${path}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${WHOP_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Whop API ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
+async function whopDelete(path: string) {
+  const res = await fetch(`${WHOP_API}${path}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${WHOP_KEY}`, "Content-Type": "application/json" },
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Whop API ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
 function ts(iso: string | null) {
   if (!iso) return ""
   return new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
@@ -223,6 +248,128 @@ export function registerWhopTools(server: McpServer) {
         }
 
         return { content: [{ type: "text" as const, text: out }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `❌ Whop error: ${e.message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // whop_update_product
+  // ═══════════════════════════════════════
+  server.tool(
+    "whop_update_product",
+    "Update a Whop product's title, description, or visibility. Use whop_list_products first to find the product ID. RULE: Product names must match service names (e.g., 'LLC Formation', 'Client Onboarding', 'Tax Return', 'ITIN Application', 'Banking', 'Shipping').",
+    {
+      product_id: z.string().describe("Product ID (e.g., prod_X6mwSZhW9GqPW)"),
+      title: z.string().max(40).optional().describe("New product title (max 40 chars)"),
+      description: z.string().optional().describe("New product description"),
+      visibility: z.enum(["visible", "hidden", "archived"]).optional().describe("Product visibility"),
+    },
+    async ({ product_id, title, description, visibility }) => {
+      try {
+        const body: Record<string, unknown> = {}
+        if (title) body.title = title
+        if (description) body.description = description
+        if (visibility) body.visibility = visibility
+
+        const result = await whopPatch(`/products/${product_id}`, body)
+        const lines = [
+          `✅ Product updated: ${result.title || product_id}`,
+        ]
+        if (title) lines.push(`   Title: ${title}`)
+        if (description) lines.push(`   Description: ${description}`)
+        if (visibility) lines.push(`   Visibility: ${visibility}`)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `❌ Whop error: ${e.message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // whop_update_plan
+  // ═══════════════════════════════════════
+  server.tool(
+    "whop_update_plan",
+    "Update a Whop plan's title, description, visibility, or product assignment. Use whop_list_plans first to find the plan ID. RULE: Plan names must include the service name and client name (e.g., 'Tax Return - Valenzuela', 'Onboarding - Truocchio').",
+    {
+      plan_id: z.string().describe("Plan ID (e.g., plan_GI9CkCBonpCRy)"),
+      title: z.string().optional().describe("New plan title"),
+      description: z.string().optional().describe("New plan description"),
+      product_id: z.string().optional().describe("Move plan to a different product"),
+      visibility: z.enum(["visible", "hidden", "archived"]).optional().describe("Plan visibility"),
+    },
+    async ({ plan_id, title, description, product_id, visibility }) => {
+      try {
+        const body: Record<string, unknown> = {}
+        if (title) body.title = title
+        if (description) body.description = description
+        if (product_id) body.product_id = product_id
+        if (visibility) body.visibility = visibility
+
+        const result = await whopPatch(`/plans/${plan_id}`, body)
+        const lines = [
+          `✅ Plan updated: ${result.title || plan_id}`,
+        ]
+        if (title) lines.push(`   Title: ${title}`)
+        if (product_id) lines.push(`   Moved to product: ${product_id}`)
+        if (visibility) lines.push(`   Visibility: ${visibility}`)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `❌ Whop error: ${e.message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // whop_create_product
+  // ═══════════════════════════════════════
+  server.tool(
+    "whop_create_product",
+    "Create a new Whop product. Products group plans together (e.g., 'Tax Return' product contains all tax return pricing plans). RULE: Product names must match service names.",
+    {
+      title: z.string().max(40).describe("Product title (max 40 chars). Must match a service name."),
+      description: z.string().optional().describe("Product description"),
+      visibility: z.enum(["visible", "hidden"]).optional().describe("Visibility (default: visible)"),
+    },
+    async ({ title, description, visibility }) => {
+      try {
+        const body: Record<string, unknown> = {
+          company_id: COMPANY_ID,
+          title,
+        }
+        if (description) body.description = description
+        if (visibility) body.visibility = visibility
+
+        const result = await whopPost("/products", body)
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Product created: ${result.title}\n   ID: ${result.id}\n   Visibility: ${result.visibility || "visible"}`,
+          }],
+        }
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `❌ Whop error: ${e.message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // whop_delete_product
+  // ═══════════════════════════════════════
+  server.tool(
+    "whop_delete_product",
+    "Delete a Whop product permanently. Only delete products with 0 members. Use whop_list_products first to verify.",
+    {
+      product_id: z.string().describe("Product ID to delete"),
+    },
+    async ({ product_id }) => {
+      try {
+        await whopDelete(`/products/${product_id}`)
+        return { content: [{ type: "text" as const, text: `✅ Product deleted: ${product_id}` }] }
       } catch (e: any) {
         return { content: [{ type: "text" as const, text: `❌ Whop error: ${e.message}` }] }
       }
