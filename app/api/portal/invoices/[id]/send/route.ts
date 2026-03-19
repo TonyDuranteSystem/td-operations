@@ -130,12 +130,28 @@ export async function POST(
   `
 
   try {
+    // Generate PDF for attachment
+    let pdfBase64: string | null = null
+    try {
+      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
+      const pdfRes = await fetch(`${baseUrl}/api/portal/invoices/${id}/pdf`, {
+        headers: { Cookie: request.headers.get('cookie') || '' },
+      })
+      if (pdfRes.ok) {
+        const pdfBuffer = await pdfRes.arrayBuffer()
+        pdfBase64 = Buffer.from(pdfBuffer).toString('base64')
+      }
+    } catch {
+      // PDF generation failed — send without attachment
+    }
+
     // Send via Gmail (as the support account)
     const rawEmail = createRawEmail({
       from: `${companyName} <support@tonydurante.us>`,
       to: customer.email,
       subject,
       html,
+      attachment: pdfBase64 ? { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` } : undefined,
     })
 
     await gmailPost('/messages/send', { raw: rawEmail })
@@ -153,22 +169,41 @@ export async function POST(
   }
 }
 
-function createRawEmail({ from, to, subject, html }: { from: string; to: string; subject: string; html: string }): string {
+function createRawEmail({ from, to, subject, html, attachment }: {
+  from: string; to: string; subject: string; html: string
+  attachment?: { base64: string; filename: string }
+}): string {
   const boundary = `boundary_${Date.now()}`
-  const email = [
+  const contentType = attachment
+    ? `multipart/mixed; boundary="${boundary}"`
+    : `multipart/alternative; boundary="${boundary}"`
+
+  const parts = [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${subject}`,
     `MIME-Version: 1.0`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: ${contentType}`,
     '',
     `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
     Buffer.from(html).toString('base64'),
-    `--${boundary}--`,
-  ].join('\r\n')
+  ]
 
-  return Buffer.from(email).toString('base64url')
+  if (attachment) {
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: application/pdf; name="${attachment.filename}"`,
+      `Content-Disposition: attachment; filename="${attachment.filename}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      attachment.base64,
+    )
+  }
+
+  parts.push(`--${boundary}--`)
+
+  return Buffer.from(parts.join('\r\n')).toString('base64url')
 }
