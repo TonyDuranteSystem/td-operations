@@ -47,7 +47,7 @@ export async function GET(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, invoice_logo_url, bank_details')
+    .select('company_name, invoice_logo_url, bank_details, physical_address, ein_number, state_of_formation')
     .eq('id', invoice.account_id)
     .single()
 
@@ -67,24 +67,6 @@ export async function GET(
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
 
-  // Embed logo if available
-  if (account?.invoice_logo_url) {
-    try {
-      const logoRes = await fetch(account.invoice_logo_url)
-      if (logoRes.ok) {
-        const logoBytes = new Uint8Array(await logoRes.arrayBuffer())
-        const contentType = logoRes.headers.get('content-type') || ''
-        const logoImage = contentType.includes('png')
-          ? await pdfDoc.embedPng(logoBytes)
-          : await pdfDoc.embedJpg(logoBytes)
-        const logoScale = logoImage.scaleToFit(80, 50)
-        page.drawImage(logoImage, { x: 460, y: 775, width: logoScale.width, height: logoScale.height })
-      }
-    } catch {
-      // Logo embed failed silently — continue without it
-    }
-  }
-
   const blue = rgb(0.15, 0.39, 0.92) // #2563eb
   const black = rgb(0, 0, 0)
   const gray = rgb(0.4, 0.4, 0.4)
@@ -94,11 +76,45 @@ export async function GET(
   const csym = invoice.currency === 'EUR' ? '\u20AC' : '$'
 
   let y = 790
+  let companyNameX = 50
 
-  // Header — Company name
+  // Embed logo if available — top left, before company name
+  if (account?.invoice_logo_url) {
+    try {
+      const logoRes = await fetch(account.invoice_logo_url)
+      if (logoRes.ok) {
+        const logoBytes = new Uint8Array(await logoRes.arrayBuffer())
+        const contentType = logoRes.headers.get('content-type') || ''
+        const logoImage = contentType.includes('png')
+          ? await pdfDoc.embedPng(logoBytes)
+          : await pdfDoc.embedJpg(logoBytes)
+        const logoScale = logoImage.scaleToFit(50, 40)
+        page.drawImage(logoImage, { x: 50, y: y - logoScale.height + 20, width: logoScale.width, height: logoScale.height })
+        companyNameX = 50 + logoScale.width + 12 // Shift company name right of logo
+      }
+    } catch {
+      // Logo embed failed silently — continue without it
+    }
+  }
+
+  // Header — Company name (to the right of logo if present)
   page.drawText(account?.company_name ?? 'Invoice', {
-    x: 50, y, size: 20, font: helveticaBold, color: blue,
+    x: companyNameX, y, size: 20, font: helveticaBold, color: blue,
   })
+
+  // Company details under company name
+  let detailY = y - 16
+  if (account?.physical_address) {
+    page.drawText(account.physical_address, { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
+    detailY -= 11
+  }
+  const companyMeta = [
+    account?.state_of_formation && `${account.state_of_formation}`,
+    account?.ein_number && `EIN: ${account.ein_number}`,
+  ].filter(Boolean).join('  |  ')
+  if (companyMeta) {
+    page.drawText(companyMeta, { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
+  }
 
   // Invoice number + status — right side
   page.drawText(`INVOICE`, {
