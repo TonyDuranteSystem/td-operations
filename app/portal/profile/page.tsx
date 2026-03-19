@@ -10,6 +10,7 @@ import Link from 'next/link'
 import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankDetailsForm } from '@/components/portal/bank-details-form'
 import { PaymentSettings } from '@/components/portal/payment-settings'
+import { ProfileEditor } from '@/components/portal/profile-editor'
 
 export default async function PortalProfilePage() {
   const supabase = createClient()
@@ -45,14 +46,17 @@ export default async function PortalProfilePage() {
           <User className="h-5 w-5 text-blue-600" />
           <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.personalInfo', locale)}</h2>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-          <InfoField label="Full Name" value={contact?.full_name ?? '\u2014'} />
-          <InfoField label="Email" value={contact?.email ?? '\u2014'} />
-          <InfoField label="Phone" value={contact?.phone ?? '\u2014'} />
-          <InfoField label="Language" value={contact?.language ?? '\u2014'} />
-          <InfoField label="Citizenship" value={contact?.citizenship ?? '\u2014'} />
-          <InfoField label="Residency" value={contact?.residency ?? '\u2014'} />
-        </div>
+        <ProfileEditor
+          contactId={contactId}
+          initialData={{
+            full_name: contact?.full_name ?? '',
+            email: contact?.email ?? '',
+            phone: contact?.phone ?? '',
+            language: contact?.language ?? '',
+            citizenship: contact?.citizenship ?? '',
+            residency: contact?.residency ?? '',
+          }}
+        />
       </div>
 
       {/* Company Info */}
