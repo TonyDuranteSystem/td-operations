@@ -1,5 +1,4 @@
 import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
@@ -16,11 +15,11 @@ export default async function PortalLayout({
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  // No user — render children without shell (login/forgot-password pages handle their own UI)
   if (!user) {
-    redirect('/portal/login')
+    return <>{children}</>
   }
 
-  // Allow admins through for debugging (they can see the portal)
   // Get contact_id and accounts
   const contactId = getClientContactId(user)
   let accounts = contactId ? await getPortalAccounts(contactId) : []
@@ -30,8 +29,7 @@ export default async function PortalLayout({
     accounts = []
   }
 
-  // Determine selected account (from cookie/sessionStorage or default to first)
-  // Note: sessionStorage is client-side only. For SSR, we use a cookie as fallback.
+  // Determine selected account (from cookie or default to first)
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id
