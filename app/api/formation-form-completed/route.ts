@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
 
       // Find or create Leads/ folder in Shared Drive root
-      const TD_CLIENTS_FOLDER = "1BbJgSIqaR28cQ7VPd8xg1j3bfQ_5EYXX" // TD Clients folder
+      const TD_CLIENTS_FOLDER = "1mbz_bUDwC4K259RcC-tDKihjlvdAVXno" // TD Clients folder on Shared Drive
       const clientsContents = await listFolder(TD_CLIENTS_FOLDER) as { files?: { id: string; name: string; mimeType: string }[] }
       let leadsParent = clientsContents?.files?.find(
         (f: { name: string; mimeType: string }) => f.name === "Leads" && f.mimeType === "application/vnd.google-apps.folder"
