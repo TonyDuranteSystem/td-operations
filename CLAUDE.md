@@ -26,6 +26,13 @@ Four domains point to the same Vercel deployment:
 When Antonio says "portal" or "client portal" → he means the client-facing portal, NOT the CRM dashboard.
 When Antonio says "dashboard" or "CRM" → he means the internal ops dashboard.
 
+### Work Discipline — MANDATORY
+1. **Plan first, build second.** Before writing code, create a complete plan with every step (code, DB, env vars, DNS, testing). Get approval. Then execute in order.
+2. **Finish one thing completely before starting the next.** A feature is NOT done until: code works, env vars are set, DB changes applied, tested, and verified. Never declare "done" with open blockers.
+3. **Group related work.** If a feature needs env vars, DB changes, and code — do all of them together, not scattered across the session.
+4. **Stay on scope.** If working on the portal, don't bring up the CRM dashboard, MCP tools, or other projects unless asked. Focus on what Antonio asked for.
+5. **Be honest about what's actually done vs what's just code pushed.** Code pushed ≠ feature working. A feature works when Antonio can use it.
+
 **Rules**:
 - All client-facing URLs MUST use `APP_BASE_URL` from `lib/config.ts` — NEVER hardcode domains
 - The `.husky/pre-push` hook blocks hardcoded domains — only `lib/config.ts` is exempt
