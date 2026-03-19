@@ -49,7 +49,7 @@ export async function POST(
   // Get account name for from line
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name')
+    .select('company_name, bank_details, payment_link')
     .eq('id', invoice.account_id)
     .single()
 
@@ -96,6 +96,30 @@ export async function POST(
         ${invoice.message ? `<div style="background: #f8fafc; padding: 16px; border-radius: 8px; margin-top: 16px;">
           <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase; font-weight: bold;">Payment Terms</p>
           <p style="margin: 8px 0 0; font-size: 14px; white-space: pre-wrap;">${invoice.message}</p>
+        </div>` : ''}
+
+        ${(() => {
+          const bd = account?.bank_details as Record<string, string> | null
+          if (!bd || !Object.values(bd).some(v => v)) return ''
+          const fields = [
+            bd.account_holder && `Account Holder: ${bd.account_holder}`,
+            bd.bank_name && `Bank: ${bd.bank_name}`,
+            bd.iban && `IBAN: ${bd.iban}`,
+            bd.swift_bic && `SWIFT/BIC: ${bd.swift_bic}`,
+            bd.account_number && `Account: ${bd.account_number}`,
+            bd.routing_number && `Routing: ${bd.routing_number}`,
+            bd.notes && bd.notes,
+          ].filter(Boolean).join('<br/>')
+          return `<div style="background: #f0fdf4; padding: 16px; border-radius: 8px; margin-top: 16px; border: 1px solid #bbf7d0;">
+            <p style="margin: 0; font-size: 12px; color: #15803d; text-transform: uppercase; font-weight: bold;">Bank Details</p>
+            <p style="margin: 8px 0 0; font-size: 13px; color: #166534;">${fields}</p>
+          </div>`
+        })()}
+
+        ${account?.payment_link ? `<div style="text-align: center; margin-top: 20px;">
+          <a href="${account.payment_link}" style="display: inline-block; padding: 14px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
+            Pay Now
+          </a>
         </div>` : ''}
 
         <p style="color: #6b7280; font-size: 13px; margin-top: 24px;">

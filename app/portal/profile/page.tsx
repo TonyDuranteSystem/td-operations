@@ -4,9 +4,11 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getPortalAccounts, getPortalAccountDetail } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
-import { User, Building2 } from 'lucide-react'
+import { User, Building2, Landmark, CreditCard } from 'lucide-react'
 import Link from 'next/link'
 import { LogoUpload } from '@/components/portal/logo-upload'
+import { BankDetailsForm } from '@/components/portal/bank-details-form'
+import { PaymentSettings } from '@/components/portal/payment-settings'
 
 export default async function PortalProfilePage() {
   const supabase = createClient()
@@ -82,6 +84,32 @@ export default async function PortalProfilePage() {
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Invoice Logo</h2>
           </div>
           <LogoUpload accountId={selectedAccountId} currentUrl={(account as Record<string, unknown>).invoice_logo_url as string | null} />
+        </div>
+      )}
+
+      {/* Bank Details */}
+      {account && selectedAccountId && (
+        <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <Landmark className="h-5 w-5 text-blue-600" />
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Bank Details</h2>
+          </div>
+          <BankDetailsForm accountId={selectedAccountId} initialData={(account as Record<string, unknown>).bank_details as Record<string, string> | null} />
+        </div>
+      )}
+
+      {/* Payment Gateway */}
+      {account && selectedAccountId && (
+        <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <CreditCard className="h-5 w-5 text-blue-600" />
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Payment Gateway</h2>
+          </div>
+          <PaymentSettings
+            accountId={selectedAccountId}
+            currentGateway={(account as Record<string, unknown>).payment_gateway as string | null}
+            currentLink={(account as Record<string, unknown>).payment_link as string | null}
+          />
         </div>
       )}
 

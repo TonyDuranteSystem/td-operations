@@ -51,7 +51,7 @@ export async function POST(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name')
+    .select('company_name, bank_details, payment_link')
     .eq('id', invoice.account_id)
     .single()
 
@@ -92,6 +92,12 @@ export async function POST(
           <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase; font-weight: bold;">Payment Details</p>
           <p style="margin: 8px 0 0; font-size: 14px; white-space: pre-wrap;">${invoice.message}</p>
         </div>` : ''}
+        ${account?.payment_link ? `<div style="text-align: center; margin-top: 20px;">
+          <a href="${account.payment_link}" style="display: inline-block; padding: 14px 32px; background: ${isOverdue ? '#dc2626' : '#f59e0b'}; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
+            Pay Now
+          </a>
+        </div>` : ''}
+
         <p style="color: #6b7280; font-size: 13px; margin-top: 24px;">
           If you have already sent payment, please disregard this reminder. For questions, reply to this email.
         </p>

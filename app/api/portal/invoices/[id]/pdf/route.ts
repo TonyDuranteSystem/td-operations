@@ -47,7 +47,7 @@ export async function GET(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name, invoice_logo_url')
+    .select('company_name, invoice_logo_url, bank_details, payment_link')
     .eq('id', invoice.account_id)
     .single()
 
@@ -185,6 +185,40 @@ export async function GET(
       }
     }
     if (line) page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
+  }
+
+  // Bank details
+  const bankDetails = account?.bank_details as Record<string, string> | null
+  if (bankDetails && Object.values(bankDetails).some(v => v)) {
+    y -= 30
+    page.drawText('Bank Details', { x: 50, y, size: 9, font: helveticaBold, color: gray })
+    y -= 14
+    const bankFields = [
+      ['Account Holder', bankDetails.account_holder],
+      ['Bank', bankDetails.bank_name],
+      ['IBAN', bankDetails.iban],
+      ['SWIFT/BIC', bankDetails.swift_bic],
+      ['Account No.', bankDetails.account_number],
+      ['Routing No.', bankDetails.routing_number],
+    ]
+    for (const [label, value] of bankFields) {
+      if (value) {
+        page.drawText(`${label}: ${value}`, { x: 50, y, size: 8, font: helvetica, color: black })
+        y -= 12
+      }
+    }
+    if (bankDetails.notes) {
+      page.drawText(bankDetails.notes, { x: 50, y, size: 8, font: helvetica, color: gray })
+      y -= 12
+    }
+  }
+
+  // Payment link
+  if (account?.payment_link && invoice.status !== 'Paid') {
+    y -= 20
+    page.drawText('Pay online:', { x: 50, y, size: 9, font: helveticaBold, color: blue })
+    y -= 14
+    page.drawText(account.payment_link, { x: 50, y, size: 9, font: helvetica, color: blue })
   }
 
   // Footer
