@@ -194,39 +194,29 @@ export function BankAccounts({ accountId }: { accountId: string }) {
               className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
 
-          {/* Show relevant fields based on currency */}
-          {currency === 'EUR' ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-zinc-600 mb-1">{t('bank.iban')}</label>
-                <input type="text" value={iban} onChange={e => setIban(e.target.value)} placeholder="DE89 3704 0044 0532 0130 00"
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="block text-xs text-zinc-600 mb-1">{t('bank.swiftBic')}</label>
-                <input type="text" value={swift} onChange={e => setSwift(e.target.value)} placeholder="COBADEFFXXX"
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
+          {/* All bank fields — client fills what's relevant */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-zinc-600 mb-1">{t('bank.iban')}</label>
+              <input type="text" value={iban} onChange={e => setIban(e.target.value)} placeholder="DE89 3704 0044 0532 0130 00"
+                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-zinc-600 mb-1">{t('bank.accountNumber')}</label>
-                <input type="text" value={accNum} onChange={e => setAccNum(e.target.value)} placeholder="987654321"
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="block text-xs text-zinc-600 mb-1">{t('bank.routingNumber')}</label>
-                <input type="text" value={routing} onChange={e => setRouting(e.target.value)} placeholder="021000021"
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="block text-xs text-zinc-600 mb-1">{t('bank.swiftBic')} (optional)</label>
-                <input type="text" value={swift} onChange={e => setSwift(e.target.value)} placeholder="CHASUS33"
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
+            <div>
+              <label className="block text-xs text-zinc-600 mb-1">{t('bank.swiftBic')}</label>
+              <input type="text" value={swift} onChange={e => setSwift(e.target.value)} placeholder="COBADEFFXXX"
+                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
-          )}
+            <div>
+              <label className="block text-xs text-zinc-600 mb-1">{t('bank.accountNumber')}</label>
+              <input type="text" value={accNum} onChange={e => setAccNum(e.target.value)} placeholder="987654321"
+                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-600 mb-1">{t('bank.routingNumber')}</label>
+              <input type="text" value={routing} onChange={e => setRouting(e.target.value)} placeholder="021000021"
+                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
 
           <div>
             <label className="block text-xs text-zinc-600 mb-1">{t('bank.notes')}</label>
