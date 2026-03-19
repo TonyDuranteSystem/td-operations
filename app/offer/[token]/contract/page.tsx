@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 import StandaloneServiceAgreement from './standalone-service-agreement'
 import ServiceAgreement from './service-agreement'
+import { ensureBankDetails, type BankDetails } from './bank-defaults'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -79,7 +80,13 @@ interface FormData {
   passport_exp: string
 }
 
-function CheckoutPreview({ offer, cl, hasCard, hasBank, token }: { offer: Offer; cl: typeof CL['en']; hasCard: boolean; hasBank: boolean; token: string }) {
+function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { offer: Offer; cl: typeof CL['en']; hasCard: boolean; hasBank: boolean; token: string }) {
+  // Ensure real bank details (replace placeholders with EUR/USD defaults)
+  const offer = useMemo(() => {
+    if (!rawOffer.bank_details) return rawOffer
+    const fixed = ensureBankDetails(rawOffer.bank_details as BankDetails, rawOffer.cost_summary as unknown[])
+    return { ...rawOffer, bank_details: fixed }
+  }, [rawOffer])
   const [showBank, setShowBank] = useState(false)
   const receiptInputRef = useRef<HTMLInputElement>(null)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)

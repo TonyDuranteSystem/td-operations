@@ -310,9 +310,13 @@ export default function ServiceAgreement({ offer, token }: Props) {
         console.warn('[service-agreement] Failed to notify offer-signed webhook:', e)
       }
 
-      // Post-sign: show payment options
+      // Post-sign: show payment options — ensure real bank details (replace placeholders)
+      const { ensureBankDetails } = await import('./bank-defaults')
+      const bankDetails = offer.bank_details
+        ? ensureBankDetails(offer.bank_details as Record<string, string>, offer.cost_summary as unknown[])
+        : null
       const hasCard = offer.payment_links && offer.payment_links.length > 0
-      const hasBank = !!offer.bank_details
+      const hasBank = !!bankDetails
       const successEl = document.getElementById('success-state-svc')
 
       if ((hasCard || hasBank) && successEl && contractBodyRef.current) {
@@ -340,13 +344,13 @@ export default function ServiceAgreement({ offer, token }: Props) {
           sh += `<button id="choose-bank" class="ps-choice-btn ps-choice-bank" type="button">`
           sh += `<span class="ps-choice-icon">&#127974;</span>`
           sh += `<span class="ps-choice-label">${cl.payByTransfer}</span>`
-          sh += `<span class="ps-choice-price">${esc(offer.bank_details!.amount || '')}</span>`
+          sh += `<span class="ps-choice-price">${esc(bankDetails!.amount || '')}</span>`
           sh += '</button>'
         }
         sh += '</div>'
 
         if (hasBank) {
-          const b = offer.bank_details!
+          const b = bankDetails!
           sh += '<div id="bank-panel" style="display:none;">'
           sh += `<div class="post-sign-option">`
           sh += `<div class="post-sign-option-label">&#127974; ${cl.payByTransfer}</div>`
