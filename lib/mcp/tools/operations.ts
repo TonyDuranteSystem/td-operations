@@ -214,7 +214,57 @@ export function registerOperationsTools(server: McpServer) {
           details: { task_title, assigned_to, priority: priority || "Normal", category },
         })
 
-        return { content: [{ type: "text" as const, text: `✅ Task created: ${data.task_title}\nAssigned: ${data.assigned_to} | Priority: ${data.priority} | Due: ${data.due_date || "—"}\nID: ${data.id}` }] }
+        // ─── Send email notification to assignee ───
+        const ASSIGNEE_EMAILS: Record<string, string> = {
+          "Luca": "support@tonydurante.us",
+          "Antonio": "antonio.durante@tonydurante.us",
+          "Claude": "", // no self-notification
+        }
+        const assigneeEmail = ASSIGNEE_EMAILS[assigned_to]
+        if (assigneeEmail) {
+          try {
+            const { gmailPost } = await import("@/lib/gmail")
+            const taskPriority = priority || "Normal"
+            const priorityIcon = taskPriority === "Urgent" ? "🔴" : taskPriority === "High" ? "🟠" : "🔵"
+
+            // Get company name if account_id provided
+            let companyName = ""
+            if (account_id) {
+              const { data: acc } = await supabaseAdmin.from("accounts").select("company_name").eq("id", account_id).single()
+              if (acc) companyName = acc.company_name
+            }
+
+            const subject = `${priorityIcon} New Task: ${task_title}${companyName ? ` — ${companyName}` : ""}`
+            const body = [
+              `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">`,
+              `<h2 style="margin:0 0 12px;color:#1e3a5f">${priorityIcon} ${task_title}</h2>`,
+              companyName ? `<p><strong>Client:</strong> ${companyName}</p>` : "",
+              `<p><strong>Assigned to:</strong> ${assigned_to}</p>`,
+              `<p><strong>Priority:</strong> ${taskPriority}</p>`,
+              due_date ? `<p><strong>Due:</strong> ${due_date}</p>` : "",
+              category ? `<p><strong>Category:</strong> ${category}</p>` : "",
+              description ? `<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/><p>${description.replace(/\n/g, "<br/>")}</p>` : "",
+              `<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>`,
+              `<p style="font-size:12px;color:#6b7280">Task ID: ${data.id}<br/>View in CRM: <a href="${process.env.NEXT_PUBLIC_APP_URL || ""}/tasks">Task Board</a></p>`,
+              `</div>`,
+            ].filter(Boolean).join("\n")
+
+            const raw = Buffer.from(
+              `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
+              `To: ${assigneeEmail}\r\n` +
+              `Subject: ${subject}\r\n` +
+              `MIME-Version: 1.0\r\n` +
+              `Content-Type: text/html; charset=utf-8\r\n\r\n` +
+              body
+            ).toString("base64url")
+
+            await gmailPost("/messages/send", { raw })
+          } catch {
+            // Email notification failure is non-blocking
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: `✅ Task created: ${data.task_title}\nAssigned: ${data.assigned_to} | Priority: ${data.priority} | Due: ${data.due_date || "—"}\nID: ${data.id}${assigneeEmail ? `\n📧 Notification sent to ${assigneeEmail}` : ""}` }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
