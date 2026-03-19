@@ -289,6 +289,15 @@ export default function FormationFormPage() {
 
       if (subErr) throw new Error(subErr.message)
 
+      // Trigger auto-chain (non-blocking)
+      try {
+        await fetch('/api/formation-form-completed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ submission_id: submission.id, token: submission.token }),
+        })
+      } catch { /* non-blocking */ }
+
       setSubmitted(true)
       setSubmission(prev => prev ? { ...prev, status: 'completed', completed_at: new Date().toISOString() } : null)
     } catch (err) {
