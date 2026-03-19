@@ -2,7 +2,9 @@ import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
+import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
+import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
@@ -40,16 +42,18 @@ export default async function PortalLayout({
   // Show onboarding wizard on first login
   const showOnboarding = isClient(user) && !user.user_metadata?.onboarding_completed
   const userName = user.user_metadata?.full_name || ''
+  const locale = getLocale(user)
 
   return (
     <Providers>
-      {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
-      <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
-        <PortalSidebar
-          user={user}
-          accounts={accounts}
-          selectedAccountId={selectedAccountId}
-        />
+      <LocaleProvider locale={locale}>
+        {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
+        <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
+          <PortalSidebar
+            user={user}
+            accounts={accounts}
+            selectedAccountId={selectedAccountId}
+          />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />
           {/* Notification bell - top right on desktop */}
@@ -60,7 +64,8 @@ export default async function PortalLayout({
           )}
           {children}
         </main>
-      </div>
+        </div>
+      </LocaleProvider>
     </Providers>
   )
 }

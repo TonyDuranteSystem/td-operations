@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
 import type { PortalAccount } from '@/lib/types'
 
@@ -28,20 +29,21 @@ interface PortalSidebarProps {
   selectedAccountId: string
 }
 
-const navigation = [
-  { name: 'Dashboard', href: '/portal', icon: LayoutDashboard },
-  { name: 'Documents', href: '/portal/documents', icon: FileText },
-  { name: 'Invoices', href: '/portal/invoices', icon: Receipt },
-  { name: 'Tax Documents', href: '/portal/tax-documents', icon: Upload },
-  { name: 'Services', href: '/portal/services', icon: Activity },
-  { name: 'Chat', href: '/portal/chat', icon: MessageCircle },
-  { name: 'Guide', href: '/portal/guide', icon: BookOpen },
+const navItems = [
+  { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
+  { key: 'nav.documents', href: '/portal/documents', icon: FileText },
+  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt },
+  { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload },
+  { key: 'nav.services', href: '/portal/services', icon: Activity },
+  { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
 ]
 
 export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const { t } = useLocale()
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -64,7 +66,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
         </button>
         <div className="ml-3 flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center">TD</div>
-          <span className="font-semibold text-sm">Portal</span>
+          <span className="font-semibold text-sm">{t('nav.portal')}</span>
         </div>
       </div>
 
@@ -87,7 +89,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
         <div className="flex items-center justify-between h-16 px-5 border-b">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-blue-600 text-white text-sm font-bold flex items-center justify-center">TD</div>
-            <span className="font-semibold text-zinc-900">Portal</span>
+            <span className="font-semibold text-zinc-900">{t('nav.portal')}</span>
           </div>
           <button
             onClick={() => setMobileOpen(false)}
@@ -109,7 +111,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {navigation.map((item) => {
+          {navItems.map((item) => {
             const isActive = item.href === '/portal'
               ? pathname === '/portal'
               : pathname.startsWith(item.href)
@@ -126,7 +128,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
                 )}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                {item.name}
+                {t(item.key)}
               </Link>
             )
           })}
@@ -146,7 +148,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
             className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-600 hover:bg-zinc-50 hover:text-red-600 transition-colors w-full"
           >
             <LogOut className="h-4 w-4" />
-            Sign Out
+            {t('nav.signOut')}
           </button>
         </div>
       </aside>
