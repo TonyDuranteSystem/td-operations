@@ -4,6 +4,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalServices } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
+import { t, getLocale } from '@/lib/portal/i18n'
 import { Activity, CheckCircle2, AlertCircle, Clock, Cog } from 'lucide-react'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -34,6 +35,7 @@ export default async function PortalServicesPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
   if (!selectedAccountId) redirect('/portal')
 
+  const locale = getLocale(user)
   const services = await getPortalServices(selectedAccountId)
   const active = services.filter(s => s.status !== 'Completed')
   const completed = services.filter(s => s.status === 'Completed')
@@ -41,15 +43,15 @@ export default async function PortalServicesPage() {
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Services</h1>
-        <p className="text-zinc-500 text-sm mt-1">Track the status of your active services</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('services.title', locale)}</h1>
+        <p className="text-zinc-500 text-sm mt-1">{t('services.subtitle', locale)}</p>
       </div>
 
       {services.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <Cog className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-zinc-900 mb-1">No services</h3>
-          <p className="text-sm text-zinc-500">Your active services will appear here.</p>
+          <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('services.noServices', locale)}</h3>
+          <p className="text-sm text-zinc-500">{t('services.noServicesDesc', locale)}</p>
         </div>
       ) : (
         <div className="space-y-6">

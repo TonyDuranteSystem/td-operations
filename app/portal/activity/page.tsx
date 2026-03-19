@@ -5,6 +5,7 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
+import { t, getLocale } from '@/lib/portal/i18n'
 import { format, parseISO } from 'date-fns'
 import { FileText, Activity as ActivityIcon, CreditCard, Calendar, MessageCircle, CheckCircle2 } from 'lucide-react'
 
@@ -48,6 +49,7 @@ export default async function PortalActivityPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
   if (!selectedAccountId) redirect('/portal')
 
+  const locale = getLocale(user)
   // Aggregate activity from multiple sources
   const activities: ActivityItem[] = []
 
@@ -88,7 +90,7 @@ export default async function PortalActivityPage() {
   return (
     <div className="p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Activity</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('activity.title', locale)}</h1>
         <p className="text-zinc-500 text-sm mt-1">Recent activity on your account</p>
       </div>
 

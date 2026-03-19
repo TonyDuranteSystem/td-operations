@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getPortalAccounts, getPortalAccountDetail } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { User, Building2, Landmark, CreditCard } from 'lucide-react'
+import { t, getLocale } from '@/lib/portal/i18n'
 import Link from 'next/link'
 import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankDetailsForm } from '@/components/portal/bank-details-form'
@@ -29,19 +30,20 @@ export default async function PortalProfilePage() {
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
   const account = selectedAccountId ? await getPortalAccountDetail(selectedAccountId) : null
+  const locale = getLocale(user)
 
   return (
     <div className="p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Profile</h1>
-        <p className="text-zinc-500 text-sm mt-1">Your personal and company information</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('profile.title', locale)}</h1>
+        <p className="text-zinc-500 text-sm mt-1">{t('profile.subtitle', locale)}</p>
       </div>
 
       {/* Personal Info */}
       <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
         <div className="flex items-center gap-2">
           <User className="h-5 w-5 text-blue-600" />
-          <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Personal Information</h2>
+          <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.personalInfo', locale)}</h2>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           <InfoField label="Full Name" value={contact?.full_name ?? '\u2014'} />
@@ -58,7 +60,7 @@ export default async function PortalProfilePage() {
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Building2 className="h-5 w-5 text-blue-600" />
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Company Information</h2>
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.companyInfo', locale)}</h2>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <InfoField label="Company Name" value={account.company_name ?? '\u2014'} />
@@ -124,7 +126,7 @@ export default async function PortalProfilePage() {
       </div>
 
       <p className="text-xs text-zinc-400">
-        To update your information, please contact the Tony Durante team via the Chat section.
+        {t('profile.contactTeam', locale)}
       </p>
     </div>
   )

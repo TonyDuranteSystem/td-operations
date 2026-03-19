@@ -4,6 +4,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns } from '@/lib/portal/queries'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, AlertCircle, CheckCircle2, CreditCard } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
@@ -86,6 +87,7 @@ export default async function PortalDashboardPage() {
     )
   }
 
+  const locale = getLocale(user)
   const today = new Date().toISOString().split('T')[0]
   const activeServices = services.filter(s => s.status !== 'Completed')
   const completedServices = services.filter(s => s.status === 'Completed')
@@ -104,7 +106,7 @@ export default async function PortalDashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Company Info Card */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Company Info</h2>
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.companyInfo', locale)}</h2>
           <div className="space-y-2.5 text-sm">
             <InfoRow icon={Building2} label="Entity Type" value={account.entity_type ?? '\u2014'} />
             <InfoRow icon={MapPin} label="State" value={account.state_of_formation ?? '\u2014'} />
@@ -119,12 +121,12 @@ export default async function PortalDashboardPage() {
         {/* Active Services Card */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
-            Active Services ({activeServices.length})
+            {t('dashboard.activeServices', locale)} ({activeServices.length})
           </h2>
           {activeServices.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
               <CheckCircle2 className="h-8 w-8 mb-2" />
-              <p className="text-sm">No active services</p>
+              <p className="text-sm">{t('dashboard.noServices', locale)}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -140,7 +142,7 @@ export default async function PortalDashboardPage() {
                   {s.current_step != null && s.total_steps != null && (
                     <div className="mt-2">
                       <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
-                        <span>Progress</span>
+                        <span>{t('dashboard.progress', locale)}</span>
                         <span>{s.current_step}/{s.total_steps}</span>
                       </div>
                       <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
@@ -162,11 +164,11 @@ export default async function PortalDashboardPage() {
 
         {/* Upcoming Deadlines */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Upcoming Deadlines</h2>
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.upcomingDeadlines', locale)}</h2>
           {deadlines.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
               <Calendar className="h-8 w-8 mb-2" />
-              <p className="text-sm">No upcoming deadlines</p>
+              <p className="text-sm">{t('dashboard.noDeadlines', locale)}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -195,11 +197,11 @@ export default async function PortalDashboardPage() {
 
         {/* Payment History */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Payment History</h2>
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.paymentHistory', locale)}</h2>
           {payments.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
               <CreditCard className="h-8 w-8 mb-2" />
-              <p className="text-sm">No payments recorded</p>
+              <p className="text-sm">{t('dashboard.noPayments', locale)}</p>
             </div>
           ) : (
             <div className="space-y-1.5">
@@ -224,7 +226,7 @@ export default async function PortalDashboardPage() {
         {/* Tax Returns */}
         {taxReturns.length > 0 && (
           <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
-            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Tax Returns</h2>
+            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.taxReturns', locale)}</h2>
             <div className="space-y-2">
               {taxReturns.map(tr => (
                 <div key={tr.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">

@@ -5,6 +5,7 @@ import { getPortalAccounts, getPortalTaxReturns } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { FileText, Upload } from 'lucide-react'
+import { t, getLocale } from '@/lib/portal/i18n'
 import { TaxDocumentUpload } from '@/components/portal/tax-document-upload'
 import { format, parseISO } from 'date-fns'
 
@@ -37,11 +38,13 @@ export default async function TaxDocumentsPage() {
     .order('created_at', { ascending: false })
     .limit(50)
 
+  const locale = getLocale(user)
+
   return (
     <div className="p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Tax Documents</h1>
-        <p className="text-zinc-500 text-sm mt-1">Upload receipts, bank statements, and income records for your tax return.</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('taxDocs.title', locale)}</h1>
+        <p className="text-zinc-500 text-sm mt-1">{t('taxDocs.subtitle', locale)}</p>
       </div>
 
       {/* Upload Section */}
@@ -49,11 +52,11 @@ export default async function TaxDocumentsPage() {
 
       {/* Previously Uploaded */}
       <div className="bg-white rounded-xl border shadow-sm p-6">
-        <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide mb-4">Previously Uploaded</h2>
+        <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide mb-4">{t('taxDocs.previouslyUploaded', locale)}</h2>
         {(!uploadedDocs || uploadedDocs.length === 0) ? (
           <div className="text-center py-8">
             <FileText className="h-10 w-10 text-zinc-200 mx-auto mb-2" />
-            <p className="text-sm text-zinc-400">No tax documents uploaded yet.</p>
+            <p className="text-sm text-zinc-400">{t('taxDocs.noUploads', locale)}</p>
           </div>
         ) : (
           <div className="space-y-2">
