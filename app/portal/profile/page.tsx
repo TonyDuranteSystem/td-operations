@@ -6,6 +6,7 @@ import { getPortalAccounts, getPortalAccountDetail } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { User, Building2 } from 'lucide-react'
 import Link from 'next/link'
+import { LogoUpload } from '@/components/portal/logo-upload'
 
 export default async function PortalProfilePage() {
   const supabase = createClient()
@@ -70,6 +71,17 @@ export default async function PortalProfilePage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Company Logo */}
+      {account && selectedAccountId && (
+        <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <Building2 className="h-5 w-5 text-blue-600" />
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Invoice Logo</h2>
+          </div>
+          <LogoUpload accountId={selectedAccountId} currentUrl={(account as Record<string, unknown>).invoice_logo_url as string | null} />
         </div>
       )}
 

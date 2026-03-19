@@ -47,7 +47,7 @@ export async function GET(
 
   const { data: account } = await supabaseAdmin
     .from('accounts')
-    .select('company_name')
+    .select('company_name, invoice_logo_url')
     .eq('id', invoice.account_id)
     .single()
 
@@ -56,6 +56,24 @@ export async function GET(
   const page = pdfDoc.addPage([595, 842]) // A4
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+
+  // Embed logo if available
+  if (account?.invoice_logo_url) {
+    try {
+      const logoRes = await fetch(account.invoice_logo_url)
+      if (logoRes.ok) {
+        const logoBytes = new Uint8Array(await logoRes.arrayBuffer())
+        const contentType = logoRes.headers.get('content-type') || ''
+        const logoImage = contentType.includes('png')
+          ? await pdfDoc.embedPng(logoBytes)
+          : await pdfDoc.embedJpg(logoBytes)
+        const logoScale = logoImage.scaleToFit(80, 50)
+        page.drawImage(logoImage, { x: 460, y: 775, width: logoScale.width, height: logoScale.height })
+      }
+    } catch {
+      // Logo embed failed silently — continue without it
+    }
+  }
 
   const blue = rgb(0.15, 0.39, 0.92) // #2563eb
   const black = rgb(0, 0, 0)
