@@ -35,8 +35,8 @@ export default function EditInvoicePage() {
       if (!res.ok) { setLoading(false); return }
       const data = await res.json()
 
-      // Only Draft invoices can be edited
-      if (data.status !== 'Draft') { setLoading(false); return }
+      // Only Draft, Sent, Overdue invoices can be edited
+      if (!['Draft', 'Sent', 'Overdue'].includes(data.status)) { setLoading(false); return }
 
       // Fetch customers for dropdown
       const custRes = await fetch(`/api/portal/invoices/customers?account_id=${data.account_id}`)
@@ -79,7 +79,7 @@ export default function EditInvoicePage() {
   if (!invoice) {
     return (
       <div className="p-8 text-center">
-        <p className="text-zinc-500">Invoice not found or cannot be edited (only Draft invoices can be edited).</p>
+        <p className="text-zinc-500">Invoice not found or cannot be edited (Paid and Cancelled invoices cannot be edited).</p>
         <Link href="/portal/invoices" className="text-sm text-blue-600 hover:underline mt-2 inline-block">Back to invoices</Link>
       </div>
     )

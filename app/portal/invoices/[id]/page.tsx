@@ -198,7 +198,7 @@ export default function InvoiceDetailPage() {
 
         {/* Actions */}
         <div className="flex gap-2 flex-wrap">
-          {invoice.status === 'Draft' && (
+          {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
             <Link
               href={`/portal/invoices/${invoiceId}/edit`}
               className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
