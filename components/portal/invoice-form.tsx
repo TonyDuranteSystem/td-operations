@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Plus, Trash2, ArrowLeft, Loader2, Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { createInvoice, updateInvoice, createCustomer } from '@/app/portal/invoices/actions'
+import { useLocale } from '@/lib/portal/use-locale'
 import Link from 'next/link'
 
 interface Customer {
@@ -50,6 +51,7 @@ interface InvoiceFormProps {
 export function InvoiceForm({ accountId, customers, templates, mode, initialData }: InvoiceFormProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  const { t } = useLocale()
 
   // Customer
   const [customerId, setCustomerId] = useState(initialData?.customerId ?? '')
@@ -190,7 +192,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-          {mode === 'create' ? 'New Invoice' : 'Edit Invoice'}
+          {mode === 'create' ? t('invoices.newInvoice') : t('invoices.editInvoice')}
         </h1>
       </div>
 
@@ -222,7 +224,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         {/* Customer + Currency Row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1.5">Customer *</label>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.customer')} *</label>
             {showNewCustomer ? (
               <div className="space-y-2">
                 <input
@@ -264,7 +266,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1.5">Currency</label>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.currency')}</label>
             <select
               value={currency}
               onChange={e => setCurrency(e.target.value as 'USD' | 'EUR')}
@@ -279,7 +281,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         {/* Dates */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1.5">Issue Date</label>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.issueDate')}</label>
             <input
               type="date"
               value={issueDate}
@@ -288,7 +290,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1.5">Due Date</label>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.dueDate')}</label>
             <input
               type="date"
               value={dueDate}
@@ -301,16 +303,16 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         {/* Recurring */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1.5">Recurring</label>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.recurring')}</label>
             <select
               value={recurringFrequency}
               onChange={e => setRecurringFrequency(e.target.value)}
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">One-time</option>
-              <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
-              <option value="yearly">Yearly</option>
+              <option value="">{t('invoices.oneTime')}</option>
+              <option value="monthly">{t('invoices.monthly')}</option>
+              <option value="quarterly">{t('invoices.quarterly')}</option>
+              <option value="yearly">{t('invoices.yearly')}</option>
             </select>
           </div>
           {recurringFrequency && (
@@ -329,7 +331,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
 
         {/* Line Items */}
         <div>
-          <label className="block text-sm font-medium text-zinc-700 mb-3">Line Items</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-3">{t('invoices.lineItems')}</label>
           <div className="space-y-2">
             {/* Header */}
             <div className="hidden sm:grid sm:grid-cols-[1fr,80px,100px,100px,40px] gap-2 text-xs font-medium text-zinc-500 uppercase px-1">
@@ -385,7 +387,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             className="mt-3 flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700"
           >
             <Plus className="h-4 w-4" />
-            Add item
+            {t('invoices.addItem')}
           </button>
         </div>
 
@@ -393,11 +395,11 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         <div className="flex justify-end">
           <div className="w-64 space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-zinc-500">Subtotal</span>
+              <span className="text-zinc-500">{t('invoices.subtotal')}</span>
               <span className="font-medium">{currencySymbol}{subtotal.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-zinc-500">Discount</span>
+              <span className="text-zinc-500">{t('invoices.discount')}</span>
               <input
                 type="number"
                 value={discount}
@@ -408,7 +410,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               />
             </div>
             <div className="flex justify-between pt-2 border-t font-semibold text-base">
-              <span>Total</span>
+              <span>{t('invoices.total')}</span>
               <span>{currencySymbol}{total.toFixed(2)}</span>
             </div>
           </div>
@@ -416,7 +418,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
 
         {/* Message */}
         <div>
-          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Message (appears on invoice)</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.message')}</label>
           <textarea
             value={message}
             onChange={e => setMessage(e.target.value)}
@@ -428,7 +430,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
 
         {/* Notes (internal) */}
         <div>
-          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Internal Notes</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.internalNotes')}</label>
           <textarea
             value={notes}
             onChange={e => setNotes(e.target.value)}
@@ -453,7 +455,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           className="flex items-center gap-2 px-6 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
         >
           {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          {mode === 'create' ? 'Create Invoice' : 'Save Changes'}
+          {mode === 'create' ? t('invoices.create') : t('invoices.save')}
         </button>
       </div>
     </form>
