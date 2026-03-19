@@ -362,16 +362,70 @@ export function parseWiseCSV(csvContent: string, fileName: string): ParseResult 
 // ─── PDF Parser (Fallback) ──────────────────────────────────
 
 /**
+ * Split two concatenated Italian-format numbers on a single line.
+ * pdf-parse extracts Wise PDF tables with amounts concatenated, e.g.:
+ *   "999,005.037,81"  → [999.00, 5037.81]    (incoming: amount, balance)
+ *   "-3.531,000,07"   → [-3531.00, 0.07]     (outgoing: -amount, balance)
+ *   "-5,555.032,26"   → [-5.55, 5032.26]     (fee: -amount, balance)
+ *   "82,531.676,53"   → [82.53, 1676.53]     (conversion credit)
+ *
+ * Italian numbers always end with ,DD (comma + 2 decimal digits).
+ * Strategy: find the first ,DD boundary that splits into two valid numbers.
+ */
+function splitConcatenatedAmounts(raw: string): { amount: number; balance: number } | null {
+  const s = raw.trim()
+  if (!s) return null
+
+  // Try splitting at each ,DD position
+  // Italian number: optional minus, digits (with optional . thousand separators), comma, 2 digits
+  const re = /,\d{2}/g
+  let match: RegExpExecArray | null
+  const positions: number[] = []
+  while ((match = re.exec(s)) !== null) {
+    positions.push(match.index + 3) // position after ,DD
+  }
+
+  // Try each split point — first valid split wins
+  for (const pos of positions) {
+    if (pos >= s.length) continue // ,DD is at the very end — that would leave no balance
+    const left = s.substring(0, pos)
+    const right = s.substring(pos)
+
+    // Both parts must be valid Italian numbers
+    const leftNum = parseItalianNumber(left)
+    const rightNum = parseItalianNumber(right)
+
+    // Validate: right part should look like an Italian number (starts with digit or minus)
+    if (/^-?[\d.]/.test(right) && (leftNum !== 0 || /^-?0,00$/.test(left.trim()))) {
+      return { amount: leftNum, balance: rightNum }
+    }
+  }
+
+  // Fallback: if only one ,DD found, the whole thing might be a single number
+  if (positions.length === 1) {
+    return { amount: parseItalianNumber(s), balance: 0 }
+  }
+
+  return null
+}
+
+/**
  * Parse Wise PDF statement (Italian language).
  * Uses pdf-parse to extract text, then regex to find transactions.
+ *
+ * Actual PDF text format (after pdf-parse extraction):
+ *   Line 1: Description (possibly multi-line, e.g. "Ricevuto denaro da NAME con causale ...")
+ *   Line 2: "DD mmmm YYYYTransazione: REFCausale: ..."  (date glued to "Transazione")
+ *   Line 3: "AMOUNT_BALANCE"  (two Italian numbers concatenated, e.g. "999,005.037,81")
  */
 export async function parseWisePDF(pdfBuffer: Buffer, fileName: string): Promise<ParseResult> {
   const errors: string[] = []
   const transactions: ParsedTransaction[] = []
 
   // Dynamic import pdf-parse v1 (CommonJS module)
+  // Import from lib/pdf-parse.js directly to avoid the test-file loading in index.js
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const pdfParse = (await import("pdf-parse")).default as (buf: Buffer) => Promise<{ text: string; numpages: number }>
+  const pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default as (buf: Buffer) => Promise<{ text: string; numpages: number }>
   const data = await pdfParse(pdfBuffer)
   const text = data.text
 
@@ -382,167 +436,123 @@ export async function parseWisePDF(pdfBuffer: Buffer, fileName: string): Promise
   else if (/Estratto conto in USD/i.test(text)) currency = "USD"
   else if (/Estratto conto in GBP/i.test(text)) currency = "GBP"
 
-  // Extract account holder
+  // Extract account holder — "Titolare del conto" followed by company name on next line
   let accountHolder = ""
-  const holderMatch = text.match(/Titolare del conto:\s*(.+?)(?:\n|$)/i)
-    || text.match(/Account holder:\s*(.+?)(?:\n|$)/i)
-  if (holderMatch) accountHolder = holderMatch[1].trim()
+  const holderIdx = text.indexOf("Titolare del conto")
+  if (holderIdx !== -1) {
+    const afterHolder = text.substring(holderIdx + "Titolare del conto".length).trim()
+    const firstLine = afterHolder.split("\n")[0]?.trim()
+    if (firstLine && !/^\d/.test(firstLine)) {
+      accountHolder = firstLine
+    }
+  }
 
-  // Parse Italian Wise PDF format
-  // Pattern: "Ricevuto denaro da NAME con causale DESC    AMOUNT    BALANCE"
-  // Followed by: "DATE Transazione: REF"
+  // Parse using the actual Wise PDF format:
+  // 1. Description lines (Ricevuto/Inviato/Wise Charges/Convertit...)
+  // 2. Date+Ref line: "DD mmmm YYYYTransazione: REF..."
+  // 3. Amounts line: concatenated Italian numbers
   const lines = text.split("\n").map(l => l.trim())
+
+  // Regex to detect date+transaction lines (date glued to "Transazione")
+  const dateTransRe = /^(\d{1,2}\s+\w+\s+\d{4})Transazione:\s*(.+)$/i
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
 
-    // Match incoming transactions: "Ricevuto denaro da ..."
-    const incomingMatch = line.match(/^(Ricevuto denaro da .+?)\s+([\d.,]+)\s+([\d.,]+)\s*$/)
-    if (incomingMatch) {
-      const desc = incomingMatch[1].trim()
-      const amount = parseItalianNumber(incomingMatch[2])
-      const balance = parseItalianNumber(incomingMatch[3])
+    // Look for date+transaction reference lines
+    const dateMatch = line.match(dateTransRe)
+    if (!dateMatch) continue
 
-      // Next line should have date and reference
-      const nextLine = lines[i + 1] || ""
-      const dateRefMatch = nextLine.match(/^(\d{1,2}\s+\w+\s+\d{4})\s+Transazione:\s*(.+)$/i)
-        || nextLine.match(/^(\d{1,2}[-/]\d{1,2}[-/]\d{4})\s+Transazione:\s*(.+)$/i)
+    const isoDate = parseItalianDate(dateMatch[1].trim())
+    if (!isoDate) continue
 
-      let isoDate = ""
-      let ref = ""
-      if (dateRefMatch) {
-        isoDate = parseItalianDate(dateRefMatch[1].trim())
-        ref = dateRefMatch[2].trim()
-        i++ // skip the date line
-      }
+    // Extract transaction ref and causale from the date line
+    // Format: "TRANSFER-1234567Causale: some text" or just "TRANSFER-1234567"
+    let ref = dateMatch[2].trim()
+    let causale = ""
+    const causaleIdx = ref.indexOf("Causale:")
+    if (causaleIdx !== -1) {
+      causale = ref.substring(causaleIdx + "Causale:".length).trim()
+      ref = ref.substring(0, causaleIdx).trim()
+    }
 
-      // Extract counterparty
-      const cpMatch = desc.match(/Ricevuto denaro da\s+(.+?)(?:\s+con causale|$)/i)
-      const counterparty = cpMatch ? cpMatch[1].trim() : ""
+    // Collect description from lines ABOVE this date line
+    // Walk backwards to find the description start
+    const descLines: string[] = []
+    for (let j = i - 1; j >= 0; j--) {
+      const prevLine = lines[j]
+      // Stop at: empty lines, page markers, header lines, previous amount lines, footer lines
+      if (!prevLine) break
+      if (/^ref:[0-9a-f-]+$/i.test(prevLine)) break
+      if (/^\d+\s*\/\s*\d+$/.test(prevLine)) break // page number like "1 / 2"
+      if (/^(Wise US Inc|Estratto conto|Generato il|Titolare del conto|IBAN|Swift\/BIC|Saldo in|Descrizione|Per qualsiasi|Hai bisogno)/i.test(prevLine)) break
+      if (/^(BE\d{2}\s|TRWI|CMFG|United States|Sheridan|30 North Gould|30 W 26th|New York|Numero di conto|Wire routing|Routing number)/i.test(prevLine)) break
+      if (/^(WY|NY|\d{5})$/.test(prevLine)) break // standalone state/zip codes
+      // If this line looks like a previous amounts line (only digits, dots, commas, minus)
+      if (/^-?[\d.,]+$/.test(prevLine)) break
+      descLines.unshift(prevLine)
+      // Stop if we found the start of a transaction description
+      if (/^(Ricevuto denaro|Inviato denaro|Wise Charges|Convertit|Complaint|Top Up)/i.test(prevLine)) break
+    }
 
-      if (isoDate && amount > 0) {
-        transactions.push({
-          transaction_date: isoDate,
-          description: desc,
-          counterparty,
-          amount,
-          currency,
-          balance_after: balance,
-          transaction_ref: ref,
-          bank_name: "Wise",
-          account_type: currency,
-        })
-      }
+    // Build description: lines from PDF + causale from date line
+    let description = descLines.join(" ").trim()
+    if (!description) continue
+    // Append causale if not already present in description (for categorization)
+    if (causale && !description.toLowerCase().includes(causale.toLowerCase().substring(0, 20))) {
+      description = `${description} — ${causale}`
+    }
+
+    // Get amounts from the next line
+    const amountLine = lines[i + 1] || ""
+    if (!/^-?[\d.,]+$/.test(amountLine)) {
+      errors.push(`Line ${i + 2}: expected amounts, got "${amountLine.substring(0, 40)}"`)
       continue
     }
 
-    // Match outgoing transactions: "Inviato denaro a ..."
-    const outgoingMatch = line.match(/^(Inviato denaro a .+?)\s+-?([\d.,]+)\s+([\d.,]+)\s*$/)
-    if (outgoingMatch) {
-      const desc = outgoingMatch[1].trim()
-      const amount = -parseItalianNumber(outgoingMatch[2])
-      const balance = parseItalianNumber(outgoingMatch[3])
-
-      const nextLine = lines[i + 1] || ""
-      const dateRefMatch = nextLine.match(/^(\d{1,2}\s+\w+\s+\d{4})\s+Transazione:\s*(.+)$/i)
-        || nextLine.match(/^(\d{1,2}[-/]\d{1,2}[-/]\d{4})\s+Transazione:\s*(.+)$/i)
-
-      let isoDate = ""
-      let ref = ""
-      if (dateRefMatch) {
-        isoDate = parseItalianDate(dateRefMatch[1].trim())
-        ref = dateRefMatch[2].trim()
-        i++
-      }
-
-      const cpMatch = desc.match(/Inviato denaro a\s+(.+?)(?:\s+con causale|$)/i)
-      const counterparty = cpMatch ? cpMatch[1].trim() : ""
-
-      if (isoDate) {
-        transactions.push({
-          transaction_date: isoDate,
-          description: desc,
-          counterparty,
-          amount,
-          currency,
-          balance_after: balance,
-          transaction_ref: ref,
-          bank_name: "Wise",
-          account_type: currency,
-        })
-      }
+    const amounts = splitConcatenatedAmounts(amountLine)
+    if (!amounts) {
+      errors.push(`Line ${i + 2}: could not parse amounts "${amountLine}"`)
       continue
     }
 
-    // Match fees: "Wise Charges for: REF    -AMOUNT    BALANCE"
-    const feeMatch = line.match(/^(Wise Charges .+?)\s+-?([\d.,]+)\s+([\d.,]+)\s*$/)
-    if (feeMatch) {
-      const desc = feeMatch[1].trim()
-      const amount = -parseItalianNumber(feeMatch[2])
-      const balance = parseItalianNumber(feeMatch[3])
+    i++ // skip the amounts line
 
-      const nextLine = lines[i + 1] || ""
-      const dateRefMatch = nextLine.match(/^(\d{1,2}\s+\w+\s+\d{4})\s+Transazione:\s*(.+)$/i)
-        || nextLine.match(/^(\d{1,2}[-/]\d{1,2}[-/]\d{4})\s+Transazione:\s*(.+)$/i)
+    // Determine amount sign based on description type
+    let amount = amounts.amount
+    const balance = amounts.balance
 
-      let isoDate = ""
-      let ref = ""
-      if (dateRefMatch) {
-        isoDate = parseItalianDate(dateRefMatch[1].trim())
-        ref = dateRefMatch[2].trim()
-        i++
-      }
-
-      if (isoDate) {
-        transactions.push({
-          transaction_date: isoDate,
-          description: desc,
-          counterparty: "Wise",
-          amount,
-          currency,
-          balance_after: balance,
-          transaction_ref: ref,
-          bank_name: "Wise",
-          account_type: currency,
-        })
-      }
-      continue
+    // For "Inviato" (sent) and "Wise Charges" the amount should be negative
+    if (/^(Inviato denaro|Wise Charges|Convertit.*\bin\b)/i.test(description)) {
+      // Amount from PDF might already be negative (has minus sign)
+      if (amount > 0) amount = -amount
+    }
+    // For "Ricevuto" (received) and conversions TO this currency, amount should be positive
+    if (/^(Ricevuto denaro|Convertit.*\bda\b.*\ba\s)/i.test(description)) {
+      if (amount < 0) amount = -amount
     }
 
-    // Match conversions: "Convertiti EUR in USD ..."
-    const convMatch = line.match(/^(Convertit.+?)\s+-?([\d.,]+)\s+([\d.,]+)\s*$/)
-    if (convMatch) {
-      const desc = convMatch[1].trim()
-      const amount = -parseItalianNumber(convMatch[2])
-      const balance = parseItalianNumber(convMatch[3])
+    // Extract counterparty
+    let counterparty = ""
+    const fromMatch = description.match(/Ricevuto denaro da\s+(.+?)(?:\s+con causale|$)/i)
+    const toMatch = description.match(/Inviato denaro a\s+(.+?)(?:\s+con causale|$)/i)
+    if (fromMatch) counterparty = fromMatch[1].trim()
+    else if (toMatch) counterparty = toMatch[1].trim()
+    else if (/^Wise Charges/i.test(description)) counterparty = "Wise"
 
-      const nextLine = lines[i + 1] || ""
-      const dateRefMatch = nextLine.match(/^(\d{1,2}\s+\w+\s+\d{4})\s+Transazione:\s*(.+)$/i)
-        || nextLine.match(/^(\d{1,2}[-/]\d{1,2}[-/]\d{4})\s+Transazione:\s*(.+)$/i)
+    if (amount === 0) continue
 
-      let isoDate = ""
-      let ref = ""
-      if (dateRefMatch) {
-        isoDate = parseItalianDate(dateRefMatch[1].trim())
-        ref = dateRefMatch[2].trim()
-        i++
-      }
-
-      if (isoDate) {
-        transactions.push({
-          transaction_date: isoDate,
-          description: desc,
-          counterparty: "",
-          amount,
-          currency,
-          balance_after: balance,
-          transaction_ref: ref,
-          bank_name: "Wise",
-          account_type: currency,
-        })
-      }
-      continue
-    }
+    transactions.push({
+      transaction_date: isoDate,
+      description,
+      counterparty,
+      amount,
+      currency,
+      balance_after: balance,
+      transaction_ref: ref,
+      bank_name: "Wise",
+      account_type: currency,
+    })
   }
 
   const dates = transactions.map(t => t.transaction_date).filter(d => d).sort()
