@@ -13,6 +13,7 @@ import {
   BookOpen,
   Upload,
   Users,
+  Settings,
   LogOut,
   Menu,
   X,
@@ -38,6 +39,7 @@ const navItems = [
   { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload },
   { key: 'nav.services', href: '/portal/services', icon: Activity },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.settings', href: '/portal/settings', icon: Settings },
   { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
 ]
 
