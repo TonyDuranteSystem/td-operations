@@ -24,6 +24,9 @@ const PUBLIC_PREFIXES = [
   '/api/track',
   '/api/tax-quote-completed',
   '/api/tax-form-completed',
+  '/api/formation-form-completed',
+  '/api/banking-form-completed',
+  '/api/itin-form-completed',
   '/api/lease-signed',
   '/api/oa-signed',
   // Client-facing forms (email-gated, no Supabase auth)
