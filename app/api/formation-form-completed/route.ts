@@ -79,7 +79,83 @@ export async function POST(req: NextRequest) {
         .ilike("email", leadEmail || "noemail")
         .limit(1)
 
-      if (contacts?.length) contactId = contacts[0].id
+      if (contacts?.length) {
+        contactId = contacts[0].id
+      } else if (lead) {
+        // AUTO-CREATE contact from lead data
+        try {
+          const { data: newContact } = await supabaseAdmin
+            .from("contacts")
+            .insert({
+              full_name: lead.full_name,
+              email: lead.email,
+              phone: lead.phone,
+              language: leadLanguage,
+              role: "Owner",
+            })
+            .select("id")
+            .single()
+
+          if (newContact) {
+            contactId = newContact.id
+            results.push({ step: "contact_created", status: "ok", detail: `Contact auto-created: ${contactId}` })
+          }
+        } catch (e) {
+          results.push({ step: "contact_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
+      }
+    }
+
+    // ─── STEP 1B: Ensure Service Delivery exists ───
+    let deliveryId: string | null = null
+    try {
+      // Check by contact_id or notes containing token
+      const orFilters = [`notes.ilike.%${token}%`]
+      if (contactId) orFilters.push(`contact_id.eq.${contactId}`)
+
+      const { data: existingSd } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id")
+        .eq("service_type", "Company Formation")
+        .or(orFilters.join(","))
+        .eq("status", "active")
+        .limit(1)
+
+      if (existingSd?.length) {
+        deliveryId = existingSd[0].id
+      } else {
+        // AUTO-CREATE Service Delivery
+        const { data: stages } = await supabaseAdmin
+          .from("pipeline_stages")
+          .select("stage_name")
+          .eq("service_type", "Company Formation")
+          .order("stage_order")
+          .limit(1)
+
+        const firstStage = stages?.[0]?.stage_name || "Data Collection"
+        const llcName = submittedData.llc_name_1 || submittedData.preferred_name_1 || "New LLC"
+
+        const { data: newSd } = await supabaseAdmin
+          .from("service_deliveries")
+          .insert({
+            service_type: "Company Formation",
+            service_name: `Company Formation - ${leadName} (${llcName})`,
+            contact_id: contactId,
+            current_stage: firstStage,
+            status: "active",
+            assigned_to: "Luca",
+            notes: `Auto-created from formation form ${token}`,
+          })
+          .select("id")
+          .single()
+
+        if (newSd) {
+          deliveryId = newSd.id
+          results.push({ step: "sd_created", status: "ok", detail: `SD auto-created: ${deliveryId}` })
+        }
+      }
+    } catch (e) {
+      results.push({ step: "sd_check", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // ─── STEP 2: Apply form data to CRM (update contact) ───
@@ -323,33 +399,7 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
     // ─── STEP 7: Create task for Luca ───
     try {
       const llcName1 = submittedData.llc_name_1 || submittedData.preferred_name_1 || "N/A"
-
-      // Find the service delivery for this lead
-      let deliveryId: string | null = null
-      if (contactId) {
-        const { data: sds } = await supabaseAdmin
-          .from("service_deliveries")
-          .select("id")
-          .eq("service_type", "Company Formation")
-          .eq("contact_id", contactId)
-          .eq("status", "active")
-          .limit(1)
-
-        if (sds?.length) deliveryId = sds[0].id
-      }
-
-      // Also check by notes containing the token
-      if (!deliveryId) {
-        const { data: sds } = await supabaseAdmin
-          .from("service_deliveries")
-          .select("id")
-          .eq("service_type", "Company Formation")
-          .ilike("notes", `%${token}%`)
-          .eq("status", "active")
-          .limit(1)
-
-        if (sds?.length) deliveryId = sds[0].id
-      }
+      // deliveryId already resolved in Step 1B above
 
       const { data: task } = await supabaseAdmin
         .from("tasks")
@@ -394,29 +444,27 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
     }
 
     // ─── STEP 8: Update service delivery history ───
-    if (contactId) {
+    if (deliveryId) {
       try {
-        const { data: sds } = await supabaseAdmin
+        const { data: sd } = await supabaseAdmin
           .from("service_deliveries")
           .select("id, notes")
-          .eq("service_type", "Company Formation")
-          .or(`contact_id.eq.${contactId},notes.ilike.%${token}%`)
-          .eq("status", "active")
-          .limit(1)
+          .eq("id", deliveryId)
+          .single()
 
-        if (sds?.length) {
-          const currentNotes = sds[0].notes || ""
+        if (sd) {
+          const currentNotes = sd.notes || ""
           await supabaseAdmin
             .from("service_deliveries")
             .update({
               notes: currentNotes + `\n${new Date().toISOString().split("T")[0]}: Formation form completed. Data applied to CRM. Luca notified.`,
               updated_at: new Date().toISOString(),
             })
-            .eq("id", sds[0].id)
+            .eq("id", sd.id)
 
-          results.push({ step: "sd_update", status: "ok", detail: `SD ${sds[0].id} notes updated` })
+          results.push({ step: "sd_update", status: "ok", detail: `SD ${sd.id} notes updated` })
         } else {
-          results.push({ step: "sd_update", status: "skipped", detail: "No active Formation SD found" })
+          results.push({ step: "sd_update", status: "skipped", detail: "SD not found" })
         }
       } catch (e) {
         results.push({ step: "sd_update", status: "error", detail: e instanceof Error ? e.message : String(e) })
