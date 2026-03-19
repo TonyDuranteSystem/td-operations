@@ -370,13 +370,34 @@ export function registerOfferTools(server: McpServer) {
             intro_en: params.intro_en,
             intro_it: params.intro_it,
             payment_links: params.payment_links,
-            bank_details: params.bank_details || {
-              beneficiary: "TONY DURANTE L.L.C.",
-              account_number: "200000306770",
-              routing_number: "064209588",
-              bank_name: "Relay Financial",
-              address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
-            },
+            bank_details: params.bank_details || (() => {
+              // Auto-select bank based on currency detected from cost_summary or services
+              const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
+              const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
+              const servicesStr = JSON.stringify(params.services || [])
+              const isEUR = firstTotal.includes("\u20ac") || firstTotal.toUpperCase().includes("EUR")
+                || servicesStr.includes("\u20ac") || servicesStr.toUpperCase().includes("EUR")
+
+              if (isEUR) {
+                // Airwallex EUR account
+                return {
+                  beneficiary: "TONY DURANTE L.L.C.",
+                  iban: "DK8989000023658198",
+                  bic: "SXPYDKKK",
+                  bank_name: "Banking Circle S.A. (via Airwallex)",
+                  address: "10225 Ulmerton Rd, 3D, Largo, FL 33771",
+                }
+              } else {
+                // Relay USD account
+                return {
+                  beneficiary: "TONY DURANTE L.L.C.",
+                  account_number: "200000306770",
+                  routing_number: "064209588",
+                  bank_name: "Relay Financial",
+                  address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+                }
+              }
+            })(),
             effective_date: params.effective_date,
             expires_at: params.expires_at,
             contract_type: params.contract_type || "formation",
