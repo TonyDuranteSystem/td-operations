@@ -4,10 +4,6 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail } from '@/lib/portal/queries'
 import { NextResponse } from 'next/server'
 
-/**
- * GET /api/portal/debug — Debug endpoint to trace portal auth flow
- * TEMPORARY — remove after debugging
- */
 export async function GET() {
   const supabase = createClient()
   const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -20,6 +16,17 @@ export async function GET() {
   const accounts = contactId ? await getPortalAccounts(contactId) : []
   const firstAccountId = accounts[0]?.id ?? null
   const accountDetail = firstAccountId ? await getPortalAccountDetail(firstAccountId) : null
+
+  // Try direct detail query with error capture
+  let directDetail = null
+  if (firstAccountId) {
+    const { data, error } = await supabaseAdmin
+      .from('accounts')
+      .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link')
+      .eq('id', firstAccountId)
+      .single()
+    directDetail = { data: data ? { id: data.id, name: data.company_name } : null, error: error?.message }
+  }
 
   // Also try direct query
   let directQuery = null
@@ -41,6 +48,7 @@ export async function GET() {
     accounts: accounts.map(a => ({ id: a.id, name: a.company_name })),
     first_account_id: firstAccountId,
     account_detail: accountDetail ? { id: accountDetail.id, name: accountDetail.company_name } : null,
+    direct_detail: directDetail,
     direct_query: directQuery,
   })
 }
