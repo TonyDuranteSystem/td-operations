@@ -249,13 +249,25 @@ export default function FormationFormPage() {
     try {
       // 1. Upload files
       const uploadPaths: string[] = []
+      const uploadErrors: string[] = []
       for (const [key, file] of Object.entries(uploadFiles)) {
         if (!file) continue
         const path = `${submission.token}/${key}_${file.name}`
         const { error: upErr } = await supabasePublic.storage
           .from('formation-uploads')
           .upload(path, file, { cacheControl: '3600', upsert: false })
-        if (!upErr) uploadPaths.push(path)
+        if (upErr) {
+          console.error(`Upload failed for ${key}:`, upErr.message)
+          uploadErrors.push(`${file.name}: ${upErr.message}`)
+        } else {
+          uploadPaths.push(path)
+        }
+      }
+      // Block submission if passport upload failed
+      if (uploadErrors.length > 0 && uploadPaths.length === 0) {
+        setSubmitError(lang === 'it' ? `Errore nel caricamento dei file: ${uploadErrors.join(', ')}. Riprova.` : `File upload failed: ${uploadErrors.join(', ')}. Please try again.`)
+        setSubmitting(false)
+        return
       }
 
       // 2. Build submitted data
