@@ -86,7 +86,14 @@ export function usePortalChat(accountId: string) {
         throw new Error(err.error || 'Failed to send')
       }
 
-      // Message will appear via realtime subscription
+      // Add message to state immediately (don't rely solely on realtime)
+      const { message: newMsg } = await res.json()
+      if (newMsg) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === newMsg.id)) return prev
+          return [...prev, newMsg]
+        })
+      }
     } catch (error) {
       throw error
     } finally {
