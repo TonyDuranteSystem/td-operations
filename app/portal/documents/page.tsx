@@ -5,6 +5,7 @@ import { getPortalAccounts } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
+import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { FileText } from 'lucide-react'
 
 const CATEGORY_LABELS: Record<number, string> = {
@@ -39,9 +40,12 @@ export default async function PortalDocumentsPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Documents</h1>
-        <p className="text-zinc-500 text-sm mt-1">View and download your company documents</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Documents</h1>
+          <p className="text-zinc-500 text-sm mt-1">View and download your company documents</p>
+        </div>
+        <DocumentUploadButton accountId={selectedAccountId} />
       </div>
 
       {(!documents || documents.length === 0) ? (

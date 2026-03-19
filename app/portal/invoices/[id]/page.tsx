@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Send, CheckCircle2, Loader2, FileText,
-  Calendar, User, Receipt, Clock,
+  Calendar, User, Receipt, Clock, Pencil,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { markInvoiceAsPaid } from '../actions'
@@ -155,6 +155,16 @@ export default function InvoiceDetailPage() {
 
         {/* Actions */}
         <div className="flex gap-2 flex-wrap">
+          {invoice.status === 'Draft' && (
+            <Link
+              href={`/portal/invoices/${invoiceId}/edit`}
+              className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit
+            </Link>
+          )}
+
           <button
             onClick={handleDownloadPDF}
             disabled={downloading}

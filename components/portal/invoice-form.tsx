@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Trash2, ArrowLeft, Loader2, Save } from 'lucide-react'
 import { toast } from 'sonner'
-import { createInvoice, createCustomer } from '@/app/portal/invoices/actions'
+import { createInvoice, updateInvoice, createCustomer } from '@/app/portal/invoices/actions'
 import Link from 'next/link'
 
 interface Customer {
@@ -24,8 +24,8 @@ interface InvoiceFormProps {
   accountId: string
   customers: Customer[]
   mode: 'create' | 'edit'
-  // For edit mode (future)
   initialData?: {
+    id?: string
     customerId: string
     currency: 'USD' | 'EUR'
     discount: number
@@ -119,29 +119,51 @@ export function InvoiceForm({ accountId, customers, mode, initialData }: Invoice
     }
 
     startTransition(async () => {
-      const result = await createInvoice({
-        account_id: accountId,
-        customer_id: customerId,
-        currency,
-        discount,
-        issue_date: issueDate,
-        due_date: dueDate || undefined,
-        notes: notes || undefined,
-        message: message || undefined,
-        items: items.map((item, i) => ({
-          ...item,
-          quantity: Number(item.quantity),
-          unit_price: Number(item.unit_price),
-          amount: Number(item.quantity) * Number(item.unit_price),
-          sort_order: i,
-        })),
-      })
+      const itemsPayload = items.map((item, i) => ({
+        ...item,
+        quantity: Number(item.quantity),
+        unit_price: Number(item.unit_price),
+        amount: Number(item.quantity) * Number(item.unit_price),
+        sort_order: i,
+      }))
 
-      if (result.success) {
-        toast.success(`Invoice ${result.data?.invoice_number} created`)
-        router.push('/portal/invoices')
+      if (mode === 'edit' && initialData?.id) {
+        const result = await updateInvoice({
+          id: initialData.id,
+          account_id: accountId,
+          customer_id: customerId,
+          currency,
+          discount,
+          issue_date: issueDate,
+          due_date: dueDate || undefined,
+          notes: notes || undefined,
+          message: message || undefined,
+          items: itemsPayload,
+        })
+        if (result.success) {
+          toast.success('Invoice updated')
+          router.push(`/portal/invoices/${initialData.id}`)
+        } else {
+          toast.error(result.error ?? 'Failed to update invoice')
+        }
       } else {
-        toast.error(result.error ?? 'Failed to create invoice')
+        const result = await createInvoice({
+          account_id: accountId,
+          customer_id: customerId,
+          currency,
+          discount,
+          issue_date: issueDate,
+          due_date: dueDate || undefined,
+          notes: notes || undefined,
+          message: message || undefined,
+          items: itemsPayload,
+        })
+        if (result.success) {
+          toast.success(`Invoice ${result.data?.invoice_number} created`)
+          router.push('/portal/invoices')
+        } else {
+          toast.error(result.error ?? 'Failed to create invoice')
+        }
       }
     })
   }
