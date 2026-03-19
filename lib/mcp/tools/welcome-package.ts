@@ -104,7 +104,9 @@ Prerequisites:
           oaAdminUrl = `${BASE_URL}/operating-agreement/${existingOa[0].token}/${existingOa[0].access_code}?preview=td`
           steps.push({ step: "OA", status: "existing", detail: `${existingOa[0].token} (${existingOa[0].status})` })
         } else {
-          const state = (account.state_of_formation || "").toUpperCase()
+          const STATE_MAP: Record<string, string> = { "NEW MEXICO": "NM", "NM": "NM", "WYOMING": "WY", "WY": "WY", "FLORIDA": "FL", "FL": "FL", "DELAWARE": "DE", "DE": "DE" }
+          const rawState = (account.state_of_formation || "").toUpperCase().trim()
+          const state = STATE_MAP[rawState] || rawState
           if (!OA_SUPPORTED_STATES.includes(state as typeof OA_SUPPORTED_STATES[number])) {
             steps.push({ step: "OA", status: "skipped", detail: `State "${state}" not supported (${OA_SUPPORTED_STATES.join(", ")})` })
           } else {
@@ -220,7 +222,7 @@ Prerequisites:
               account_id,
               contact_id: contact.id,
               tenant_company: account.company_name,
-              tenant_name: contact.full_name,
+              tenant_contact_name: contact.full_name,
               tenant_email: contact.email,
               suite_number: assignedSuite,
               premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
@@ -346,7 +348,7 @@ Prerequisites:
             const folderResult = await listFolder(account.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
             const folderContents = folderResult.files || []
             const companyFolder = folderContents.find(f =>
-              f.name === "Company" && f.mimeType === "application/vnd.google-apps.folder"
+              (f.name === "1. Company" || f.name === "Company") && f.mimeType === "application/vnd.google-apps.folder"
             )
 
             const searchFolderId = companyFolder?.id || account.drive_folder_id

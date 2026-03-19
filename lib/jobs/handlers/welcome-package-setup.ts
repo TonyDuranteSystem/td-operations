@@ -212,7 +212,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         account_id: p.account_id,
         contact_id: contact.id,
         tenant_company: account.company_name,
-        tenant_name: contact.full_name,
+        tenant_contact_name: contact.full_name,
         tenant_email: contact.email,
         suite_number: assignedSuite,
         premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
