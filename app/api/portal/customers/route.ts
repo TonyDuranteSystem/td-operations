@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { revalidatePath } from 'next/cache'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -48,5 +49,6 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+  revalidatePath('/portal/customers')
   return NextResponse.json({ success: true, id: data.id })
 }
