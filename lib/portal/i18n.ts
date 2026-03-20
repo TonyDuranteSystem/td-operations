@@ -399,6 +399,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'profile.edit': 'Edit',
     'profile.email': 'Email',
 
+    // Push notifications
+    'push.on': 'Push notifications on',
+    'push.blocked': 'Notifications blocked by browser',
+    'push.enable': 'Enable push notifications',
+    'push.test': 'Send test',
+    'push.testSent': 'Test notification sent! Check your device.',
+    'push.testFailed': 'Failed to send test notification',
+
     // Common
     'common.cancel': 'Cancel',
     'common.save': 'Save',
@@ -808,6 +816,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'profile.saveFailed': 'Errore nel salvataggio del profilo',
     'profile.edit': 'Modifica',
     'profile.email': 'Email',
+
+    // Push notifications
+    'push.on': 'Notifiche push attive',
+    'push.blocked': 'Notifiche bloccate dal browser',
+    'push.enable': 'Attiva notifiche push',
+    'push.test': 'Invia test',
+    'push.testSent': 'Notifica di test inviata! Controlla il dispositivo.',
+    'push.testFailed': 'Invio notifica di test fallito',
 
     // Common
     'common.cancel': 'Annulla',

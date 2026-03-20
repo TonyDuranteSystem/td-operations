@@ -1,14 +1,16 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Bell, BellOff, Loader2 } from 'lucide-react'
+import { Bell, BellOff, Loader2, Send } from 'lucide-react'
 import { toast } from 'sonner'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface PushToggleProps {
   accountId: string
 }
 
 export function PushToggle({ accountId }: PushToggleProps) {
+  const { t } = useLocale()
   const [supported, setSupported] = useState(false)
   const [permission, setPermission] = useState<NotificationPermission>('default')
   const [subscribed, setSubscribed] = useState(false)
@@ -111,38 +113,67 @@ export function PushToggle({ accountId }: PushToggleProps) {
     }
   }
 
+  const handleTest = async () => {
+    try {
+      const res = await fetch('/api/portal/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId }),
+      })
+      const data = await res.json()
+      if (data.sent > 0) {
+        toast.success(t('push.testSent'))
+      } else {
+        toast.error(t('push.testFailed'))
+      }
+    } catch {
+      toast.error(t('push.testFailed'))
+    }
+  }
+
   if (!supported) return null
   if (loading) return <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
 
   return (
-    <button
-      onClick={subscribed ? handleDisable : handleEnable}
-      disabled={loading || permission === 'denied'}
-      className={`flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg transition-colors ${
-        subscribed
-          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-          : permission === 'denied'
-            ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-            : 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100'
-      }`}
-    >
-      {subscribed ? (
-        <>
-          <Bell className="h-4 w-4" />
-          Push notifications on
-        </>
-      ) : permission === 'denied' ? (
-        <>
-          <BellOff className="h-4 w-4" />
-          Notifications blocked by browser
-        </>
-      ) : (
-        <>
-          <Bell className="h-4 w-4" />
-          Enable push notifications
-        </>
+    <div className="flex flex-col sm:flex-row gap-2">
+      <button
+        onClick={subscribed ? handleDisable : handleEnable}
+        disabled={loading || permission === 'denied'}
+        className={`flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg transition-colors ${
+          subscribed
+            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+            : permission === 'denied'
+              ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+              : 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100'
+        }`}
+      >
+        {subscribed ? (
+          <>
+            <Bell className="h-4 w-4" />
+            {t('push.on')}
+          </>
+        ) : permission === 'denied' ? (
+          <>
+            <BellOff className="h-4 w-4" />
+            {t('push.blocked')}
+          </>
+        ) : (
+          <>
+            <Bell className="h-4 w-4" />
+            {t('push.enable')}
+          </>
+        )}
+      </button>
+      {subscribed && (
+        <button
+          onClick={handleTest}
+          className="flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 transition-colors"
+        >
+          <Send className="h-4 w-4" />
+          {t('push.test')}
+        </button>
       )}
-    </button>
+    </div>
   )
 }
 
