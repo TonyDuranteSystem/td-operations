@@ -247,13 +247,34 @@ export async function GET(
     ]
     for (const [label, value] of bankFields) {
       if (value) {
-        page.drawText(`${label}: ${value}`, { x: 50, y, size: 8, font: helvetica, color: black })
-        y -= 12
+        const fullText = `${label}: ${value}`
+        // Wrap if too long for page width (max ~490pt)
+        if (helvetica.widthOfTextAtSize(fullText, 8) > 490) {
+          page.drawText(`${label}:`, { x: 50, y, size: 8, font: helvetica, color: gray })
+          y -= 11
+          page.drawText(String(value), { x: 50, y, size: 8, font: helvetica, color: black })
+          y -= 12
+        } else {
+          page.drawText(fullText, { x: 50, y, size: 8, font: helvetica, color: black })
+          y -= 12
+        }
       }
     }
     if (bankAccount.notes) {
-      page.drawText(bankAccount.notes, { x: 50, y, size: 8, font: helvetica, color: gray })
-      y -= 12
+      // Word-wrap bank notes
+      const noteWords = String(bankAccount.notes).split(' ')
+      let noteLine = ''
+      for (const word of noteWords) {
+        const test = noteLine ? `${noteLine} ${word}` : word
+        if (helvetica.widthOfTextAtSize(test, 8) > 490) {
+          page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray })
+          y -= 11
+          noteLine = word
+        } else {
+          noteLine = test
+        }
+      }
+      if (noteLine) { page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 12 }
     }
   }
 
@@ -262,7 +283,14 @@ export async function GET(
     y -= 20
     page.drawText('Pay online:', { x: 50, y, size: 9, font: helveticaBold, color: blue })
     y -= 14
-    page.drawText(paymentLinkUrl, { x: 50, y, size: 9, font: helvetica, color: blue })
+    // Truncate very long URLs to prevent overflow
+    const maxUrlWidth = 490
+    let displayUrl = paymentLinkUrl
+    while (displayUrl.length > 10 && helvetica.widthOfTextAtSize(displayUrl, 9) > maxUrlWidth) {
+      displayUrl = displayUrl.slice(0, -1)
+    }
+    if (displayUrl !== paymentLinkUrl) displayUrl += '...'
+    page.drawText(displayUrl, { x: 50, y, size: 9, font: helvetica, color: blue })
   }
 
   // Footer
