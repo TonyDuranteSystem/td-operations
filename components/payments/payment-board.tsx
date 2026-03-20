@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  FileText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
@@ -20,6 +21,7 @@ import Link from 'next/link'
 import { markPaymentPaid } from '@/app/(dashboard)/payments/actions'
 import { EditPaymentDialog } from '@/components/payments/edit-payment-dialog'
 import { CreatePaymentDialog } from '@/components/payments/create-payment-dialog'
+import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 
 interface PaymentItem {
   id: string
@@ -41,12 +43,19 @@ interface PaymentItem {
   company_name: string | null
   updated_at: string
   notes?: string | null
+  invoice_status?: string | null
+  invoice_number?: string | null
+  issue_date?: string | null
+  total?: string | number | null
+  sent_at?: string | null
+  qb_sync_status?: string | null
 }
 
 interface PaymentBoardProps {
   overdue: PaymentItem[]
   upcoming: PaymentItem[]
   paid: PaymentItem[]
+  invoices: PaymentItem[]
   stats: {
     overdueCount: number
     overdueTotal: number
@@ -54,9 +63,26 @@ interface PaymentBoardProps {
     upcomingTotal: number
     paidCount: number
     paidTotal: number
+    invoiceCount: number
   }
   activeTab: string
   today: string
+}
+
+const INVOICE_STATUS_COLORS: Record<string, string> = {
+  Draft: 'bg-zinc-100 text-zinc-600',
+  Sent: 'bg-blue-100 text-blue-700',
+  Paid: 'bg-emerald-100 text-emerald-700',
+  Overdue: 'bg-red-100 text-red-700',
+  Voided: 'bg-zinc-200 text-zinc-500 line-through',
+  Credit: 'bg-purple-100 text-purple-700',
+}
+
+const QB_SYNC_ICONS: Record<string, string> = {
+  synced: '✓',
+  error: '✗',
+  pending: '…',
+  skipped: '—',
 }
 
 const FOLLOWUP_COLORS: Record<string, string> = {
@@ -129,20 +155,24 @@ function MarkPaidButton({ paymentId, description }: { paymentId: string; descrip
 
 const PAYMENTS_PER_PAGE = 30
 
-export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today }: PaymentBoardProps) {
+export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeTab, today }: PaymentBoardProps) {
   const router = useRouter()
   const [page, setPage] = useState(1)
   const [showCreate, setShowCreate] = useState(false)
+  const [showInvoice, setShowInvoice] = useState(false)
+  const [showCredit, setShowCredit] = useState(false)
   const [editingPayment, setEditingPayment] = useState<PaymentItem | null>(null)
 
   const tabs = [
     { key: 'scaduti', label: 'Scaduti', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
     { key: 'arrivo', label: 'In Arrivo', count: stats.upcomingCount, icon: Clock, color: 'text-amber-600' },
     { key: 'pagati', label: 'Pagati', count: stats.paidCount, icon: CheckCircle2, color: 'text-emerald-600' },
+    { key: 'invoices', label: 'Invoices', count: stats.invoiceCount, icon: FileText, color: 'text-blue-600' },
   ]
 
   const allPayments = activeTab === 'scaduti' ? overdue :
-                      activeTab === 'arrivo' ? upcoming : paid
+                      activeTab === 'arrivo' ? upcoming :
+                      activeTab === 'invoices' ? invoices : paid
   const totalPages = Math.ceil(allPayments.length / PAYMENTS_PER_PAGE)
   const currentPayments = allPayments.slice((page - 1) * PAYMENTS_PER_PAGE, page * PAYMENTS_PER_PAGE)
 
@@ -162,13 +192,34 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
           <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(stats.paidTotal)}</p>
           <p className="text-xs text-muted-foreground mt-1">{stats.paidCount} pagati</p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-white rounded-lg border p-4 min-w-[48px] flex items-center justify-center hover:bg-zinc-50 transition-colors"
-          title="Nuovo pagamento"
-        >
-          <Plus className="h-5 w-5 text-zinc-600" />
-        </button>
+        {activeTab === 'invoices' ? (
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowInvoice(true)}
+              className="bg-white rounded-lg border p-4 flex items-center gap-2 hover:bg-zinc-50 transition-colors"
+              title="New Invoice"
+            >
+              <FileText className="h-5 w-5 text-blue-600" />
+              <span className="text-sm font-medium hidden sm:inline">Invoice</span>
+            </button>
+            <button
+              onClick={() => setShowCredit(true)}
+              className="bg-white rounded-lg border p-4 flex items-center gap-2 hover:bg-zinc-50 transition-colors"
+              title="New Credit Note"
+            >
+              <FileText className="h-5 w-5 text-purple-600" />
+              <span className="text-sm font-medium hidden sm:inline">Credit</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-white rounded-lg border p-4 min-w-[48px] flex items-center justify-center hover:bg-zinc-50 transition-colors"
+            title="Nuovo pagamento"
+          >
+            <Plus className="h-5 w-5 text-zinc-600" />
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
@@ -201,15 +252,27 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
       {/* Payment list */}
       <div className="bg-white rounded-lg border overflow-hidden">
         {/* Desktop Header */}
-        <div className="hidden lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          <span>Descrizione</span>
-          <span>Azienda</span>
-          <span className="text-right">Importo</span>
-          <span>Scadenza</span>
-          <span>Stato</span>
-          <span>Follow-up</span>
-          <span></span>
-        </div>
+        {activeTab === 'invoices' ? (
+          <div className="hidden lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <span>Invoice #</span>
+            <span>Description</span>
+            <span>Account</span>
+            <span className="text-right">Amount</span>
+            <span>Due Date</span>
+            <span>Status</span>
+            <span className="text-center">QB</span>
+          </div>
+        ) : (
+          <div className="hidden lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <span>Descrizione</span>
+            <span>Azienda</span>
+            <span className="text-right">Importo</span>
+            <span>Scadenza</span>
+            <span>Stato</span>
+            <span>Follow-up</span>
+            <span></span>
+          </div>
+        )}
 
         {currentPayments.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
@@ -219,6 +282,53 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
           currentPayments.map(p => {
             const bucket = activeTab === 'scaduti' ? getOverdueBucket(p.due_date, today) : null
             const desc = p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || p.installment || '—')
+
+            // Invoice-specific rendering
+            if (activeTab === 'invoices') {
+              return (
+                <div key={p.id} onClick={() => setEditingPayment(p)} className="flex flex-col lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer hover:bg-zinc-50/50">
+                  {/* Invoice # */}
+                  <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '—'}</span>
+                  {/* Description */}
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{desc}</p>
+                    <p className="text-xs text-muted-foreground lg:hidden">
+                      {p.company_name && <span>{p.company_name} · </span>}
+                      {formatCurrency(p.total ?? p.amount, p.amount_currency)}
+                    </p>
+                  </div>
+                  {/* Account */}
+                  <div className="hidden lg:block">
+                    {p.company_name ? (
+                      <Link href={`/accounts/${p.account_id}`} className="text-xs text-muted-foreground hover:text-blue-600 truncate block">
+                        {p.company_name}
+                      </Link>
+                    ) : <span className="text-xs text-muted-foreground">—</span>}
+                  </div>
+                  {/* Amount */}
+                  <p className={cn('text-right font-medium hidden lg:block', p.invoice_status === 'Credit' && 'text-purple-600')}>
+                    {p.invoice_status === 'Credit' ? '-' : ''}{formatCurrency(Math.abs(Number(p.total ?? p.amount)), p.amount_currency)}
+                  </p>
+                  {/* Due Date */}
+                  <div className="hidden lg:block text-xs">
+                    {p.due_date ? formatDate(p.due_date) : '—'}
+                  </div>
+                  {/* Status */}
+                  <div className="hidden lg:block">
+                    <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', INVOICE_STATUS_COLORS[p.invoice_status ?? ''] ?? 'bg-zinc-100')}>
+                      {p.invoice_status}
+                    </span>
+                  </div>
+                  {/* QB Sync */}
+                  <div className="hidden lg:block text-center">
+                    <span className={cn('text-xs', p.qb_sync_status === 'synced' ? 'text-emerald-600' : p.qb_sync_status === 'error' ? 'text-red-600' : 'text-zinc-400')} title={`QB: ${p.qb_sync_status ?? 'pending'}`}>
+                      {QB_SYNC_ICONS[p.qb_sync_status ?? 'pending'] ?? '…'}
+                    </span>
+                  </div>
+                </div>
+              )
+            }
+
             return (
               <div key={p.id} onClick={() => setEditingPayment(p)} className={cn(
                 'flex flex-col lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer',
@@ -335,6 +445,16 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
       <CreatePaymentDialog
         open={showCreate}
         onClose={() => setShowCreate(false)}
+      />
+      <InvoiceDialog
+        open={showInvoice}
+        onClose={() => setShowInvoice(false)}
+        mode="invoice"
+      />
+      <InvoiceDialog
+        open={showCredit}
+        onClose={() => setShowCredit(false)}
+        mode="credit"
       />
       {editingPayment && (
         <EditPaymentDialog

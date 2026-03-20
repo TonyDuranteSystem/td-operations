@@ -13,7 +13,7 @@ export default async function PaymentsPage({
   // Fetch all non-paid payments with account names
   const { data: rawPayments } = await supabase
     .from('payments')
-    .select('id, account_id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, delay_approved_until, notes, updated_at')
+    .select('id, account_id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, delay_approved_until, notes, updated_at, invoice_status, issue_date, total, sent_at, qb_sync_status')
     .order('due_date', { ascending: true, nullsFirst: false })
 
   // Get account names
@@ -36,13 +36,16 @@ export default async function PaymentsPage({
 
   // Categorize
   const overdue = payments.filter(p =>
-    (p.status === 'Overdue') ||
-    ((p.status === 'Pending') && p.due_date && p.due_date < today)
+    !p.invoice_status &&
+    ((p.status === 'Overdue') ||
+    ((p.status === 'Pending') && p.due_date && p.due_date < today))
   )
   const upcoming = payments.filter(p =>
+    !p.invoice_status &&
     (p.status === 'Pending') && (!p.due_date || p.due_date >= today)
   )
-  const paid = payments.filter(p => p.status === 'Paid')
+  const paid = payments.filter(p => !p.invoice_status && p.status === 'Paid')
+  const invoices = payments.filter(p => p.invoice_status != null)
 
   const totalOverdue = overdue.reduce((sum, p) => sum + Number(p.amount_due ?? p.amount ?? 0), 0)
   const totalUpcoming = upcoming.reduce((sum, p) => sum + Number(p.amount_due ?? p.amount ?? 0), 0)
@@ -54,6 +57,7 @@ export default async function PaymentsPage({
     upcomingTotal: totalUpcoming,
     paidCount: paid.length,
     paidTotal: paid.reduce((sum, p) => sum + Number(p.amount_paid ?? p.amount ?? 0), 0),
+    invoiceCount: invoices.length,
   }
 
   return (
@@ -68,6 +72,7 @@ export default async function PaymentsPage({
         overdue={overdue}
         upcoming={upcoming}
         paid={paid}
+        invoices={invoices}
         stats={stats}
         activeTab={activeTab}
         today={today}

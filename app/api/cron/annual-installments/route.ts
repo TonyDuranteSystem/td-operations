@@ -111,7 +111,7 @@ export async function GET(req: NextRequest) {
           amount,
           currency: "USD",
           payment_type: installmentNumber === 1 ? "1st_installment" : "2nd_installment",
-          status: "pending",
+          status: "Pending",
           description: `${installmentLabel} ${year} - ${acct.company_name}`,
           due_date: `${year}-${month === 1 ? "01" : "06"}-01`,
         })

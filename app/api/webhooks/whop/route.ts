@@ -180,7 +180,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     amount_paid: total,
     amount_currency: currency === "USD" ? "USD" : "EUR",
     paid_date: paidAt ? paidAt.split("T")[0] : new Date().toISOString().split("T")[0],
-    status: "paid",
+    status: "Paid",
     payment_method: "Whop",
     description: `${productTitle || "Whop payment"} — ${clientName || email || "unknown"}`,
     notes: `Whop payment ${paymentId}. Product: ${productTitle || "N/A"}.`,
