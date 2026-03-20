@@ -260,6 +260,29 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['query'],
     },
   },
+  // ── Knowledge Base & SOPs ──
+  {
+    name: 'search_kb',
+    description: 'Search business knowledge articles by keyword. Contains pricing rules, banking partners, business rules, SOPs, tone guidelines, and operational procedures. ALWAYS use this before performing any action to check if there are rules that apply.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search keyword (e.g. "drive folder", "passport", "pricing", "formation", "banking")' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_sop',
+    description: 'Get the full Standard Operating Procedure (SOP) for a service type. Contains step-by-step workflows, Drive folder structure, rules, and pipeline stages. Service types: Company Formation, EIN Application, Banking Fintech, Banking Physical, Client Onboarding, ITIN, Tax Return, Company Closure, CMRA, RA Renewal, State Annual Report, Shipping, Public Notary, Support, Offboarding.',
+    parameters: {
+      type: 'object',
+      properties: {
+        service_type: { type: 'string', description: 'Service type name (e.g. "Company Formation", "Tax Return", "Client Onboarding")' },
+      },
+      required: ['service_type'],
+    },
+  },
   // ── Google Drive Tools ──
   {
     name: 'drive_search',
@@ -431,6 +454,8 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'update_task': return await updateTask(params)
       case 'update_account_notes': return await updateAccountNotes(params)
       case 'run_sql_query': return await runSqlQuery(params)
+      case 'search_kb': return await searchKb(params)
+      case 'get_sop': return await getSop(params)
       case 'drive_search': return await driveSearchTool(params)
       case 'drive_list_folder': return await driveListFolderTool(params)
       case 'drive_move': return await driveMoveTool(params)
@@ -939,6 +964,57 @@ async function runSqlQuery(p: any) {
   const { data, error } = await supabaseAdmin.rpc('execute_sql', { query: sql })
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
+}
+
+// ============================================================
+// Knowledge Base & SOPs
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function searchKb(p: any) {
+  const pattern = `%${p.query}%`
+  const { data, error } = await supabaseAdmin
+    .from('knowledge_articles')
+    .select('id, title, category, content')
+    .or(`title.ilike.${pattern},content.ilike.${pattern},category.ilike.${pattern}`)
+    .limit(5)
+
+  if (error) return JSON.stringify({ error: error.message })
+  if (!data?.length) return JSON.stringify({ results: [], message: 'No knowledge articles found. Try different keywords.' })
+
+  // Return titles + truncated content (first 500 chars) for overview, full content for top match
+  const results = data.map((a, i) => ({
+    title: a.title,
+    category: a.category,
+    content: i === 0 ? a.content : a.content?.slice(0, 500) + (a.content?.length > 500 ? '...' : ''),
+  }))
+
+  return JSON.stringify({ results, total: results.length })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getSop(p: any) {
+  const { data, error } = await supabaseAdmin
+    .from('sop_runbooks')
+    .select('id, title, service_type, content, version')
+    .ilike('service_type', `%${p.service_type}%`)
+    .limit(1)
+    .single()
+
+  if (error) {
+    // Try title match as fallback
+    const { data: fallback } = await supabaseAdmin
+      .from('sop_runbooks')
+      .select('id, title, service_type, content, version')
+      .ilike('title', `%${p.service_type}%`)
+      .limit(1)
+      .single()
+
+    if (fallback) return JSON.stringify({ title: fallback.title, service_type: fallback.service_type, content: fallback.content })
+    return JSON.stringify({ error: `No SOP found for "${p.service_type}". Available: Company Formation, EIN Application, Banking Fintech, Banking Physical, Client Onboarding, ITIN, Tax Return, Company Closure, CMRA, RA Renewal, State Annual Report, Shipping, Public Notary, Support, Offboarding.` })
+  }
+
+  return JSON.stringify({ title: data.title, service_type: data.service_type, content: data.content })
 }
 
 // ============================================================
