@@ -162,7 +162,6 @@ export const AGENT_TOOLS: ToolDef[] = [
         assigned_to: { type: 'string', description: 'Assignee name (e.g. Antonio, Luca)' },
         due_date: { type: 'string', description: 'Due date in YYYY-MM-DD format' },
         account_id: { type: 'string', description: 'Related account UUID (optional)' },
-        company_name: { type: 'string', description: 'Related company name (optional)' },
         category: { type: 'string', description: 'Category: Tax, Formation, Compliance, Admin, Billing, Client Communication' },
       },
       required: ['task_title'],
@@ -333,12 +332,12 @@ async function searchPayments(p: any) {
 async function searchTasks(p: any) {
   let query = supabaseAdmin
     .from('tasks')
-    .select('id, task_title, status, priority, due_date, assigned_to, category, company_name, description')
+    .select('id, task_title, status, priority, due_date, assigned_to, category, description, account_id, notes')
   if (p.status) query = query.eq('status', p.status)
   if (p.priority) query = query.eq('priority', p.priority)
   if (p.assigned_to) query = query.ilike('assigned_to', `%${p.assigned_to}%`)
   if (p.query) query = query.ilike('task_title', `%${p.query}%`)
-  const { data, error } = await query.order('due_date', { ascending: true }).limit(Number(p.limit) || 20)
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(Number(p.limit) || 20)
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
 }
@@ -434,7 +433,6 @@ async function createTask(p: any) {
       assigned_to: p.assigned_to || 'Antonio',
       due_date: p.due_date || null,
       account_id: p.account_id || null,
-      company_name: p.company_name || null,
       category: p.category || 'Admin',
       status: 'To Do',
     })
