@@ -25,6 +25,7 @@ import { markPaymentPaid } from '@/app/(dashboard)/payments/actions'
 import { EditPaymentDialog } from '@/components/payments/edit-payment-dialog'
 import { CreatePaymentDialog } from '@/components/payments/create-payment-dialog'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
+import { InvoiceDetailDialog } from '@/components/payments/invoice-detail-dialog'
 
 interface PaymentItem {
   id: string
@@ -230,6 +231,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
   const [showInvoice, setShowInvoice] = useState(false)
   const [showCredit, setShowCredit] = useState(false)
   const [editingPayment, setEditingPayment] = useState<PaymentItem | null>(null)
+  const [viewingInvoice, setViewingInvoice] = useState<PaymentItem | null>(null)
 
   const tabs = [
     { key: 'overdue', label: 'Overdue', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
@@ -357,7 +359,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
             // Invoice-specific rendering
             if (activeTab === 'invoices') {
               return (
-                <div key={p.id} onClick={() => setEditingPayment(p)} className="flex flex-col lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px,80px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer hover:bg-zinc-50/50">
+                <div key={p.id} onClick={() => setViewingInvoice(p)} className="flex flex-col lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px,80px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer hover:bg-zinc-50/50">
                   <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '\u2014'}</span>
                   <div className="min-w-0">
                     <p className="font-medium truncate">{desc}</p>
@@ -526,6 +528,16 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
           open={!!editingPayment}
           onClose={() => setEditingPayment(null)}
           payment={editingPayment}
+        />
+      )}
+      {viewingInvoice && (
+        <InvoiceDetailDialog
+          open={!!viewingInvoice}
+          onClose={() => setViewingInvoice(null)}
+          paymentId={viewingInvoice.id}
+          invoiceNumber={viewingInvoice.invoice_number ?? null}
+          invoiceStatus={viewingInvoice.invoice_status ?? null}
+          updatedAt={viewingInvoice.updated_at}
         />
       )}
     </div>

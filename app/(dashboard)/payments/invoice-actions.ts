@@ -275,6 +275,42 @@ export async function createCreditNote(
   })
 }
 
+// ── Delete Invoice (Draft only) ─────────────────────────────────────
+
+export async function deleteInvoice(
+  paymentId: string
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+
+    // Verify still Draft
+    const { data: current } = await supabase
+      .from('payments')
+      .select('invoice_status, invoice_number')
+      .eq('id', paymentId)
+      .single()
+
+    if (!current) throw new Error('Invoice not found')
+    if (current.invoice_status !== 'Draft') {
+      throw new Error('Can only delete Draft invoices. Void it instead.')
+    }
+
+    // Delete items first (FK cascade should handle this, but be explicit)
+    await supabase.from('payment_items').delete().eq('payment_id', paymentId)
+
+    // Delete payment
+    const { error } = await supabase.from('payments').delete().eq('id', paymentId)
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/payments')
+  }, {
+    action_type: 'delete',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: 'Invoice deleted',
+  })
+}
+
 // ── Get Invoice with Items ──────────────────────────────────────────
 
 export async function getInvoiceWithItems(paymentId: string) {
