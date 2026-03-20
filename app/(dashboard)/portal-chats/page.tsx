@@ -302,7 +302,7 @@ export default function PortalChatsPage() {
                   <div
                     key={msg.id}
                     className={cn(
-                      'max-w-[75%] rounded-xl px-4 py-2.5',
+                      'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden',
                       msg.sender_type === 'admin'
                         ? 'ml-auto bg-blue-600 text-white'
                         : 'bg-zinc-100 text-zinc-900'
@@ -321,7 +321,7 @@ export default function PortalChatsPage() {
                         <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
                       </a>
                     )}
-                    <p className="text-sm whitespace-pre-wrap">{msg.message}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
                     <p className={cn(
                       'text-xs mt-1',
                       msg.sender_type === 'admin' ? 'text-blue-200' : 'text-zinc-400'
