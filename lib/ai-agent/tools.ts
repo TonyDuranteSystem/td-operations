@@ -189,6 +189,67 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'gmail_search',
+    description: 'Search Gmail inbox for emails. Can search by sender, subject, keywords, date range. Returns list of email summaries (id, from, to, subject, date, snippet). Use this to check for new emails from a client or about a topic.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Gmail search query. Examples: "from:mario@example.com", "subject:passport", "from:tacoli newer_than:7d", "is:unread from:client@email.com". Supports all Gmail search operators.' },
+        max_results: { type: 'number', description: 'Max results to return (default 10, max 20)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'gmail_read',
+    description: 'Read the full content of a specific email by its message ID. Returns from, to, subject, date, and full body text. Use after gmail_search to read a specific email.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
+      },
+      required: ['message_id'],
+    },
+  },
+  {
+    name: 'gmail_read_thread',
+    description: 'Read all messages in an email thread by thread ID. Returns the full conversation. Use to understand the full context of an email exchange.',
+    parameters: {
+      type: 'object',
+      properties: {
+        thread_id: { type: 'string', description: 'Gmail thread ID (from gmail_search results)' },
+      },
+      required: ['thread_id'],
+    },
+  },
+  {
+    name: 'update_task',
+    description: 'Update an existing CRM task status, notes, or other fields.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'UUID of the task to update' },
+        status: { type: 'string', enum: ['To Do', 'In Progress', 'Waiting', 'Done'], description: 'New status' },
+        notes: { type: 'string', description: 'Update task notes (appends to existing)' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'], description: 'New priority' },
+        assigned_to: { type: 'string', description: 'New assignee' },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
+    name: 'update_account_notes',
+    description: 'Append a note to an account record. Use this to log actions taken on client accounts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'UUID of the account' },
+        note: { type: 'string', description: 'Note to append (will be timestamped automatically)' },
+      },
+      required: ['account_id', 'note'],
+    },
+  },
+  {
     name: 'run_sql_query',
     description: 'Run a read-only SQL query for complex questions other tools cannot answer. SELECT only. Tables: accounts, contacts, account_contacts, services, payments, tasks, deals, tax_returns, deadlines, leads, portal_messages, offers.',
     parameters: {
@@ -223,6 +284,11 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'create_task': return await createTask(params)
       case 'send_email': return await sendEmail(params)
       case 'get_dashboard_stats': return await getDashboardStats()
+      case 'gmail_search': return await gmailSearch(params)
+      case 'gmail_read': return await gmailRead(params)
+      case 'gmail_read_thread': return await gmailReadThread(params)
+      case 'update_task': return await updateTask(params)
+      case 'update_account_notes': return await updateAccountNotes(params)
       case 'run_sql_query': return await runSqlQuery(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
@@ -514,6 +580,199 @@ async function getDashboardStats() {
     pending_payments_total: totalPending,
     overdue_deadlines: overdueDeadlines.count ?? 0,
   })
+}
+
+// ============================================================
+// Gmail Tools
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function gmailSearch(p: any) {
+  const { gmailGet } = await import('@/lib/gmail')
+  const maxResults = Math.min(Number(p.max_results) || 10, 20)
+
+  // Search messages
+  const searchResult = await gmailGet('/messages', {
+    q: p.query,
+    maxResults: String(maxResults),
+  }) as { messages?: Array<{ id: string; threadId: string }> }
+
+  if (!searchResult.messages?.length) {
+    return JSON.stringify({ results: [], total: 0, message: 'No emails found matching the search query.' })
+  }
+
+  // Fetch headers for each message (in parallel, max 10)
+  const messagesToFetch = searchResult.messages.slice(0, maxResults)
+  const details = await Promise.all(
+    messagesToFetch.map(async (msg) => {
+      try {
+        const detail = await gmailGet(`/messages/${msg.id}`, { format: 'metadata', metadataHeaders: ['From', 'To', 'Subject', 'Date'] }) as {
+          id: string
+          threadId: string
+          snippet: string
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          payload?: { headers?: Array<{ name: string; value: string }> }
+          labelIds?: string[]
+        }
+        const headers = detail.payload?.headers || []
+        const getHeader = (name: string) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || ''
+        return {
+          id: detail.id,
+          thread_id: detail.threadId,
+          from: getHeader('From'),
+          to: getHeader('To'),
+          subject: getHeader('Subject'),
+          date: getHeader('Date'),
+          snippet: detail.snippet,
+          is_unread: detail.labelIds?.includes('UNREAD') || false,
+        }
+      } catch {
+        return { id: msg.id, thread_id: msg.threadId, error: 'Failed to fetch' }
+      }
+    })
+  )
+
+  return JSON.stringify({ results: details, total: details.length })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function gmailRead(p: any) {
+  const { gmailGet } = await import('@/lib/gmail')
+
+  const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }) as {
+    id: string
+    threadId: string
+    snippet: string
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    payload?: any
+    labelIds?: string[]
+  }
+
+  const headers = detail.payload?.headers || []
+  const getHeader = (name: string) => headers.find((h: { name: string; value: string }) => h.name.toLowerCase() === name.toLowerCase())?.value || ''
+
+  // Extract body text
+  let bodyText = ''
+  function extractText(part: { mimeType?: string; body?: { data?: string }; parts?: unknown[] }) {
+    if (part.mimeType === 'text/plain' && part.body?.data) {
+      bodyText += Buffer.from(part.body.data, 'base64url').toString('utf-8')
+    } else if (part.parts) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const sub of part.parts as any[]) extractText(sub)
+    }
+  }
+  if (detail.payload) extractText(detail.payload)
+
+  // Fallback to snippet if no plain text found
+  if (!bodyText) bodyText = detail.snippet || ''
+
+  // Truncate very long emails
+  if (bodyText.length > 5000) bodyText = bodyText.slice(0, 5000) + '\n...[truncated]'
+
+  return JSON.stringify({
+    id: detail.id,
+    thread_id: detail.threadId,
+    from: getHeader('From'),
+    to: getHeader('To'),
+    subject: getHeader('Subject'),
+    date: getHeader('Date'),
+    body: bodyText,
+    is_unread: detail.labelIds?.includes('UNREAD') || false,
+  })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function gmailReadThread(p: any) {
+  const { gmailGet } = await import('@/lib/gmail')
+
+  const thread = await gmailGet(`/threads/${p.thread_id}`, { format: 'full' }) as {
+    id: string
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    messages?: any[]
+  }
+
+  if (!thread.messages?.length) {
+    return JSON.stringify({ thread_id: p.thread_id, messages: [], error: 'Thread not found or empty' })
+  }
+
+  const msgs = thread.messages.map((msg) => {
+    const headers = msg.payload?.headers || []
+    const getHeader = (name: string) => headers.find((h: { name: string; value: string }) => h.name.toLowerCase() === name.toLowerCase())?.value || ''
+
+    let bodyText = ''
+    function extractText(part: { mimeType?: string; body?: { data?: string }; parts?: unknown[] }) {
+      if (part.mimeType === 'text/plain' && part.body?.data) {
+        bodyText += Buffer.from(part.body.data, 'base64url').toString('utf-8')
+      } else if (part.parts) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const sub of part.parts as any[]) extractText(sub)
+      }
+    }
+    if (msg.payload) extractText(msg.payload)
+    if (!bodyText) bodyText = msg.snippet || ''
+    if (bodyText.length > 3000) bodyText = bodyText.slice(0, 3000) + '\n...[truncated]'
+
+    return {
+      id: msg.id,
+      from: getHeader('From'),
+      to: getHeader('To'),
+      subject: getHeader('Subject'),
+      date: getHeader('Date'),
+      body: bodyText,
+    }
+  })
+
+  return JSON.stringify({ thread_id: p.thread_id, messages: msgs })
+}
+
+// ============================================================
+// CRM Update Tools
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateTask(p: any) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {}
+  if (p.status) updates.status = p.status
+  if (p.priority) updates.priority = p.priority
+  if (p.assigned_to) updates.assigned_to = p.assigned_to
+
+  // Handle notes — append to existing
+  if (p.notes) {
+    const { data: existing } = await supabaseAdmin.from('tasks').select('notes').eq('id', p.task_id).single()
+    const timestamp = new Date().toISOString().split('T')[0]
+    const existingNotes = existing?.notes || ''
+    updates.notes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.notes}` : `${timestamp}: ${p.notes}`
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return JSON.stringify({ error: 'No fields to update. Provide status, notes, priority, or assigned_to.' })
+  }
+
+  updates.updated_at = new Date().toISOString()
+  const { data, error } = await supabaseAdmin
+    .from('tasks')
+    .update(updates)
+    .eq('id', p.task_id)
+    .select('id, task_title, status, priority, assigned_to, notes')
+    .single()
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, task: data })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateAccountNotes(p: any) {
+  const { data: existing } = await supabaseAdmin.from('accounts').select('notes').eq('id', p.account_id).single()
+  const timestamp = new Date().toISOString().split('T')[0]
+  const existingNotes = existing?.notes || ''
+  const newNotes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.note}` : `${timestamp}: ${p.note}`
+
+  const { error } = await supabaseAdmin
+    .from('accounts')
+    .update({ notes: newNotes })
+    .eq('id', p.account_id)
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, message: `Note added to account` })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
