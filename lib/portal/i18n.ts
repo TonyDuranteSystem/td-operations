@@ -123,6 +123,29 @@ const translations: Record<Locale, Record<string, string>> = {
     'services.completed': 'Completed Services',
     'services.noServices': 'No services yet',
     'services.noServicesDesc': 'Services will appear here when you purchase a service.',
+    'services.notFound': 'Service not found',
+    'services.progress': 'Progress',
+    'services.stages': 'stages',
+    'services.timeline': 'Service Timeline',
+    'services.relatedDocs': 'Related Documents',
+    'services.blocked': 'Action Required',
+    'services.viewDetails': 'View details',
+
+    // Deadlines
+    'deadlines.title': 'Deadlines',
+    'deadlines.subtitle': 'Track all your important dates and filing deadlines',
+    'deadlines.total': 'Total',
+    'deadlines.pending': 'Pending',
+    'deadlines.overdue': 'Overdue',
+    'deadlines.calendarView': 'Calendar',
+    'deadlines.listView': 'List',
+    'deadlines.allClear': 'All deadlines are up to date!',
+    'nav.deadlines': 'Deadlines',
+
+    // Tax Return Status
+    'taxDocs.returnStatus': 'Tax Return Status',
+    'taxDocs.deadline': 'Deadline',
+    'taxDocs.extension': 'Extension',
 
     // Chat
     'chat.title': 'Chat',
@@ -198,6 +221,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'bank.routingNumber': 'Routing Number',
     'bank.notes': 'Additional Notes',
     'bank.autoNote': 'These details will appear on your invoices automatically.',
+    'bank.showOnInvoice': 'Bank Account on Invoice',
     'bank.save': 'Save Bank Details',
     'bank.saved': 'Bank details saved',
     'bank.failed': 'Failed to save bank details',
@@ -375,6 +399,29 @@ const translations: Record<Locale, Record<string, string>> = {
     'services.completed': 'Servizi Completati',
     'services.noServices': 'Nessun servizio',
     'services.noServicesDesc': 'I servizi appariranno qui quando acquisterai un servizio.',
+    'services.notFound': 'Servizio non trovato',
+    'services.progress': 'Progresso',
+    'services.stages': 'fasi',
+    'services.timeline': 'Timeline del Servizio',
+    'services.relatedDocs': 'Documenti Correlati',
+    'services.blocked': 'Azione Richiesta',
+    'services.viewDetails': 'Vedi dettagli',
+
+    // Deadlines
+    'deadlines.title': 'Scadenze',
+    'deadlines.subtitle': 'Monitora tutte le date importanti e le scadenze fiscali',
+    'deadlines.total': 'Totale',
+    'deadlines.pending': 'In Attesa',
+    'deadlines.overdue': 'Scadute',
+    'deadlines.calendarView': 'Calendario',
+    'deadlines.listView': 'Lista',
+    'deadlines.allClear': 'Tutte le scadenze sono in ordine!',
+    'nav.deadlines': 'Scadenze',
+
+    // Tax Return Status
+    'taxDocs.returnStatus': 'Stato Dichiarazioni Fiscali',
+    'taxDocs.deadline': 'Scadenza',
+    'taxDocs.extension': 'Proroga',
 
     // Chat
     'chat.title': 'Chat',
@@ -450,6 +497,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'bank.routingNumber': 'Routing Number',
     'bank.notes': 'Note Aggiuntive',
     'bank.autoNote': 'Questi dettagli appariranno automaticamente sulle tue fatture.',
+    'bank.showOnInvoice': 'Conto Bancario in Fattura',
     'bank.save': 'Salva Coordinate Bancarie',
     'bank.saved': 'Coordinate bancarie salvate',
     'bank.failed': 'Errore nel salvataggio delle coordinate bancarie',

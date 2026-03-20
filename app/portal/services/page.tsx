@@ -5,7 +5,8 @@ import { getPortalAccounts, getPortalServices } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
-import { Activity, CheckCircle2, AlertCircle, Clock, Cog } from 'lucide-react'
+import { Activity, CheckCircle2, AlertCircle, Clock, Cog, ChevronRight } from 'lucide-react'
+import Link from 'next/link'
 
 const STATUS_COLORS: Record<string, string> = {
   'Not Started': 'bg-zinc-100 text-zinc-600',
@@ -64,8 +65,8 @@ export default async function PortalServicesPage() {
                   const Icon = STATUS_ICONS[s.status ?? ''] ?? Activity
                   const progress = s.current_step && s.total_steps ? (s.current_step / s.total_steps) * 100 : 0
                   return (
-                    <div key={s.id} className={cn(
-                      'bg-white rounded-xl border shadow-sm p-5',
+                    <Link href={`/portal/services/${s.id}`} key={s.id} className={cn(
+                      'bg-white rounded-xl border shadow-sm p-5 hover:shadow-md transition-shadow block',
                       s.blocked_waiting_external && 'border-red-200'
                     )}>
                       <div className="flex items-start justify-between gap-2 mb-3">
@@ -105,7 +106,11 @@ export default async function PortalServicesPage() {
                           <span className="font-medium">Blocked:</span> {s.blocked_reason}
                         </div>
                       )}
-                    </div>
+
+                      <div className="mt-3 flex items-center text-xs text-blue-600 font-medium">
+                        View details <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                      </div>
+                    </Link>
                   )
                 })}
               </div>
@@ -118,14 +123,15 @@ export default async function PortalServicesPage() {
               <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Completed ({completed.length})</h2>
               <div className="grid gap-2">
                 {completed.map(s => (
-                  <div key={s.id} className="bg-white rounded-xl border shadow-sm p-4 flex items-center gap-3">
+                  <Link href={`/portal/services/${s.id}`} key={s.id} className="bg-white rounded-xl border shadow-sm p-4 flex items-center gap-3 hover:shadow-md transition-shadow">
                     <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-zinc-900 truncate">{s.service_name}</p>
                       <p className="text-xs text-zinc-500">{s.service_type}</p>
                     </div>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Completed</span>
-                  </div>
+                    <ChevronRight className="h-4 w-4 text-zinc-300" />
+                  </Link>
                 ))}
               </div>
             </div>

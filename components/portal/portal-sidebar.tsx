@@ -18,6 +18,7 @@ import {
   Menu,
   X,
   User,
+  CalendarDays,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -38,6 +39,7 @@ const navItems = [
   { key: 'nav.customers', href: '/portal/customers', icon: Users },
   { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload },
   { key: 'nav.services', href: '/portal/services', icon: Activity },
+  { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
   { key: 'nav.settings', href: '/portal/settings', icon: Settings },
   { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },

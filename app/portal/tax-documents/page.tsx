@@ -4,7 +4,8 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalTaxReturns } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
-import { FileText, Upload } from 'lucide-react'
+import { FileText, Upload, CheckCircle2, Clock, AlertCircle, CalendarClock, Shield } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { TaxDocumentUpload } from '@/components/portal/tax-document-upload'
 import { format, parseISO } from 'date-fns'
@@ -46,6 +47,61 @@ export default async function TaxDocumentsPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('taxDocs.title', locale)}</h1>
         <p className="text-zinc-500 text-sm mt-1">{t('taxDocs.subtitle', locale)}</p>
       </div>
+
+      {/* Tax Return Status Cards */}
+      {taxReturns.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
+            {t('taxDocs.returnStatus', locale)}
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {taxReturns.map(tr => {
+              const isOverdue = tr.deadline && new Date(tr.deadline) < new Date() && tr.status !== 'Filed' && tr.status !== 'Complete'
+              const statusColor = tr.status === 'Filed' || tr.status === 'Complete'
+                ? 'bg-emerald-100 text-emerald-700'
+                : isOverdue ? 'bg-red-100 text-red-700'
+                : 'bg-amber-100 text-amber-700'
+              const StatusIcon = tr.status === 'Filed' || tr.status === 'Complete'
+                ? CheckCircle2 : isOverdue ? AlertCircle : Clock
+              return (
+                <div key={tr.id} className="bg-white rounded-xl border shadow-sm p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center">
+                        <span className="text-sm font-bold text-indigo-600">{tr.tax_year}</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-zinc-900">{tr.return_type}</p>
+                        <span className={cn('text-[10px] px-2 py-0.5 rounded-full', statusColor)}>
+                          {tr.status}
+                        </span>
+                      </div>
+                    </div>
+                    <StatusIcon className={cn('h-5 w-5',
+                      tr.status === 'Filed' || tr.status === 'Complete' ? 'text-emerald-500' :
+                      isOverdue ? 'text-red-500' : 'text-amber-500'
+                    )} />
+                  </div>
+                  <div className="space-y-1.5 text-xs text-zinc-600">
+                    {tr.deadline && (
+                      <div className="flex items-center gap-2">
+                        <CalendarClock className="h-3.5 w-3.5 text-zinc-400" />
+                        <span>{t('taxDocs.deadline', locale)}: {format(parseISO(tr.deadline), 'MMM d, yyyy')}</span>
+                      </div>
+                    )}
+                    {tr.extension_filed && tr.extension_deadline && (
+                      <div className="flex items-center gap-2">
+                        <Shield className="h-3.5 w-3.5 text-blue-400" />
+                        <span>{t('taxDocs.extension', locale)}: {format(parseISO(tr.extension_deadline), 'MMM d, yyyy')}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Upload Section */}
       <TaxDocumentUpload accountId={selectedAccountId} taxYears={taxYears} />

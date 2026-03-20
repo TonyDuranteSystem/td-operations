@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { FileText, Download, Search, Filter } from 'lucide-react'
+import { FileText, Download, Search, Filter, Eye, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
@@ -33,6 +33,8 @@ export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
+  const [previewDoc, setPreviewDoc] = useState<{ id: string; name: string; url: string } | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   const categories = Array.from(new Set(documents.map(d => d.category).filter((c): c is number => c != null)))
 
@@ -67,8 +69,73 @@ export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
     }
   }
 
+  const isPreviewable = (fileName: string) => {
+    const ext = fileName.toLowerCase().split('.').pop()
+    return ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext ?? '')
+  }
+
+  const handlePreview = async (docId: string, fileName: string) => {
+    setPreviewLoading(true)
+    try {
+      const res = await fetch(`/api/portal/documents/${docId}`)
+      if (!res.ok) throw new Error()
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      setPreviewDoc({ id: docId, name: fileName, url })
+    } catch {
+      toast.error('Failed to load preview')
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const isPdf = (name: string) => name.toLowerCase().endsWith('.pdf')
+
   return (
     <div className="space-y-4">
+      {/* Document Preview Modal */}
+      {previewDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => { URL.revokeObjectURL(previewDoc.url); setPreviewDoc(null) }} />
+          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b">
+              <h3 className="font-medium text-sm text-zinc-900 truncate">{previewDoc.name}</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleDownload(previewDoc.id, previewDoc.name)}
+                  className="p-2 rounded-lg hover:bg-zinc-100 text-zinc-500"
+                  title="Download"
+                >
+                  <Download className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => { URL.revokeObjectURL(previewDoc.url); setPreviewDoc(null) }}
+                  className="p-2 rounded-lg hover:bg-zinc-100 text-zinc-500"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-zinc-50">
+              {isPdf(previewDoc.name) ? (
+                <iframe
+                  src={previewDoc.url}
+                  className="w-full h-[75vh] rounded border"
+                  title={previewDoc.name}
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={previewDoc.url}
+                  alt={previewDoc.name}
+                  className="max-w-full max-h-[75vh] object-contain rounded"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
@@ -138,16 +205,28 @@ export function DocumentList({ documents, categoryLabels }: DocumentListProps) {
                   </span>
                 </div>
               </div>
-              {doc.drive_file_id && (
-                <button
-                  onClick={() => handleDownload(doc.id, doc.file_name)}
-                  disabled={downloading === doc.id}
-                  className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
-                  title="Download"
-                >
-                  <Download className="h-4 w-4" />
-                </button>
-              )}
+              <div className="flex items-center gap-1 shrink-0">
+                {doc.drive_file_id && isPreviewable(doc.file_name) && (
+                  <button
+                    onClick={() => handlePreview(doc.id, doc.file_name)}
+                    disabled={previewLoading}
+                    className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
+                    title="Preview"
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
+                )}
+                {doc.drive_file_id && (
+                  <button
+                    onClick={() => handleDownload(doc.id, doc.file_name)}
+                    disabled={downloading === doc.id}
+                    className="p-2.5 rounded-lg hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors disabled:opacity-50"
+                    title="Download"
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
