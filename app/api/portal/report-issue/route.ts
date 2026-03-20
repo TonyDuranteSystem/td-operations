@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
   await supabaseAdmin.from('tasks').insert({
     task_title: `Portal issue: ${area || 'error'} — ${account?.company_name || 'Unknown'}`,
     assigned_to: 'Luca',
-    category: 'Support',
+    category: 'Internal',
     account_id,
     status: 'To Do',
     priority: 'High',

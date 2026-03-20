@@ -203,7 +203,8 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
         })
       } catch { /* don't fail on report */ }
 
-      // Show friendly message, not technical error
+      // Close dialog so toast is visible, then show friendly message
+      onClose()
       toast.error(
         t('docUpload.errorReported') || "Something went wrong. Our team has been notified and will email you when it's fixed.",
         { duration: 8000 }
