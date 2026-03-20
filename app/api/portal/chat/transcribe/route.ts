@@ -33,11 +33,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Audio too large (max 25MB)' }, { status: 400 })
     }
 
-    // Send to OpenAI Whisper API
+    // Send to OpenAI Whisper API — no language param = auto-detect
+    // Whisper supports 97 languages and auto-detects perfectly
     const whisperForm = new FormData()
     whisperForm.append('file', audio, audio.name || 'recording.webm')
     whisperForm.append('model', 'whisper-1')
-    whisperForm.append('language', language)
     whisperForm.append('response_format', 'json')
 
     const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
