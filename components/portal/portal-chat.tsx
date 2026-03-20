@@ -48,10 +48,10 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
-    el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 150) + 'px'
-    // Enable scroll if content exceeds max
-    el.style.overflowY = el.scrollHeight > 150 ? 'auto' : 'hidden'
+    // Collapse to 0 first to get true scrollHeight
+    el.style.height = '0px'
+    const newHeight = Math.max(44, Math.min(el.scrollHeight, 150))
+    el.style.height = newHeight + 'px'
   }, [input])
 
   // Auto-scroll to bottom on new messages
@@ -236,7 +236,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
             rows={1}
             placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
             className={cn(
-              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-2xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors resize-none",
+              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-2xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors resize-none overflow-y-auto",
               isRecording && "ring-2 ring-red-300 bg-red-50/50"
             )}
           />
