@@ -41,7 +41,7 @@ export async function getPortalServices(accountId: string): Promise<PortalServic
     .from('services')
     .select('id, service_name, service_type, status, current_step, total_steps, blocked_waiting_external, blocked_reason, start_date')
     .eq('account_id', accountId)
-    .in('status', ['Not Started', 'In Progress', 'Blocked', 'Completed'])
+    .in('status', ['Not Started', 'In Progress', 'Waiting Client', 'Waiting Third Party', 'Completed'])
     .order('updated_at', { ascending: false })
 
   // Get current_stage from service_deliveries (linked by account_id + service_name)
