@@ -193,7 +193,7 @@ export default function PortalChatsPage() {
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
       {/* Thread list */}
       <div className={cn(
         'w-full lg:w-[350px] lg:shrink-0 border-r flex flex-col',
@@ -266,7 +266,7 @@ export default function PortalChatsPage() {
 
       {/* Message thread */}
       <div className={cn(
-        'flex-1 flex flex-col',
+        'flex-1 min-w-0 flex flex-col overflow-hidden',
         !selectedAccountId ? 'hidden lg:flex' : 'flex'
       )}>
         {!selectedAccountId ? (
@@ -292,7 +292,7 @@ export default function PortalChatsPage() {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
               {messagesLoading ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
