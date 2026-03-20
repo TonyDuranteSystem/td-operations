@@ -81,11 +81,19 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   Credit: 'bg-purple-100 text-purple-700',
 }
 
+const PAYMENT_STATUS_COLORS: Record<string, string> = {
+  Overdue: 'bg-red-100 text-red-700',
+  Pending: 'bg-amber-100 text-amber-700',
+  Paid: 'bg-emerald-100 text-emerald-700',
+  'Not Invoiced': 'bg-zinc-100 text-zinc-500',
+  Waived: 'bg-zinc-100 text-zinc-400',
+}
+
 const QB_SYNC_ICONS: Record<string, string> = {
-  synced: '✓',
-  error: '✗',
-  pending: '…',
-  skipped: '—',
+  synced: '\u2713',
+  error: '\u2717',
+  pending: '\u2026',
+  skipped: '\u2014',
 }
 
 const FOLLOWUP_COLORS: Record<string, string> = {
@@ -98,31 +106,31 @@ const FOLLOWUP_COLORS: Record<string, string> = {
 }
 
 function formatCurrency(amount: string | number | null, currency?: string | null): string {
-  if (amount == null) return '—'
+  if (amount == null) return '\u2014'
   const num = typeof amount === 'string' ? parseFloat(amount) : amount
-  if (isNaN(num)) return '—'
-  const c = currency === 'EUR' ? '€' : '$'
+  if (isNaN(num)) return '\u2014'
+  const c = currency === 'EUR' ? '\u20AC' : '$'
   return `${c}${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function formatDate(d: string | null): string {
-  if (!d) return '—'
+  if (!d) return '\u2014'
   try {
-    return format(parseISO(d), 'dd/MM/yyyy')
+    return format(parseISO(d), 'MMM d, yyyy')
   } catch {
     return d
   }
 }
 
 function getOverdueBucket(dueDate: string | null, today: string): { label: string; color: string } {
-  if (!dueDate) return { label: 'N/D', color: 'bg-zinc-100 text-zinc-600' }
+  if (!dueDate) return { label: 'No date', color: 'bg-zinc-100 text-zinc-600' }
   const days = differenceInDays(parseISO(today), parseISO(dueDate))
-  if (days <= 0) return { label: 'Non scaduto', color: 'bg-zinc-100 text-zinc-600' }
-  if (days <= 7) return { label: `${days}g`, color: 'bg-amber-100 text-amber-700' }
-  if (days <= 14) return { label: `${days}g`, color: 'bg-amber-200 text-amber-800' }
-  if (days <= 30) return { label: `${days}g`, color: 'bg-orange-100 text-orange-700' }
-  if (days <= 45) return { label: `${days}g`, color: 'bg-red-100 text-red-700' }
-  return { label: `${days}g`, color: 'bg-red-200 text-red-900' }
+  if (days <= 0) return { label: 'Not due', color: 'bg-zinc-100 text-zinc-600' }
+  if (days <= 7) return { label: `${days}d`, color: 'bg-amber-100 text-amber-700' }
+  if (days <= 14) return { label: `${days}d`, color: 'bg-amber-200 text-amber-800' }
+  if (days <= 30) return { label: `${days}d`, color: 'bg-orange-100 text-orange-700' }
+  if (days <= 45) return { label: `${days}d`, color: 'bg-red-100 text-red-700' }
+  return { label: `${days}d`, color: 'bg-red-200 text-red-900' }
 }
 
 function MarkPaidButton({ paymentId, description }: { paymentId: string; description: string }) {
@@ -136,22 +144,22 @@ function MarkPaidButton({ paymentId, description }: { paymentId: string; descrip
         startTransition(async () => {
           try {
             await markPaymentPaid(paymentId)
-            toast.success(`Pagamento segnato come pagato`, { description })
+            toast.success('Payment marked as paid', { description })
           } catch {
-            toast.error('Errore nel segnare il pagamento come pagato')
+            toast.error('Failed to mark payment as paid')
           }
         })
       }}
       className={cn(
-        'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors shrink-0',
+        'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border transition-colors shrink-0',
         isPending
-          ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-          : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+          ? 'bg-zinc-100 text-zinc-400 border-zinc-200 cursor-not-allowed'
+          : 'bg-white text-zinc-600 border-zinc-300 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300'
       )}
-      title="Segna come pagato"
+      title="Mark as paid"
     >
       {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-      <span className="hidden sm:inline">Pagato</span>
+      <span className="hidden sm:inline">Mark Paid</span>
     </button>
   )
 }
@@ -196,19 +204,14 @@ function InvoiceActions({ payment }: { payment: PaymentItem }) {
 
   return (
     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-      {/* Download PDF — always available */}
       <button onClick={handleDownload} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600" title="Download PDF">
         <Download className="h-3.5 w-3.5" />
       </button>
-
-      {/* Send — only for Draft or Overdue */}
       {(status === 'Draft' || status === 'Overdue') && (
         <button onClick={handleSend} disabled={isPending} className="p-1 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700 disabled:opacity-40" title="Send Invoice">
           {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
         </button>
       )}
-
-      {/* Remind — only for Sent or Overdue */}
       {(status === 'Sent' || status === 'Overdue') && (
         <button onClick={handleRemind} disabled={isPending} className="p-1 rounded hover:bg-amber-50 text-amber-500 hover:text-amber-700 disabled:opacity-40" title="Send Reminder">
           {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
@@ -229,14 +232,14 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
   const [editingPayment, setEditingPayment] = useState<PaymentItem | null>(null)
 
   const tabs = [
-    { key: 'scaduti', label: 'Scaduti', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
-    { key: 'arrivo', label: 'In Arrivo', count: stats.upcomingCount, icon: Clock, color: 'text-amber-600' },
-    { key: 'pagati', label: 'Pagati', count: stats.paidCount, icon: CheckCircle2, color: 'text-emerald-600' },
+    { key: 'overdue', label: 'Overdue', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
+    { key: 'upcoming', label: 'Upcoming', count: stats.upcomingCount, icon: Clock, color: 'text-amber-600' },
+    { key: 'paid', label: 'Paid', count: stats.paidCount, icon: CheckCircle2, color: 'text-emerald-600' },
     { key: 'invoices', label: 'Invoices', count: stats.invoiceCount, icon: FileText, color: 'text-blue-600' },
   ]
 
-  const allPayments = activeTab === 'scaduti' ? overdue :
-                      activeTab === 'arrivo' ? upcoming :
+  const allPayments = activeTab === 'overdue' ? overdue :
+                      activeTab === 'upcoming' ? upcoming :
                       activeTab === 'invoices' ? invoices : paid
   const totalPages = Math.ceil(allPayments.length / PAYMENTS_PER_PAGE)
   const currentPayments = allPayments.slice((page - 1) * PAYMENTS_PER_PAGE, page * PAYMENTS_PER_PAGE)
@@ -247,15 +250,15 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
       <div className="flex gap-3 flex-wrap">
         <div className="bg-white rounded-lg border p-4 flex-1 min-w-[140px]">
           <p className="text-2xl font-semibold text-red-600">{formatCurrency(stats.overdueTotal)}</p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.overdueCount} pagamenti scaduti</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.overdueCount} overdue</p>
         </div>
         <div className="bg-white rounded-lg border p-4 flex-1 min-w-[140px]">
           <p className="text-2xl font-semibold text-amber-600">{formatCurrency(stats.upcomingTotal)}</p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.upcomingCount} in arrivo</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.upcomingCount} upcoming</p>
         </div>
         <div className="bg-white rounded-lg border p-4 flex-1 min-w-[140px]">
           <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(stats.paidTotal)}</p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.paidCount} pagati</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.paidCount} paid</p>
         </div>
         {activeTab === 'invoices' ? (
           <div className="flex gap-2">
@@ -280,7 +283,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
           <button
             onClick={() => setShowCreate(true)}
             className="bg-white rounded-lg border p-4 min-w-[48px] flex items-center justify-center hover:bg-zinc-50 transition-colors"
-            title="Nuovo pagamento"
+            title="New payment"
           >
             <Plus className="h-5 w-5 text-zinc-600" />
           </button>
@@ -329,12 +332,12 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
             <span></span>
           </div>
         ) : (
-          <div className="hidden lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            <span>Descrizione</span>
-            <span>Azienda</span>
-            <span className="text-right">Importo</span>
-            <span>Scadenza</span>
-            <span>Stato</span>
+          <div className="hidden lg:grid lg:grid-cols-[1fr,120px,100px,100px,100px,80px,70px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            <span>Description</span>
+            <span>Company</span>
+            <span className="text-right">Amount</span>
+            <span>Due Date</span>
+            <span>Status</span>
             <span>Follow-up</span>
             <span></span>
           </div>
@@ -342,20 +345,20 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
 
         {currentPayments.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            Nessun pagamento
+            No payments
           </div>
         ) : (
           currentPayments.map(p => {
-            const bucket = activeTab === 'scaduti' ? getOverdueBucket(p.due_date, today) : null
-            const desc = p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || p.installment || '—')
+            const bucket = activeTab === 'overdue' ? getOverdueBucket(p.due_date, today) : null
+            const desc = p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || p.installment || '\u2014')
+            const statusLabel = p.status ?? 'Unknown'
+            const statusColor = PAYMENT_STATUS_COLORS[statusLabel] ?? 'bg-zinc-100 text-zinc-600'
 
             // Invoice-specific rendering
             if (activeTab === 'invoices') {
               return (
                 <div key={p.id} onClick={() => setEditingPayment(p)} className="flex flex-col lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px,80px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer hover:bg-zinc-50/50">
-                  {/* Invoice # */}
-                  <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '—'}</span>
-                  {/* Description */}
+                  <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '\u2014'}</span>
                   <div className="min-w-0">
                     <p className="font-medium truncate">{desc}</p>
                     <p className="text-xs text-muted-foreground lg:hidden">
@@ -363,35 +366,29 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                       {formatCurrency(p.total ?? p.amount, p.amount_currency)}
                     </p>
                   </div>
-                  {/* Account */}
                   <div className="hidden lg:block">
                     {p.company_name ? (
                       <Link href={`/accounts/${p.account_id}`} className="text-xs text-muted-foreground hover:text-blue-600 truncate block">
                         {p.company_name}
                       </Link>
-                    ) : <span className="text-xs text-muted-foreground">—</span>}
+                    ) : <span className="text-xs text-muted-foreground">\u2014</span>}
                   </div>
-                  {/* Amount */}
                   <p className={cn('text-right font-medium hidden lg:block', p.invoice_status === 'Credit' && 'text-purple-600')}>
                     {p.invoice_status === 'Credit' ? '-' : ''}{formatCurrency(Math.abs(Number(p.total ?? p.amount)), p.amount_currency)}
                   </p>
-                  {/* Due Date */}
                   <div className="hidden lg:block text-xs">
-                    {p.due_date ? formatDate(p.due_date) : '—'}
+                    {p.due_date ? formatDate(p.due_date) : '\u2014'}
                   </div>
-                  {/* Status */}
                   <div className="hidden lg:block">
                     <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', INVOICE_STATUS_COLORS[p.invoice_status ?? ''] ?? 'bg-zinc-100')}>
                       {p.invoice_status}
                     </span>
                   </div>
-                  {/* QB Sync */}
                   <div className="hidden lg:block text-center">
                     <span className={cn('text-xs', p.qb_sync_status === 'synced' ? 'text-emerald-600' : p.qb_sync_status === 'error' ? 'text-red-600' : 'text-zinc-400')} title={`QB: ${p.qb_sync_status ?? 'pending'}`}>
-                      {QB_SYNC_ICONS[p.qb_sync_status ?? 'pending'] ?? '…'}
+                      {QB_SYNC_ICONS[p.qb_sync_status ?? 'pending'] ?? '\u2026'}
                     </span>
                   </div>
-                  {/* Actions */}
                   <div className="hidden lg:flex justify-end">
                     <InvoiceActions payment={p} />
                   </div>
@@ -401,16 +398,19 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
 
             return (
               <div key={p.id} onClick={() => setEditingPayment(p)} className={cn(
-                'flex flex-col lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer',
-                activeTab === 'scaduti' && bucket ? 'hover:bg-red-50/30' : 'hover:bg-zinc-50/50'
+                'flex flex-col lg:grid lg:grid-cols-[1fr,120px,100px,100px,100px,80px,70px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer',
+                activeTab === 'overdue' ? 'hover:bg-red-50/30' : 'hover:bg-zinc-50/50'
               )}>
                 {/* Description + mobile info */}
                 <div className="min-w-0">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium truncate">{desc}</p>
-                    {/* Mobile: quick action */}
-                    <div className="lg:hidden">
-                      {activeTab !== 'pagati' && (
+                    {/* Mobile: status badge + action */}
+                    <div className="flex items-center gap-2 lg:hidden">
+                      <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', statusColor)}>
+                        {statusLabel}
+                      </span>
+                      {activeTab !== 'paid' && (
                         <MarkPaidButton paymentId={p.id} description={String(desc)} />
                       )}
                     </div>
@@ -424,9 +424,9 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                       </Link>
                     )}
                     {p.due_date && <span>· {formatDate(p.due_date)}</span>}
-                    {bucket && (
+                    {bucket && bucket.label !== 'No date' && (
                       <span className={cn('font-medium px-1.5 py-0.5 rounded', bucket.color)}>
-                        {bucket.label}
+                        {bucket.label} overdue
                       </span>
                     )}
                   </div>
@@ -438,7 +438,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                     <Link href={`/accounts/${p.account_id}`} className="text-xs text-muted-foreground hover:text-blue-600 truncate block">
                       {p.company_name}
                     </Link>
-                  ) : <span className="text-xs text-muted-foreground">—</span>}
+                  ) : <span className="text-xs text-muted-foreground">\u2014</span>}
                 </div>
                 <p className="text-right font-medium hidden lg:block">
                   {formatCurrency(p.amount_due ?? p.amount, p.amount_currency)}
@@ -446,25 +446,20 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                 <div className="hidden lg:flex items-center gap-1">
                   {p.due_date ? (
                     <><Calendar className="h-3 w-3 text-muted-foreground" /><span className="text-xs">{formatDate(p.due_date)}</span></>
-                  ) : <span className="text-xs text-muted-foreground">N/D</span>}
+                  ) : <span className="text-xs text-muted-foreground">No date</span>}
                 </div>
                 <div className="hidden lg:block">
-                  {activeTab === 'scaduti' && bucket ? (
-                    <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', bucket.color)}>{bucket.label}</span>
-                  ) : (
-                    <span className={cn('text-xs px-1.5 py-0.5 rounded',
-                      p.status === 'Paid' ? 'bg-emerald-100 text-emerald-700' :
-                      p.status === 'Overdue' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                    )}>{p.status}</span>
-                  )}
+                  <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', statusColor)}>
+                    {statusLabel}
+                  </span>
                 </div>
                 <div className="hidden lg:block">
                   {p.followup_stage ? (
                     <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', FOLLOWUP_COLORS[p.followup_stage] ?? 'bg-zinc-100')}>{p.followup_stage}</span>
-                  ) : <span className="text-xs text-muted-foreground">—</span>}
+                  ) : <span className="text-xs text-muted-foreground">\u2014</span>}
                 </div>
                 <div className="hidden lg:flex justify-end">
-                  {activeTab !== 'pagati' && (
+                  {activeTab !== 'paid' && (
                     <MarkPaidButton paymentId={p.id} description={String(desc)} />
                   )}
                 </div>
@@ -478,7 +473,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            {((page - 1) * PAYMENTS_PER_PAGE) + 1}–{Math.min(page * PAYMENTS_PER_PAGE, allPayments.length)} di {allPayments.length}
+            {((page - 1) * PAYMENTS_PER_PAGE) + 1}\u2013{Math.min(page * PAYMENTS_PER_PAGE, allPayments.length)} of {allPayments.length}
           </p>
           <div className="flex items-center gap-1">
             <button

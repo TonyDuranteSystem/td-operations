@@ -8,7 +8,7 @@ export default async function PaymentsPage({
 }) {
   const supabase = createClient()
   const today = new Date().toISOString().split('T')[0]
-  const activeTab = searchParams.tab ?? 'scaduti'
+  const activeTab = searchParams.tab ?? 'overdue'
 
   // Fetch all non-paid payments with account names
   const { data: rawPayments } = await supabase
@@ -65,7 +65,7 @@ export default async function PaymentsPage({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Payment Tracker</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {stats.overdueCount} scaduti (${stats.overdueTotal.toLocaleString()}) · {stats.upcomingCount} in arrivo
+          {stats.overdueCount} overdue (${stats.overdueTotal.toLocaleString()}) · {stats.upcomingCount} upcoming
         </p>
       </div>
       <PaymentBoard
