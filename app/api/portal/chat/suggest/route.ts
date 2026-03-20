@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
+import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -13,6 +14,12 @@ import { NextRequest, NextResponse } from 'next/server'
  * 4. Generates a reply that sounds like the admin
  */
 export async function POST(request: NextRequest) {
+  // Rate limit: max 6 suggestions per minute (expensive OpenAI calls)
+  const rl = checkRateLimit(getRateLimitKey(request) + ':suggest', 6, 60_000)
+  if (!rl.allowed) {
+    return NextResponse.json({ error: 'Too many requests. Please wait.' }, { status: 429, headers: { 'Retry-After': String(rl.retryAfter ?? 10) } })
+  }
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isAdmin(user)) {
@@ -119,7 +126,9 @@ export async function POST(request: NextRequest) {
       .map(m => `${m.sender_type === 'admin' ? 'Admin' : 'Client'}: ${m.message}`)
       .join('\n')
 
-    // 9. Call GPT-4
+    // 9. Call GPT-4 (with 30s timeout)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30_000)
     const systemPrompt = `You are an AI assistant that helps Antonio (admin of Tony Durante LLC, a US business formation and tax consulting company) draft replies to client portal messages.
 
 YOUR JOB: Generate a reply that sounds EXACTLY like Antonio would write it. Match his tone, style, and level of detail.
@@ -158,7 +167,9 @@ RULES:
         max_tokens: 500,
         temperature: 0.7,
       }),
+      signal: controller.signal,
     })
+    clearTimeout(timeout)
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -170,7 +181,10 @@ RULES:
     const suggestion = result.choices?.[0]?.message?.content?.trim() || ''
 
     return NextResponse.json({ suggestion })
-  } catch (err) {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      return NextResponse.json({ error: 'AI request timed out. Please try again.' }, { status: 504 })
+    }
     console.error('[suggest] Error:', err)
     return NextResponse.json({ error: 'Failed to generate suggestion' }, { status: 500 })
   }

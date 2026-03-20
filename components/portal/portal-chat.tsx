@@ -247,6 +247,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
                 onClick={stopRecording}
                 className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
                 title={t('chat.stopRecording') || 'Stop recording'}
+                aria-label={t('chat.stopRecording') || 'Stop recording'}
               >
                 <Square className="h-5 w-5 fill-current" />
               </button>
@@ -254,6 +255,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
               <button
                 disabled
                 className="p-3 rounded-full bg-blue-100 text-blue-500 shrink-0"
+                aria-label="Transcribing audio"
               >
                 <Loader2 className="h-5 w-5 animate-spin" />
               </button>
@@ -262,6 +264,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
                 onClick={startRecording}
                 className="p-3 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
                 title={t('chat.startRecording') || 'Voice input'}
+                aria-label={t('chat.startRecording') || 'Start voice recording'}
               >
                 <Mic className="h-5 w-5" />
               </button>

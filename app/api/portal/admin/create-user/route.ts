@@ -89,12 +89,58 @@ export async function POST(request: NextRequest) {
     })
     .eq('id', account_id)
 
+  // Send welcome email with temp password (never expose in API response)
+  try {
+    const { gmailPost } = await import('@/lib/gmail')
+    const loginUrl = `${PORTAL_BASE_URL}/portal/login`
+    const welcomeHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #18181b; padding: 20px; border-radius: 12px 12px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 18px;">Welcome to Tony Durante Portal</h1>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+          <p>Hi ${contact.full_name || 'there'},</p>
+          <p>Your portal account has been created. Here are your login credentials:</p>
+          <div style="background: #f4f4f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0 0 8px;"><strong>Email:</strong> ${contact.email}</p>
+            <p style="margin: 0;"><strong>Temporary Password:</strong> ${tempPassword}</p>
+          </div>
+          <p>You will be asked to change your password on first login.</p>
+          <a href="${loginUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 8px;">
+            Login to Portal
+          </a>
+        </div>
+      </div>
+    `
+    const subject = 'Your Tony Durante Portal Account'
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+    const boundary = `boundary_${Date.now()}`
+    const rawEmail = [
+      `From: Tony Durante <support@tonydurante.us>`,
+      `To: ${contact.email}`,
+      `Subject: ${encodedSubject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(welcomeHtml).toString('base64'),
+      `--${boundary}--`,
+    ].join('\r\n')
+    await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+  } catch (emailErr) {
+    console.error('Welcome email failed:', emailErr)
+    // Don't fail the whole operation — user is created, password can be sent manually
+  }
+
+  // NEVER return temp_password in API response — it was sent via email
   return NextResponse.json({
     success: true,
     user_id: newUser.user.id,
     email: contact.email,
-    temp_password: tempPassword,
     login_url: `${PORTAL_BASE_URL}/portal/login`,
-    message: `Portal account created for ${contact.full_name} (${contact.email}). Temporary password: ${tempPassword}`,
+    message: `Portal account created for ${contact.full_name || contact.email}. Login credentials sent via email.`,
   })
 }

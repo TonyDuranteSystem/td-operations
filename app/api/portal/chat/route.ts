@@ -67,6 +67,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id and message (or attachment) required' }, { status: 400 })
   }
 
+  // Input validation: max message length
+  if (message && message.length > 5000) {
+    return NextResponse.json({ error: 'Message too long (max 5000 characters)' }, { status: 400 })
+  }
+
+  // Validate attachment_url is from our storage only
+  if (attachment_url && !attachment_url.startsWith(process.env.NEXT_PUBLIC_SUPABASE_URL || '')) {
+    return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
+  }
+
   // Determine sender type
   const isClientUser = user.app_metadata?.role === 'client'
   const senderType = isClientUser ? 'client' : 'admin'
@@ -136,8 +146,9 @@ async function notifyAdminOfClientMessage(accountId: string, clientEmail: string
     .eq('id', accountId)
     .single()
 
-  const companyName = account?.company_name || 'Unknown'
-  const preview = messagePreview.slice(0, 200) || '[Attachment]'
+  const escHtml = (s: string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g, '&#39;')
+  const companyName = escHtml(account?.company_name || 'Unknown')
+  const preview = escHtml(messagePreview.slice(0, 200) || '[Attachment]')
 
   try {
     const { gmailPost } = await import('@/lib/gmail')

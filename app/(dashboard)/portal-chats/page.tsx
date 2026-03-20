@@ -475,11 +475,12 @@ export default function PortalChatsPage() {
                       onClick={stopRecording}
                       className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
                       title="Stop recording"
+                      aria-label="Stop recording"
                     >
                       <Square className="h-5 w-5 fill-current" />
                     </button>
                   ) : isTranscribing ? (
-                    <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0">
+                    <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0" aria-label="Transcribing audio">
                       <Loader2 className="h-5 w-5 animate-spin" />
                     </button>
                   ) : (
@@ -487,6 +488,7 @@ export default function PortalChatsPage() {
                       onClick={startRecording}
                       className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
                       title="Dictate — appends to current text"
+                      aria-label="Start voice recording"
                     >
                       <Mic className="h-5 w-5" />
                     </button>
@@ -500,6 +502,11 @@ export default function PortalChatsPage() {
                 >
                   {sendMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
                 </button>
+                {replyText.length > 4500 && (
+                  <span className={cn('text-xs', replyText.length > 5000 ? 'text-red-500' : 'text-zinc-400')}>
+                    {replyText.length}/5000
+                  </span>
+                )}
               </div>
             </div>
           </>

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
+import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -10,6 +11,12 @@ import { NextRequest, NextResponse } from 'next/server'
  * adds clarity, and makes it sound polished.
  */
 export async function POST(request: NextRequest) {
+  // Rate limit: max 12 polishes per minute
+  const rl = checkRateLimit(getRateLimitKey(request) + ':polish', 12, 60_000)
+  if (!rl.allowed) {
+    return NextResponse.json({ error: 'Too many requests. Please wait.' }, { status: 429, headers: { 'Retry-After': String(rl.retryAfter ?? 10) } })
+  }
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isAdmin(user)) {
@@ -68,6 +75,10 @@ ${styleExamples.length > 0 ? `ANTONIO'S WRITING STYLE (examples from past messag
 
 ${companyName ? `CLIENT COMPANY: ${companyName}` : ''}`
 
+    // 30s timeout
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30_000)
+
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -83,7 +94,9 @@ ${companyName ? `CLIENT COMPANY: ${companyName}` : ''}`
         max_tokens: 500,
         temperature: 0.5,
       }),
+      signal: controller.signal,
     })
+    clearTimeout(timeout)
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -95,7 +108,10 @@ ${companyName ? `CLIENT COMPANY: ${companyName}` : ''}`
     const polished = result.choices?.[0]?.message?.content?.trim() || ''
 
     return NextResponse.json({ polished })
-  } catch (err) {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      return NextResponse.json({ error: 'AI request timed out. Please try again.' }, { status: 504 })
+    }
     console.error('[polish] Error:', err)
     return NextResponse.json({ error: 'Failed to polish message' }, { status: 500 })
   }
