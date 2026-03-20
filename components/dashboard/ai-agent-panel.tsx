@@ -89,7 +89,9 @@ export function AiAgentPanel() {
       }
 
       const data = await res.json()
-      setMessages(prev => [...prev, { role: 'assistant', content: data.content || 'No response.' }])
+      const providerTag = data.provider === 'claude' ? '' : data.provider === 'openai' ? ' _(GPT-4o fallback)_' : ''
+      const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
+      setMessages(prev => [...prev, { role: 'assistant', content: (data.content || 'No response.') + providerTag + toolInfo }])
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Something went wrong. Please try again.' }])
     } finally {
