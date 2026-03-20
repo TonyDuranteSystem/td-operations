@@ -34,10 +34,12 @@ export async function GET(
   }
 
   // Fetch service delivery (has current stage + stage_history)
+  // Linked by account_id + service_name (no FK between tables)
   const { data: delivery } = await supabaseAdmin
     .from('service_deliveries')
     .select('id, stage, stage_order, stage_entered_at, stage_history, status, start_date, end_date, notes')
-    .eq('service_id', id)
+    .eq('account_id', service.account_id)
+    .eq('service_name', service.service_name)
     .maybeSingle()
 
   // Fetch pipeline stages for this service type

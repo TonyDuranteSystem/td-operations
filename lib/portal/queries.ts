@@ -44,24 +44,23 @@ export async function getPortalServices(accountId: string): Promise<PortalServic
     .in('status', ['Not Started', 'In Progress', 'Blocked', 'Completed'])
     .order('updated_at', { ascending: false })
 
-  // Get current_stage from service_deliveries
-  const serviceIds = (data ?? []).map(s => s.id)
+  // Get current_stage from service_deliveries (linked by account_id + service_name)
   let stageMap: Record<string, string> = {}
 
-  if (serviceIds.length > 0) {
+  if ((data ?? []).length > 0) {
     const { data: deliveries } = await supabaseAdmin
       .from('service_deliveries')
-      .select('service_id, current_stage')
-      .in('service_id', serviceIds)
+      .select('service_name, stage')
+      .eq('account_id', accountId)
 
     if (deliveries) {
-      stageMap = Object.fromEntries(deliveries.map(d => [d.service_id, d.current_stage]))
+      stageMap = Object.fromEntries(deliveries.map(d => [d.service_name, d.stage]))
     }
   }
 
   return (data ?? []).map(s => ({
     ...s,
-    current_stage: stageMap[s.id] ?? null,
+    current_stage: stageMap[s.service_name] ?? null,
   })) as PortalService[]
 }
 
