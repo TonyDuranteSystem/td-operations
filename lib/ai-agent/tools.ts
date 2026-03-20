@@ -326,6 +326,19 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['message_id'],
     },
   },
+  {
+    name: 'preview_attachment',
+    description: 'Preview an image attachment from a Gmail email. Returns an inline image that will be displayed in the chat. Use this when Antonio asks to see/show/preview an attachment before saving it. Only works for images (PNG, JPG, GIF). For PDFs or other files, save to Drive first and provide the link.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message_id: { type: 'string', description: 'Gmail message ID' },
+        attachment_id: { type: 'string', description: 'Attachment ID (from gmail_get_attachments or gmail_read results)' },
+        mime_type: { type: 'string', description: 'MIME type of the attachment (e.g. image/png, image/jpeg)' },
+      },
+      required: ['message_id', 'attachment_id'],
+    },
+  },
   // ── CRM Update Tools ──
   {
     name: 'update_service',
@@ -423,6 +436,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'drive_move': return await driveMoveTool(params)
       case 'drive_upload_file': return await driveUploadFileTool(params)
       case 'gmail_get_attachments': return await gmailGetAttachmentsTool(params)
+      case 'preview_attachment': return await previewAttachmentTool(params)
       case 'update_service': return await updateService(params)
       case 'update_contact': return await updateContact(params)
       case 'advance_service_stage': return await advanceServiceStage(params)
@@ -1058,6 +1072,31 @@ async function gmailGetAttachmentsTool(p: any) {
     })),
     total: attachments.length,
     hint: 'To save to Drive: call gmail_get_attachments again with save_to_drive=true and drive_folder_id. Or use drive_upload_file with gmail_message_id + attachment_id for a specific file. Find the client folder with drive_search(client_name, mime_type="application/vnd.google-apps.folder").',
+  })
+}
+
+// ============================================================
+// Attachment Preview Tool
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function previewAttachmentTool(p: any) {
+  const mimeType = p.mime_type || 'image/png'
+
+  // Only images can be previewed inline
+  if (!mimeType.startsWith('image/')) {
+    return JSON.stringify({
+      error: 'Only image attachments can be previewed. For PDFs and other files, save to Drive first and share the link.',
+    })
+  }
+
+  // Return a preview URL that the chat UI will render as an image
+  const previewUrl = `/api/ai-agent/attachment-preview?message_id=${encodeURIComponent(p.message_id)}&attachment_id=${encodeURIComponent(p.attachment_id)}&mime_type=${encodeURIComponent(mimeType)}`
+
+  return JSON.stringify({
+    preview_url: previewUrl,
+    mime_type: mimeType,
+    message: `Here is the attachment preview. Include this in your response as an image: ![Attachment Preview](${previewUrl})`,
   })
 }
 
