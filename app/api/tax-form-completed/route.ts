@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
 
 export async function POST(req: NextRequest) {
   try {
@@ -364,7 +365,7 @@ ${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>
       try {
         // Wait for Drive save to complete (files need to be in Drive first)
         // Then trigger bank statement processing + P&L generation
-        const { downloadFileBinary, listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
+        // downloadFileBinary, listFolder, uploadBinaryToDrive imported at top
         const { parseBankStatement, categorizeTransaction } = await import("@/lib/bank-statement-parser")
 
         const { data: acc } = await supabaseAdmin
@@ -465,10 +466,42 @@ ${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>
                 try {
                   // Trigger P&L generation via the MCP tool logic
                   // For now, just log that it's ready — the MCP tool can be called to generate Excel
+                  // Auto-generate P&L Excel and upload to Drive
+                  const { generatePnlExcel } = await import("@/lib/pnl-generator")
+                  const pnl = await generatePnlExcel(sub.account_id!, sub.tax_year)
+
+                  // Upload to Drive Tax/{year}/ folder
+                  const { data: accDrive } = await supabaseAdmin
+                    .from("accounts")
+                    .select("drive_folder_id")
+                    .eq("id", sub.account_id!)
+                    .single()
+
+                  if (accDrive?.drive_folder_id) {
+                    const taxFolderId = await (async () => {
+                      const lf = await listFolder(accDrive.drive_folder_id)
+                      const files = (lf as { files?: { id: string; name: string; mimeType: string }[] }).files || []
+                      const tf = files.find(f => f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name))
+                      if (!tf) return accDrive.drive_folder_id
+                      // Find year subfolder
+                      const yearLf = await listFolder(tf.id)
+                      const yearFiles = (yearLf as { files?: { id: string; name: string; mimeType: string }[] }).files || []
+                      const yf = yearFiles.find(f => f.name === String(sub.tax_year) && f.mimeType === "application/vnd.google-apps.folder")
+                      return yf?.id || tf.id
+                    })()
+
+                    await uploadBinaryToDrive(
+                      pnl.fileName,
+                      pnl.buffer,
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                      taxFolderId,
+                    )
+                  }
+
                   results.push({
-                    step: "pnl_ready",
+                    step: "pnl_generated",
                     status: "ok",
-                    detail: `${totalParsed} transactions stored. Run bank_statement_pnl to generate Excel.`,
+                    detail: `P&L Excel generated and uploaded to Drive. ${pnl.summary}`,
                   })
                 } catch (pnlErr) {
                   results.push({
