@@ -33,13 +33,6 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
 
   const handleTranscript = useCallback((text: string) => {
     setInput(prev => (prev ? prev + ' ' + text : text).trim())
-    // Auto-grow textarea for transcribed text
-    setTimeout(() => {
-      if (inputRef.current) {
-        inputRef.current.style.height = 'auto'
-        inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + 'px'
-      }
-    }, 0)
     inputRef.current?.focus()
   }, [])
 
@@ -50,6 +43,16 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
     stopRecording,
     isSupported: micSupported,
   } = useVoiceInput({ language: speechLang, onTranscript: handleTranscript })
+
+  // Auto-grow textarea whenever input changes (typing, voice, paste)
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 150) + 'px'
+    // Enable scroll if content exceeds max
+    el.style.overflowY = el.scrollHeight > 150 ? 'auto' : 'hidden'
+  }, [input])
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -228,20 +231,14 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
           <textarea
             ref={inputRef}
             value={input}
-            onChange={e => {
-              setInput(e.target.value)
-              // Auto-grow: reset height then set to scrollHeight
-              e.target.style.height = 'auto'
-              e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
-            }}
+            onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
             placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
             className={cn(
-              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-2xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors resize-none overflow-hidden",
+              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-2xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors resize-none",
               isRecording && "ring-2 ring-red-300 bg-red-50/50"
             )}
-            style={{ maxHeight: '120px' }}
           />
           {/* WhatsApp-style: empty input = mic, text = send. One big button. */}
           {input.trim() || !micSupported ? (
