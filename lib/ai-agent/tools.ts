@@ -190,11 +190,11 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'gmail_search',
-    description: 'Search Gmail inbox (support@tonydurante.us). Returns email summaries with message IDs. WORKFLOW for client document handling: 1) gmail_search to find the email, 2) gmail_read to see full content + attachment list, 3) gmail_get_attachments to list/save attachments to Drive, 4) update_task + update_contact to update CRM.',
+    description: 'Search Gmail inbox (support@tonydurante.us). Returns email summaries with message IDs. IMPORTANT: To find emails from a client, FIRST use search_contacts to get their email address, then search with "from:their@email.com". Searching by name alone may not work. WORKFLOW: 1) search_contacts → get email, 2) gmail_search with from:email, 3) gmail_read for full content, 4) gmail_get_attachments to save to Drive, 5) update_task + update_contact.',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Gmail search query. Examples: "from:mario@example.com", "subject:passport", "from:tacoli newer_than:7d", "is:unread from:client@email.com". Supports all Gmail search operators.' },
+        query: { type: 'string', description: 'Gmail search query. ALWAYS use "from:email@address.com" to search by sender (not by name). Examples: "from:mario@example.com", "from:client@email.com has:attachment", "from:client@email.com newer_than:7d". Supports all Gmail operators.' },
         max_results: { type: 'number', description: 'Max results to return (default 10, max 20)' },
       },
       required: ['query'],
