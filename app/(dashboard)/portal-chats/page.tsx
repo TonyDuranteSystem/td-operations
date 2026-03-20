@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
@@ -29,9 +29,12 @@ export default function PortalChatsPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
+  const [aiSuggestion, setAiSuggestion] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const prevTotalUnreadRef = useRef(0)
+  const lastSuggestedMsgRef = useRef<string | null>(null)
   const queryClient = useQueryClient()
   const { playSound } = useNotificationSound()
 
@@ -80,6 +83,8 @@ export default function PortalChatsPage() {
   // Mark messages as read when admin opens a thread
   useEffect(() => {
     if (!selectedAccountId) return
+    setAiSuggestion('')
+    lastSuggestedMsgRef.current = null
     fetch('/api/portal/chat/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -88,6 +93,30 @@ export default function PortalChatsPage() {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     }).catch(() => {})
   }, [selectedAccountId, queryClient])
+
+  // Auto-suggest reply when last message is from client
+  useEffect(() => {
+    if (!messages?.length || !selectedAccountId) return
+    const lastMsg = messages[messages.length - 1]
+    if (lastMsg.sender_type !== 'client') return
+    // Don't re-suggest for the same message
+    if (lastSuggestedMsgRef.current === lastMsg.id) return
+    lastSuggestedMsgRef.current = lastMsg.id
+
+    setAiLoading(true)
+    setAiSuggestion('')
+    fetch('/api/portal/chat/suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: selectedAccountId }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.suggestion) setAiSuggestion(data.suggestion)
+      })
+      .catch(() => {})
+      .finally(() => setAiLoading(false))
+  }, [messages, selectedAccountId])
 
   // 🔔 WhatsApp-style notifications: sound + browser notification + tab badge
   useEffect(() => {
@@ -320,6 +349,57 @@ export default function PortalChatsPage() {
                     <span className="text-xs text-blue-600 font-medium">Transcribing...</span>
                   </>
                 )}
+              </div>
+            )}
+
+            {/* AI Suggestion */}
+            {(aiLoading || aiSuggestion) && (
+              <div className="px-4 py-3 border-t bg-gradient-to-r from-violet-50 to-blue-50 shrink-0">
+                {aiLoading ? (
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-violet-500 animate-pulse" />
+                    <span className="text-xs text-violet-600 font-medium">AI is thinking...</span>
+                  </div>
+                ) : aiSuggestion ? (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+                        <span className="text-[11px] font-semibold text-violet-600 uppercase tracking-wide">AI Suggestion</span>
+                      </div>
+                      <button
+                        onClick={() => setAiSuggestion('')}
+                        className="p-0.5 rounded hover:bg-violet-100 text-violet-400"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <p className="text-sm text-zinc-700 whitespace-pre-wrap mb-2">{aiSuggestion}</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setReplyText(aiSuggestion)
+                          setAiSuggestion('')
+                          inputRef.current?.focus()
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
+                      >
+                        <Check className="h-3 w-3" />
+                        Use this reply
+                      </button>
+                      <button
+                        onClick={() => {
+                          setReplyText(aiSuggestion)
+                          setAiSuggestion('')
+                          inputRef.current?.focus()
+                        }}
+                        className="px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors"
+                      >
+                        Edit first
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
 
