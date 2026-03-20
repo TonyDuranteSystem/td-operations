@@ -35,6 +35,14 @@
     {
       "path": "/api/cron/email-monitor",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/annual-installments",
+      "schedule": "0 10 1 * *"
+    },
+    {
+      "path": "/api/cron/deadline-reminders",
+      "schedule": "0 8 * * *"
     }
   ],
   "rewrites": [
