@@ -1,3 +1,4 @@
+import type { Metadata, Viewport } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
@@ -10,6 +11,25 @@ import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { cookies } from 'next/headers'
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: '#2563eb',
+}
+
+export const metadata: Metadata = {
+  title: 'TD Portal',
+  description: 'Tony Durante LLC — Client Portal',
+  manifest: '/portal/manifest',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'TD Portal',
+  },
+}
 
 export default async function PortalLayout({
   children,

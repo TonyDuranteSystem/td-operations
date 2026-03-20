@@ -63,6 +63,12 @@ export default function PortalSettingsPage() {
   }
 
   useEffect(() => {
+    // Check sessionStorage first (set by company-switcher), then cookie fallback
+    const fromSession = sessionStorage.getItem('portal_account_id')
+    if (fromSession) {
+      setAccountId(fromSession)
+      return
+    }
     const match = document.cookie.match(/portal_account_id=([^;]+)/)
     if (match) setAccountId(match[1])
   }, [])
