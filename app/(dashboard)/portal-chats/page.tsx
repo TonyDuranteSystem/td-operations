@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
@@ -31,6 +31,7 @@ export default function PortalChatsPage() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
+  const [polishing, setPolishing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const prevTotalUnreadRef = useRef(0)
@@ -197,6 +198,21 @@ export default function PortalChatsPage() {
     if (isRecording) stopRecording()
     sendMutation.mutate(replyText.trim())
     if (inputRef.current) inputRef.current.style.height = 'auto'
+  }
+
+  const handlePolish = async () => {
+    if (!replyText.trim() || polishing) return
+    setPolishing(true)
+    try {
+      const res = await fetch('/api/portal/chat/polish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: replyText, account_id: selectedAccountId }),
+      })
+      const data = await res.json()
+      if (data.polished) setReplyText(data.polished)
+    } catch { /* silent */ }
+    finally { setPolishing(false) }
   }
 
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
@@ -427,7 +443,18 @@ export default function PortalChatsPage() {
                     isRecording && "ring-2 ring-red-300 bg-red-50/50"
                   )}
                 />
-                {/* WhatsApp-style: empty = mic, text = send */}
+                {/* Polish button — shows when there's text */}
+                {replyText.trim() && (
+                  <button
+                    onClick={handlePolish}
+                    disabled={polishing}
+                    className="p-3 rounded-lg bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
+                    title="AI Polish — clean up grammar and make it professional"
+                  >
+                    {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                  </button>
+                )}
+                {/* Send / Mic / Stop */}
                 {replyText.trim() || !micSupported ? (
                   <button
                     onClick={handleSend}
