@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { CommandPalette } from '@/components/dashboard/command-palette'
+import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { isAdmin } from '@/lib/auth'
 
@@ -52,6 +53,7 @@ export default async function DashboardLayout({
           {children}
         </main>
         <CommandPalette />
+        <AiAgentPanel />
       </div>
     </Providers>
   )

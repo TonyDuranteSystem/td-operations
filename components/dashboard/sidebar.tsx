@@ -18,6 +18,7 @@ import {
   X,
   MessagesSquare,
   Search,
+  Bot,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -155,8 +156,8 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Search button */}
-        <div className="px-3 py-2 border-t border-sidebar-border">
+        {/* Search + AI Agent buttons */}
+        <div className="px-3 py-2 border-t border-sidebar-border space-y-1">
           <button
             onClick={() => document.dispatchEvent(new CustomEvent('open-command-palette'))}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
@@ -164,6 +165,14 @@ export function Sidebar({
             <Search className="h-4 w-4 shrink-0" />
             <span className="flex-1 text-left">Search...</span>
             <kbd className="hidden sm:inline-flex px-1.5 py-0.5 bg-sidebar-accent rounded text-[10px] text-sidebar-foreground/40">{'\u2318'}K</kbd>
+          </button>
+          <button
+            onClick={() => document.dispatchEvent(new CustomEvent('open-ai-agent'))}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-violet-400 hover:bg-violet-500/10 hover:text-violet-300 transition-colors"
+          >
+            <Bot className="h-4 w-4 shrink-0" />
+            <span className="flex-1 text-left">AI Agent</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-medium">NEW</span>
           </button>
         </div>
 
