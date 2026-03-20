@@ -206,9 +206,9 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
           <button
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
-            className="p-2.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 transition-colors"
+            className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 transition-colors shrink-0"
           >
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+            {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
           </button>
           <input
             ref={fileRef}
@@ -224,40 +224,43 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
             onKeyDown={handleKeyDown}
             placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
             className={cn(
-              "flex-1 px-4 py-2.5 text-sm border rounded-full bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors",
+              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-full bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors",
               isRecording && "ring-2 ring-red-300 bg-red-50/50"
             )}
           />
-          {micSupported && (
+          {/* WhatsApp-style: empty input = mic, text = send. One big button. */}
+          {input.trim() || !micSupported ? (
             <button
-              onClick={handleMicToggle}
-              disabled={isTranscribing}
-              className={cn(
-                "p-2.5 rounded-full transition-all",
-                isRecording
-                  ? "bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30"
-                  : isTranscribing
-                    ? "bg-blue-100 text-blue-500"
-                    : "text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100"
-              )}
-              title={isRecording ? (t('chat.stopRecording') || 'Stop recording') : (t('chat.startRecording') || 'Voice input')}
+              onClick={handleSend}
+              disabled={!input.trim() || sending}
+              className="p-3 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
             >
-              {isTranscribing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : isRecording ? (
-                <Square className="h-3.5 w-3.5 fill-current" />
-              ) : (
-                <Mic className="h-4 w-4" />
-              )}
+              {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+            </button>
+          ) : isRecording ? (
+            <button
+              onClick={stopRecording}
+              className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
+              title={t('chat.stopRecording') || 'Stop recording'}
+            >
+              <Square className="h-5 w-5 fill-current" />
+            </button>
+          ) : isTranscribing ? (
+            <button
+              disabled
+              className="p-3 rounded-full bg-blue-100 text-blue-500 shrink-0"
+            >
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </button>
+          ) : (
+            <button
+              onClick={startRecording}
+              className="p-3 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
+              title={t('chat.startRecording') || 'Voice input'}
+            >
+              <Mic className="h-5 w-5" />
             </button>
           )}
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || sending}
-            className="p-2.5 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </button>
         </div>
       </div>
     </div>

@@ -325,7 +325,7 @@ export default function PortalChatsPage() {
 
             {/* Reply input */}
             <div className="p-4 border-t bg-white shrink-0">
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
                 <input
                   ref={inputRef}
                   type="text"
@@ -334,40 +334,38 @@ export default function PortalChatsPage() {
                   onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
                   placeholder={isRecording ? 'Recording...' : 'Type a reply...'}
                   className={cn(
-                    "flex-1 px-4 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+                    "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
                     isRecording && "ring-2 ring-red-300 bg-red-50/50"
                   )}
                 />
-                {micSupported && (
+                {/* WhatsApp-style: empty = mic, text = send */}
+                {replyText.trim() || !micSupported ? (
                   <button
-                    onClick={isRecording ? stopRecording : startRecording}
-                    disabled={isTranscribing}
-                    className={cn(
-                      "px-3 py-2.5 rounded-lg transition-all",
-                      isRecording
-                        ? "bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/25"
-                        : isTranscribing
-                          ? "bg-blue-100 text-blue-500"
-                          : "border text-zinc-500 hover:bg-zinc-50"
-                    )}
-                    title={isRecording ? 'Stop recording' : 'Voice input'}
+                    onClick={handleSend}
+                    disabled={!replyText.trim() || sendMutation.isPending}
+                    className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors shrink-0"
                   >
-                    {isTranscribing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : isRecording ? (
-                      <Square className="h-4 w-4 fill-current" />
-                    ) : (
-                      <Mic className="h-4 w-4" />
-                    )}
+                    {sendMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                  </button>
+                ) : isRecording ? (
+                  <button
+                    onClick={stopRecording}
+                    className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
+                  >
+                    <Square className="h-5 w-5 fill-current" />
+                  </button>
+                ) : isTranscribing ? (
+                  <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={startRecording}
+                    className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
+                  >
+                    <Mic className="h-5 w-5" />
                   </button>
                 )}
-                <button
-                  onClick={handleSend}
-                  disabled={!replyText.trim() || sendMutation.isPending}
-                  className="px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                >
-                  {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </button>
               </div>
             </div>
           </>
