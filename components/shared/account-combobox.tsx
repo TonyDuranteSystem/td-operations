@@ -1,13 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Search, X, Building2 } from 'lucide-react'
+import { Search, X, Building2, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface AccountOption {
   id: string
   company_name: string
   status?: string
+  contact_name?: string | null
 }
 
 interface AccountComboboxProps {
@@ -20,14 +21,14 @@ interface AccountComboboxProps {
 
 /**
  * Shared searchable account picker.
- * Debounced search, returns { id, company_name }.
- * Reused across task dialogs, inbox CRM linking, invoices, leads.
+ * Searches by company name, contact first name, or contact last name.
+ * Always returns accounts — shows contact name as hint when matched by person.
  */
 export function AccountCombobox({
   value,
   displayValue,
   onChange,
-  placeholder = 'Search accounts...',
+  placeholder = 'Search by company, first name, or last name...',
   className,
 }: AccountComboboxProps) {
   const [open, setOpen] = useState(false)
@@ -60,7 +61,7 @@ export function AccountCombobox({
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
-        const res = await fetch(`/api/accounts?q=${encodeURIComponent(query)}&limit=8`)
+        const res = await fetch(`/api/accounts?q=${encodeURIComponent(query)}&limit=10`)
         if (res.ok) {
           const data = await res.json()
           setResults(data.accounts ?? [])
@@ -122,7 +123,7 @@ export function AccountCombobox({
       </div>
 
       {open && (query.length >= 2 || results.length > 0) && (
-        <div className="absolute z-50 mt-1 w-full bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
+        <div className="absolute z-50 mt-1 w-full bg-white border rounded-md shadow-lg max-h-56 overflow-y-auto">
           {loading && (
             <p className="px-3 py-2 text-sm text-muted-foreground">Searching...</p>
           )}
@@ -134,12 +135,20 @@ export function AccountCombobox({
               key={account.id}
               type="button"
               onClick={() => handleSelect(account)}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-zinc-50 transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-left hover:bg-zinc-50 transition-colors"
             >
               <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-              <span className="truncate">{account.company_name}</span>
+              <div className="flex-1 min-w-0">
+                <span className="font-medium truncate block">{account.company_name}</span>
+                {account.contact_name && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <User className="h-3 w-3" />
+                    {account.contact_name}
+                  </span>
+                )}
+              </div>
               {account.status && (
-                <span className="text-xs text-muted-foreground ml-auto shrink-0">{account.status}</span>
+                <span className="text-xs text-muted-foreground shrink-0">{account.status}</span>
               )}
             </button>
           ))}

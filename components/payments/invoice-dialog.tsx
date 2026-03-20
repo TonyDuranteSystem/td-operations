@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { X, Loader2, Plus, Trash2, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
+import { ServiceTypeSelect } from '@/components/shared/service-type-select'
 import { createInvoice, createCreditNote } from '@/app/(dashboard)/payments/invoice-actions'
 import type { CreateInvoiceInput, CreateCreditNoteInput, InvoiceItem } from '@/lib/schemas/invoice'
 
@@ -179,17 +180,25 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice' }: InvoiceDialog
               {errors.account_id && <p className="text-xs text-red-600 mt-1">{errors.account_id}</p>}
             </div>
 
-            {/* Description */}
+            {/* Service Type */}
             <div>
-              <label className="block text-sm font-medium mb-1">Description *</label>
-              <input
-                type="text"
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                autoFocus
-                placeholder={isCredit ? 'Referral credit — Partner Name' : '1st Installment 2026 — Management Fees'}
-                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-sm font-medium mb-1">Service *</label>
+              {isCredit ? (
+                <input
+                  type="text"
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  autoFocus
+                  placeholder="Referral credit — Partner Name"
+                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              ) : (
+                <ServiceTypeSelect
+                  value={description}
+                  onChange={setDescription}
+                  placeholder="Select service type..."
+                />
+              )}
               {errors.description && <p className="text-xs text-red-600 mt-1">{errors.description}</p>}
             </div>
 
