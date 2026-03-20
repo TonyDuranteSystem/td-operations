@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         category: categoryNum,
         document_type_name: typeName,
         status: 'classified',
-        confidence: '1.0',
+        confidence: 'high',
         mime_type: file.type,
         file_size: file.size,
       })
