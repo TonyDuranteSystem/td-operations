@@ -40,7 +40,7 @@ export function CommandPalette() {
   const debounceRef = useRef<NodeJS.Timeout>()
   const router = useRouter()
 
-  // Keyboard shortcut: Cmd+K / Ctrl+K
+  // Keyboard shortcut: Cmd+K / Ctrl+K + custom event from sidebar button
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -51,8 +51,15 @@ export function CommandPalette() {
         setOpen(false)
       }
     }
+    function handleOpenSearch() {
+      setOpen(true)
+    }
     document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
+    document.addEventListener('open-command-palette', handleOpenSearch)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('open-command-palette', handleOpenSearch)
+    }
   }, [])
 
   // Focus input when opening
@@ -79,7 +86,7 @@ export function CommandPalette() {
     debounceRef.current = setTimeout(async () => {
       try {
         // Phase 1: accounts + tasks only. Add tables as pages ship.
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&tables=accounts,tasks`)
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&tables=accounts,tasks,leads,contacts`)
         if (res.ok) {
           const data = await res.json()
           setResults(data.results ?? [])
@@ -145,7 +152,7 @@ export function CommandPalette() {
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Search accounts, tasks..."
+              placeholder="Search accounts, contacts, tasks, leads..."
               className="flex-1 py-3.5 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
             />
             {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}

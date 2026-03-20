@@ -17,6 +17,7 @@ import {
   Menu,
   X,
   MessagesSquare,
+  Search,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -89,7 +90,13 @@ export function Sidebar({
         >
           <Menu className="h-5 w-5" />
         </button>
-        <span className="ml-3 font-semibold">TD Operations</span>
+        <span className="ml-3 font-semibold flex-1">TD Operations</span>
+        <button
+          onClick={() => document.dispatchEvent(new CustomEvent('open-command-palette'))}
+          className="p-2 rounded-md hover:bg-zinc-100 text-zinc-500"
+        >
+          <Search className="h-5 w-5" />
+        </button>
       </div>
 
       {/* Mobile overlay */}
@@ -148,11 +155,16 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Keyboard shortcut hint */}
-        <div className="px-6 py-2 border-t border-sidebar-border">
-          <p className="text-[10px] text-sidebar-foreground/40">
-            Press <kbd className="px-1 py-0.5 bg-sidebar-accent rounded text-[9px]">{'\u2318'}K</kbd> to search
-          </p>
+        {/* Search button */}
+        <div className="px-3 py-2 border-t border-sidebar-border">
+          <button
+            onClick={() => document.dispatchEvent(new CustomEvent('open-command-palette'))}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+          >
+            <Search className="h-4 w-4 shrink-0" />
+            <span className="flex-1 text-left">Search...</span>
+            <kbd className="hidden sm:inline-flex px-1.5 py-0.5 bg-sidebar-accent rounded text-[10px] text-sidebar-foreground/40">{'\u2318'}K</kbd>
+          </button>
         </div>
 
         {/* Footer */}
