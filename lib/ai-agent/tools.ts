@@ -41,7 +41,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'search_contacts',
-    description: 'Search contacts by name or email. Returns linked accounts.',
+    description: 'Search contacts AND leads by name or email. Use this when looking for a person. Returns linked accounts for contacts and lead details for leads.',
     parameters: {
       type: 'object',
       properties: {
@@ -290,7 +290,20 @@ async function searchContacts(p: any) {
     if (!linkMap.has(l.contact_id)) linkMap.set(l.contact_id, [])
     linkMap.get(l.contact_id)!.push({ company_name: acct?.company_name, role: l.role, account_id: acct?.id })
   }
-  return JSON.stringify((data ?? []).map(c => ({ ...c, accounts: linkMap.get(c.id) ?? [] })))
+
+  const contacts = (data ?? []).map(c => ({ type: 'contact' as const, ...c, accounts: linkMap.get(c.id) ?? [] }))
+
+  // Also search leads
+  const leadPattern = `%${p.query}%`
+  const { data: leads } = await supabaseAdmin
+    .from('leads')
+    .select('id, full_name, first_name, last_name, email, phone, status, source, reason, notes, offer_status, created_at')
+    .or(`full_name.ilike.${leadPattern},email.ilike.${leadPattern},first_name.ilike.${leadPattern},last_name.ilike.${leadPattern}`)
+    .limit(10)
+
+  const leadResults = (leads ?? []).map(l => ({ type: 'lead' as const, ...l }))
+
+  return JSON.stringify({ contacts, leads: leadResults, total: contacts.length + leadResults.length })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -381,10 +394,10 @@ async function searchDeadlines(p: any) {
 async function searchLeads(p: any) {
   let query = supabaseAdmin
     .from('leads')
-    .select('id, name, email, company, status, source, service_interest, created_at')
+    .select('id, full_name, first_name, last_name, email, phone, status, source, reason, channel, notes, offer_status, created_at')
     .order('created_at', { ascending: false })
     .limit(Number(p.limit) || 15)
-  if (p.query) query = query.or(`name.ilike.%${p.query}%,email.ilike.%${p.query}%,company.ilike.%${p.query}%`)
+  if (p.query) query = query.or(`full_name.ilike.%${p.query}%,email.ilike.%${p.query}%,first_name.ilike.%${p.query}%,last_name.ilike.%${p.query}%`)
   if (p.status) query = query.eq('status', p.status)
   const { data, error } = await query
   if (error) return JSON.stringify({ error: error.message })
