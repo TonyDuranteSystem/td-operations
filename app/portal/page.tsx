@@ -3,8 +3,8 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns } from '@/lib/portal/queries'
-import { Building2, Shield, MapPin, Calendar, FileText, Clock, AlertCircle, CheckCircle2, CreditCard } from 'lucide-react'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers } from '@/lib/portal/queries'
+import { Building2, Shield, MapPin, Calendar, FileText, Clock, AlertCircle, CheckCircle2, CreditCard, Users, Mail, Phone, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
@@ -72,12 +72,13 @@ export default async function PortalDashboardPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id
 
   // Fetch all data in parallel
-  const [account, services, deadlines, payments, taxReturns] = await Promise.all([
+  const [account, services, deadlines, payments, taxReturns, members] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
     getPortalPayments(selectedAccountId),
     getPortalTaxReturns(selectedAccountId),
+    getPortalMembers(selectedAccountId),
   ])
 
   if (!account) {
@@ -92,6 +93,7 @@ export default async function PortalDashboardPage() {
   const today = new Date().toISOString().split('T')[0]
   const activeServices = services.filter(s => s.status !== 'Completed')
   const completedServices = services.filter(s => s.status === 'Completed')
+  const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
@@ -109,15 +111,54 @@ export default async function PortalDashboardPage() {
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.companyInfo', locale)}</h2>
           <div className="space-y-2.5 text-sm">
-            <InfoRow icon={Building2} label="Entity Type" value={account.entity_type ?? '\u2014'} />
-            <InfoRow icon={MapPin} label="State" value={account.state_of_formation ?? '\u2014'} />
-            <InfoRow icon={Calendar} label="Formation" value={formatDate(account.formation_date)} />
+            <InfoRow icon={Building2} label={t('dashboard.entityType', locale)} value={account.entity_type ?? '\u2014'} />
+            <InfoRow icon={MapPin} label={t('dashboard.state', locale)} value={account.state_of_formation ?? '\u2014'} />
+            <InfoRow icon={Calendar} label={t('dashboard.formation', locale)} value={formatDate(account.formation_date)} />
             <InfoRow icon={Shield} label="EIN" value={formatEin(account.ein_number)} />
             {account.filing_id && <InfoRow icon={FileText} label="Filing ID" value={account.filing_id} />}
-            {account.registered_agent_provider && <InfoRow icon={Shield} label="Registered Agent" value={account.registered_agent_provider} />}
-            {account.physical_address && <InfoRow icon={MapPin} label="Address" value={account.physical_address} />}
+            {account.registered_agent_address && <InfoRow icon={MapPin} label={t('dashboard.raAddress', locale)} value={account.registered_agent_address} />}
+            {account.physical_address && <InfoRow icon={MapPin} label={t('dashboard.address', locale)} value={account.physical_address} />}
           </div>
         </div>
+
+        {/* Members Card — shown for multi-member LLCs or when multiple contacts */}
+        {isMultiMember && members.length > 0 && (
+          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
+              {t('dashboard.members', locale)} ({members.length})
+            </h2>
+            <div className="space-y-3">
+              {members.map((m, i) => (
+                <div key={i} className="rounded-lg border p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-zinc-400" />
+                      <span className="text-sm font-medium text-zinc-900">{m.first_name} {m.last_name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{m.role}</span>
+                      {m.ownership_pct != null && (
+                        <span className="text-xs text-zinc-500">{m.ownership_pct}%</span>
+                      )}
+                    </div>
+                  </div>
+                  {m.email && (
+                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                      <Mail className="h-3.5 w-3.5" />
+                      <span>{m.email}</span>
+                    </div>
+                  )}
+                  {m.phone && (
+                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                      <Phone className="h-3.5 w-3.5" />
+                      <span>{m.phone}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Active Services Card */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">

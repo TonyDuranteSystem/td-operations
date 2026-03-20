@@ -29,11 +29,30 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await supabaseAdmin
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link')
     .eq('id', accountId)
     .single()
 
   return data
+}
+
+export async function getPortalMembers(accountId: string) {
+  const { data } = await supabaseAdmin
+    .from('account_contacts')
+    .select('role, ownership_pct, contacts(first_name, last_name, email, phone)')
+    .eq('account_id', accountId)
+
+  return (data ?? []).map(d => {
+    const c = d.contacts as unknown as { first_name: string; last_name: string; email: string | null; phone: string | null } | null
+    return {
+      role: d.role,
+      ownership_pct: d.ownership_pct,
+      first_name: c?.first_name ?? '',
+      last_name: c?.last_name ?? '',
+      email: c?.email ?? null,
+      phone: c?.phone ?? null,
+    }
+  })
 }
 
 export async function getPortalServices(accountId: string): Promise<PortalService[]> {
