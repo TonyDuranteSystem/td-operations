@@ -190,7 +190,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'gmail_search',
-    description: 'Search Gmail inbox for emails. Can search by sender, subject, keywords, date range. Returns list of email summaries (id, from, to, subject, date, snippet). Use this to check for new emails from a client or about a topic.',
+    description: 'Search Gmail inbox (support@tonydurante.us). Returns email summaries with message IDs. WORKFLOW for client document handling: 1) gmail_search to find the email, 2) gmail_read to see full content + attachment list, 3) gmail_get_attachments to list/save attachments to Drive, 4) update_task + update_contact to update CRM.',
     parameters: {
       type: 'object',
       properties: {
@@ -202,7 +202,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'gmail_read',
-    description: 'Read the full content of a specific email by its message ID. Returns from, to, subject, date, and full body text. Use after gmail_search to read a specific email.',
+    description: 'Read a specific email by message ID. Returns from, to, subject, date, body text, and attachment list (with IDs). Use the attachment IDs with gmail_get_attachments or drive_upload_file to save to Drive.',
     parameters: {
       type: 'object',
       properties: {
@@ -263,12 +263,12 @@ export const AGENT_TOOLS: ToolDef[] = [
   // ── Google Drive Tools ──
   {
     name: 'drive_search',
-    description: 'Search Google Drive files by name/keyword on the Shared Drive.',
+    description: 'Search Google Drive files/folders by name on the Shared Drive. Use mime_type "application/vnd.google-apps.folder" to search for folders only. To find a client folder, search by their name or company name.',
     parameters: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search term (file name or keyword)' },
-        mime_type: { type: 'string', description: 'Optional MIME type filter (e.g. application/pdf, application/vnd.google-apps.folder)' },
+        mime_type: { type: 'string', description: 'Optional MIME type filter (e.g. application/pdf, application/vnd.google-apps.folder for folders)' },
       },
       required: ['query'],
     },
@@ -298,16 +298,16 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'drive_upload_file',
-    description: 'Upload a binary file (PDF, image) to Drive. Provide either a source_url to fetch from, or gmail_message_id + attachment_id to save a Gmail attachment.',
+    description: 'Upload a file to Google Drive from a URL or Gmail attachment. WORKFLOW for Gmail attachments: 1) gmail_search to find email, 2) gmail_get_attachments to list attachments and get attachment_id, 3) Use this tool with gmail_message_id + attachment_id + folder_id to save to Drive. To find the client Drive folder: use drive_search with client name + mime_type "application/vnd.google-apps.folder", or check contact.gdrive_folder_url via get_account_detail.',
     parameters: {
       type: 'object',
       properties: {
-        file_name: { type: 'string', description: 'Name for the uploaded file' },
+        file_name: { type: 'string', description: 'Name for the uploaded file (include extension, e.g. "Passport - John Smith.png")' },
         folder_id: { type: 'string', description: 'Target Drive folder ID' },
         source_url: { type: 'string', description: 'URL to download the file from (optional)' },
-        gmail_message_id: { type: 'string', description: 'Gmail message ID containing the attachment (optional)' },
-        attachment_id: { type: 'string', description: 'Gmail attachment ID (optional, required with gmail_message_id)' },
-        mime_type: { type: 'string', description: 'MIME type of the file (e.g. application/pdf). Auto-detected from Gmail attachments.' },
+        gmail_message_id: { type: 'string', description: 'Gmail message ID containing the attachment' },
+        attachment_id: { type: 'string', description: 'Gmail attachment ID (from gmail_get_attachments results)' },
+        mime_type: { type: 'string', description: 'MIME type of the file (e.g. image/png, application/pdf)' },
       },
       required: ['file_name', 'folder_id'],
     },
@@ -315,13 +315,13 @@ export const AGENT_TOOLS: ToolDef[] = [
   // ── Gmail Attachment Tool ──
   {
     name: 'gmail_get_attachments',
-    description: 'List attachments from a Gmail message. Optionally save them all to a Drive folder.',
+    description: 'List or save attachments from a Gmail message. Without save_to_drive: returns attachment list with IDs, filenames, sizes. With save_to_drive=true + drive_folder_id: downloads and uploads all attachments to Drive. IMPORTANT: To find the right Drive folder, first use drive_search with client name + mime_type "application/vnd.google-apps.folder".',
     parameters: {
       type: 'object',
       properties: {
-        message_id: { type: 'string', description: 'Gmail message ID' },
-        save_to_drive: { type: 'boolean', description: 'If true, upload all attachments to Drive folder specified by drive_folder_id' },
-        drive_folder_id: { type: 'string', description: 'Target Drive folder ID (required if save_to_drive=true)' },
+        message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
+        save_to_drive: { type: 'boolean', description: 'If true, download all attachments and upload to drive_folder_id' },
+        drive_folder_id: { type: 'string', description: 'Target Drive folder ID. Find via drive_search with client name. Required if save_to_drive=true.' },
       },
       required: ['message_id'],
     },
@@ -343,12 +343,13 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'update_contact',
-    description: 'Update a contact record fields (e.g. passport_on_file, notes, phone, language, citizenship).',
+    description: 'Update a contact record. After saving a passport to Drive, set passport_on_file=true and gdrive_folder_url to the folder link.',
     parameters: {
       type: 'object',
       properties: {
         contact_id: { type: 'string', description: 'UUID of the contact' },
-        passport_on_file: { type: 'boolean', description: 'Whether passport is on file' },
+        passport_on_file: { type: 'boolean', description: 'Set to true after passport is saved to Drive' },
+        gdrive_folder_url: { type: 'string', description: 'Google Drive folder URL for this contact' },
         notes: { type: 'string', description: 'Notes to append (timestamped)' },
         phone: { type: 'string', description: 'Updated phone number' },
         language: { type: 'string', description: 'Preferred language' },
@@ -1056,6 +1057,7 @@ async function gmailGetAttachmentsTool(p: any) {
       attachmentId: a.attachmentId,
     })),
     total: attachments.length,
+    hint: 'To save to Drive: call gmail_get_attachments again with save_to_drive=true and drive_folder_id. Or use drive_upload_file with gmail_message_id + attachment_id for a specific file. Find the client folder with drive_search(client_name, mime_type="application/vnd.google-apps.folder").',
   })
 }
 
@@ -1098,6 +1100,7 @@ async function updateContact(p: any) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {}
   if (p.passport_on_file !== undefined) updates.passport_on_file = p.passport_on_file
+  if (p.gdrive_folder_url) updates.gdrive_folder_url = p.gdrive_folder_url
   if (p.phone) updates.phone = p.phone
   if (p.language) updates.language = p.language
   if (p.citizenship) updates.citizenship = p.citizenship
@@ -1111,7 +1114,7 @@ async function updateContact(p: any) {
   }
 
   if (Object.keys(updates).length === 0) {
-    return JSON.stringify({ error: 'No fields to update. Provide passport_on_file, notes, phone, language, or citizenship.' })
+    return JSON.stringify({ error: 'No fields to update. Provide passport_on_file, gdrive_folder_url, notes, phone, language, or citizenship.' })
   }
 
   updates.updated_at = new Date().toISOString()
