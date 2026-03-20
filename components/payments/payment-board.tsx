@@ -13,6 +13,9 @@ import {
   ChevronRight,
   Plus,
   FileText,
+  Send,
+  Download,
+  Bell,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
@@ -153,6 +156,68 @@ function MarkPaidButton({ paymentId, description }: { paymentId: string; descrip
   )
 }
 
+function InvoiceActions({ payment }: { payment: PaymentItem }) {
+  const [isPending, startTransition] = useTransition()
+  const status = payment.invoice_status
+
+  const handleSend = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    startTransition(async () => {
+      try {
+        const res = await fetch(`/api/invoices/${payment.id}/send`, { method: 'POST' })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error ?? 'Send failed')
+        toast.success(`Invoice ${payment.invoice_number} sent`)
+        window.location.reload()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to send')
+      }
+    })
+  }
+
+  const handleRemind = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    startTransition(async () => {
+      try {
+        const res = await fetch(`/api/invoices/${payment.id}/remind`, { method: 'POST' })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error ?? 'Remind failed')
+        toast.success(`Reminder sent for ${payment.invoice_number}`)
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to send reminder')
+      }
+    })
+  }
+
+  const handleDownload = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    window.open(`/api/invoices/${payment.id}/pdf`, '_blank')
+  }
+
+  return (
+    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+      {/* Download PDF — always available */}
+      <button onClick={handleDownload} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600" title="Download PDF">
+        <Download className="h-3.5 w-3.5" />
+      </button>
+
+      {/* Send — only for Draft or Overdue */}
+      {(status === 'Draft' || status === 'Overdue') && (
+        <button onClick={handleSend} disabled={isPending} className="p-1 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700 disabled:opacity-40" title="Send Invoice">
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+        </button>
+      )}
+
+      {/* Remind — only for Sent or Overdue */}
+      {(status === 'Sent' || status === 'Overdue') && (
+        <button onClick={handleRemind} disabled={isPending} className="p-1 rounded hover:bg-amber-50 text-amber-500 hover:text-amber-700 disabled:opacity-40" title="Send Reminder">
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+        </button>
+      )}
+    </div>
+  )
+}
+
 const PAYMENTS_PER_PAGE = 30
 
 export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeTab, today }: PaymentBoardProps) {
@@ -253,7 +318,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
       <div className="bg-white rounded-lg border overflow-hidden">
         {/* Desktop Header */}
         {activeTab === 'invoices' ? (
-          <div className="hidden lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <div className="hidden lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px,80px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
             <span>Invoice #</span>
             <span>Description</span>
             <span>Account</span>
@@ -261,6 +326,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
             <span>Due Date</span>
             <span>Status</span>
             <span className="text-center">QB</span>
+            <span></span>
           </div>
         ) : (
           <div className="hidden lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -286,7 +352,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
             // Invoice-specific rendering
             if (activeTab === 'invoices') {
               return (
-                <div key={p.id} onClick={() => setEditingPayment(p)} className="flex flex-col lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer hover:bg-zinc-50/50">
+                <div key={p.id} onClick={() => setEditingPayment(p)} className="flex flex-col lg:grid lg:grid-cols-[100px,1fr,120px,100px,100px,80px,50px,80px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer hover:bg-zinc-50/50">
                   {/* Invoice # */}
                   <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '—'}</span>
                   {/* Description */}
@@ -324,6 +390,10 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                     <span className={cn('text-xs', p.qb_sync_status === 'synced' ? 'text-emerald-600' : p.qb_sync_status === 'error' ? 'text-red-600' : 'text-zinc-400')} title={`QB: ${p.qb_sync_status ?? 'pending'}`}>
                       {QB_SYNC_ICONS[p.qb_sync_status ?? 'pending'] ?? '…'}
                     </span>
+                  </div>
+                  {/* Actions */}
+                  <div className="hidden lg:flex justify-end">
+                    <InvoiceActions payment={p} />
                   </div>
                 </div>
               )
