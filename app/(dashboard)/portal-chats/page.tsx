@@ -32,7 +32,7 @@ export default function PortalChatsPage() {
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const prevTotalUnreadRef = useRef(0)
   const lastSuggestedMsgRef = useRef<string | null>(null)
   const queryClient = useQueryClient()
@@ -184,10 +184,19 @@ export default function PortalChatsPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Auto-grow textarea
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = Math.max(44, Math.min(el.scrollHeight, 150)) + 'px'
+  }, [replyText])
+
   const handleSend = () => {
     if (!replyText.trim() || !selectedAccountId) return
     if (isRecording) stopRecording()
     sendMutation.mutate(replyText.trim())
+    if (inputRef.current) inputRef.current.style.height = 'auto'
   }
 
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
@@ -405,16 +414,16 @@ export default function PortalChatsPage() {
 
             {/* Reply input */}
             <div className="p-4 border-t bg-white shrink-0">
-              <div className="flex gap-2 items-center">
-                <input
+              <div className="flex gap-2 items-end">
+                <textarea
                   ref={inputRef}
-                  type="text"
                   value={replyText}
                   onChange={e => setReplyText(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                  rows={1}
                   placeholder={isRecording ? 'Recording...' : 'Type a reply...'}
                   className={cn(
-                    "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500",
+                    "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto",
                     isRecording && "ring-2 ring-red-300 bg-red-50/50"
                   )}
                 />
