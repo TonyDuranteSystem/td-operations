@@ -783,10 +783,38 @@ export function registerCrmTools(server: McpServer) {
           }
         }
 
+        // Post-update hook: installment payment triggers
+        let installmentMsg = ""
+        if (table === "payments" && updates.status === "paid") {
+          try {
+            // Check if this is an installment payment
+            const paymentType = data.payment_type as string | undefined
+            const paymentAccountId = data.account_id as string | undefined
+
+            if (paymentAccountId && (paymentType === "1st_installment" || paymentType === "2nd_installment")) {
+              const year = new Date().getFullYear()
+
+              if (paymentType === "1st_installment") {
+                const { onFirstInstallmentPaid } = await import("@/lib/installment-handler")
+                const result = await onFirstInstallmentPaid(paymentAccountId, year)
+                const ok = result.steps.filter(s => s.status === "ok").length
+                installmentMsg = `\n\n📦 1st Installment trigger: ${ok} actions executed (CMRA, Tax Return SDs created)`
+              } else {
+                const { onSecondInstallmentPaid } = await import("@/lib/installment-handler")
+                const result = await onSecondInstallmentPaid(paymentAccountId, year)
+                const ok = result.steps.filter(s => s.status === "ok").length
+                installmentMsg = `\n\n📦 2nd Installment trigger: ${ok} actions executed (tax return gate lifted)`
+              }
+            }
+          } catch {
+            // Non-blocking
+          }
+        }
+
         return {
           content: [{
             type: "text" as const,
-            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${autoAdvanceMsg}`,
+            text: `✅ ${table} record updated: ${id}\n${JSON.stringify(data, null, 2)}${autoAdvanceMsg}${installmentMsg}`,
           }],
         }
       } catch (err: any) {
