@@ -593,6 +593,53 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     }
   }
 
+  // ─── 5b. SET RENEWAL DATES ───
+  if (account_id) {
+    try {
+      const renewalUpdates: Record<string, unknown> = {}
+      const currentYear = new Date().getFullYear()
+
+      // CMRA renewal = Dec 31 current year (lease expiry)
+      renewalUpdates.cmra_renewal_date = `${currentYear}-12-31`
+
+      // Annual Report due date — based on state
+      const stateUpper = (state_of_formation || "").toUpperCase().replace("NEW MEXICO", "NM").replace("WYOMING", "WY").replace("FLORIDA", "FL").replace("DELAWARE", "DE")
+      const formationDate = String(submitted.formation_date || "")
+
+      if (stateUpper === "NM") {
+        // New Mexico: NO annual report
+        // Don't set annual_report_due_date
+      } else if (stateUpper === "FL") {
+        // Florida: May 1 every year
+        renewalUpdates.annual_report_due_date = `${currentYear + 1}-05-01`
+      } else if (stateUpper === "DE") {
+        // Delaware: June 1 for LLCs, March 1 for Corps
+        renewalUpdates.annual_report_due_date = `${currentYear + 1}-06-01`
+      } else if (stateUpper === "WY" && formationDate) {
+        // Wyoming: 1st day of anniversary month
+        const month = formationDate.slice(5, 7) // MM from YYYY-MM-DD
+        renewalUpdates.annual_report_due_date = `${currentYear + 1}-${month}-01`
+      }
+
+      renewalUpdates.updated_at = new Date().toISOString()
+
+      await supabaseAdmin
+        .from("accounts")
+        .update(renewalUpdates)
+        .eq("id", account_id)
+
+      const datesList = Object.entries(renewalUpdates)
+        .filter(([k]) => k.endsWith("_date") && k !== "updated_at")
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ")
+
+      result.steps.push(step("renewal_dates", "ok", datesList || "Set (NM has no AR)"))
+    } catch (e) {
+      result.steps.push(step("renewal_dates", "error", e instanceof Error ? e.message : String(e)))
+    }
+    await updateJobProgress(job.id, result)
+  }
+
   // ─── 6. LEAD CONVERSION — SKIPPED (now happens at payment in whop webhook / check-wire-payments) ───
   result.steps.push(step("lead_converted", "skipped", "Moved to payment confirmation (Change 1.1)"))
 
