@@ -165,6 +165,16 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    // Audit log
+    const { logPortalAction } = await import('@/lib/portal/audit')
+    logPortalAction({
+      user_id: user.id,
+      account_id: accountId,
+      action: taxYear ? 'tax_doc_uploaded' : 'document_uploaded',
+      detail: `${fileName} (${typeName || 'general'})`,
+      ip: request.headers.get('x-forwarded-for') || undefined,
+    })
+
     return NextResponse.json({
       success: true,
       document_id: doc?.id,

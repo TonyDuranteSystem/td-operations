@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Shield } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -21,13 +21,21 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: string; userId: string; locale?: string }) {
-  const { messages, loading, sending, sendMessage } = usePortalChat(accountId)
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore } = usePortalChat(accountId)
   const [input, setInput] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [micConsented, setMicConsented] = useState(false)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Check if mic consent was previously given
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setMicConsented(localStorage.getItem('mic_consent') === 'yes')
+    }
+  }, [])
 
   const speechLang = locale === 'it' ? 'it-IT' : 'en-US'
 
@@ -111,6 +119,17 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
     if (isRecording) {
       stopRecording()
     } else {
+      if (!micConsented) {
+        // Show consent notice
+        const ok = window.confirm(
+          locale === 'it'
+            ? 'Per usare l\'input vocale, il tuo audio verrà registrato e inviato per la trascrizione. La registrazione viene eliminata subito dopo. Vuoi continuare?'
+            : 'To use voice input, your audio will be recorded and sent for transcription. The recording is deleted immediately after. Continue?'
+        )
+        if (!ok) return
+        localStorage.setItem('mic_consent', 'yes')
+        setMicConsented(true)
+      }
       startRecording()
     }
   }
@@ -133,7 +152,25 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
             <p className="text-xs mt-1">Send a message to start the conversation</p>
           </div>
         ) : (
-          messages.map((msg) => {
+          <>
+          {/* Load older messages */}
+          {hasMore && (
+            <div className="flex justify-center mb-2">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 disabled:opacity-50 transition-colors"
+              >
+                {loadingMore ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ChevronUp className="h-3 w-3" />
+                )}
+                {locale === 'it' ? 'Carica messaggi precedenti' : 'Load older messages'}
+              </button>
+            </div>
+          )}
+          {messages.map((msg) => {
             const messageDate = formatMessageDate(msg.created_at)
             const showDateHeader = messageDate !== lastDate
             lastDate = messageDate
@@ -177,16 +214,23 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
                     )}
                     {msg.message && <p className="whitespace-pre-wrap break-words">{msg.message}</p>}
                     <p className={cn(
-                      'text-[10px] mt-1',
-                      isOwn ? 'text-blue-200' : 'text-zinc-400'
+                      'text-[10px] mt-1 flex items-center gap-1',
+                      isOwn ? 'text-blue-200 justify-end' : 'text-zinc-400'
                     )}>
                       {formatTime(msg.created_at)}
+                      {isOwn && (
+                        <CheckCheck className={cn(
+                          'h-3 w-3',
+                          msg.read_at ? 'text-blue-300' : 'text-blue-200/50'
+                        )} />
+                      )}
                     </p>
                   </div>
                 </div>
               </div>
             )
-          })
+          })}
+          </>
         )}
       </div>
 
@@ -244,7 +288,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
           {micSupported && (
             isRecording ? (
               <button
-                onClick={stopRecording}
+                onClick={handleMicToggle}
                 className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
                 title={t('chat.stopRecording') || 'Stop recording'}
                 aria-label={t('chat.stopRecording') || 'Stop recording'}
@@ -261,7 +305,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
               </button>
             ) : (
               <button
-                onClick={startRecording}
+                onClick={handleMicToggle}
                 className="p-3 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
                 title={t('chat.startRecording') || 'Voice input'}
                 aria-label={t('chat.startRecording') || 'Start voice recording'}

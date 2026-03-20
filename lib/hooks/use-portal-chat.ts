@@ -12,17 +12,22 @@ export function usePortalChat(accountId: string) {
   const [messages, setMessages] = useState<PortalMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
   // Load initial messages + mark as read
   useEffect(() => {
     async function load() {
       setLoading(true)
+      setHasMore(true)
       try {
         const res = await fetch(`/api/portal/chat?account_id=${accountId}&limit=50`)
         if (res.ok) {
           const data = await res.json()
-          setMessages(data.messages ?? [])
+          const msgs = data.messages ?? []
+          setMessages(msgs)
+          setHasMore(msgs.length >= 50)
           // Mark admin messages as read (client has seen them)
           fetch('/api/portal/chat/read', {
             method: 'POST',
@@ -38,6 +43,28 @@ export function usePortalChat(accountId: string) {
     }
     load()
   }, [accountId])
+
+  // Load older messages
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore || messages.length === 0) return
+    setLoadingMore(true)
+    try {
+      const oldest = messages[0]
+      const res = await fetch(`/api/portal/chat?account_id=${accountId}&limit=50&before=${oldest.created_at}`)
+      if (res.ok) {
+        const data = await res.json()
+        const older = data.messages ?? []
+        setHasMore(older.length >= 50)
+        if (older.length > 0) {
+          setMessages(prev => [...older, ...prev])
+        }
+      }
+    } catch {
+      // silent
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [accountId, messages, loadingMore, hasMore])
 
   // Subscribe to realtime
   useEffect(() => {
@@ -107,5 +134,5 @@ export function usePortalChat(accountId: string) {
     }
   }, [accountId, sending])
 
-  return { messages, loading, sending, sendMessage }
+  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore }
 }

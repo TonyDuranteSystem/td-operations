@@ -34,6 +34,13 @@ export default function PortalLoginPage() {
       return
     }
 
+    // Audit log login (fire-and-forget)
+    fetch('/api/portal/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login' }),
+    }).catch(() => {})
+
     router.push('/portal')
     router.refresh()
   }

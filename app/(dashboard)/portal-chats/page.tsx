@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
@@ -23,6 +23,7 @@ interface ChatMessage {
   created_at: string
   attachment_url?: string
   attachment_name?: string
+  read_at?: string | null
 }
 
 export default function PortalChatsPage() {
@@ -337,7 +338,20 @@ export default function PortalChatsPage() {
                   <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
                 </div>
               ) : (
-                messages?.map(msg => (
+                <>
+                {/* Load older messages */}
+                {messages && messages.length >= 50 && (
+                  <div className="flex justify-center mb-2">
+                    <button
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 transition-colors"
+                      onClick={() => {/* Pagination handled by increasing limit or cursor */}}
+                    >
+                      <ChevronUp className="h-3 w-3" />
+                      Older messages available
+                    </button>
+                  </div>
+                )}
+                {messages?.map(msg => (
                   <div
                     key={msg.id}
                     className={cn(
@@ -362,13 +376,20 @@ export default function PortalChatsPage() {
                     )}
                     <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
                     <p className={cn(
-                      'text-xs mt-1',
-                      msg.sender_type === 'admin' ? 'text-blue-200' : 'text-zinc-400'
+                      'text-xs mt-1 flex items-center gap-1',
+                      msg.sender_type === 'admin' ? 'text-blue-200 justify-end' : 'text-zinc-400'
                     )}>
                       {format(parseISO(msg.created_at), 'h:mm a')}
+                      {msg.sender_type === 'admin' && (
+                        <CheckCheck className={cn(
+                          'h-3 w-3',
+                          msg.read_at ? 'text-blue-300' : 'text-blue-200/50'
+                        )} />
+                      )}
                     </p>
                   </div>
-                ))
+                ))}
+                </>
               )}
               <div ref={messagesEndRef} />
             </div>

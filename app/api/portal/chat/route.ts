@@ -123,6 +123,16 @@ export async function POST(request: NextRequest) {
     notifyAdminOfClientMessage(account_id, user.email || '', (message || '').trim()).catch(() => {})
   }
 
+  // Audit log
+  const { logPortalAction } = await import('@/lib/portal/audit')
+  logPortalAction({
+    user_id: user.id,
+    account_id: account_id,
+    action: 'message_sent',
+    detail: `${senderType} message (${(message || '').length} chars)${attachment_url ? ' + attachment' : ''}`,
+    ip: request.headers.get('x-forwarded-for') || undefined,
+  })
+
   return NextResponse.json({ message: data })
 }
 
