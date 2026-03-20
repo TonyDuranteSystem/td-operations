@@ -1164,6 +1164,57 @@ export function registerOperationsTools(server: McpServer) {
           }
         }
 
+        // ─── AUTO-TRIGGER: Set initial renewal dates on Company Formation closing stages ───
+        if (
+          delivery.service_type === "Company Formation" &&
+          (targetStage.stage_name === "Post-Formation + Banking" || targetStage.stage_name === "Closing") &&
+          delivery.account_id
+        ) {
+          try {
+            const { data: acctDates } = await supabaseAdmin
+              .from("accounts")
+              .select("cmra_renewal_date, annual_report_due_date, state_of_formation, formation_date")
+              .eq("id", delivery.account_id)
+              .single()
+
+            if (acctDates) {
+              const renewals: Record<string, unknown> = {}
+              const currentYear = new Date().getFullYear()
+
+              // CMRA: Dec 31 current year (if not already set)
+              if (!acctDates.cmra_renewal_date) {
+                renewals.cmra_renewal_date = `${currentYear}-12-31`
+              }
+
+              // Annual Report: per state (if not already set)
+              if (!acctDates.annual_report_due_date) {
+                const st = (acctDates.state_of_formation || "").toUpperCase()
+                  .replace("NEW MEXICO", "NM").replace("WYOMING", "WY")
+                  .replace("FLORIDA", "FL").replace("DELAWARE", "DE")
+
+                if (st === "FL") renewals.annual_report_due_date = `${currentYear + 1}-05-01`
+                else if (st === "DE") renewals.annual_report_due_date = `${currentYear + 1}-06-01`
+                else if (st === "WY" && acctDates.formation_date) {
+                  const month = String(acctDates.formation_date).slice(5, 7)
+                  renewals.annual_report_due_date = `${currentYear + 1}-${month}-01`
+                }
+                // NM: no annual report
+              }
+
+              if (Object.keys(renewals).length > 0) {
+                renewals.updated_at = new Date().toISOString()
+                await supabaseAdmin.from("accounts").update(renewals).eq("id", delivery.account_id)
+                const datesList = Object.entries(renewals)
+                  .filter(([k]) => k !== "updated_at")
+                  .map(([k, v]) => `${k}=${v}`).join(", ")
+                lines.push(`\n📅 Renewal dates set: ${datesList}`)
+              }
+            }
+          } catch (rdErr) {
+            lines.push(`\n⚠️ Renewal dates failed: ${rdErr instanceof Error ? rdErr.message : String(rdErr)}`)
+          }
+        }
+
         // ─── AUTO-TRIGGER: Welcome Package on "Post-Formation + Banking" ───
         if (
           delivery.service_type === "Company Formation" &&
