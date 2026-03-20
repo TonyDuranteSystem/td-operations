@@ -11,11 +11,14 @@ interface Message {
   content: string
 }
 
+type Provider = 'auto' | 'claude' | 'openai'
+
 export function AiAgentPanel() {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [provider, setProvider] = useState<Provider>('auto')
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -81,6 +84,7 @@ export function AiAgentPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          provider: provider !== 'auto' ? provider : undefined,
         }),
       })
 
@@ -134,6 +138,17 @@ export function AiAgentPanel() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {/* Provider selector */}
+            <select
+              value={provider}
+              onChange={e => setProvider(e.target.value as Provider)}
+              className="text-[11px] bg-white border border-zinc-200 rounded-md px-1.5 py-1 text-zinc-600 focus:outline-none focus:ring-1 focus:ring-violet-400 cursor-pointer"
+              title="Choose AI provider"
+            >
+              <option value="auto">Auto (Claude → GPT)</option>
+              <option value="claude">Claude only</option>
+              <option value="openai">GPT-4o only</option>
+            </select>
             {messages.length > 0 && (
               <button
                 onClick={clearChat}

@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { messages } = await request.json()
+    const { messages, provider: requestedProvider } = await request.json()
 
     if (!messages?.length || !Array.isArray(messages)) {
       return NextResponse.json({ error: 'messages array required' }, { status: 400 })
@@ -48,9 +48,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No valid messages provided' }, { status: 400 })
     }
 
+    // Validate provider choice
+    const forcedProvider = ['claude', 'openai'].includes(requestedProvider) ? requestedProvider : undefined
+
     // Lazy import to avoid loading providers at build time
     const { callAgent } = await import('@/lib/ai-agent/providers')
-    const result = await callAgent(validMessages)
+    const result = await callAgent(validMessages, forcedProvider)
 
     return NextResponse.json({
       content: result.reply,

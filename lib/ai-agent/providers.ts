@@ -213,8 +213,18 @@ async function callOpenAI(messages: Message[]): Promise<AgentResponse> {
 // Main Entry — Claude first, fallback to OpenAI
 // ============================================================
 
-export async function callAgent(messages: Message[]): Promise<AgentResponse> {
-  // Try Claude first
+export async function callAgent(messages: Message[], forcedProvider?: string): Promise<AgentResponse> {
+  // If a specific provider is forced
+  if (forcedProvider === 'claude') {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured')
+    return await callClaude(messages)
+  }
+  if (forcedProvider === 'openai') {
+    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured')
+    return await callOpenAI(messages)
+  }
+
+  // Auto mode: Try Claude first, fallback to OpenAI
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       return await callClaude(messages)
