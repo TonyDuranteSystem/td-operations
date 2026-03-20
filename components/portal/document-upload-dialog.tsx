@@ -182,7 +182,32 @@ export function DocumentUploadDialog({ accountId, open, onClose }: DocumentUploa
       onClose()
       router.refresh()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed')
+      const errorMsg = err instanceof Error ? err.message : 'Upload failed'
+
+      // Auto-report the issue — client sees friendly message, admin gets details
+      try {
+        await fetch('/api/portal/report-issue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_id: accountId,
+            area: 'upload',
+            error_message: errorMsg,
+            context: {
+              file_name: file?.name,
+              file_size: file?.size,
+              file_type: file?.type,
+              doc_type: selectedDocType?.typeName,
+            },
+          }),
+        })
+      } catch { /* don't fail on report */ }
+
+      // Show friendly message, not technical error
+      toast.error(
+        t('docUpload.errorReported') || "Something went wrong. Our team has been notified and will email you when it's fixed.",
+        { duration: 8000 }
+      )
     } finally {
       setUploading(false)
       setUploadProgress('')
