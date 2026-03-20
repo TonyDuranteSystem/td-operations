@@ -39,7 +39,7 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
   tax_return: {
     bucket: "tax-form-uploads",
     driveSubfolder: "3. Tax",
-    pdfTitle: "Tax Return Data Collection",
+    pdfTitle: "Tax Return Data Collection -- COMPLETE DATA PACKAGE",
     filePrefix: "Tax_Data",
     sections: [
       {
@@ -47,50 +47,92 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
         fields: [
           { key: "llc_name", label: "LLC Name" },
           { key: "ein_number", label: "EIN" },
-          { key: "state_of_incorporation", label: "State" },
+          { key: "state_of_incorporation", label: "State of Incorporation" },
           { key: "date_of_incorporation", label: "Formation Date" },
           { key: "principal_product_service", label: "Principal Product/Service" },
           { key: "us_business_activities", label: "US Business Activities" },
           { key: "website_url", label: "Website" },
+          { key: "state_revenue_breakdown", label: "Revenue Breakdown by State (Corp)" },
+          { key: "new_activities_markets", label: "New Activities/Markets (Corp)" },
+          { key: "has_payroll_w2", label: "Has Payroll/W-2 (Corp)" },
+          { key: "payroll_details", label: "Payroll Details (Corp)" },
         ],
       },
       {
-        title: "Owner Information",
+        title: "Owner / Member Information",
         fields: [
           { key: "owner_first_name", label: "First Name" },
           { key: "owner_last_name", label: "Last Name" },
           { key: "owner_email", label: "Email" },
           { key: "owner_phone", label: "Phone" },
-          { key: "owner_street", label: "Address" },
+          { key: "owner_street", label: "Street Address" },
           { key: "owner_city", label: "City" },
           { key: "owner_state_province", label: "State/Province" },
-          { key: "owner_zip", label: "ZIP" },
+          { key: "owner_zip", label: "ZIP/Postal Code" },
           { key: "owner_country", label: "Country" },
-          { key: "owner_tax_residency", label: "Tax Residency" },
-          { key: "owner_local_tax_number", label: "Local Tax Number" },
+          { key: "owner_tax_residency", label: "Tax Residency Country" },
+          { key: "owner_local_tax_number", label: "Local Tax ID Number" },
+          { key: "owner_direct_100_pct", label: "Direct 100% Owner (SMLLC)" },
+          { key: "owner_ultimate_25_pct", label: "Ultimate 25%+ Owner (SMLLC)" },
+          { key: "ultimate_owner_name", label: "Ultimate Owner Name" },
+          { key: "ultimate_owner_address", label: "Ultimate Owner Address" },
+          { key: "ultimate_owner_country", label: "Ultimate Owner Country" },
+          { key: "ultimate_owner_tax_id", label: "Ultimate Owner Tax ID" },
+          { key: "ownership_structure", label: "Ownership Structure (Corp)" },
+          { key: "foreign_owned_25_pct", label: "Foreign Owned 25%+ (Corp)" },
+          { key: "foreign_owner_details", label: "Foreign Owner Details (Corp)" },
         ],
       },
       {
-        title: "Tax Details",
+        title: "SMLLC Financial Data (Form 5472 / 1120)",
+        fields: [
+          { key: "formation_costs", label: "Formation Costs (USD)" },
+          { key: "bank_contributions", label: "Bank Contributions / Capital (USD)" },
+          { key: "distributions_withdrawals", label: "Distributions / Withdrawals (USD)" },
+          { key: "personal_expenses", label: "Personal Expenses Paid Through LLC (USD)" },
+          { key: "smllc_additional_comments", label: "Additional Comments / Notes" },
+        ],
+      },
+      {
+        title: "Related Party Transactions (SMLLC)",
+        fields: [
+          { key: "related_party_transactions", label: "Related Party Transactions (see details below)" },
+        ],
+      },
+      {
+        title: "MMLLC Tax Details (Form 1065)",
         fields: [
           { key: "prior_year_returns_filed", label: "Prior Year Returns Filed" },
           { key: "financial_statements_sent", label: "Financial Statements Sent" },
-          { key: "mmllc_foreign_partners", label: "Foreign Partners" },
-          { key: "mmllc_foreign_bank_accounts", label: "Foreign Bank Accounts" },
-          { key: "mmllc_assets_over_50k", label: "Assets Over $50K" },
-          { key: "mmllc_crypto_transactions", label: "Crypto Transactions" },
           { key: "mmllc_has_payroll", label: "Has Payroll" },
-          { key: "mmllc_issued_1099", label: "Issued 1099" },
+          { key: "mmllc_ownership_change", label: "Ownership Change During Year" },
+          { key: "mmllc_foreign_partners", label: "Foreign Partners" },
+          { key: "mmllc_assets_over_50k", label: "Total Assets Over $50K" },
           { key: "mmllc_received_1099", label: "Received 1099" },
-          { key: "mmllc_real_estate", label: "Real Estate" },
-          { key: "mmllc_home_office", label: "Home Office" },
+          { key: "mmllc_issued_1099", label: "Issued 1099" },
+          { key: "mmllc_crypto_transactions", label: "Crypto Transactions" },
+          { key: "mmllc_real_estate", label: "Real Estate Owned/Used" },
+          { key: "mmllc_foreign_bank_accounts", label: "Foreign Bank Accounts" },
+          { key: "mmllc_home_office", label: "Home Office Deduction" },
           { key: "mmllc_vehicle_business_use", label: "Vehicle Business Use" },
           { key: "mmllc_health_insurance", label: "Health Insurance" },
           { key: "mmllc_retirement_plan", label: "Retirement Plan" },
           { key: "mmllc_debt_forgiveness", label: "Debt Forgiveness" },
           { key: "mmllc_related_party_trans", label: "Related Party Transactions" },
-          { key: "mmllc_ownership_change", label: "Ownership Change" },
           { key: "mmllc_additional_info", label: "Additional Notes" },
+        ],
+      },
+      {
+        title: "Corp Tax Details (Form 1120)",
+        fields: [
+          { key: "corp_rental_passive_income", label: "Rental / Passive Income (USD)" },
+          { key: "corp_additional_info", label: "Additional Information" },
+        ],
+      },
+      {
+        title: "Additional Members (MMLLC)",
+        fields: [
+          { key: "additional_members", label: "Members (name, ownership %, ITIN/SSN, tax residency, address)" },
         ],
       },
     ],
@@ -336,12 +378,33 @@ export async function generateFormSummaryPDF(
         display = String(val)
       }
 
-      // Truncate long values
-      if (display.length > 100) display = display.substring(0, 97) + "..."
-
+      // Wrap long values across multiple lines (never truncate)
       page.drawText(field.label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
-      page.drawText(display, { x: 200, y, size: 10, font, color: black })
-      y -= 16
+      if (display.length <= 60) {
+        page.drawText(display, { x: 200, y, size: 10, font, color: black })
+        y -= 16
+      } else {
+        y -= 14
+        // Split into lines of ~80 chars
+        const words = display.split(/\s+/)
+        let line = ""
+        for (const word of words) {
+          if ((line + " " + word).length > 80 && line.length > 0) {
+            ensureSpace(14)
+            page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
+            y -= 12
+            line = word
+          } else {
+            line += " " + word
+          }
+        }
+        if (line.trim()) {
+          ensureSpace(14)
+          page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
+          y -= 12
+        }
+        y -= 4
+      }
     }
     y -= 8
   }
@@ -366,12 +429,32 @@ export async function generateFormSummaryPDF(
       else if (typeof val === "object") display = JSON.stringify(val)
       else display = String(val)
 
-      if (display.length > 80) display = display.substring(0, 77) + "..."
-
       const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
       page.drawText(label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
-      page.drawText(display, { x: 200, y, size: 10, font, color: black })
-      y -= 16
+      if (display.length <= 60) {
+        page.drawText(display, { x: 200, y, size: 10, font, color: black })
+        y -= 16
+      } else {
+        y -= 14
+        const words = display.split(/\s+/)
+        let line = ""
+        for (const word of words) {
+          if ((line + " " + word).length > 80 && line.length > 0) {
+            ensureSpace(14)
+            page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
+            y -= 12
+            line = word
+          } else {
+            line += " " + word
+          }
+        }
+        if (line.trim()) {
+          ensureSpace(14)
+          page.drawText(line.trim(), { x: 60, y, size: 9, font, color: black })
+          y -= 12
+        }
+        y -= 4
+      }
     }
   }
 

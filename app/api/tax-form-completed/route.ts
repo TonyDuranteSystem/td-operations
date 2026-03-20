@@ -2,9 +2,17 @@
  * POST /api/tax-form-completed
  *
  * Called by the tax form frontend after the client submits.
- * 1. Sends email notification to support@
- * 2. Updates service delivery stage_history
- * 3. Creates review task for Antonio
+ * Auto-chain per Tax Return SOP:
+ *
+ * 1. Update contact (only changed fields)
+ * 2. Check passport for one-time customers
+ * 3. Send detailed email to team (support@)
+ * 4. Update tax_returns status -> Data Received
+ * 5. Advance SD -> Data Received
+ * 6. Save complete data PDF + uploads to Drive (3. Tax/{year}/)
+ * 7. Auto P&L for MMLLC (parse bank statements)
+ * 8. Create task for team
+ * 9. Update SD history
  *
  * Body: { submission_id: string, token: string }
  * No auth required (public endpoint — only triggers internal notifications)
@@ -51,7 +59,91 @@ export async function POST(req: NextRequest) {
       if (acc) companyName = acc.company_name
     }
 
-    // ─── 1. DETAILED EMAIL TO LUCA + ANTONIO ───
+    // ─── 0A. UPDATE CONTACT (only changed fields) ───
+    if (sub.contact_id) {
+      try {
+        const { data: fullSub0 } = await supabaseAdmin
+          .from("tax_return_submissions")
+          .select("submitted_data")
+          .eq("id", submission_id)
+          .single()
+        const sd0 = (fullSub0?.submitted_data || {}) as Record<string, unknown>
+
+        const { data: contact } = await supabaseAdmin
+          .from("contacts")
+          .select("phone, residency, citizenship")
+          .eq("id", sub.contact_id)
+          .single()
+
+        if (contact) {
+          const updates: Record<string, unknown> = {}
+          if (sd0.owner_phone && sd0.owner_phone !== contact.phone) updates.phone = sd0.owner_phone
+          if (sd0.owner_tax_residency && sd0.owner_tax_residency !== contact.citizenship) updates.citizenship = sd0.owner_tax_residency
+
+          const newAddr = [sd0.owner_street, sd0.owner_city, sd0.owner_state_province, sd0.owner_zip, sd0.owner_country].filter(Boolean).join(", ")
+          if (newAddr && newAddr !== contact.residency) updates.residency = newAddr
+
+          if (Object.keys(updates).length > 0) {
+            updates.updated_at = new Date().toISOString()
+            await supabaseAdmin.from("contacts").update(updates).eq("id", sub.contact_id)
+            results.push({ step: "contact_update", status: "ok", detail: `Updated: ${Object.keys(updates).filter(k => k !== "updated_at").join(", ")}` })
+          } else {
+            results.push({ step: "contact_update", status: "skipped", detail: "No changes detected" })
+          }
+        }
+      } catch (e) {
+        results.push({ step: "contact_update", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 0B. CHECK PASSPORT FOR ONE-TIME CUSTOMERS ───
+    if (sub.account_id) {
+      try {
+        const { data: acc0 } = await supabaseAdmin
+          .from("accounts")
+          .select("account_type")
+          .eq("id", sub.account_id)
+          .single()
+
+        if (acc0?.account_type === "One-Time" && sub.contact_id) {
+          const { data: contact0 } = await supabaseAdmin
+            .from("contacts")
+            .select("passport_on_file")
+            .eq("id", sub.contact_id)
+            .single()
+
+          if (contact0 && !contact0.passport_on_file) {
+            const { data: contactInfo } = await supabaseAdmin
+              .from("contacts")
+              .select("full_name, email")
+              .eq("id", sub.contact_id)
+              .single()
+
+            await supabaseAdmin.from("tasks").insert({
+              task_title: `[MISSING] Request passport from ${contactInfo?.full_name || "client"} (${companyName})`,
+              description: `One-time client ${companyName} submitted tax form but has NO passport on file.\nEmail ${contactInfo?.email || "client"} to request a clear passport scan.\nPassport is required for tax return filing.`,
+              assigned_to: "Luca",
+              priority: "Urgent",
+              category: "Document",
+              status: "To Do",
+              due_date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              account_id: sub.account_id,
+              contact_id: sub.contact_id,
+              created_by: "System",
+            })
+            results.push({ step: "passport_check", status: "missing", detail: "One-time client, no passport on file. Urgent task created." })
+          } else {
+            results.push({ step: "passport_check", status: "ok", detail: "Passport on file" })
+          }
+        } else {
+          results.push({ step: "passport_check", status: "skipped", detail: "Annual client (passport already on file)" })
+        }
+      } catch (e) {
+        results.push({ step: "passport_check", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
+    // ─── 1. DETAILED EMAIL TO TEAM ───
     try {
       const { gmailPost } = await import("@/lib/gmail")
 
@@ -94,7 +186,6 @@ ${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
-        `Cc: antonio.durante@tonydurante.us\r\n` +
         `Subject: [TASK] Tax Form Completed - ${companyName} (${sub.tax_year})\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
@@ -102,7 +193,7 @@ ${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>
       ).toString("base64url")
 
       await gmailPost("/messages/send", { raw })
-      results.push({ step: "email_notification", status: "ok", detail: `Detailed email sent to support@ + antonio@` })
+      results.push({ step: "email_notification", status: "ok", detail: `Detailed email sent to support@ (team)` })
     } catch (e) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
@@ -140,9 +231,9 @@ ${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
-      // ─── 3. CREATE REVIEW TASK FOR ANTONIO ───
+      // ─── 3. CREATE REVIEW TASK FOR TEAM ───
       try {
-        const taskTitle = `Review tax form data — ${companyName} (${sub.tax_year})`
+        const taskTitle = `Review tax form data -- ${companyName} (${sub.tax_year})`
 
         const { data: existingTask } = await supabaseAdmin
           .from("tasks")
@@ -161,7 +252,7 @@ ${sub.entity_type === "MMLLC" ? `<li>Bank statements auto-parsed. Review: <code>
               `Review: tax_form_review(token="${sub.token}")`,
               `Action: Review data completeness, then apply_changes=true to update CRM.`,
             ].join("\n"),
-            assigned_to: "Antonio",
+            assigned_to: "Luca",
             priority: "High",
             category: "Tax",
             status: "To Do",
