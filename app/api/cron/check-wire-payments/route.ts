@@ -2,12 +2,14 @@
  * Cron: Check Wire Payments
  * Schedule: every 6 hours via Vercel cron
  *
- * Checks QuickBooks bank deposits for pending wire transfers.
- * Matches deposits against pending_activations (status = awaiting_payment, payment_method = bank_transfer).
+ * Two detection methods:
+ * 1. QuickBooks bank deposits (USD — Relay)
+ * 2. Gmail Airwallex notifications (EUR — Airwallex IBAN)
+ *
+ * Matches against pending_activations (status = awaiting_payment, payment_method = bank_transfer).
  * When a match is found → triggers activate-service workflow.
  *
- * Match logic: compare QB deposit amounts with pending_activation amounts (±5% tolerance)
- * and check if deposit memo/description contains client name or offer reference.
+ * Match logic: compare amounts (±5% tolerance) + client name/reference in memo.
  */
 
 export const dynamic = 'force-dynamic'
@@ -172,9 +174,130 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    console.log(`[check-wire] Done. Checked: ${pendingList.length}, Matched: ${matched}`)
+    // 4. Check Airwallex EUR deposits via Gmail (for EUR pending activations not yet matched)
+    const eurPending = pendingList.filter(p =>
+      p.status === "awaiting_payment" &&
+      (p.currency === "EUR" || p.currency === "eur")
+    )
 
-    await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "success", details: { checked: pendingList.length, matched, deposits_found: deposits.length }, executed_at: new Date().toISOString() })
+    // Also re-check: some may have been matched by QB above, reload
+    let airwallexMatched = 0
+    if (eurPending.length > 0) {
+      try {
+        const { gmailGet } = await import("@/lib/gmail")
+
+        // Search for Airwallex deposit notifications in the last 14 days
+        const searchQuery = encodeURIComponent(`from:airwallex subject:"deposit" after:${dateStr.replace(/-/g, "/")}`)
+        const searchResult = await gmailGet(`/messages?q=${searchQuery}&maxResults=50`)
+        const messageIds = (searchResult.messages || []) as Array<{ id: string }>
+
+        // Parse each Airwallex email for amount and sender
+        const airwallexDeposits: Array<{ amount: number; sender: string; date: string; messageId: string }> = []
+
+        for (const msg of messageIds.slice(0, 20)) {
+          try {
+            const detail = await gmailGet(`/messages/${msg.id}?format=full`)
+            const headers = (detail.payload?.headers || []) as Array<{ name: string; value: string }>
+            const dateHeader = headers.find((h: { name: string }) => h.name === "Date")?.value || ""
+            const snippet = String(detail.snippet || "")
+
+            // Parse amount from snippet: "deposit of 3,000.00 EUR" or "deposit of 3000.00 EUR"
+            const amountMatch = snippet.match(/deposit\s+of\s+([\d,.]+)\s*EUR/i)
+            // Parse sender: "from ATCOACHING LLC" or "from Company Name"
+            const senderMatch = snippet.match(/from\s+([A-Z][A-Za-z0-9\s.]+(?:LLC|Inc|Ltd|Corp)?)/i)
+
+            if (amountMatch) {
+              const amount = parseFloat(amountMatch[1].replace(/,/g, ""))
+              const sender = senderMatch ? senderMatch[1].trim() : ""
+              airwallexDeposits.push({ amount, sender, date: dateHeader, messageId: msg.id })
+            }
+          } catch {
+            // Skip individual email parse errors
+          }
+        }
+
+        console.log(`[check-wire] Found ${airwallexDeposits.length} Airwallex EUR deposits`)
+
+        // Match EUR pending activations against Airwallex deposits
+        for (const pending of eurPending) {
+          // Re-check status (may have been matched by QB above)
+          const { data: currentStatus } = await supabase
+            .from("pending_activations")
+            .select("status")
+            .eq("id", pending.id)
+            .single()
+
+          if (currentStatus?.status !== "awaiting_payment") continue
+
+          const pendingAmount = parseFloat(pending.amount)
+          const clientNameLower = (pending.client_name || "").toLowerCase()
+
+          for (const deposit of airwallexDeposits) {
+            const amountDiff = Math.abs(deposit.amount - pendingAmount)
+            const exactMatch = amountDiff < 1
+            const toleranceMatch = amountDiff <= pendingAmount * 0.05
+            const senderLower = deposit.sender.toLowerCase()
+
+            // Match: exact amount OR (close amount + sender contains client name)
+            const nameWords = clientNameLower.split(/\s+/).filter(w => w.length > 2)
+            const nameMatch = nameWords.some(w => senderLower.includes(w))
+
+            if (exactMatch || (toleranceMatch && nameMatch)) {
+              console.log(`[check-wire] AIRWALLEX MATCH: ${pending.client_name} — EUR ${pendingAmount} = Airwallex EUR ${deposit.amount} from "${deposit.sender}"`)
+
+              const { data: wireUpdated } = await supabase
+                .from("pending_activations")
+                .update({
+                  status: "payment_confirmed",
+                  payment_confirmed_at: new Date().toISOString(),
+                  qb_transaction_ref: `airwallex:${deposit.messageId}`,
+                  notes: `Matched Airwallex EUR deposit: ${deposit.amount} EUR from "${deposit.sender}" on ${deposit.date}`,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", pending.id)
+                .eq("status", "awaiting_payment")
+                .select("id, lead_id")
+
+              if (!wireUpdated || wireUpdated.length === 0) continue
+
+              // Lead → Converted
+              if (wireUpdated[0].lead_id) {
+                await supabase
+                  .from("leads")
+                  .update({ status: "Converted", updated_at: new Date().toISOString() })
+                  .eq("id", wireUpdated[0].lead_id)
+              }
+
+              // Trigger activation
+              const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`
+              try {
+                await fetch(`${baseUrl}/api/workflows/activate-service`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.API_SECRET_TOKEN}`,
+                  },
+                  body: JSON.stringify({ pending_activation_id: pending.id }),
+                })
+              } catch (e) {
+                console.error("[check-wire] Failed to trigger activation for Airwallex match:", e)
+              }
+
+              airwallexMatched++
+              matched++
+              break
+            }
+          }
+        }
+      } catch (airwallexErr) {
+        console.error("[check-wire] Airwallex Gmail check failed:", airwallexErr)
+        // Non-blocking: QB matching still works
+      }
+    }
+
+    console.log(`[check-wire] Done. Checked: ${pendingList.length}, Matched: ${matched} (QB: ${matched - airwallexMatched}, Airwallex: ${airwallexMatched})`)
+
+    await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "success", details: { checked: pendingList.length, matched, airwallex_matched: airwallexMatched, deposits_found: deposits.length }, executed_at: new Date().toISOString() })
 
     return NextResponse.json({
       ok: true,
