@@ -89,15 +89,17 @@ export function AiAgentPanel() {
       })
 
       if (!res.ok) {
-        throw new Error('Request failed')
+        const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+        throw new Error(errData.error || `Request failed (${res.status})`)
       }
 
       const data = await res.json()
       const providerTag = data.provider === 'claude' ? '' : data.provider === 'openai' ? ' _(GPT-4o fallback)_' : ''
       const toolInfo = data.tools_used?.length ? `\n\n_🔧 Used: ${Array.from(new Set(data.tools_used) as Set<string>).join(', ')}_` : ''
       setMessages(prev => [...prev, { role: 'assistant', content: (data.content || 'No response.') + providerTag + toolInfo }])
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Something went wrong. Please try again.' }])
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Unknown error'
+      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }])
     } finally {
       setLoading(false)
     }
