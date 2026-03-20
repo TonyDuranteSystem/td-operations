@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
       ? `${docType || 'Tax Document'} - ${taxYear}`
       : 'Client Upload'
 
-    const { data: doc } = await supabaseAdmin
+    const { data: doc, error: insertError } = await supabaseAdmin
       .from('documents')
       .insert({
         file_name: file.name,
@@ -95,10 +95,17 @@ export async function POST(request: NextRequest) {
         category: categoryNum,
         document_type_name: typeName,
         status: 'classified',
-        confidence: 1.0,
+        confidence: '1.0',
+        mime_type: file.type,
+        file_size: file.size,
       })
       .select('id')
       .single()
+
+    if (insertError) {
+      console.error('Document insert error:', insertError)
+      return NextResponse.json({ error: 'File uploaded to Drive but failed to save record. Please contact support.' }, { status: 500 })
+    }
 
     // For tax documents: create task + notification for admin
     if (taxYear) {

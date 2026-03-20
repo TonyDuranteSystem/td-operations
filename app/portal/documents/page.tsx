@@ -9,6 +9,8 @@ import { DocumentUploadButton } from '@/components/portal/document-upload-button
 import { t, getLocale } from '@/lib/portal/i18n'
 import { FileText } from 'lucide-react'
 
+export const dynamic = 'force-dynamic'
+
 const CATEGORY_LABELS: Record<number, string> = {
   1: 'Company',
   2: 'Contacts',
