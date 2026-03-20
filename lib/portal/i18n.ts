@@ -158,6 +158,13 @@ const translations: Record<Locale, Record<string, string>> = {
     'chat.placeholder': 'Type a message...',
     'chat.team': 'Tony Durante Team',
     'chat.you': 'You',
+    'chat.recording': 'Recording... tap mic to stop',
+    'chat.transcribing': 'Transcribing...',
+    'chat.stopRecording': 'Stop recording',
+    'chat.startRecording': 'Voice input',
+    'chat.listening': 'Listening...',
+    'chat.stopListening': 'Stop dictation',
+    'chat.startListening': 'Dictate message',
 
     // Profile
     'profile.title': 'Profile',
@@ -464,6 +471,13 @@ const translations: Record<Locale, Record<string, string>> = {
     'chat.placeholder': 'Scrivi un messaggio...',
     'chat.team': 'Team Tony Durante',
     'chat.you': 'Tu',
+    'chat.recording': 'Registrando... tocca il microfono per fermare',
+    'chat.transcribing': 'Trascrizione in corso...',
+    'chat.stopRecording': 'Ferma registrazione',
+    'chat.startRecording': 'Input vocale',
+    'chat.listening': 'In ascolto...',
+    'chat.stopListening': 'Ferma dettatura',
+    'chat.startListening': 'Dettare messaggio',
 
     // Profile
     'profile.title': 'Profilo',

@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
+import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
 
@@ -19,7 +20,7 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'h:mm a')
 }
 
-export function PortalChat({ accountId, userId }: { accountId: string; userId: string }) {
+export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: string; userId: string; locale?: string }) {
   const { messages, loading, sending, sendMessage } = usePortalChat(accountId)
   const [input, setInput] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -27,6 +28,21 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const speechLang = locale === 'it' ? 'it-IT' : 'en-US'
+
+  const handleTranscript = useCallback((text: string) => {
+    setInput(prev => (prev ? prev + ' ' + text : text).trim())
+    inputRef.current?.focus()
+  }, [])
+
+  const {
+    isRecording,
+    isTranscribing,
+    startRecording,
+    stopRecording,
+    isSupported: micSupported,
+  } = useVoiceInput({ language: speechLang, onTranscript: handleTranscript })
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -37,6 +53,8 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
 
   const handleSend = async () => {
     if (!input.trim() || sending) return
+    // Stop recording if active
+    if (isRecording) stopRecording()
     const msg = input
     setInput('')
     try {
@@ -74,6 +92,14 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
       toast.error('Failed to upload file')
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleMicToggle = () => {
+    if (isRecording) {
+      stopRecording()
+    } else {
+      startRecording()
     }
   }
 
@@ -152,6 +178,28 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
         )}
       </div>
 
+      {/* Recording indicator */}
+      {(isRecording || isTranscribing) && (
+        <div className="px-4 py-2 bg-red-50 border-t border-red-100 flex items-center gap-2">
+          {isRecording && (
+            <>
+              <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-xs text-red-600 font-medium">
+                {t('chat.recording') || 'Recording... tap mic to stop'}
+              </span>
+            </>
+          )}
+          {isTranscribing && (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+              <span className="text-xs text-blue-600 font-medium">
+                {t('chat.transcribing') || 'Transcribing...'}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Input */}
       <div className="border-t p-3">
         <div className="flex items-center gap-2">
@@ -174,9 +222,35 @@ export function PortalChat({ accountId, userId }: { accountId: string; userId: s
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={t('chat.placeholder')}
-            className="flex-1 px-4 py-2.5 text-sm border rounded-full bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
+            placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
+            className={cn(
+              "flex-1 px-4 py-2.5 text-sm border rounded-full bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors",
+              isRecording && "ring-2 ring-red-300 bg-red-50/50"
+            )}
           />
+          {micSupported && (
+            <button
+              onClick={handleMicToggle}
+              disabled={isTranscribing}
+              className={cn(
+                "p-2.5 rounded-full transition-all",
+                isRecording
+                  ? "bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30"
+                  : isTranscribing
+                    ? "bg-blue-100 text-blue-500"
+                    : "text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100"
+              )}
+              title={isRecording ? (t('chat.stopRecording') || 'Stop recording') : (t('chat.startRecording') || 'Voice input')}
+            >
+              {isTranscribing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : isRecording ? (
+                <Square className="h-3.5 w-3.5 fill-current" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
+            </button>
+          )}
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending}
