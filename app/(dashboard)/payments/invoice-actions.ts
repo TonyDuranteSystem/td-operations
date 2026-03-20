@@ -10,6 +10,7 @@ import {
   type CreateCreditNoteInput,
 } from '@/lib/schemas/invoice'
 import { generateInvoiceNumber } from '@/lib/invoice-number'
+import { syncPaymentToQB, syncVoidToQB } from '@/lib/qb-sync'
 
 // ── Create Invoice (Draft) ─────────────────────────────────────────
 
@@ -166,6 +167,12 @@ export async function markInvoicePaid(
     const result = await updateWithLock('payments', paymentId, updates, updatedAt)
     if (!result.success) throw new Error(result.error)
 
+    // QB sync (non-blocking best-effort)
+    syncPaymentToQB(paymentId, {
+      paymentDate: today,
+      paymentMethod: paymentMethod,
+    }).catch(() => {})
+
     revalidatePath('/payments')
     revalidatePath('/accounts')
   }, {
@@ -189,6 +196,10 @@ export async function voidInvoice(
       status: 'Waived',
     }, updatedAt)
     if (!result.success) throw new Error(result.error)
+
+    // QB sync (non-blocking best-effort)
+    syncVoidToQB(paymentId).catch(() => {})
+
     revalidatePath('/payments')
   }, {
     action_type: 'update',

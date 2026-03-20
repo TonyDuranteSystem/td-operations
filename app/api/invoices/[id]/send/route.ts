@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { gmailPost } from '@/lib/gmail'
 import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { safeSend } from '@/lib/mcp/safe-send'
+import { syncInvoiceToQB } from '@/lib/qb-sync'
 
 // TD LLC company info
 const TD_COMPANY = {
@@ -178,6 +179,12 @@ export async function POST(
               updated_at: new Date().toISOString(),
             })
             .eq('id', id)
+        },
+      },
+      {
+        name: 'qb_sync',
+        fn: async () => {
+          await syncInvoiceToQB(id)
         },
       },
     ],
