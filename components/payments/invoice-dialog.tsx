@@ -195,7 +195,22 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice' }: InvoiceDialog
               ) : (
                 <ServiceTypeSelect
                   value={description}
-                  onChange={setDescription}
+                  onChange={(name, defaultPrice, defaultCurrency) => {
+                    setDescription(name)
+                    // Auto-fill first line item with service name and price
+                    if (defaultPrice != null && items.length === 1 && items[0].amount === 0) {
+                      setItems([{
+                        description: name,
+                        quantity: 1,
+                        unit_price: defaultPrice,
+                        amount: defaultPrice,
+                        sort_order: 0,
+                      }])
+                    }
+                    if (defaultCurrency) {
+                      setCurrency(defaultCurrency as 'USD' | 'EUR')
+                    }
+                  }}
                   placeholder="Select service type..."
                 />
               )}
