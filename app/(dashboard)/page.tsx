@@ -6,6 +6,7 @@ import { UnreadMessagesCard } from '@/components/dashboard/cards/unread-messages
 import { UpcomingDeadlinesCard } from '@/components/dashboard/cards/upcoming-deadlines'
 import { PendingFormsCard } from '@/components/dashboard/cards/pending-forms'
 import { RecentPaymentsCard } from '@/components/dashboard/cards/recent-payments'
+import { PendingActions } from '@/components/dashboard/pending-actions'
 
 export default function DashboardPage() {
   return (
@@ -16,7 +17,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Row 1: Urgent Tasks (wide) + Unread Messages */}
+        {/* Row 1: Urgent Tasks (wide) + AI Pending Actions */}
         <div className="lg:col-span-2">
           <CardErrorBoundary fallbackTitle="Urgent Tasks">
             <Suspense fallback={<CardSkeleton title="Urgent Tasks" />}>
@@ -25,13 +26,15 @@ export default function DashboardPage() {
           </CardErrorBoundary>
         </div>
 
+        <PendingActions />
+
+        {/* Row 2: Unread Messages + Deadlines + Pending Forms */}
         <CardErrorBoundary fallbackTitle="Unread Messages">
           <Suspense fallback={<CardSkeleton title="Unread Messages" />}>
             <UnreadMessagesCard />
           </Suspense>
         </CardErrorBoundary>
 
-        {/* Row 2: Deadlines + Pending Forms + Recent Payments */}
         <CardErrorBoundary fallbackTitle="Upcoming Deadlines">
           <Suspense fallback={<CardSkeleton title="Upcoming Deadlines" />}>
             <UpcomingDeadlinesCard />
@@ -44,6 +47,7 @@ export default function DashboardPage() {
           </Suspense>
         </CardErrorBoundary>
 
+        {/* Row 3: Recent Payments */}
         <CardErrorBoundary fallbackTitle="Recent Payments">
           <Suspense fallback={<CardSkeleton title="Recent Payments" />}>
             <RecentPaymentsCard />
