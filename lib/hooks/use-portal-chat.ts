@@ -14,7 +14,7 @@ export function usePortalChat(accountId: string) {
   const [sending, setSending] = useState(false)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  // Load initial messages
+  // Load initial messages + mark as read
   useEffect(() => {
     async function load() {
       setLoading(true)
@@ -23,6 +23,12 @@ export function usePortalChat(accountId: string) {
         if (res.ok) {
           const data = await res.json()
           setMessages(data.messages ?? [])
+          // Mark admin messages as read (client has seen them)
+          fetch('/api/portal/chat/read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId }),
+          }).catch(() => {})
         }
       } catch {
         // silent

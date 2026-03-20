@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
+import { CRM_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -107,5 +108,78 @@ export async function POST(request: NextRequest) {
     }).catch(() => {}) // fire-and-forget
   }
 
+  // Notify admin when client sends a message
+  if (senderType === 'client') {
+    notifyAdminOfClientMessage(account_id, user.email || '', (message || '').trim()).catch(() => {})
+  }
+
   return NextResponse.json({ message: data })
+}
+
+/**
+ * Send email notification to admin when a client sends a chat message.
+ * Throttled: only sends if no email was sent for this account in last 5 minutes
+ * (to avoid spam when client sends multiple messages).
+ */
+const recentAdminNotifications = new Map<string, number>()
+
+async function notifyAdminOfClientMessage(accountId: string, clientEmail: string, messagePreview: string) {
+  // Throttle: max 1 email per account per 5 minutes
+  const lastSent = recentAdminNotifications.get(accountId) ?? 0
+  if (Date.now() - lastSent < 5 * 60 * 1000) return
+  recentAdminNotifications.set(accountId, Date.now())
+
+  // Get company name
+  const { data: account } = await supabaseAdmin
+    .from('accounts')
+    .select('company_name')
+    .eq('id', accountId)
+    .single()
+
+  const companyName = account?.company_name || 'Unknown'
+  const preview = messagePreview.slice(0, 200) || '[Attachment]'
+
+  try {
+    const { gmailPost } = await import('@/lib/gmail')
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #18181b; padding: 20px; border-radius: 12px 12px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 18px;">💬 New Portal Message</h1>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+          <p style="margin: 0 0 4px;"><strong>Company:</strong> ${companyName}</p>
+          <p style="margin: 0 0 16px; color: #6b7280;"><strong>From:</strong> ${clientEmail}</p>
+          <div style="background: #f4f4f5; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+            <p style="margin: 0; color: #27272a; font-size: 14px; white-space: pre-wrap;">${preview}</p>
+          </div>
+          <a href="${CRM_BASE_URL}/portal-chats" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold;">
+            Reply in CRM
+          </a>
+        </div>
+      </div>
+    `
+
+    const subject = `Portal: New message from ${companyName}`
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+    const boundary = `boundary_${Date.now()}`
+    const rawEmail = [
+      `From: TD Portal <support@tonydurante.us>`,
+      `To: support@tonydurante.us`,
+      `Subject: ${encodedSubject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(html).toString('base64'),
+      `--${boundary}--`,
+    ].join('\r\n')
+
+    await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+  } catch (err) {
+    console.error('Admin chat notification email failed:', err)
+  }
 }

@@ -26,3 +26,4 @@
 
 export const APP_BASE_URL = "https://app.tonydurante.us"
 export const PORTAL_BASE_URL = "https://portal.tonydurante.us"
+export const CRM_BASE_URL = "https://td-operations.vercel.app"

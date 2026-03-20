@@ -42,6 +42,19 @@ export default function PortalChatsPage() {
     refetchInterval: 5_000,
   })
 
+  // Mark messages as read when admin opens a thread
+  useEffect(() => {
+    if (!selectedAccountId) return
+    fetch('/api/portal/chat/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: selectedAccountId }),
+    }).then(() => {
+      // Refresh threads to update unread count
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+    }).catch(() => {})
+  }, [selectedAccountId, queryClient])
+
   // Send reply
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
