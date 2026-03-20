@@ -11,9 +11,16 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // Allow cron secret OR dashboard user auth
+  const cronSecret = process.env.CRON_SECRET
+  const cronHeader = _request.headers.get('x-cron-secret')
+  const isCron = cronSecret && cronHeader === cronSecret
+
+  if (!isCron) {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const { id } = await params
 
