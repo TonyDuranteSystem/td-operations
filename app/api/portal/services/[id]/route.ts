@@ -45,7 +45,7 @@ export async function GET(
   // Fetch pipeline stages for this service type
   const { data: pipelineStages } = await supabaseAdmin
     .from('pipeline_stages')
-    .select('stage_name, stage_order, stage_description')
+    .select('stage_name, stage_order, stage_description, client_description')
     .eq('service_type', service.service_type)
     .order('stage_order')
 
@@ -70,7 +70,7 @@ export async function GET(
     return {
       name: ps.stage_name,
       order: ps.stage_order,
-      description: ps.stage_description,
+      description: ps.client_description || ps.stage_description,
       status: stageStatus,
       entered_at: historyEntry?.entered_at ?? (stageStatus === 'current' ? delivery?.stage_entered_at : null),
       exited_at: historyEntry?.exited_at ?? null,
