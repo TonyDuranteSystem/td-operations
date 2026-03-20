@@ -1246,6 +1246,96 @@ export function registerOperationsTools(server: McpServer) {
           }
         }
 
+        // ─── AUTO-TRIGGER: Company Closure Stage 5 — Cancel all active services ───
+        if (
+          delivery.service_type === "Company Closure" &&
+          targetStage.stage_name === "Closing" &&
+          delivery.account_id
+        ) {
+          try {
+            const closureLines: string[] = []
+
+            // Cancel all active SDs for this account (except this closure SD)
+            const { data: activeSds } = await supabaseAdmin
+              .from("service_deliveries")
+              .select("id, service_type")
+              .eq("account_id", delivery.account_id)
+              .eq("status", "active")
+              .neq("id", delivery_id)
+
+            if (activeSds?.length) {
+              for (const sd of activeSds) {
+                await supabaseAdmin
+                  .from("service_deliveries")
+                  .update({ status: "cancelled", updated_at: new Date().toISOString() })
+                  .eq("id", sd.id)
+              }
+              closureLines.push(`Cancelled ${activeSds.length} active SDs: ${activeSds.map(s => s.service_type).join(", ")}`)
+            }
+
+            // Set account to Inactive
+            await supabaseAdmin
+              .from("accounts")
+              .update({ status: "Inactive", updated_at: new Date().toISOString() })
+              .eq("id", delivery.account_id)
+            closureLines.push("Account -> Inactive")
+
+            // Deactivate portal
+            await supabaseAdmin
+              .from("accounts")
+              .update({ portal_account: false, updated_at: new Date().toISOString() })
+              .eq("id", delivery.account_id)
+            closureLines.push("Portal deactivated")
+
+            // Close all open tasks for this account
+            const { data: openTasks } = await supabaseAdmin
+              .from("tasks")
+              .select("id")
+              .eq("account_id", delivery.account_id)
+              .in("status", ["To Do", "In Progress", "Waiting"])
+
+            if (openTasks?.length) {
+              await supabaseAdmin
+                .from("tasks")
+                .update({ status: "Done", updated_at: new Date().toISOString() })
+                .eq("account_id", delivery.account_id)
+                .in("status", ["To Do", "In Progress", "Waiting"])
+              closureLines.push(`Closed ${openTasks.length} open tasks`)
+            }
+
+            // Create tasks for manual steps
+            await supabaseAdmin.from("tasks").insert([
+              {
+                task_title: `[CLOSURE] Remove RA on Harbor Compliance`,
+                description: `Company closure in progress. Remove Registered Agent service from Harbor Compliance portal.`,
+                assigned_to: "Luca", priority: "High", category: "Filing", status: "To Do",
+                account_id: delivery.account_id, delivery_id, created_by: "System",
+              },
+              {
+                task_title: `[CLOSURE] Cancel QB recurring invoices`,
+                description: `Company closure. Check QuickBooks for any recurring invoices and cancel them.`,
+                assigned_to: "Luca", priority: "Normal", category: "Payment", status: "To Do",
+                account_id: delivery.account_id, delivery_id, created_by: "System",
+              },
+              {
+                task_title: `[CLOSURE] Email client -- closure complete`,
+                description: `All closure steps done. Send confirmation email to client that their LLC has been dissolved.`,
+                assigned_to: "Luca", priority: "Normal", category: "Client Communication", status: "To Do",
+                account_id: delivery.account_id, delivery_id, created_by: "System",
+              },
+            ])
+            closureLines.push("Created 3 tasks: Harbor RA, QB invoices, client email")
+
+            if (closureLines.length > 0) {
+              lines.push("")
+              lines.push("CLOSURE AUTO-CLEANUP:")
+              closureLines.forEach(l => lines.push(`   ${l}`))
+            }
+          } catch (closureErr) {
+            lines.push(`\n Warning: Closure auto-cleanup failed: ${closureErr instanceof Error ? closureErr.message : String(closureErr)}`)
+          }
+        }
+
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
