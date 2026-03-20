@@ -26,13 +26,20 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
   const [uploading, setUploading] = useState(false)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const speechLang = locale === 'it' ? 'it-IT' : 'en-US'
 
   const handleTranscript = useCallback((text: string) => {
     setInput(prev => (prev ? prev + ' ' + text : text).trim())
+    // Auto-grow textarea for transcribed text
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto'
+        inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + 'px'
+      }
+    }, 0)
     inputRef.current?.focus()
   }, [])
 
@@ -57,6 +64,8 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
     if (isRecording) stopRecording()
     const msg = input
     setInput('')
+    // Reset textarea height
+    if (inputRef.current) inputRef.current.style.height = 'auto'
     try {
       await sendMessage(msg)
     } catch {
@@ -202,7 +211,7 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
 
       {/* Input */}
       <div className="border-t p-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-end gap-2">
           <button
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
@@ -216,17 +225,23 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
             onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
             className="hidden"
           />
-          <input
+          <textarea
             ref={inputRef}
-            type="text"
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={e => {
+              setInput(e.target.value)
+              // Auto-grow: reset height then set to scrollHeight
+              e.target.style.height = 'auto'
+              e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
+            }}
             onKeyDown={handleKeyDown}
+            rows={1}
             placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
             className={cn(
-              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-full bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors",
+              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-2xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors resize-none overflow-hidden",
               isRecording && "ring-2 ring-red-300 bg-red-50/50"
             )}
+            style={{ maxHeight: '120px' }}
           />
           {/* WhatsApp-style: empty input = mic, text = send. One big button. */}
           {input.trim() || !micSupported ? (
