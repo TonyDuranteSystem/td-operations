@@ -240,39 +240,41 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
               isRecording && "ring-2 ring-red-300 bg-red-50/50"
             )}
           />
-          {/* WhatsApp-style: empty input = mic, text = send. One big button. */}
-          {input.trim() || !micSupported ? (
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || sending}
-              className="p-3 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-            >
-              {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-            </button>
-          ) : isRecording ? (
-            <button
-              onClick={stopRecording}
-              className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
-              title={t('chat.stopRecording') || 'Stop recording'}
-            >
-              <Square className="h-5 w-5 fill-current" />
-            </button>
-          ) : isTranscribing ? (
-            <button
-              disabled
-              className="p-3 rounded-full bg-blue-100 text-blue-500 shrink-0"
-            >
-              <Loader2 className="h-5 w-5 animate-spin" />
-            </button>
-          ) : (
-            <button
-              onClick={startRecording}
-              className="p-3 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
-              title={t('chat.startRecording') || 'Voice input'}
-            >
-              <Mic className="h-5 w-5" />
-            </button>
+          {/* Mic — always visible so user can dictate into existing text */}
+          {micSupported && (
+            isRecording ? (
+              <button
+                onClick={stopRecording}
+                className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
+                title={t('chat.stopRecording') || 'Stop recording'}
+              >
+                <Square className="h-5 w-5 fill-current" />
+              </button>
+            ) : isTranscribing ? (
+              <button
+                disabled
+                className="p-3 rounded-full bg-blue-100 text-blue-500 shrink-0"
+              >
+                <Loader2 className="h-5 w-5 animate-spin" />
+              </button>
+            ) : (
+              <button
+                onClick={startRecording}
+                className="p-3 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
+                title={t('chat.startRecording') || 'Voice input'}
+              >
+                <Mic className="h-5 w-5" />
+              </button>
+            )
           )}
+          {/* Send */}
+          <button
+            onClick={handleSend}
+            disabled={!input.trim() || sending}
+            className="p-3 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+          </button>
         </div>
       </div>
     </div>

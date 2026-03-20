@@ -468,34 +468,38 @@ export default function PortalChatsPage() {
                     {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
                   </button>
                 )}
-                {/* Send / Mic / Stop */}
-                {replyText.trim() || !micSupported ? (
-                  <button
-                    onClick={handleSend}
-                    disabled={!replyText.trim() || sendMutation.isPending}
-                    className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors shrink-0"
-                  >
-                    {sendMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                  </button>
-                ) : isRecording ? (
-                  <button
-                    onClick={stopRecording}
-                    className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
-                  >
-                    <Square className="h-5 w-5 fill-current" />
-                  </button>
-                ) : isTranscribing ? (
-                  <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={startRecording}
-                    className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
-                  >
-                    <Mic className="h-5 w-5" />
-                  </button>
+                {/* Mic — always visible (dictate into empty or append to existing text) */}
+                {micSupported && (
+                  isRecording ? (
+                    <button
+                      onClick={stopRecording}
+                      className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
+                      title="Stop recording"
+                    >
+                      <Square className="h-5 w-5 fill-current" />
+                    </button>
+                  ) : isTranscribing ? (
+                    <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={startRecording}
+                      className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
+                      title="Dictate — appends to current text"
+                    >
+                      <Mic className="h-5 w-5" />
+                    </button>
+                  )
                 )}
+                {/* Send */}
+                <button
+                  onClick={handleSend}
+                  disabled={!replyText.trim() || sendMutation.isPending}
+                  className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  {sendMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                </button>
               </div>
             </div>
           </>
