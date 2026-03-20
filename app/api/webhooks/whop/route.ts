@@ -194,6 +194,48 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     console.error("[whop-webhook] Failed to create payment:", payErr.message)
   }
 
+  // 3b. Check if this Whop payment matches an open CRM invoice (auto-reconcile)
+  if (accountId && total > 0) {
+    try {
+      const { data: openInvoices } = await getSupabase()
+        .from("payments")
+        .select("id, invoice_number, total, amount, invoice_status")
+        .eq("account_id", accountId)
+        .in("invoice_status", ["Sent", "Overdue"])
+
+      if (openInvoices?.length) {
+        // Find invoice with matching amount (±$1 tolerance)
+        const match = openInvoices.find(inv => {
+          const invAmount = Number(inv.total ?? inv.amount ?? 0)
+          return Math.abs(invAmount - total) < 1
+        })
+
+        if (match) {
+          console.log(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
+          const today = new Date().toISOString().split("T")[0]
+          await getSupabase()
+            .from("payments")
+            .update({
+              status: "Paid",
+              invoice_status: "Paid",
+              paid_date: today,
+              payment_method: "Whop",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", match.id)
+
+          // QB sync (non-blocking)
+          try {
+            const { syncPaymentToQB } = await import("@/lib/qb-sync")
+            syncPaymentToQB(match.id, { paymentDate: today, paymentMethod: "Whop" }).catch(() => {})
+          } catch { /* qb-sync not critical */ }
+        }
+      }
+    } catch (matchErr) {
+      console.error("[whop-webhook] Invoice matching failed:", matchErr)
+    }
+  }
+
   // 4. Update lead status to "Converted" (payment = conversion point)
   if (leadId) {
     await getSupabase()

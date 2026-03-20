@@ -20,6 +20,7 @@ import {
   Search,
   Bot,
   Rocket,
+  ArrowLeftRight,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -59,6 +60,7 @@ export function Sidebar({
     { name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
     { name: 'Services', href: '/services', icon: Cog },
     { name: 'Payments', href: '/payments', icon: CreditCard },
+    { name: 'Reconciliation', href: '/reconciliation', icon: ArrowLeftRight },
     { name: 'Calendar', href: '/calendar', icon: Calendar },
     { name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, adminOnly: true },
     { name: 'Portal Launch', href: '/portal-launch', icon: Rocket, adminOnly: true },
