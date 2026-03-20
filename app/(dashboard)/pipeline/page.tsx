@@ -7,7 +7,9 @@ const STAGE_ORDER = [
   'Offer Sent',
   'Negotiation',
   'Agreement Signed',
+  'Paid',
   'Closed Won',
+  'Closed Lost',
 ]
 
 export default async function PipelinePage() {

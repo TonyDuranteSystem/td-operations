@@ -35,18 +35,19 @@ export async function UrgentTasksCard() {
         <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           Urgent Tasks
         </h3>
-        <Link href="/tasks" className="text-xs text-blue-600 hover:underline">
-          View all
+        <Link href="/tasks" className="text-xs font-medium text-blue-600 hover:underline">
+          View all &rarr;
         </Link>
       </div>
       <div className="space-y-2">
         {tasks.map(task => {
           const overdue = task.due_date && task.due_date < today
           return (
-            <div
+            <Link
               key={task.id}
+              href="/tasks"
               className={cn(
-                'flex items-start gap-2 py-2 px-3 rounded-md text-sm',
+                'flex items-start gap-2 py-2 px-3 rounded-lg text-sm hover:bg-zinc-50 cursor-pointer transition-colors',
                 overdue ? 'bg-red-50' : 'bg-amber-50'
               )}
             >
@@ -58,7 +59,7 @@ export async function UrgentTasksCard() {
                   {task.due_date && ` \u2022 ${task.due_date}`}
                 </p>
               </div>
-            </div>
+            </Link>
           )
         })}
       </div>

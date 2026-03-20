@@ -11,12 +11,15 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Plus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { markPaymentPaid } from '@/app/(dashboard)/payments/actions'
+import { EditPaymentDialog } from '@/components/payments/edit-payment-dialog'
+import { CreatePaymentDialog } from '@/components/payments/create-payment-dialog'
 
 interface PaymentItem {
   id: string
@@ -37,6 +40,7 @@ interface PaymentItem {
   delay_approved_until: string | null
   company_name: string | null
   updated_at: string
+  notes?: string | null
 }
 
 interface PaymentBoardProps {
@@ -128,6 +132,8 @@ const PAYMENTS_PER_PAGE = 30
 export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today }: PaymentBoardProps) {
   const router = useRouter()
   const [page, setPage] = useState(1)
+  const [showCreate, setShowCreate] = useState(false)
+  const [editingPayment, setEditingPayment] = useState<PaymentItem | null>(null)
 
   const tabs = [
     { key: 'scaduti', label: 'Scaduti', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
@@ -142,7 +148,7 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
 
   return (
     <div className="space-y-6">
-      {/* Stats */}
+      {/* Stats + New button */}
       <div className="flex gap-3 flex-wrap">
         <div className="bg-white rounded-lg border p-4 flex-1 min-w-[140px]">
           <p className="text-2xl font-semibold text-red-600">{formatCurrency(stats.overdueTotal)}</p>
@@ -156,6 +162,13 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
           <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(stats.paidTotal)}</p>
           <p className="text-xs text-muted-foreground mt-1">{stats.paidCount} pagati</p>
         </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="bg-white rounded-lg border p-4 min-w-[48px] flex items-center justify-center hover:bg-zinc-50 transition-colors"
+          title="Nuovo pagamento"
+        >
+          <Plus className="h-5 w-5 text-zinc-600" />
+        </button>
       </div>
 
       {/* Tabs */}
@@ -207,9 +220,9 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
             const bucket = activeTab === 'scaduti' ? getOverdueBucket(p.due_date, today) : null
             const desc = p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || p.installment || '—')
             return (
-              <div key={p.id} className={cn(
-                'flex flex-col lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm',
-                activeTab === 'scaduti' && bucket && 'hover:bg-red-50/30'
+              <div key={p.id} onClick={() => setEditingPayment(p)} className={cn(
+                'flex flex-col lg:grid lg:grid-cols-[1fr,120px,100px,100px,80px,80px,70px] gap-1 lg:gap-3 px-4 py-3 border-b last:border-b-0 lg:items-center text-sm cursor-pointer',
+                activeTab === 'scaduti' && bucket ? 'hover:bg-red-50/30' : 'hover:bg-zinc-50/50'
               )}>
                 {/* Description + mobile info */}
                 <div className="min-w-0">
@@ -316,6 +329,19 @@ export function PaymentBoard({ overdue, upcoming, paid, stats, activeTab, today 
             </button>
           </div>
         </div>
+      )}
+
+      {/* Dialogs */}
+      <CreatePaymentDialog
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+      />
+      {editingPayment && (
+        <EditPaymentDialog
+          open={!!editingPayment}
+          onClose={() => setEditingPayment(null)}
+          payment={editingPayment}
+        />
       )}
     </div>
   )

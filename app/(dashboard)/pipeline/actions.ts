@@ -2,8 +2,10 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
+import { createDealSchema, updateDealSchema, type CreateDealInput, type UpdateDealInput } from '@/lib/schemas/deal'
 
-// Mapping: deal service_type → service delivery tickets to create
+// ── Mapping: deal service_type → service delivery tickets to create ──
 const SERVICE_MAP: Record<string, { type: string; billing: string }[]> = {
   'Company Formation': [
     { type: 'Company Formation', billing: 'One-Time' },
@@ -36,6 +38,7 @@ const SERVICE_MAP: Record<string, { type: string; billing: string }[]> = {
   'State Annual Report': [{ type: 'State Annual Report', billing: 'Standalone' }],
 }
 
+// ── Existing: updateDealStage (with service ticket auto-creation) ──
 export async function updateDealStage(dealId: string, newStage: string) {
   const supabase = createClient()
 
@@ -134,4 +137,77 @@ async function createServiceDeliveryTickets(dealId: string) {
   }
 
   console.log(`Deal ${dealId} → ${newServices.length} service tickets creati per account ${deal.account_id}`)
+}
+
+// ── New: createDeal ──
+export async function createDeal(input: CreateDealInput): Promise<ActionResult<{ id: string }>> {
+  const parsed = createDealSchema.safeParse(input)
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+
+  return safeAction(async () => {
+    const supabase = createClient()
+    const now = new Date().toISOString()
+    const { data, error } = await supabase
+      .from('deals')
+      .insert({ ...parsed.data, created_at: now, updated_at: now })
+      .select('id')
+      .single()
+    if (error) throw new Error(error.message)
+    revalidatePath('/pipeline')
+    return data
+  }, {
+    action_type: 'create', table_name: 'deals', account_id: parsed.data?.account_id,
+    summary: `Created: ${parsed.data.deal_name}`,
+    details: { ...parsed.data },
+  })
+}
+
+// ── New: updateDeal ──
+export async function updateDeal(input: UpdateDealInput): Promise<ActionResult> {
+  const parsed = updateDealSchema.safeParse(input)
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+
+  const { id, updated_at, ...updates } = parsed.data
+
+  return safeAction(async () => {
+    const result = await updateWithLock('deals', id, updates, updated_at)
+    if (!result.success) throw new Error(result.error)
+    revalidatePath('/pipeline')
+  }, {
+    action_type: 'update', table_name: 'deals', record_id: id,
+    summary: `Updated: ${Object.keys(updates).join(', ')}`,
+    details: updates,
+  })
+}
+
+// ── New: addDealNote ──
+export async function addDealNote(
+  dealId: string,
+  note: string,
+  updatedAt: string
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+
+    // Read current notes
+    const { data: current, error: readError } = await supabase
+      .from('deals')
+      .select('notes')
+      .eq('id', dealId)
+      .single()
+    if (readError) throw new Error(readError.message)
+
+    const datePrefix = new Date().toISOString().split('T')[0]
+    const newNote = `[${datePrefix}] ${note.trim()}`
+    const updatedNotes = current?.notes
+      ? `${newNote}\n${current.notes}`
+      : newNote
+
+    const result = await updateWithLock('deals', dealId, { notes: updatedNotes }, updatedAt)
+    if (!result.success) throw new Error(result.error)
+    revalidatePath('/pipeline')
+  }, {
+    action_type: 'update', table_name: 'deals', record_id: dealId,
+    summary: `Note added`, details: { note },
+  })
 }

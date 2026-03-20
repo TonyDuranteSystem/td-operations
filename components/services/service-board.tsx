@@ -11,13 +11,17 @@ import {
   Filter,
   CheckCircle2,
   Loader2,
+  Plus,
+  ChevronRightIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
-import { completeService, updateServiceStatus } from '@/app/(dashboard)/services/actions'
+import { completeService, updateServiceStatus, advanceServiceStep } from '@/app/(dashboard)/services/actions'
+import { EditServiceDialog } from '@/components/services/edit-service-dialog'
+import { CreateServiceDialog } from '@/components/services/create-service-dialog'
 
 interface ServiceItem {
   id: string
@@ -27,12 +31,15 @@ interface ServiceItem {
   status: string | null
   current_step: number | null
   total_steps: number | null
+  amount: number | null
+  amount_currency: string | null
   blocked_waiting_external: boolean | null
   blocked_reason: string | null
   blocked_since: string | null
   sla_due_date: string | null
   stage_entered_at: string | null
   company_name: string | null
+  notes: string | null
   updated_at: string
 }
 
@@ -73,11 +80,11 @@ function CompleteButton({ serviceId, serviceName }: { serviceId: string; service
       onClick={(e) => {
         e.stopPropagation()
         startTransition(async () => {
-          try {
-            await completeService(serviceId)
+          const result = await completeService(serviceId)
+          if (result.success) {
             toast.success('Servizio completato', { description: serviceName })
-          } catch {
-            toast.error('Errore nel completare il servizio')
+          } else {
+            toast.error(result.error ?? 'Errore nel completare il servizio')
           }
         })
       }}
@@ -95,9 +102,43 @@ function CompleteButton({ serviceId, serviceName }: { serviceId: string; service
   )
 }
 
+function AdvanceStepButton({ serviceId, currentStep, totalSteps, updatedAt }: { serviceId: string; currentStep: number; totalSteps: number; updatedAt: string }) {
+  const [isPending, startTransition] = useTransition()
+
+  if (currentStep >= totalSteps) return null
+
+  return (
+    <button
+      disabled={isPending}
+      onClick={(e) => {
+        e.stopPropagation()
+        startTransition(async () => {
+          const result = await advanceServiceStep(serviceId, updatedAt)
+          if (result.success) {
+            toast.success(`Step ${currentStep + 1}/${totalSteps}`)
+          } else {
+            toast.error(result.error ?? 'Errore')
+          }
+        })
+      }}
+      className={cn(
+        'inline-flex items-center gap-0.5 px-1.5 py-1 text-xs font-medium rounded transition-colors',
+        isPending
+          ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+          : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+      )}
+      title={`Avanza a step ${currentStep + 1}`}
+    >
+      {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRightIcon className="h-3 w-3" />}
+    </button>
+  )
+}
+
 export function ServiceBoard({ columns, stats, serviceTypes, typeFilter, today }: ServiceBoardProps) {
   const router = useRouter()
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('kanban')
+  const [showCreate, setShowCreate] = useState(false)
+  const [editingService, setEditingService] = useState<ServiceItem | null>(null)
 
   return (
     <div className="space-y-6">
@@ -129,6 +170,13 @@ export function ServiceBoard({ columns, stats, serviceTypes, typeFilter, today }
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setShowCreate(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-zinc-900 text-white hover:bg-zinc-800 transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Service
+          </button>
+          <button
             onClick={() => setViewMode('list')}
             className={cn(
               'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
@@ -151,27 +199,43 @@ export function ServiceBoard({ columns, stats, serviceTypes, typeFilter, today }
 
       {/* Content */}
       {viewMode === 'list' ? (
-        <ListView columns={columns} today={today} />
+        <ListView columns={columns} today={today} onEditService={setEditingService} />
       ) : (
-        <KanbanView columns={columns} today={today} />
+        <KanbanView columns={columns} today={today} onEditService={setEditingService} />
+      )}
+
+      {/* Dialogs */}
+      <CreateServiceDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      {editingService && (
+        <EditServiceDialog
+          open={!!editingService}
+          onClose={() => setEditingService(null)}
+          service={{
+            ...editingService,
+            account_id: editingService.account_id ?? '',
+            status: editingService.status ?? 'Not Started',
+            blocked_waiting_external: editingService.blocked_waiting_external ?? false,
+            company_name: editingService.company_name ?? '',
+          }}
+        />
       )}
     </div>
   )
 }
 
-/* ── List View ───────────────────────────────────── */
+/* -- List View ------------------------------------------------- */
 
-function ListView({ columns, today }: { columns: Column[]; today: string }) {
+function ListView({ columns, today, onEditService }: { columns: Column[]; today: string; onEditService: (s: ServiceItem) => void }) {
   return (
     <div className="space-y-2">
       {columns.map(col => (
-        <StatusSection key={col.status} column={col} today={today} />
+        <StatusSection key={col.status} column={col} today={today} onEditService={onEditService} />
       ))}
     </div>
   )
 }
 
-function StatusSection({ column, today }: { column: Column; today: string }) {
+function StatusSection({ column, today, onEditService }: { column: Column; today: string; onEditService: (s: ServiceItem) => void }) {
   const [open, setOpen] = useState(true)
   const colors = STATUS_COLORS[column.status] ?? STATUS_COLORS['Not Started']
 
@@ -193,7 +257,7 @@ function StatusSection({ column, today }: { column: Column; today: string }) {
             <p className="text-sm text-muted-foreground col-span-full pl-6">Nessun servizio</p>
           ) : (
             column.items.map(s => (
-              <ServiceCard key={s.id} service={s} today={today} showComplete />
+              <ServiceCard key={s.id} service={s} today={today} showComplete onClick={() => onEditService(s)} />
             ))
           )}
         </div>
@@ -202,7 +266,7 @@ function StatusSection({ column, today }: { column: Column; today: string }) {
   )
 }
 
-function ServiceCard({ service: s, today, showComplete = false }: { service: ServiceItem; today: string; showComplete?: boolean }) {
+function ServiceCard({ service: s, today, showComplete = false, onClick }: { service: ServiceItem; today: string; showComplete?: boolean; onClick?: () => void }) {
   const isBlocked = s.blocked_waiting_external === true
   const hasSla = s.sla_due_date != null
   let slaDays: number | null = null
@@ -213,11 +277,14 @@ function ServiceCard({ service: s, today, showComplete = false }: { service: Ser
   }
 
   return (
-    <div className={cn(
-      'bg-white rounded-lg border p-3 text-sm',
-      isBlocked && 'border-red-200 bg-red-50/50',
-      slaOverdue && !isBlocked && 'border-amber-200 bg-amber-50/50'
-    )}>
+    <div
+      className={cn(
+        'bg-white rounded-lg border p-3 text-sm cursor-pointer hover:ring-2 hover:ring-blue-200 transition-all',
+        isBlocked && 'border-red-200 bg-red-50/50',
+        slaOverdue && !isBlocked && 'border-amber-200 bg-amber-50/50'
+      )}
+      onClick={onClick}
+    >
       <div className="flex items-center justify-between gap-2 mb-1">
         <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">
           {s.service_type}
@@ -235,6 +302,7 @@ function ServiceCard({ service: s, today, showComplete = false }: { service: Ser
       {s.company_name && (
         <Link
           href={`/accounts/${s.account_id}`}
+          onClick={e => e.stopPropagation()}
           className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5 hover:text-blue-600"
         >
           <Building2 className="h-3 w-3" />
@@ -244,7 +312,15 @@ function ServiceCard({ service: s, today, showComplete = false }: { service: Ser
       <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
         <div className="flex items-center gap-2">
           {s.current_step != null && s.total_steps != null && (
-            <span>Step {s.current_step}/{s.total_steps}</span>
+            <>
+              <span>Step {s.current_step}/{s.total_steps}</span>
+              <AdvanceStepButton
+                serviceId={s.id}
+                currentStep={s.current_step}
+                totalSteps={s.total_steps}
+                updatedAt={s.updated_at}
+              />
+            </>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -272,9 +348,9 @@ function ServiceCard({ service: s, today, showComplete = false }: { service: Ser
   )
 }
 
-/* ── Kanban View with Drag & Drop ───────────────────── */
+/* -- Kanban View with Drag & Drop ------------------------------ */
 
-function KanbanView({ columns, today }: { columns: Column[]; today: string }) {
+function KanbanView({ columns, today, onEditService }: { columns: Column[]; today: string; onEditService: (s: ServiceItem) => void }) {
   const [cols, setCols] = useState(columns)
   const [, startTransition] = useTransition()
 
@@ -296,11 +372,11 @@ function KanbanView({ columns, today }: { columns: Column[]; today: string }) {
     // Persist to DB
     if (srcStatus !== dstStatus) {
       startTransition(async () => {
-        try {
-          await updateServiceStatus(moved.id, dstStatus)
+        const result = await updateServiceStatus(moved.id, dstStatus)
+        if (result.success) {
           toast.success(`Servizio spostato in "${dstStatus}"`, { description: moved.service_name })
-        } catch {
-          toast.error('Errore nello spostamento del servizio')
+        } else {
+          toast.error(result.error ?? 'Errore nello spostamento del servizio')
           setCols(columns) // revert
         }
       })
@@ -339,7 +415,7 @@ function KanbanView({ columns, today }: { columns: Column[]; today: string }) {
                             {...provided.dragHandleProps}
                             className={cn(snapshot.isDragging && 'opacity-90 rotate-1 shadow-lg')}
                           >
-                            <ServiceCard service={s} today={today} showComplete />
+                            <ServiceCard service={s} today={today} showComplete onClick={() => onEditService(s)} />
                           </div>
                         )}
                       </Draggable>

@@ -48,7 +48,7 @@ export async function UnreadMessagesCard() {
           Open inbox
         </Link>
       </div>
-      <div className="flex items-center gap-3">
+      <Link href="/inbox" className="flex items-center gap-3 hover:bg-zinc-50 cursor-pointer rounded-lg transition-colors p-2 -m-2">
         <div className="flex items-center justify-center h-12 w-12 rounded-full bg-blue-50">
           <MessageSquare className="h-6 w-6 text-blue-600" />
         </div>
@@ -56,7 +56,7 @@ export async function UnreadMessagesCard() {
           <p className="text-2xl font-semibold">{totalUnread}</p>
           <p className="text-xs text-muted-foreground">unread messages</p>
         </div>
-      </div>
+      </Link>
     </div>
   )
 }

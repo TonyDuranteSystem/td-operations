@@ -6,12 +6,15 @@ import {
   ChevronRight,
   DollarSign,
   Building2,
+  Plus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { updateDealStage } from '@/app/(dashboard)/pipeline/actions'
+import { EditDealDialog } from './edit-deal-dialog'
+import { CreateDealDialog } from './create-deal-dialog'
 
 interface DealItem {
   id: string
@@ -25,8 +28,10 @@ interface DealItem {
   deal_category: string | null
   service_type: string | null
   payment_status: string | null
+  notes: string | null
   company_name: string | null
   created_at: string
+  updated_at: string
 }
 
 interface StageGroup {
@@ -49,7 +54,9 @@ const STAGE_COLORS: Record<string, { badge: string }> = {
   'Offer Sent': { badge: 'bg-amber-100 text-amber-700' },
   'Negotiation': { badge: 'bg-blue-100 text-blue-700' },
   'Agreement Signed': { badge: 'bg-indigo-100 text-indigo-700' },
+  'Paid': { badge: 'bg-teal-100 text-teal-700' },
   'Closed Won': { badge: 'bg-emerald-100 text-emerald-700' },
+  'Closed Lost': { badge: 'bg-red-100 text-red-700' },
 }
 
 const PAYMENT_COLORS: Record<string, string> = {
@@ -75,6 +82,8 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
 
 export function PipelineBoard({ stages, stats }: { stages: StageGroup[]; stats: PipelineStats }) {
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('kanban')
+  const [showCreate, setShowCreate] = useState(false)
+  const [editingDeal, setEditingDeal] = useState<DealItem | null>(null)
 
   return (
     <div className="space-y-6">
@@ -84,27 +93,52 @@ export function PipelineBoard({ stages, stats }: { stages: StageGroup[]; stats: 
         <StatCard label="Totale" value={formatCurrency(stats.totalValue)} sub={`${stats.total} deal`} color="text-foreground" />
       </div>
 
-      <div className="flex items-center gap-2">
-        <button onClick={() => setViewMode('list')} className={cn('px-3 py-1.5 text-xs font-medium rounded-lg transition-colors', viewMode === 'list' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200')}>Lista</button>
-        <button onClick={() => setViewMode('kanban')} className={cn('px-3 py-1.5 text-xs font-medium rounded-lg transition-colors', viewMode === 'kanban' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200')}>Kanban</button>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button onClick={() => setViewMode('list')} className={cn('px-3 py-1.5 text-xs font-medium rounded-lg transition-colors', viewMode === 'list' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200')}>Lista</button>
+          <button onClick={() => setViewMode('kanban')} className={cn('px-3 py-1.5 text-xs font-medium rounded-lg transition-colors', viewMode === 'kanban' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200')}>Kanban</button>
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 text-white rounded-lg hover:bg-zinc-800 transition-colors"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          New Deal
+        </button>
       </div>
 
-      {viewMode === 'list' ? <ListView stages={stages} /> : <KanbanView stages={stages} />}
+      {viewMode === 'list' ? (
+        <ListView stages={stages} onEdit={setEditingDeal} />
+      ) : (
+        <KanbanView stages={stages} onEdit={setEditingDeal} />
+      )}
+
+      {/* Create Dialog */}
+      <CreateDealDialog open={showCreate} onClose={() => setShowCreate(false)} />
+
+      {/* Edit Dialog */}
+      {editingDeal && (
+        <EditDealDialog
+          open={!!editingDeal}
+          onClose={() => setEditingDeal(null)}
+          deal={editingDeal}
+        />
+      )}
     </div>
   )
 }
 
-function ListView({ stages }: { stages: StageGroup[] }) {
+function ListView({ stages, onEdit }: { stages: StageGroup[]; onEdit: (deal: DealItem) => void }) {
   return (
     <div className="space-y-2">
       {stages.map(group => (
-        <StageSection key={group.stage} group={group} defaultOpen={group.stage !== 'Closed Won'} />
+        <StageSection key={group.stage} group={group} defaultOpen={group.stage !== 'Closed Won'} onEdit={onEdit} />
       ))}
     </div>
   )
 }
 
-function StageSection({ group, defaultOpen }: { group: StageGroup; defaultOpen: boolean }) {
+function StageSection({ group, defaultOpen, onEdit }: { group: StageGroup; defaultOpen: boolean; onEdit: (deal: DealItem) => void }) {
   const [open, setOpen] = useState(defaultOpen)
   const colors = STAGE_COLORS[group.stage] ?? STAGE_COLORS['Initial Consultation']
 
@@ -120,19 +154,29 @@ function StageSection({ group, defaultOpen }: { group: StageGroup; defaultOpen: 
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 pb-4">
           {group.deals.length === 0 ? (
             <p className="text-sm text-muted-foreground col-span-full pl-6">Nessun deal</p>
-          ) : group.deals.map(deal => <DealCard key={deal.id} deal={deal} />)}
+          ) : group.deals.map(deal => <DealCard key={deal.id} deal={deal} onEdit={onEdit} />)}
         </div>
       )}
     </div>
   )
 }
 
-function DealCard({ deal }: { deal: DealItem }) {
+function DealCard({ deal, onEdit }: { deal: DealItem; onEdit?: (deal: DealItem) => void }) {
   return (
-    <div className="bg-white rounded-lg border p-3 text-sm hover:shadow-sm transition-shadow">
+    <div
+      onClick={() => onEdit?.(deal)}
+      className={cn(
+        'bg-white rounded-lg border p-3 text-sm transition-shadow',
+        onEdit && 'cursor-pointer hover:shadow-md'
+      )}
+    >
       <p className="font-medium leading-snug line-clamp-2">{deal.deal_name}</p>
       {deal.company_name && (
-        <Link href={`/accounts/${deal.account_id}`} className="flex items-center gap-1 text-xs text-muted-foreground mt-1 hover:text-blue-600 transition-colors">
+        <Link
+          href={`/accounts/${deal.account_id}`}
+          onClick={e => e.stopPropagation()}
+          className="flex items-center gap-1 text-xs text-muted-foreground mt-1 hover:text-blue-600 transition-colors"
+        >
           <Building2 className="h-3 w-3" />{deal.company_name}
         </Link>
       )}
@@ -153,8 +197,8 @@ function DealCard({ deal }: { deal: DealItem }) {
   )
 }
 
-function KanbanView({ stages }: { stages: StageGroup[] }) {
-  const activeStages = stages.filter(s => s.stage !== 'Closed Won')
+function KanbanView({ stages, onEdit }: { stages: StageGroup[]; onEdit: (deal: DealItem) => void }) {
+  const activeStages = stages.filter(s => s.stage !== 'Closed Won' && s.stage !== 'Closed Lost')
   const [cols, setCols] = useState(activeStages)
   const [, startTransition] = useTransition()
 
@@ -213,7 +257,7 @@ function KanbanView({ stages }: { stages: StageGroup[] }) {
                       <Draggable key={deal.id} draggableId={deal.id} index={index}>
                         {(provided, snapshot) => (
                           <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps} className={cn(snapshot.isDragging && 'opacity-90 rotate-1 shadow-lg')}>
-                            <DealCard deal={deal} />
+                            <DealCard deal={deal} onEdit={onEdit} />
                           </div>
                         )}
                       </Draggable>

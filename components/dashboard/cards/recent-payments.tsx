@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { CreditCard, Banknote } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
+import Link from 'next/link'
 
 export async function RecentPaymentsCard() {
   const supabase = createClient()
@@ -42,7 +43,7 @@ export async function RecentPaymentsCard() {
             : `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
 
           return (
-            <div key={p.id} className="flex items-center gap-2 py-1.5 px-3 rounded-md bg-emerald-50 text-sm">
+            <Link key={p.id} href="/payments" className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-emerald-50 text-sm hover:bg-zinc-50 cursor-pointer transition-colors">
               <CreditCard className="h-4 w-4 text-emerald-600 shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="font-medium truncate text-xs">{companyName}</p>
@@ -54,7 +55,7 @@ export async function RecentPaymentsCard() {
               <span className="text-xs font-semibold text-emerald-700 shrink-0">
                 {formatted}
               </span>
-            </div>
+            </Link>
           )
         })}
       </div>

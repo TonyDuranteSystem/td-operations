@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
+import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/account-create'
 
 export async function updateAccountField(
   accountId: string,
@@ -48,6 +49,30 @@ export async function updateContactField(
   }, {
     action_type: 'update', table_name: 'contacts', record_id: contactId,
     summary: `${field} updated`, details: { [field]: value },
+  })
+}
+
+export async function createAccount(
+  input: CreateAccountInput
+): Promise<ActionResult<{ id: string }>> {
+  const parsed = createAccountSchema.safeParse(input)
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+
+  return safeAction(async () => {
+    const supabase = createClient()
+    const now = new Date().toISOString()
+    const { data, error } = await supabase
+      .from('accounts')
+      .insert({ ...parsed.data, created_at: now, updated_at: now })
+      .select('id')
+      .single()
+    if (error) throw new Error(error.message)
+    revalidatePath('/accounts')
+    return data
+  }, {
+    action_type: 'create', table_name: 'accounts',
+    summary: `Created: ${parsed.data.company_name}`,
+    details: { ...parsed.data },
   })
 }
 

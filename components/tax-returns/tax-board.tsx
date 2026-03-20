@@ -14,7 +14,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TaxCard } from './tax-card'
-import type { TaxSection } from '@/lib/types'
+import { EditTaxDialog } from './edit-tax-dialog'
+import type { TaxReturn, TaxSection } from '@/lib/types'
 
 const ICON_MAP: Record<string, React.ReactNode> = {
   clipboard: <ClipboardList className="h-4 w-4" />,
@@ -49,10 +50,12 @@ function Section({
   section,
   today,
   defaultOpen = true,
+  onEdit,
 }: {
   section: TaxSection
   today: string
   defaultOpen?: boolean
+  onEdit: (tr: TaxReturn) => void
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const colors = COLOR_MAP[section.color] ?? COLOR_MAP.amber
@@ -82,7 +85,7 @@ function Section({
             <p className="text-sm text-muted-foreground col-span-full pl-6">Nessun elemento</p>
           ) : (
             section.items.map(tr => (
-              <TaxCard key={tr.id} taxReturn={tr} today={today} />
+              <TaxCard key={tr.id} taxReturn={tr} today={today} onEdit={onEdit} />
             ))
           )}
         </div>
@@ -109,6 +112,8 @@ export function TaxBoard({
   stats: TaxStats
   today: string
 }) {
+  const [editingTax, setEditingTax] = useState<TaxReturn | null>(null)
+
   return (
     <div className="space-y-6">
       {/* Summary bar */}
@@ -129,9 +134,19 @@ export function TaxBoard({
             section={section}
             today={today}
             defaultOpen={section.key !== 'completati'}
+            onEdit={setEditingTax}
           />
         ))}
       </div>
+
+      {/* Edit Dialog */}
+      {editingTax && (
+        <EditTaxDialog
+          open={!!editingTax}
+          onClose={() => setEditingTax(null)}
+          taxReturn={editingTax}
+        />
+      )}
     </div>
   )
 }

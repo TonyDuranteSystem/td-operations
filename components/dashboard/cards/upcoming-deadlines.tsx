@@ -1,7 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { Calendar, PartyPopper } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { differenceInDays, parseISO, format } from 'date-fns'
+import { differenceInDays, parseISO } from 'date-fns'
+import Link from 'next/link'
 
 export async function UpcomingDeadlinesCard() {
   const supabase = createClient()
@@ -48,11 +49,18 @@ export async function UpcomingDeadlinesCard() {
           const accounts = d.accounts as any
           const companyName = (Array.isArray(accounts) ? accounts[0]?.company_name : accounts?.company_name) ?? 'Unknown'
 
+          const href = d.account_id
+            ? `/accounts/${d.account_id}`
+            : d.deadline_type?.toLowerCase().includes('tax')
+              ? '/tax-returns'
+              : '/payments'
+
           return (
-            <div
+            <Link
               key={d.id}
+              href={href}
               className={cn(
-                'flex items-center gap-2 py-1.5 px-3 rounded-md text-sm',
+                'flex items-center gap-2 py-1.5 px-3 rounded-lg text-sm hover:bg-zinc-50 cursor-pointer transition-colors',
                 isOverdue ? 'bg-red-50' : isUrgent ? 'bg-orange-50' : 'bg-yellow-50'
               )}
             >
@@ -75,7 +83,7 @@ export async function UpcomingDeadlinesCard() {
                     : `${daysUntil}d`
                 }
               </span>
-            </div>
+            </Link>
           )
         })}
       </div>

@@ -1,12 +1,14 @@
 import { createClient } from '@/lib/supabase/server'
 import { FileCheck, ClipboardList } from 'lucide-react'
 import { differenceInDays, parseISO } from 'date-fns'
+import Link from 'next/link'
 
 interface PendingForm {
   type: string
   client_name: string
   sent_at: string
   days_waiting: number
+  slug?: string
 }
 
 export async function PendingFormsCard() {
@@ -38,13 +40,14 @@ export async function PendingFormsCard() {
         client_name: (row[nameField] as string) ?? 'Unknown',
         sent_at: row.created_at as string,
         days_waiting: differenceInDays(parseISO(today), parseISO(row.created_at as string)),
+        slug: row.slug as string | undefined,
       }))
     })
   )
 
   const pending: PendingForm[] = results
-    .filter((r): r is PromiseFulfilledResult<PendingForm[]> => r.status === 'fulfilled')
-    .flatMap(r => r.value)
+    .filter(r => r.status === 'fulfilled')
+    .flatMap(r => (r as PromiseFulfilledResult<PendingForm[]>).value)
     .sort((a, b) => b.days_waiting - a.days_waiting)
     .slice(0, 6)
 
@@ -68,18 +71,33 @@ export async function PendingFormsCard() {
         Pending Forms
       </h3>
       <div className="space-y-2">
-        {pending.map((form, i) => (
-          <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-md bg-zinc-50 text-sm">
-            <ClipboardList className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="font-medium truncate text-xs">{form.type}</p>
-              <p className="text-xs text-muted-foreground truncate">{form.client_name}</p>
-            </div>
-            <span className="text-xs text-muted-foreground shrink-0">
-              {form.days_waiting}d ago
-            </span>
-          </div>
-        ))}
+        {pending.map((form, i) => {
+          const formTypeSlug: Record<string, string> = {
+            'Formation': 'formation-form',
+            'Onboarding': 'onboarding-form',
+            'Banking': 'banking-form',
+            'ITIN': 'itin-form',
+            'Tax': 'tax-form',
+            'Closure': 'closure-form',
+          }
+          const basePath = formTypeSlug[form.type] ?? ''
+          const href = form.slug && basePath
+            ? `/forms/${basePath}/${form.slug}?preview=td`
+            : '#'
+
+          return (
+            <Link key={i} href={href} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-zinc-50 text-sm hover:bg-zinc-100 cursor-pointer transition-colors">
+              <ClipboardList className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium truncate text-xs">{form.type}</p>
+                <p className="text-xs text-muted-foreground truncate">{form.client_name}</p>
+              </div>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {form.days_waiting}d ago
+              </span>
+            </Link>
+          )
+        })}
       </div>
     </div>
   )

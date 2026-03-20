@@ -2,10 +2,11 @@
 
 import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
-import { Search, Building2, AlertCircle, ChevronRight, ChevronLeft } from 'lucide-react'
+import { Search, Building2, AlertCircle, ChevronRight, ChevronLeft, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
 import Link from 'next/link'
+import { CreateAccountDialog } from './create-account-dialog'
 
 const ENTITY_COLORS: Record<string, string> = {
   'Single Member LLC': 'bg-blue-100 text-blue-700',
@@ -40,6 +41,7 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
+  const [showCreate, setShowCreate] = useState(false)
 
   function buildParams(overrides: Record<string, string> = {}) {
     const params = new URLSearchParams()
@@ -105,6 +107,13 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
           <option value="Multi Member LLC">MMLLC</option>
           <option value="C-Corp Elected">C-Corp</option>
         </select>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors shrink-0"
+        >
+          <Plus className="h-4 w-4" />
+          New Account
+        </button>
       </div>
 
       {/* Stats row */}
@@ -270,6 +279,8 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
           </div>
         </div>
       )}
+
+      <CreateAccountDialog open={showCreate} onClose={() => setShowCreate(false)} />
     </div>
   )
 }
