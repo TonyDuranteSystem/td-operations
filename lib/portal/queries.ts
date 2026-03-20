@@ -110,6 +110,36 @@ export async function getPortalPayments(accountId: string) {
   return data ?? []
 }
 
+/**
+ * Get TD LLC invoices sent to this client account (from CRM payments table).
+ * These are invoices Tony Durante LLC sent TO the client, not the client's own invoices.
+ */
+export async function getPortalBilling(accountId: string) {
+  const { data } = await supabaseAdmin
+    .from('payments')
+    .select('id, invoice_number, invoice_status, description, total, amount, amount_currency, issue_date, due_date, paid_date, sent_at, message, payment_items(description, quantity, unit_price, amount)')
+    .eq('account_id', accountId)
+    .not('invoice_status', 'is', null)
+    .order('issue_date', { ascending: false })
+    .limit(50)
+
+  return data ?? []
+}
+
+/**
+ * Get active service_deliveries for this account to drive portal nav visibility.
+ * Returns service names so the sidebar can show/hide sections.
+ */
+export async function getPortalActiveServices(accountId: string): Promise<string[]> {
+  const { data } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('service_name')
+    .eq('account_id', accountId)
+    .in('stage', ['Active', 'Intake', 'Setup', 'Processing', 'Review'])
+
+  return (data ?? []).map(d => d.service_name)
+}
+
 export async function getPortalTaxReturns(accountId: string) {
   // Tax returns are matched by company_name, not account_id
   const { data: account } = await supabaseAdmin

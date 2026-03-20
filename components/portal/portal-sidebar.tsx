@@ -8,7 +8,6 @@ import {
   FileText,
   Receipt,
   MessageCircle,
-  Cog as CogIcon,
   Activity,
   BookOpen,
   Upload,
@@ -19,6 +18,8 @@ import {
   X,
   User,
   CalendarDays,
+  CreditCard,
+  ChevronDown,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -30,26 +31,68 @@ interface PortalSidebarProps {
   user: { email?: string }
   accounts: PortalAccount[]
   selectedAccountId: string
+  activeServices?: string[]
 }
 
-const navItems = [
+// Nav items organized into collapsible groups
+interface NavItem {
+  key: string
+  href: string
+  icon: typeof LayoutDashboard
+}
+
+interface NavGroup {
+  key: string // i18n key for group label
+  items: NavItem[]
+  defaultOpen?: boolean
+}
+
+// Flat items (always visible, no group)
+const topItems: NavItem[] = [
   { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
-  { key: 'nav.documents', href: '/portal/documents', icon: FileText },
-  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt },
-  { key: 'nav.customers', href: '/portal/customers', icon: Users },
-  { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload },
-  { key: 'nav.services', href: '/portal/services', icon: Activity },
-  { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+]
+
+// Grouped items
+const navGroups: NavGroup[] = [
+  {
+    key: 'nav.group.business',
+    items: [
+      { key: 'nav.documents', href: '/portal/documents', icon: FileText },
+      { key: 'nav.services', href: '/portal/services', icon: Activity },
+      { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays },
+      { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload },
+    ],
+    defaultOpen: true,
+  },
+  {
+    key: 'nav.group.finance',
+    items: [
+      { key: 'nav.billing', href: '/portal/billing', icon: CreditCard },
+      { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt },
+      { key: 'nav.customers', href: '/portal/customers', icon: Users },
+    ],
+    defaultOpen: true,
+  },
+]
+
+const bottomItems: NavItem[] = [
   { key: 'nav.settings', href: '/portal/settings', icon: Settings },
   { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
 ]
 
-export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSidebarProps) {
+// i18n fallback for group labels
+const GROUP_LABELS: Record<string, Record<string, string>> = {
+  'nav.group.business': { en: 'Business', it: 'Azienda' },
+  'nav.group.finance': { en: 'Finance', it: 'Finanza' },
+}
+
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const { t } = useLocale()
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const { t, locale } = useLocale()
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -58,7 +101,37 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
     router.refresh()
   }
 
+  const toggleGroup = (groupKey: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(groupKey)) next.delete(groupKey)
+      else next.add(groupKey)
+      return next
+    })
+  }
+
+  const isActive = (href: string) =>
+    href === '/portal' ? pathname === '/portal' : pathname.startsWith(href)
+
   const displayName = user.email?.split('@')[0] ?? 'User'
+
+  const renderNavItem = (item: NavItem) => (
+    <Link
+      key={item.href}
+      href={item.href}
+      onClick={() => setMobileOpen(false)}
+      aria-current={isActive(item.href) ? 'page' : undefined}
+      className={cn(
+        'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+        isActive(item.href)
+          ? 'bg-blue-50 text-blue-700'
+          : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+      )}
+    >
+      <item.icon className="h-4 w-4 shrink-0" />
+      {t(item.key)}
+    </Link>
+  )
 
   return (
     <>
@@ -119,28 +192,41 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive = item.href === '/portal'
-              ? pathname === '/portal'
-              : pathname.startsWith(item.href)
+          {/* Top items (always visible) */}
+          {topItems.map(renderNavItem)}
+
+          {/* Collapsible groups */}
+          {navGroups.map(group => {
+            const isCollapsed = collapsedGroups.has(group.key)
+            const groupLabel = GROUP_LABELS[group.key]?.[locale] ?? GROUP_LABELS[group.key]?.en ?? group.key
+            const hasActiveItem = group.items.some(item => isActive(item.href))
+
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                aria-current={isActive ? 'page' : undefined}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-blue-50 text-blue-700'
-                    : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+              <div key={group.key} className="pt-3">
+                <button
+                  onClick={() => toggleGroup(group.key)}
+                  className="flex items-center justify-between w-full px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider hover:text-zinc-600 transition-colors"
+                >
+                  <span>{groupLabel}</span>
+                  <ChevronDown className={cn('h-3 w-3 transition-transform', isCollapsed && '-rotate-90')} />
+                </button>
+                {(!isCollapsed || hasActiveItem) && (
+                  <div className="mt-1 space-y-0.5">
+                    {group.items.map(item => {
+                      // If collapsed, only show the active item
+                      if (isCollapsed && !isActive(item.href)) return null
+                      return renderNavItem(item)
+                    })}
+                  </div>
                 )}
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                {t(item.key)}
-              </Link>
+              </div>
             )
           })}
+
+          {/* Bottom items */}
+          <div className="pt-3">
+            {bottomItems.map(renderNavItem)}
+          </div>
         </nav>
 
         {/* Footer */}
