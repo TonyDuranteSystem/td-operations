@@ -260,6 +260,133 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['query'],
     },
   },
+  // ── Google Drive Tools ──
+  {
+    name: 'drive_search',
+    description: 'Search Google Drive files by name/keyword on the Shared Drive.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search term (file name or keyword)' },
+        mime_type: { type: 'string', description: 'Optional MIME type filter (e.g. application/pdf, application/vnd.google-apps.folder)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'drive_list_folder',
+    description: 'List contents of a Google Drive folder by folder ID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        folder_id: { type: 'string', description: 'Google Drive folder ID' },
+      },
+      required: ['folder_id'],
+    },
+  },
+  {
+    name: 'drive_move',
+    description: 'Move a Google Drive file to a different folder.',
+    parameters: {
+      type: 'object',
+      properties: {
+        file_id: { type: 'string', description: 'File ID to move' },
+        target_folder_id: { type: 'string', description: 'Destination folder ID' },
+      },
+      required: ['file_id', 'target_folder_id'],
+    },
+  },
+  {
+    name: 'drive_upload_file',
+    description: 'Upload a binary file (PDF, image) to Drive. Provide either a source_url to fetch from, or gmail_message_id + attachment_id to save a Gmail attachment.',
+    parameters: {
+      type: 'object',
+      properties: {
+        file_name: { type: 'string', description: 'Name for the uploaded file' },
+        folder_id: { type: 'string', description: 'Target Drive folder ID' },
+        source_url: { type: 'string', description: 'URL to download the file from (optional)' },
+        gmail_message_id: { type: 'string', description: 'Gmail message ID containing the attachment (optional)' },
+        attachment_id: { type: 'string', description: 'Gmail attachment ID (optional, required with gmail_message_id)' },
+        mime_type: { type: 'string', description: 'MIME type of the file (e.g. application/pdf). Auto-detected from Gmail attachments.' },
+      },
+      required: ['file_name', 'folder_id'],
+    },
+  },
+  // ── Gmail Attachment Tool ──
+  {
+    name: 'gmail_get_attachments',
+    description: 'List attachments from a Gmail message. Optionally save them all to a Drive folder.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message_id: { type: 'string', description: 'Gmail message ID' },
+        save_to_drive: { type: 'boolean', description: 'If true, upload all attachments to Drive folder specified by drive_folder_id' },
+        drive_folder_id: { type: 'string', description: 'Target Drive folder ID (required if save_to_drive=true)' },
+      },
+      required: ['message_id'],
+    },
+  },
+  // ── CRM Update Tools ──
+  {
+    name: 'update_service',
+    description: 'Update a service record: status, current_step, or notes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        service_id: { type: 'string', description: 'UUID of the service' },
+        status: { type: 'string', description: 'New status: Not Started, In Progress, Waiting Client, Waiting Third Party, Completed, Cancelled' },
+        current_step: { type: 'number', description: 'New current step number' },
+        notes: { type: 'string', description: 'Notes to append (timestamped)' },
+      },
+      required: ['service_id'],
+    },
+  },
+  {
+    name: 'update_contact',
+    description: 'Update a contact record fields (e.g. passport_on_file, notes, phone, language, citizenship).',
+    parameters: {
+      type: 'object',
+      properties: {
+        contact_id: { type: 'string', description: 'UUID of the contact' },
+        passport_on_file: { type: 'boolean', description: 'Whether passport is on file' },
+        notes: { type: 'string', description: 'Notes to append (timestamped)' },
+        phone: { type: 'string', description: 'Updated phone number' },
+        language: { type: 'string', description: 'Preferred language' },
+        citizenship: { type: 'string', description: 'Country of citizenship' },
+      },
+      required: ['contact_id'],
+    },
+  },
+  {
+    name: 'advance_service_stage',
+    description: 'Advance a service delivery to the next pipeline stage. Finds the service_delivery record for a given service_id, then moves it to the next stage. Automatically creates auto-tasks defined in pipeline_stages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        service_id: { type: 'string', description: 'UUID of the service (will look up the active service_delivery)' },
+        notes: { type: 'string', description: 'Optional notes about why this stage was advanced' },
+      },
+      required: ['service_id'],
+    },
+  },
+  {
+    name: 'log_conversation',
+    description: 'Log a client conversation/interaction in the CRM. Use after handling a WhatsApp, email, or call to maintain communication history.',
+    parameters: {
+      type: 'object',
+      properties: {
+        account_id: { type: 'string', description: 'Account UUID' },
+        contact_id: { type: 'string', description: 'Contact UUID' },
+        channel: { type: 'string', description: 'Channel: WhatsApp, Email, Phone, Calendly, Telegram' },
+        topic: { type: 'string', description: 'Brief topic/subject of the conversation' },
+        category: { type: 'string', description: 'Category (e.g., Support, Billing, Onboarding, Tax)' },
+        client_message: { type: 'string', description: 'Summary of what the client said' },
+        response_sent: { type: 'string', description: 'Summary of the response sent' },
+        direction: { type: 'string', description: 'Direction: inbound, outbound' },
+      },
+      required: ['topic'],
+    },
+  },
 ]
 
 // ============================================================
@@ -290,6 +417,15 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'update_task': return await updateTask(params)
       case 'update_account_notes': return await updateAccountNotes(params)
       case 'run_sql_query': return await runSqlQuery(params)
+      case 'drive_search': return await driveSearchTool(params)
+      case 'drive_list_folder': return await driveListFolderTool(params)
+      case 'drive_move': return await driveMoveTool(params)
+      case 'drive_upload_file': return await driveUploadFileTool(params)
+      case 'gmail_get_attachments': return await gmailGetAttachmentsTool(params)
+      case 'update_service': return await updateService(params)
+      case 'update_contact': return await updateContact(params)
+      case 'advance_service_stage': return await advanceServiceStage(params)
+      case 'log_conversation': return await logConversation(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
   } catch (err) {
@@ -788,4 +924,316 @@ async function runSqlQuery(p: any) {
   const { data, error } = await supabaseAdmin.rpc('execute_sql', { query: sql })
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
+}
+
+// ============================================================
+// Google Drive Tools
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function driveSearchTool(p: any) {
+  const { searchFiles } = await import('@/lib/google-drive')
+  const result = await searchFiles(p.query, p.mime_type || undefined)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const files = (result as any).files || []
+  return JSON.stringify({ files, total: files.length })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function driveListFolderTool(p: any) {
+  const { listFolder } = await import('@/lib/google-drive')
+  const result = await listFolder(p.folder_id)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const files = (result as any).files || []
+  return JSON.stringify({ files, total: files.length })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function driveMoveTool(p: any) {
+  const { moveFile } = await import('@/lib/google-drive')
+  const result = await moveFile(p.file_id, p.target_folder_id)
+  return JSON.stringify({ success: true, file: result })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function driveUploadFileTool(p: any) {
+  const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+
+  let fileBuffer: Buffer
+  let mimeType = p.mime_type || 'application/octet-stream'
+
+  if (p.gmail_message_id && p.attachment_id) {
+    // Download from Gmail attachment
+    const { getGmailAttachment } = await import('@/lib/gmail')
+    const attachment = await getGmailAttachment(p.gmail_message_id, p.attachment_id)
+    fileBuffer = attachment.data
+  } else if (p.source_url) {
+    // Download from URL
+    const res = await fetch(p.source_url)
+    if (!res.ok) throw new Error(`Failed to download from URL: ${res.status} ${res.statusText}`)
+    const contentType = res.headers.get('content-type')
+    if (contentType && mimeType === 'application/octet-stream') mimeType = contentType
+    const arrayBuffer = await res.arrayBuffer()
+    fileBuffer = Buffer.from(arrayBuffer)
+  } else {
+    return JSON.stringify({ error: 'Provide either source_url or gmail_message_id + attachment_id' })
+  }
+
+  const result = await uploadBinaryToDrive(p.file_name, fileBuffer, mimeType, p.folder_id)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const file = result as any
+  return JSON.stringify({ success: true, file_id: file.id, name: file.name, web_link: file.webViewLink || null })
+}
+
+// ============================================================
+// Gmail Attachment Tool
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function gmailGetAttachmentsTool(p: any) {
+  const { gmailGet } = await import('@/lib/gmail')
+
+  // Get full message to find attachments
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }) as any
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const attachments: Array<{ filename: string; mimeType: string; attachmentId: string; size: number }> = []
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function findAttachments(part: any) {
+    if (part.filename && part.body?.attachmentId) {
+      attachments.push({
+        filename: part.filename,
+        mimeType: part.mimeType || 'application/octet-stream',
+        attachmentId: part.body.attachmentId,
+        size: part.body.size || 0,
+      })
+    }
+    if (part.parts) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const sub of part.parts) findAttachments(sub)
+    }
+  }
+  if (detail.payload) findAttachments(detail.payload)
+
+  if (attachments.length === 0) {
+    return JSON.stringify({ attachments: [], total: 0, message: 'No attachments found in this email.' })
+  }
+
+  // If save_to_drive requested, download each and upload
+  if (p.save_to_drive && p.drive_folder_id) {
+    const { getGmailAttachment } = await import('@/lib/gmail')
+    const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+
+    const uploaded: Array<{ filename: string; drive_file_id: string }> = []
+    const failed: Array<{ filename: string; error: string }> = []
+
+    for (const att of attachments) {
+      try {
+        const attData = await getGmailAttachment(p.message_id, att.attachmentId)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const driveFile = await uploadBinaryToDrive(att.filename, attData.data, att.mimeType, p.drive_folder_id) as any
+        uploaded.push({ filename: att.filename, drive_file_id: driveFile.id })
+      } catch (err) {
+        failed.push({ filename: att.filename, error: err instanceof Error ? err.message : 'Unknown error' })
+      }
+    }
+
+    return JSON.stringify({
+      attachments: attachments.map(a => ({ filename: a.filename, mimeType: a.mimeType, size: a.size })),
+      total: attachments.length,
+      uploaded,
+      failed: failed.length > 0 ? failed : undefined,
+    })
+  }
+
+  return JSON.stringify({
+    attachments: attachments.map(a => ({
+      filename: a.filename,
+      mimeType: a.mimeType,
+      size: a.size,
+      attachmentId: a.attachmentId,
+    })),
+    total: attachments.length,
+  })
+}
+
+// ============================================================
+// CRM Update Tools (additional)
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateService(p: any) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {}
+  if (p.status) updates.status = p.status
+  if (p.current_step !== undefined) updates.current_step = p.current_step
+
+  // Handle notes — append to existing
+  if (p.notes) {
+    const { data: existing } = await supabaseAdmin.from('services').select('notes').eq('id', p.service_id).single()
+    const timestamp = new Date().toISOString().split('T')[0]
+    const existingNotes = existing?.notes || ''
+    updates.notes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.notes}` : `${timestamp}: ${p.notes}`
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return JSON.stringify({ error: 'No fields to update. Provide status, current_step, or notes.' })
+  }
+
+  updates.updated_at = new Date().toISOString()
+  const { data, error } = await supabaseAdmin
+    .from('services')
+    .update(updates)
+    .eq('id', p.service_id)
+    .select('id, service_name, service_type, status, current_step, total_steps, notes')
+    .single()
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, service: data })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateContact(p: any) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {}
+  if (p.passport_on_file !== undefined) updates.passport_on_file = p.passport_on_file
+  if (p.phone) updates.phone = p.phone
+  if (p.language) updates.language = p.language
+  if (p.citizenship) updates.citizenship = p.citizenship
+
+  // Handle notes — append to existing
+  if (p.notes) {
+    const { data: existing } = await supabaseAdmin.from('contacts').select('notes').eq('id', p.contact_id).single()
+    const timestamp = new Date().toISOString().split('T')[0]
+    const existingNotes = existing?.notes || ''
+    updates.notes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.notes}` : `${timestamp}: ${p.notes}`
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return JSON.stringify({ error: 'No fields to update. Provide passport_on_file, notes, phone, language, or citizenship.' })
+  }
+
+  updates.updated_at = new Date().toISOString()
+  const { data, error } = await supabaseAdmin
+    .from('contacts')
+    .update(updates)
+    .eq('id', p.contact_id)
+    .select('id, full_name, email, phone, language, citizenship, passport_on_file, notes')
+    .single()
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, contact: data })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function advanceServiceStage(p: any) {
+  // Find the active service_delivery for this service
+  const { data: delivery, error: dErr } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('*')
+    .eq('service_id', p.service_id)
+    .eq('status', 'active')
+    .limit(1)
+    .single()
+
+  if (dErr || !delivery) {
+    return JSON.stringify({ error: `No active service delivery found for service ${p.service_id}. Error: ${dErr?.message || 'not found'}` })
+  }
+
+  // Get current stage order
+  const currentStageOrder = delivery.stage_order || 0
+
+  // Get the next stage from pipeline_stages
+  const { data: nextStage, error: sErr } = await supabaseAdmin
+    .from('pipeline_stages')
+    .select('*')
+    .eq('service_type', delivery.service_type)
+    .gt('stage_order', currentStageOrder)
+    .order('stage_order')
+    .limit(1)
+    .single()
+
+  if (sErr || !nextStage) {
+    return JSON.stringify({ error: `No next stage found for service type "${delivery.service_type}" after stage_order ${currentStageOrder}. The delivery may already be at the final stage.` })
+  }
+
+  // Update delivery to the next stage
+  const isCompleted = nextStage.is_final === true
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deliveryUpdate: Record<string, any> = {
+    stage: nextStage.stage_name,
+    stage_order: nextStage.stage_order,
+    updated_at: new Date().toISOString(),
+  }
+  if (isCompleted) {
+    deliveryUpdate.status = 'completed'
+    deliveryUpdate.completed_at = new Date().toISOString()
+  }
+  if (p.notes) {
+    const existingNotes = delivery.notes || ''
+    const timestamp = new Date().toISOString().split('T')[0]
+    deliveryUpdate.notes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.notes}` : `${timestamp}: ${p.notes}`
+  }
+
+  const { error: uErr } = await supabaseAdmin
+    .from('service_deliveries')
+    .update(deliveryUpdate)
+    .eq('id', delivery.id)
+  if (uErr) return JSON.stringify({ error: `Failed to advance stage: ${uErr.message}` })
+
+  // Create auto-tasks if the stage defines them
+  const createdTasks: string[] = []
+  if (nextStage.auto_tasks && Array.isArray(nextStage.auto_tasks)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const taskDef of nextStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
+      const { error: tErr } = await supabaseAdmin
+        .from('tasks')
+        .insert({
+          task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
+          assigned_to: taskDef.assigned_to || 'Luca',
+          category: taskDef.category || 'Internal',
+          priority: taskDef.priority || 'Normal',
+          description: taskDef.description || `Auto-created by pipeline advance to "${nextStage.stage_name}"`,
+          status: 'To Do',
+          account_id: delivery.account_id,
+          deal_id: delivery.deal_id,
+          delivery_id: delivery.id,
+          stage_order: nextStage.stage_order,
+        })
+      if (!tErr) createdTasks.push(taskDef.title)
+    }
+  }
+
+  return JSON.stringify({
+    success: true,
+    delivery_id: delivery.id,
+    previous_stage: delivery.stage || 'New',
+    new_stage: nextStage.stage_name,
+    is_completed: isCompleted,
+    tasks_created: createdTasks,
+  })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function logConversation(p: any) {
+  const insert = {
+    account_id: p.account_id || null,
+    contact_id: p.contact_id || null,
+    channel: p.channel || null,
+    topic: p.topic,
+    category: p.category || null,
+    client_message: p.client_message || null,
+    response_sent: p.response_sent || null,
+    direction: p.direction || null,
+    handled_by: 'AI Agent',
+    status: p.response_sent ? 'Sent' : 'New',
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('conversations')
+    .insert(insert)
+    .select('id, topic, channel, status')
+    .single()
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, conversation: data })
 }

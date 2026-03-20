@@ -13,10 +13,10 @@ function getDaysLabel(dueDate: string, today: string): { text: string; overdue: 
   const due = parseISO(dueDate)
   const now = parseISO(today)
   const diff = differenceInDays(due, now)
-  if (diff < 0) return { text: `Scaduto da ${Math.abs(diff)}g`, overdue: true }
-  if (diff === 0) return { text: 'Scade oggi', overdue: false }
-  if (diff === 1) return { text: 'Scade domani', overdue: false }
-  return { text: `Scade tra ${diff}g`, overdue: false }
+  if (diff < 0) return { text: `Overdue ${Math.abs(diff)}d`, overdue: true }
+  if (diff === 0) return { text: 'Due today', overdue: false }
+  if (diff === 1) return { text: 'Due tomorrow', overdue: false }
+  return { text: `Due in ${diff}d`, overdue: false }
 }
 
 function isFollowUp(task: Task, today: string): boolean {

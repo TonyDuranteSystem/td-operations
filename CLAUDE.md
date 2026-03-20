@@ -241,7 +241,7 @@ docs/
 ```
 
 ## Communication
-Antonio communicates in Italian and English. Match his language. Be direct and efficient.
+Always communicate in English. Be direct and efficient.
 
 ## Multi-Machine Git Safety (iMac + Mac Mini + MacBook)
 All three machines share the same repo via GitHub auto-sync.
