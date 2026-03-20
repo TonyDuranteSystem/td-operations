@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2 } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
@@ -32,6 +32,7 @@ export default function PortalChatsPage() {
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [polishing, setPolishing] = useState(false)
+  const [chatSearch, setChatSearch] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const prevTotalUnreadRef = useRef(0)
@@ -248,6 +249,19 @@ export default function PortalChatsPage() {
             {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
           </button>
         </div>
+        {/* Chat search */}
+        <div className="px-3 py-2 border-b">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
+            <input
+              type="text"
+              value={chatSearch}
+              onChange={e => setChatSearch(e.target.value)}
+              placeholder="Search client or company..."
+              className="w-full pl-9 pr-3 py-2 text-xs border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-zinc-50"
+            />
+          </div>
+        </div>
         <div className="flex-1 overflow-y-auto">
           {threadsLoading ? (
             <div className="flex items-center justify-center py-12">
@@ -259,7 +273,7 @@ export default function PortalChatsPage() {
               <p className="text-sm text-zinc-400">No portal conversations yet</p>
             </div>
           ) : (
-            threads.map(thread => (
+            threads.filter(t => !chatSearch.trim() || t.company_name.toLowerCase().includes(chatSearch.toLowerCase())).map(thread => (
               <button
                 key={thread.account_id}
                 onClick={() => setSelectedAccountId(thread.account_id)}

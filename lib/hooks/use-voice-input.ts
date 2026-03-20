@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 interface UseVoiceInputOptions {
   language?: string
   onTranscript?: (text: string) => void
+  onError?: (message: string) => void
 }
 
 interface UseVoiceInputReturn {
@@ -28,7 +29,7 @@ interface UseVoiceInputReturn {
  *   })
  */
 export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInputReturn {
-  const { language = 'en-US', onTranscript } = options
+  const { language = 'en-US', onTranscript, onError } = options
 
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
