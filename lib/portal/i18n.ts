@@ -311,6 +311,26 @@ const translations: Record<Locale, Record<string, string>> = {
     'customers.noCustomers': 'No customers yet',
     'customers.noCustomersDesc': 'Add your first customer to start creating invoices.',
 
+    // Customer detail
+    'customers.firstName': 'First Name',
+    'customers.lastName': 'Last Name',
+    'customers.company': 'Company',
+    'customers.email': 'Email',
+    'customers.phone': 'Phone',
+    'customers.address': 'Address',
+    'customers.city': 'City',
+    'customers.region': 'Region',
+    'customers.country': 'Country',
+    'customers.vat': 'VAT Number',
+    'customers.notes': 'Notes',
+    'customers.name': 'Name',
+    'customers.updated': 'Customer updated',
+    'customers.deleted': 'Customer deleted',
+    'customers.deleteConfirm': 'Delete this customer? This cannot be undone.',
+    'customers.cannotDelete': 'Cannot delete — customer may have invoices',
+    'customers.notFound': 'Customer not found',
+    'customers.noInvoices': 'No invoices for this customer yet',
+
     // Activity extras
     'activity.noActivityDesc': 'Activity will appear here as things happen on your account.',
     'activity.docUploaded': 'Document uploaded',
@@ -700,6 +720,26 @@ const translations: Record<Locale, Record<string, string>> = {
     'customers.add': 'Aggiungi Cliente',
     'customers.noCustomers': 'Nessun cliente',
     'customers.noCustomersDesc': 'Aggiungi il tuo primo cliente per iniziare a creare fatture.',
+
+    // Customer detail
+    'customers.firstName': 'Nome',
+    'customers.lastName': 'Cognome',
+    'customers.company': 'Azienda',
+    'customers.email': 'Email',
+    'customers.phone': 'Telefono',
+    'customers.address': 'Indirizzo',
+    'customers.city': 'Città',
+    'customers.region': 'Regione',
+    'customers.country': 'Paese',
+    'customers.vat': 'Partita IVA',
+    'customers.notes': 'Note',
+    'customers.name': 'Nome',
+    'customers.updated': 'Cliente aggiornato',
+    'customers.deleted': 'Cliente eliminato',
+    'customers.deleteConfirm': 'Eliminare questo cliente? L\'operazione non può essere annullata.',
+    'customers.cannotDelete': 'Impossibile eliminare — il cliente potrebbe avere fatture',
+    'customers.notFound': 'Cliente non trovato',
+    'customers.noInvoices': 'Nessuna fattura per questo cliente',
 
     // Activity extras
     'activity.noActivityDesc': 'Le attività appariranno qui man mano che succedono cose sul tuo account.',

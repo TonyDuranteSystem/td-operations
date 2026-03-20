@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface Customer {
   id: string
@@ -47,6 +48,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function CustomerDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const { t } = useLocale()
   const customerId = params.id as string
 
   const [customer, setCustomer] = useState<Customer | null>(null)
@@ -81,56 +83,56 @@ export default function CustomerDetailPage() {
       if (!res.ok) throw new Error('Failed to save')
       setCustomer(editData)
       setEditing(false)
-      toast.success('Customer updated')
+      toast.success(t('customers.updated'))
     } catch {
-      toast.error('Failed to save')
+      toast.error(t('profile.saveFailed'))
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async () => {
-    if (!confirm('Delete this customer? This cannot be undone.')) return
+    if (!confirm(t('customers.deleteConfirm'))) return
     try {
       const res = await fetch(`/api/portal/customers/${customerId}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to delete')
-      toast.success('Customer deleted')
+      toast.success(t('customers.deleted'))
       router.push('/portal/customers')
     } catch {
-      toast.error('Cannot delete — customer may have invoices')
+      toast.error(t('customers.cannotDelete'))
     }
   }
 
   if (loading) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
-  if (!customer) return <div className="p-8 text-center"><p className="text-zinc-500">Customer not found</p></div>
+  if (!customer) return <div className="p-8 text-center"><p className="text-zinc-500">{t('customers.notFound')}</p></div>
 
   const csym = (c: string) => c === 'EUR' ? '\u20AC' : '$'
 
   return (
-    <div className="p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link href="/portal/customers" className="p-2 rounded-lg hover:bg-zinc-100">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Link href="/portal/customers" className="p-2 rounded-lg hover:bg-zinc-100 shrink-0">
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{customer.name}</h1>
-            {customer.email && <p className="text-sm text-zinc-500">{customer.email}</p>}
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900 truncate">{customer.name}</h1>
+            {customer.email && <p className="text-sm text-zinc-500 truncate">{customer.email}</p>}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 pl-11 sm:pl-0">
           {!editing ? (
             <button onClick={() => { setEditData(customer); setEditing(true) }} className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">
-              <Pencil className="h-4 w-4" /> Edit
+              <Pencil className="h-4 w-4" /> {t('profile.edit')}
             </button>
           ) : (
             <>
               <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} {t('common.save')}
               </button>
               <button onClick={() => { setEditing(false); setEditData(customer) }} className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">
-                <X className="h-4 w-4" /> Cancel
+                <X className="h-4 w-4" /> {t('common.cancel')}
               </button>
             </>
           )}
@@ -144,31 +146,31 @@ export default function CustomerDetailPage() {
       <div className="bg-white rounded-xl border shadow-sm p-6">
         {editing && editData ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <EditField label="First Name" value={editData.first_name ?? ''} onChange={v => setEditData({ ...editData, first_name: v })} />
-            <EditField label="Last Name" value={editData.last_name ?? ''} onChange={v => setEditData({ ...editData, last_name: v })} />
-            <EditField label="Company" value={editData.company_name ?? ''} onChange={v => setEditData({ ...editData, company_name: v })} />
-            <EditField label="Email" value={editData.email ?? ''} onChange={v => setEditData({ ...editData, email: v })} />
-            <EditField label="Phone" value={editData.phone ?? ''} onChange={v => setEditData({ ...editData, phone: v })} />
-            <EditField label="Address" value={editData.address ?? ''} onChange={v => setEditData({ ...editData, address: v })} />
-            <EditField label="City" value={editData.city ?? ''} onChange={v => setEditData({ ...editData, city: v })} />
-            <EditField label="Region" value={editData.region ?? ''} onChange={v => setEditData({ ...editData, region: v })} />
-            <EditField label="Country" value={editData.country ?? ''} onChange={v => setEditData({ ...editData, country: v })} />
-            <EditField label="VAT Number" value={editData.vat_number ?? ''} onChange={v => setEditData({ ...editData, vat_number: v })} />
+            <EditField label={t('customers.firstName')} value={editData.first_name ?? ''} onChange={v => setEditData({ ...editData, first_name: v })} />
+            <EditField label={t('customers.lastName')} value={editData.last_name ?? ''} onChange={v => setEditData({ ...editData, last_name: v })} />
+            <EditField label={t('customers.company')} value={editData.company_name ?? ''} onChange={v => setEditData({ ...editData, company_name: v })} />
+            <EditField label={t('customers.email')} value={editData.email ?? ''} onChange={v => setEditData({ ...editData, email: v })} />
+            <EditField label={t('customers.phone')} value={editData.phone ?? ''} onChange={v => setEditData({ ...editData, phone: v })} />
+            <EditField label={t('customers.address')} value={editData.address ?? ''} onChange={v => setEditData({ ...editData, address: v })} />
+            <EditField label={t('customers.city')} value={editData.city ?? ''} onChange={v => setEditData({ ...editData, city: v })} />
+            <EditField label={t('customers.region')} value={editData.region ?? ''} onChange={v => setEditData({ ...editData, region: v })} />
+            <EditField label={t('customers.country')} value={editData.country ?? ''} onChange={v => setEditData({ ...editData, country: v })} />
+            <EditField label={t('customers.vat')} value={editData.vat_number ?? ''} onChange={v => setEditData({ ...editData, vat_number: v })} />
             <div className="sm:col-span-2">
-              <EditField label="Notes" value={editData.notes ?? ''} onChange={v => setEditData({ ...editData, notes: v })} />
+              <EditField label={t('customers.notes')} value={editData.notes ?? ''} onChange={v => setEditData({ ...editData, notes: v })} />
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            {customer.first_name && <InfoRow icon={User} label="First Name" value={customer.first_name} />}
-            {customer.last_name && <InfoRow icon={User} label="Last Name" value={customer.last_name} />}
-            {customer.company_name && <InfoRow icon={User} label="Company" value={customer.company_name} />}
-            {!customer.first_name && !customer.company_name && <InfoRow icon={User} label="Name" value={customer.name} />}
-            <InfoRow icon={Mail} label="Email" value={customer.email ?? '\u2014'} />
-            {customer.phone && <InfoRow icon={Mail} label="Phone" value={customer.phone} />}
-            <InfoRow icon={MapPin} label="Address" value={[customer.address, customer.city, customer.region, customer.country].filter(Boolean).join(', ') || '\u2014'} />
-            <InfoRow icon={FileText} label="VAT" value={customer.vat_number ?? '\u2014'} />
-            {customer.notes && <div className="sm:col-span-2"><InfoRow icon={FileText} label="Notes" value={customer.notes} /></div>}
+            {customer.first_name && <InfoRow icon={User} label={t('customers.firstName')} value={customer.first_name} />}
+            {customer.last_name && <InfoRow icon={User} label={t('customers.lastName')} value={customer.last_name} />}
+            {customer.company_name && <InfoRow icon={User} label={t('customers.company')} value={customer.company_name} />}
+            {!customer.first_name && !customer.company_name && <InfoRow icon={User} label={t('customers.name')} value={customer.name} />}
+            <InfoRow icon={Mail} label={t('customers.email')} value={customer.email ?? '\u2014'} />
+            {customer.phone && <InfoRow icon={Mail} label={t('customers.phone')} value={customer.phone} />}
+            <InfoRow icon={MapPin} label={t('customers.address')} value={[customer.address, customer.city, customer.region, customer.country].filter(Boolean).join(', ') || '\u2014'} />
+            <InfoRow icon={FileText} label={t('customers.vat')} value={customer.vat_number ?? '\u2014'} />
+            {customer.notes && <div className="sm:col-span-2"><InfoRow icon={FileText} label={t('customers.notes')} value={customer.notes} /></div>}
           </div>
         )}
       </div>
@@ -176,11 +178,11 @@ export default function CustomerDetailPage() {
       {/* Invoices for this customer */}
       <div className="bg-white rounded-xl border shadow-sm p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Invoices ({invoices.length})</h2>
-          <Link href="/portal/invoices/new" className="text-sm text-blue-600 hover:text-blue-700">New Invoice</Link>
+          <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.title')} ({invoices.length})</h2>
+          <Link href="/portal/invoices/new" className="text-sm text-blue-600 hover:text-blue-700">{t('invoices.newInvoice')}</Link>
         </div>
         {invoices.length === 0 ? (
-          <p className="text-sm text-zinc-400 text-center py-4">No invoices for this customer yet</p>
+          <p className="text-sm text-zinc-400 text-center py-4">{t('customers.noInvoices')}</p>
         ) : (
           <div className="divide-y">
             {invoices.map(inv => (

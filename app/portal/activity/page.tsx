@@ -7,7 +7,8 @@ import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { format, parseISO } from 'date-fns'
-import { FileText, Activity as ActivityIcon, CreditCard, Calendar, MessageCircle, CheckCircle2 } from 'lucide-react'
+import { FileText, Activity as ActivityIcon, CreditCard, Calendar, MessageCircle, CheckCircle2, ArrowRight } from 'lucide-react'
+import Link from 'next/link'
 
 interface ActivityItem {
   id: string
@@ -98,7 +99,13 @@ export default async function PortalActivityPage() {
         <div className="bg-white rounded-xl border shadow-sm p-8 sm:p-12 text-center">
           <ActivityIcon className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
           <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('activity.noActivity', locale)}</h3>
-          <p className="text-sm text-zinc-500">{t('activity.noActivityDesc', locale)}</p>
+          <p className="text-sm text-zinc-500 mb-4">{t('activity.noActivityDesc', locale)}</p>
+          <Link
+            href="/portal"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            {t('nav.dashboard', locale)} <ArrowRight className="h-4 w-4" />
+          </Link>
         </div>
       ) : (
         <div className="relative">
