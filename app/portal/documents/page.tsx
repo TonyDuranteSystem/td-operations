@@ -43,11 +43,11 @@ export default async function PortalDocumentsPage() {
     .limit(100)
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('documents.title', locale)}</h1>
-          <p className="text-zinc-500 text-sm mt-1">{t('documents.subtitle', locale)}</p>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('documents.title', locale)}</h1>
+          <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('documents.subtitle', locale)}</p>
         </div>
         <DocumentUploadButton accountId={selectedAccountId} />
       </div>

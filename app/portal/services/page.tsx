@@ -48,10 +48,10 @@ export default async function PortalServicesPage() {
   const completed = services.filter(s => s.status === 'Completed')
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('services.title', locale)}</h1>
-        <p className="text-zinc-500 text-sm mt-1">{t('services.subtitle', locale)}</p>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('services.title', locale)}</h1>
+        <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('services.subtitle', locale)}</p>
       </div>
 
       {services.length === 0 ? (
@@ -65,7 +65,7 @@ export default async function PortalServicesPage() {
           {/* Active */}
           {active.length > 0 && (
             <div className="space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Active ({active.length})</h2>
+              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('services.active', locale)} ({active.length})</h2>
               <div className="grid gap-3 sm:grid-cols-2">
                 {active.map(s => {
                   const Icon = STATUS_ICONS[s.status ?? ''] ?? Activity
@@ -91,7 +91,7 @@ export default async function PortalServicesPage() {
                       {s.current_step != null && s.total_steps != null && (
                         <div className="mb-2">
                           <div className="flex items-center justify-between text-xs text-zinc-500 mb-1.5">
-                            <span>Step {s.current_step} of {s.total_steps}</span>
+                            <span>{t('services.step', locale)} {s.current_step} {t('services.of', locale)} {s.total_steps}</span>
                             <span>{Math.round(progress)}%</span>
                           </div>
                           <div className="h-2 bg-zinc-100 rounded-full overflow-hidden">
@@ -104,17 +104,17 @@ export default async function PortalServicesPage() {
                       )}
 
                       {s.current_stage && (
-                        <p className="text-xs text-zinc-500 mt-2">Current stage: <span className="font-medium">{s.current_stage}</span></p>
+                        <p className="text-xs text-zinc-500 mt-2">{t('services.currentStage', locale)}: <span className="font-medium">{s.current_stage}</span></p>
                       )}
 
                       {s.blocked_waiting_external && s.blocked_reason && (
                         <div className="mt-2 p-2 rounded-lg bg-red-50 text-xs text-red-700">
-                          <span className="font-medium">Blocked:</span> {s.blocked_reason}
+                          <span className="font-medium">{t('services.blocked', locale)}:</span> {s.blocked_reason}
                         </div>
                       )}
 
                       <div className="mt-3 flex items-center text-xs text-blue-600 font-medium">
-                        View details <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                        {t('services.viewDetails', locale)} <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
                       </div>
                     </Link>
                   )
@@ -126,7 +126,7 @@ export default async function PortalServicesPage() {
           {/* Completed */}
           {completed.length > 0 && (
             <div className="space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Completed ({completed.length})</h2>
+              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('services.completed', locale)} ({completed.length})</h2>
               <div className="grid gap-2">
                 {completed.map(s => (
                   <Link href={`/portal/services/${s.id}`} key={s.id} className="bg-white rounded-xl border shadow-sm p-4 flex items-center gap-3 hover:shadow-md transition-shadow">
@@ -135,7 +135,7 @@ export default async function PortalServicesPage() {
                       <p className="text-sm font-medium text-zinc-900 truncate">{s.service_name}</p>
                       <p className="text-xs text-zinc-500">{s.service_type}</p>
                     </div>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Completed</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">{t('services.completed', locale)}</span>
                     <ChevronRight className="h-4 w-4 text-zinc-300" />
                   </Link>
                 ))}

@@ -303,6 +303,33 @@ const translations: Record<Locale, Record<string, string>> = {
     'docType.certificate': 'Certificate of Good Standing',
     'docType.other': 'Other Document',
 
+    // Customers
+    'customers.title': 'Customers',
+    'customers.subtitle': 'Manage your customers and view their invoices',
+    'customers.new': 'New Customer',
+    'customers.add': 'Add Customer',
+    'customers.noCustomers': 'No customers yet',
+    'customers.noCustomersDesc': 'Add your first customer to start creating invoices.',
+
+    // Activity extras
+    'activity.noActivityDesc': 'Activity will appear here as things happen on your account.',
+    'activity.docUploaded': 'Document uploaded',
+
+    // Services extras
+    'services.step': 'Step',
+    'services.of': 'of',
+    'services.currentStage': 'Current stage',
+
+    // Dashboard extras
+    'dashboard.stage': 'Stage',
+    'dashboard.deadline': 'Deadline',
+    'dashboard.ext': 'Ext',
+    'dashboard.daysOverdue': 'overdue',
+    'dashboard.today': 'Today',
+    'dashboard.noAccount': 'No company linked to your account. Please contact support.',
+    'dashboard.noCompanies': 'No active companies found. Please contact support.',
+    'dashboard.accountNotFound': 'Account not found.',
+
     // Common
     'common.cancel': 'Cancel',
     'common.save': 'Save',
@@ -615,6 +642,33 @@ const translations: Record<Locale, Record<string, string>> = {
     'docType.contract': 'Contratto',
     'docType.certificate': 'Certificato di Good Standing',
     'docType.other': 'Altro Documento',
+
+    // Customers
+    'customers.title': 'Clienti',
+    'customers.subtitle': 'Gestisci i tuoi clienti e visualizza le loro fatture',
+    'customers.new': 'Nuovo Cliente',
+    'customers.add': 'Aggiungi Cliente',
+    'customers.noCustomers': 'Nessun cliente',
+    'customers.noCustomersDesc': 'Aggiungi il tuo primo cliente per iniziare a creare fatture.',
+
+    // Activity extras
+    'activity.noActivityDesc': 'Le attività appariranno qui man mano che succedono cose sul tuo account.',
+    'activity.docUploaded': 'Documento caricato',
+
+    // Services extras
+    'services.step': 'Fase',
+    'services.of': 'di',
+    'services.currentStage': 'Fase attuale',
+
+    // Dashboard extras
+    'dashboard.stage': 'Fase',
+    'dashboard.deadline': 'Scadenza',
+    'dashboard.ext': 'Proroga',
+    'dashboard.daysOverdue': 'in ritardo',
+    'dashboard.today': 'Oggi',
+    'dashboard.noAccount': 'Nessuna azienda collegata al tuo account. Contatta il supporto.',
+    'dashboard.noCompanies': 'Nessuna azienda attiva trovata. Contatta il supporto.',
+    'dashboard.accountNotFound': 'Account non trovato.',
 
     // Common
     'common.cancel': 'Annulla',

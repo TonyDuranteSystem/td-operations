@@ -67,6 +67,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
         <button
           onClick={() => setMobileOpen(true)}
           className="p-2 -ml-2 rounded-md hover:bg-zinc-100"
+          aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
         </button>
@@ -100,6 +101,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId }: PortalSideb
           <button
             onClick={() => setMobileOpen(false)}
             className="lg:hidden p-1 rounded hover:bg-zinc-100"
+            aria-label="Close menu"
           >
             <X className="h-5 w-5" />
           </button>

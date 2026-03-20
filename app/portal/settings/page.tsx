@@ -68,7 +68,7 @@ export default function PortalSettingsPage() {
   }, [])
 
   return (
-    <div className="p-6 lg:p-8 max-w-lg mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-lg mx-auto space-y-4 sm:space-y-6">
       <div className="flex items-center gap-3">
         <Link href="/portal/profile" className="p-2 rounded-lg hover:bg-zinc-100"><ArrowLeft className="h-5 w-5" /></Link>
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('settings.title')}</h1>

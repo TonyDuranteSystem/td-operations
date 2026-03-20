@@ -128,15 +128,15 @@ export default function ServiceDetailPage() {
   const totalStages = service.timeline.length
 
   return (
-    <div className="p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <Link href="/portal/services" className="p-2 rounded-lg hover:bg-zinc-100 mt-0.5">
+      <div className="flex items-start gap-3 sm:gap-4">
+        <Link href="/portal/services" className="p-2 rounded-lg hover:bg-zinc-100 mt-0.5 shrink-0">
           <ArrowLeft className="h-5 w-5" />
         </Link>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{service.service_name}</h1>
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{service.service_name}</h1>
             <span className={cn('text-xs font-medium px-2.5 py-1 rounded-full', statusConfig.color)}>
               {service.status}
             </span>

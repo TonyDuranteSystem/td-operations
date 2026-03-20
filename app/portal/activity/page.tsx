@@ -77,7 +77,7 @@ export default async function PortalActivityPage() {
     activities.push({
       id: `doc-${d.id}`,
       type: 'document',
-      title: `Document uploaded: ${d.file_name}`,
+      title: `${t('activity.docUploaded', locale)}: ${d.file_name}`,
       body: d.document_type_name,
       created_at: d.created_at,
     })
@@ -88,17 +88,17 @@ export default async function PortalActivityPage() {
   const feed = activities.slice(0, 50)
 
   return (
-    <div className="p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('activity.title', locale)}</h1>
-        <p className="text-zinc-500 text-sm mt-1">Recent activity on your account</p>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('activity.title', locale)}</h1>
+        <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('activity.subtitle', locale)}</p>
       </div>
 
       {feed.length === 0 ? (
-        <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
+        <div className="bg-white rounded-xl border shadow-sm p-8 sm:p-12 text-center">
           <ActivityIcon className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-zinc-900 mb-1">No activity yet</h3>
-          <p className="text-sm text-zinc-500">Activity will appear here as things happen on your account.</p>
+          <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('activity.noActivity', locale)}</h3>
+          <p className="text-sm text-zinc-500">{t('activity.noActivityDesc', locale)}</p>
         </div>
       ) : (
         <div className="relative">

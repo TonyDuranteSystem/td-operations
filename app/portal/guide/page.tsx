@@ -16,10 +16,10 @@ export default function PortalGuidePage() {
   ]
 
   return (
-    <div className="p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('guide.title')}</h1>
-        <p className="text-zinc-500 text-sm mt-1">{t('guide.subtitle')}</p>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('guide.title')}</h1>
+        <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('guide.subtitle')}</p>
       </div>
 
       <div className="space-y-4">

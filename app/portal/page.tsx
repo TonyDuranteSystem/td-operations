@@ -49,10 +49,12 @@ export default async function PortalDashboardPage() {
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
+  const locale = getLocale(user)
+
   if (!contactId) {
     return (
-      <div className="p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
-        <p className="text-zinc-500">No company linked to your account. Please contact support.</p>
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
+        <p className="text-zinc-500">{t('dashboard.noAccount', locale)}</p>
       </div>
     )
   }
@@ -60,8 +62,8 @@ export default async function PortalDashboardPage() {
   const accounts = await getPortalAccounts(contactId)
   if (accounts.length === 0) {
     return (
-      <div className="p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
-        <p className="text-zinc-500">No active companies found. Please contact support.</p>
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
+        <p className="text-zinc-500">{t('dashboard.noCompanies', locale)}</p>
       </div>
     )
   }
@@ -83,24 +85,22 @@ export default async function PortalDashboardPage() {
 
   if (!account) {
     return (
-      <div className="p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
-        <p className="text-zinc-500">Account not found.</p>
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
+        <p className="text-zinc-500">{t('dashboard.accountNotFound', locale)}</p>
       </div>
     )
   }
-
-  const locale = getLocale(user)
   const today = new Date().toISOString().split('T')[0]
   const activeServices = services.filter(s => s.status !== 'Completed')
   const completedServices = services.filter(s => s.status === 'Completed')
   const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{account.company_name}</h1>
-        <p className="text-zinc-500 text-sm mt-1">
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{account.company_name}</h1>
+        <p className="text-zinc-500 text-xs sm:text-sm mt-1">
           {account.entity_type && `${account.entity_type} \u2022 `}
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
@@ -114,8 +114,8 @@ export default async function PortalDashboardPage() {
             <InfoRow icon={Building2} label={t('dashboard.entityType', locale)} value={account.entity_type ?? '\u2014'} />
             <InfoRow icon={MapPin} label={t('dashboard.state', locale)} value={account.state_of_formation ?? '\u2014'} />
             <InfoRow icon={Calendar} label={t('dashboard.formation', locale)} value={formatDate(account.formation_date)} />
-            <InfoRow icon={Shield} label="EIN" value={formatEin(account.ein_number)} />
-            {account.filing_id && <InfoRow icon={FileText} label="Filing ID" value={account.filing_id} />}
+            <InfoRow icon={Shield} label={t('dashboard.ein', locale)} value={formatEin(account.ein_number)} />
+            {account.filing_id && <InfoRow icon={FileText} label={t('profile.filingId', locale)} value={account.filing_id} />}
             {account.registered_agent_address && <InfoRow icon={MapPin} label={t('dashboard.raAddress', locale)} value={account.registered_agent_address} />}
             {account.physical_address && <InfoRow icon={MapPin} label={t('dashboard.address', locale)} value={account.physical_address} />}
           </div>
@@ -196,7 +196,7 @@ export default async function PortalDashboardPage() {
                     </div>
                   )}
                   {s.current_stage && (
-                    <p className="text-xs text-zinc-400 mt-1">Stage: {s.current_stage}</p>
+                    <p className="text-xs text-zinc-400 mt-1">{t('dashboard.stage', locale)}: {s.current_stage}</p>
                   )}
                 </div>
               ))}
@@ -271,15 +271,15 @@ export default async function PortalDashboardPage() {
             <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.taxReturns', locale)}</h2>
             <div className="space-y-2">
               {taxReturns.map(tr => (
-                <div key={tr.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">
+                <div key={tr.id} className="flex flex-col sm:flex-row sm:items-center justify-between py-2 border-b last:border-b-0 text-sm gap-1 sm:gap-3">
                   <div className="flex items-center gap-3">
                     <span className="font-medium">{tr.tax_year}</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">{tr.return_type}</span>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-zinc-500">Deadline: {formatDate(tr.deadline)}</span>
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <span className="text-xs text-zinc-500">{t('dashboard.deadline', locale)}: {formatDate(tr.deadline)}</span>
                     {tr.extension_filed && (
-                      <span className="text-xs text-zinc-500">Ext: {formatDate(tr.extension_deadline)}</span>
+                      <span className="text-xs text-zinc-500">{t('dashboard.ext', locale)}: {formatDate(tr.extension_deadline)}</span>
                     )}
                     <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[tr.status ?? ''] ?? 'bg-zinc-100')}>
                       {tr.status}
@@ -297,10 +297,12 @@ export default async function PortalDashboardPage() {
 
 function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
-      <span className="text-zinc-500 min-w-[110px]">{label}</span>
-      <span className="font-medium text-zinc-900">{value}</span>
+    <div className="flex items-start sm:items-center gap-2">
+      <Icon className="h-4 w-4 text-zinc-400 shrink-0 mt-0.5 sm:mt-0" />
+      <div className="flex flex-col sm:flex-row sm:gap-2 min-w-0">
+        <span className="text-zinc-500 text-xs sm:text-sm sm:min-w-[110px] shrink-0">{label}</span>
+        <span className="font-medium text-zinc-900 text-sm break-words">{value}</span>
+      </div>
     </div>
   )
 }

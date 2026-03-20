@@ -55,15 +55,15 @@ export default async function PortalInvoicesPage() {
   }))
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale)}</h1>
-          <p className="text-zinc-500 text-sm mt-1">{t('invoices.subtitle', locale)}</p>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale)}</h1>
+          <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('invoices.subtitle', locale)}</p>
         </div>
         <Link
           href="/portal/invoices/new"
-          className="flex items-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
         >
           <Plus className="h-4 w-4" />
           {t('invoices.new', locale)}
@@ -71,18 +71,18 @@ export default async function PortalInvoicesPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-white rounded-xl border shadow-sm p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.totalInvoiced', locale)}</p>
-          <p className="text-xl font-semibold text-zinc-900 mt-1">${stats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+          <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">${stats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
         </div>
         <div className="bg-white rounded-xl border shadow-sm p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.paid', locale)}</p>
-          <p className="text-xl font-semibold text-emerald-600 mt-1">${stats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+          <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">${stats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
         </div>
         <div className="bg-white rounded-xl border shadow-sm p-4">
           <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.outstanding', locale)}</p>
-          <p className="text-xl font-semibold text-amber-600 mt-1">${stats.outstanding.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+          <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">${stats.outstanding.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
         </div>
       </div>
 

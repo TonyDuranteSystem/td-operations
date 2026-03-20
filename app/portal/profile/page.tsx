@@ -34,10 +34,10 @@ export default async function PortalProfilePage() {
   const locale = getLocale(user)
 
   return (
-    <div className="p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('profile.title', locale)}</h1>
-        <p className="text-zinc-500 text-sm mt-1">{t('profile.subtitle', locale)}</p>
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('profile.title', locale)}</h1>
+        <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('profile.subtitle', locale)}</p>
       </div>
 
       {/* Personal Info */}
@@ -67,15 +67,15 @@ export default async function PortalProfilePage() {
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.companyInfo', locale)}</h2>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            <InfoField label="Company Name" value={account.company_name ?? '\u2014'} />
-            <InfoField label="Entity Type" value={account.entity_type ?? '\u2014'} />
-            <InfoField label="State" value={account.state_of_formation ?? '\u2014'} />
-            <InfoField label="EIN" value={account.ein_number || '\u2014'} />
-            <InfoField label="Formation Date" value={account.formation_date ?? '\u2014'} />
-            <InfoField label="Filing ID" value={account.filing_id ?? '\u2014'} />
+            <InfoField label={t('profile.companyName', locale)} value={account.company_name ?? '\u2014'} />
+            <InfoField label={t('dashboard.entityType', locale)} value={account.entity_type ?? '\u2014'} />
+            <InfoField label={t('dashboard.state', locale)} value={account.state_of_formation ?? '\u2014'} />
+            <InfoField label={t('dashboard.ein', locale)} value={account.ein_number || '\u2014'} />
+            <InfoField label={t('dashboard.formationDate', locale)} value={account.formation_date ?? '\u2014'} />
+            <InfoField label={t('profile.filingId', locale)} value={account.filing_id ?? '\u2014'} />
             {account.physical_address && (
               <div className="sm:col-span-2">
-                <InfoField label="Address" value={account.physical_address} />
+                <InfoField label={t('profile.address', locale)} value={account.physical_address} />
               </div>
             )}
           </div>
@@ -87,7 +87,7 @@ export default async function PortalProfilePage() {
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Building2 className="h-5 w-5 text-blue-600" />
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Invoice Logo</h2>
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.invoiceLogo', locale)}</h2>
           </div>
           <LogoUpload accountId={selectedAccountId} currentUrl={(account as Record<string, unknown>).invoice_logo_url as string | null} />
         </div>
@@ -98,7 +98,7 @@ export default async function PortalProfilePage() {
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Landmark className="h-5 w-5 text-blue-600" />
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Bank Accounts</h2>
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.bankDetails', locale)}</h2>
           </div>
           <BankAccounts accountId={selectedAccountId} />
         </div>
@@ -109,7 +109,7 @@ export default async function PortalProfilePage() {
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <CreditCard className="h-5 w-5 text-blue-600" />
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">Payment Links</h2>
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.paymentGateway', locale)}</h2>
           </div>
           <PaymentLinks accountId={selectedAccountId} />
         </div>
@@ -121,12 +121,14 @@ export default async function PortalProfilePage() {
           href="/portal/settings"
           className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50 transition-colors"
         >
-          Change Password
+          {t('profile.changePassword', locale)}
         </Link>
       </div>
 
       <p className="text-xs text-zinc-400">
-        {t('profile.contactTeam', locale)}
+        <Link href="/portal/chat" className="hover:text-blue-600 underline underline-offset-2">
+          {t('profile.contactTeam', locale)}
+        </Link>
       </p>
     </div>
   )

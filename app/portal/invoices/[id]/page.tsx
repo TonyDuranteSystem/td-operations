@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner'
 import { markInvoiceAsPaid, createTemplate } from '../actions'
 import { format, parseISO } from 'date-fns'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface InvoiceDetail {
   id: string
@@ -48,6 +49,7 @@ export default function InvoiceDetailPage() {
   const router = useRouter()
   const invoiceId = params.id as string
 
+  const { t } = useLocale()
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
@@ -178,53 +180,53 @@ export default function InvoiceDetailPage() {
   }
 
   return (
-    <div className="p-6 lg:p-8 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center gap-4">
-          <Link href="/portal/invoices" className="p-2 rounded-lg hover:bg-zinc-100">
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <Link href="/portal/invoices" className="p-2 rounded-lg hover:bg-zinc-100 shrink-0">
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{invoice.invoice_number}</h1>
+          <div className="min-w-0">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{invoice.invoice_number}</h1>
               <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_COLORS[invoice.status] ?? 'bg-zinc-100 text-zinc-700'}`}>
                 {invoice.status}
               </span>
             </div>
-            <p className="text-sm text-zinc-500 mt-0.5">Created {fmtDate(invoice.created_at)}</p>
+            <p className="text-xs sm:text-sm text-zinc-500 mt-0.5">{t('invoices.created')} {fmtDate(invoice.created_at)}</p>
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-2 flex-wrap">
+        {/* Actions — stack on mobile */}
+        <div className="grid grid-cols-2 sm:flex gap-2 sm:flex-wrap">
           {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
             <Link
               href={`/portal/invoices/${invoiceId}/edit`}
-              className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+              className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50"
             >
               <Pencil className="h-4 w-4" />
-              Edit
+              {t('invoices.edit')}
             </Link>
           )}
 
           <button
             onClick={handleDownloadPDF}
             disabled={downloading}
-            className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50 disabled:opacity-50"
+            className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50 disabled:opacity-50"
           >
             {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            PDF
+            {t('invoices.pdf')}
           </button>
 
           {invoice.status === 'Draft' && invoice.customer?.email && (
             <button
               onClick={handleSend}
               disabled={sending}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
               {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Send
+              {t('invoices.send')}
             </button>
           )}
 
@@ -233,28 +235,28 @@ export default function InvoiceDetailPage() {
               <button
                 onClick={handleRemind}
                 disabled={reminding}
-                className="flex items-center gap-2 px-4 py-2 text-sm border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 disabled:opacity-50"
+                className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 disabled:opacity-50"
               >
                 {reminding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}
-                Remind
+                {t('invoices.remind')}
               </button>
               <button
                 onClick={handleMarkPaid}
                 disabled={isPending}
-                className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                className="flex items-center justify-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
               >
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Mark Paid
+                {t('invoices.markPaid')}
               </button>
             </>
           )}
 
           <button
             onClick={() => { setTemplateName(invoice.customer?.name ?? 'Template'); setShowTemplateModal(true) }}
-            className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
+            className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50"
           >
             <BookmarkPlus className="h-4 w-4" />
-            Save Template
+            {t('invoices.saveAsTemplate')}
           </button>
         </div>
       </div>
@@ -265,7 +267,7 @@ export default function InvoiceDetailPage() {
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowTemplateModal(false)} />
           <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-zinc-900">Save as Template</h3>
+              <h3 className="font-semibold text-zinc-900">{t('invoices.saveAsTemplate')}</h3>
               <button onClick={() => setShowTemplateModal(false)} className="p-1 hover:bg-zinc-100 rounded"><X className="h-4 w-4" /></button>
             </div>
             <input
