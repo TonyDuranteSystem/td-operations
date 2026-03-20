@@ -146,7 +146,7 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
       {/* Add new link form */}
       {showAdd ? (
         <div className="border rounded-lg p-4 space-y-3 bg-zinc-50">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-zinc-600 mb-1">{t('payment.label')} *</label>
               <input type="text" value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="e.g., Monthly Service"
@@ -165,7 +165,7 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
             <input type="url" value={newUrl} onChange={e => setNewUrl(e.target.value)} placeholder="https://buy.stripe.com/..."
               className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-zinc-600 mb-1">{t('payment.amount')}</label>
               <input type="number" value={newAmount} onChange={e => setNewAmount(e.target.value)} placeholder="100.00" step="0.01"

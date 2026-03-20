@@ -330,6 +330,55 @@ const translations: Record<Locale, Record<string, string>> = {
     'dashboard.noCompanies': 'No active companies found. Please contact support.',
     'dashboard.accountNotFound': 'Account not found.',
 
+    // Invoice form extras
+    'invoices.amount': 'Amount',
+    'invoices.noBankAccount': 'None — no bank details on invoice',
+    'invoices.itemDescPlaceholder': 'Item description',
+
+    // Bank extras
+    'bank.newAccount': 'New Bank Account',
+    'bank.usdAccount': 'USD Account',
+    'bank.eurAccount': 'EUR Account',
+    'bank.label': 'Label',
+    'bank.onInvoice': 'On Invoice',
+    'bank.useOnInvoice': 'Use on Invoice',
+    'bank.showOnInvoices': 'Show on invoices',
+    'bank.addAccount': 'Add Account',
+    'bank.addBankAccount': 'Add Bank Account',
+    'bank.removed': 'Account removed',
+    'bank.invoiceUpdated': 'Invoice account updated',
+    'bank.holder': 'Holder',
+    'bank.bank': 'Bank',
+    'bank.acctNum': 'Account #',
+    'bank.routingNum': 'Routing #',
+    'bank.labelRequired': 'Label is required',
+
+    // Deadline extras
+    'deadlines.today': 'Today',
+    'deadlines.dOverdue': 'd overdue',
+    'deadlines.dLeft': 'd left',
+    'deadlines.dayMon': 'Mon',
+    'deadlines.dayTue': 'Tue',
+    'deadlines.dayWed': 'Wed',
+    'deadlines.dayThu': 'Thu',
+    'deadlines.dayFri': 'Fri',
+    'deadlines.daySat': 'Sat',
+    'deadlines.daySun': 'Sun',
+
+    // Logo
+    'logo.change': 'Change logo',
+    'logo.upload': 'Upload logo',
+    'logo.formats': 'JPEG, PNG, SVG — max 2MB',
+    'logo.invoiceNote': 'Appears on your invoices',
+    'logo.uploaded': 'Logo uploaded',
+    'logo.tooLarge': 'Logo must be under 2MB',
+
+    // Profile extras
+    'profile.updated': 'Profile updated',
+    'profile.saveFailed': 'Failed to save profile',
+    'profile.edit': 'Edit',
+    'profile.email': 'Email',
+
     // Common
     'common.cancel': 'Cancel',
     'common.save': 'Save',
@@ -339,6 +388,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'common.search': 'Search...',
     'common.noResults': 'No results',
     'common.all': 'All',
+    'common.add': 'Add',
   },
 
   it: {
@@ -670,6 +720,55 @@ const translations: Record<Locale, Record<string, string>> = {
     'dashboard.noCompanies': 'Nessuna azienda attiva trovata. Contatta il supporto.',
     'dashboard.accountNotFound': 'Account non trovato.',
 
+    // Invoice form extras
+    'invoices.amount': 'Importo',
+    'invoices.noBankAccount': 'Nessuno — niente dati bancari in fattura',
+    'invoices.itemDescPlaceholder': 'Descrizione voce',
+
+    // Bank extras
+    'bank.newAccount': 'Nuovo Conto Bancario',
+    'bank.usdAccount': 'Conto USD',
+    'bank.eurAccount': 'Conto EUR',
+    'bank.label': 'Etichetta',
+    'bank.onInvoice': 'In Fattura',
+    'bank.useOnInvoice': 'Usa in Fattura',
+    'bank.showOnInvoices': 'Mostra sulle fatture',
+    'bank.addAccount': 'Aggiungi Conto',
+    'bank.addBankAccount': 'Aggiungi Conto Bancario',
+    'bank.removed': 'Conto rimosso',
+    'bank.invoiceUpdated': 'Conto fattura aggiornato',
+    'bank.holder': 'Intestatario',
+    'bank.bank': 'Banca',
+    'bank.acctNum': 'N. Conto',
+    'bank.routingNum': 'Routing #',
+    'bank.labelRequired': 'L\'etichetta è obbligatoria',
+
+    // Deadline extras
+    'deadlines.today': 'Oggi',
+    'deadlines.dOverdue': 'g in ritardo',
+    'deadlines.dLeft': 'g rimasti',
+    'deadlines.dayMon': 'Lun',
+    'deadlines.dayTue': 'Mar',
+    'deadlines.dayWed': 'Mer',
+    'deadlines.dayThu': 'Gio',
+    'deadlines.dayFri': 'Ven',
+    'deadlines.daySat': 'Sab',
+    'deadlines.daySun': 'Dom',
+
+    // Logo
+    'logo.change': 'Cambia logo',
+    'logo.upload': 'Carica logo',
+    'logo.formats': 'JPEG, PNG, SVG — max 2MB',
+    'logo.invoiceNote': 'Appare sulle tue fatture',
+    'logo.uploaded': 'Logo caricato',
+    'logo.tooLarge': 'Il logo deve essere inferiore a 2MB',
+
+    // Profile extras
+    'profile.updated': 'Profilo aggiornato',
+    'profile.saveFailed': 'Errore nel salvataggio del profilo',
+    'profile.edit': 'Modifica',
+    'profile.email': 'Email',
+
     // Common
     'common.cancel': 'Annulla',
     'common.save': 'Salva',
@@ -679,6 +778,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'common.search': 'Cerca...',
     'common.noResults': 'Nessun risultato',
     'common.all': 'Tutti',
+    'common.add': 'Aggiungi',
   },
 }
 

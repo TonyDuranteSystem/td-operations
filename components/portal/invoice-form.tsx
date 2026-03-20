@@ -222,7 +222,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         {/* From Template */}
         {mode === 'create' && templates && templates.length > 0 && (
           <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1.5">From Template</label>
+            <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.fromTemplate')}</label>
             <select
               onChange={e => {
                 const tmpl = templates.find(t => t.id === e.target.value)
@@ -235,7 +235,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               defaultValue=""
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">Select a template...</option>
+              <option value="">{t('invoices.selectTemplate')}</option>
               {templates.map(t => (
                 <option key={t.id} value={t.id}>{t.name} ({t.items.length} items, {t.currency})</option>
               ))}
@@ -253,7 +253,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   type="text"
                   value={newCustomerName}
                   onChange={e => setNewCustomerName(e.target.value)}
-                  placeholder="Customer name"
+                  placeholder={t('invoices.customerName')}
                   autoFocus
                   className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -261,12 +261,12 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   type="email"
                   value={newCustomerEmail}
                   onChange={e => setNewCustomerEmail(e.target.value)}
-                  placeholder="Email (optional)"
+                  placeholder={t('invoices.email')}
                   className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <div className="flex gap-2">
-                  <button type="button" onClick={handleCreateCustomer} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700">Add</button>
-                  <button type="button" onClick={() => setShowNewCustomer(false)} className="px-3 py-1.5 text-xs border rounded-lg hover:bg-zinc-50">Cancel</button>
+                  <button type="button" onClick={handleCreateCustomer} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700">{t('common.add')}</button>
+                  <button type="button" onClick={() => setShowNewCustomer(false)} className="px-3 py-1.5 text-xs border rounded-lg hover:bg-zinc-50">{t('common.cancel')}</button>
                 </div>
               </div>
             ) : (
@@ -276,13 +276,13 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   onChange={e => setCustomerId(e.target.value)}
                   className="flex-1 px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="">Select customer...</option>
+                  <option value="">{t('invoices.selectCustomer')}</option>
                   {customerList.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
                 <button type="button" onClick={() => setShowNewCustomer(true)} className="px-3 py-2.5 text-xs border rounded-lg hover:bg-zinc-50 shrink-0">
-                  + New
+                  {t('invoices.newCustomer')}
                 </button>
               </div>
             )}
@@ -339,14 +339,14 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           </div>
           {recurringFrequency && (
             <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-zinc-700 mb-1.5">End Date (optional)</label>
+              <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.endDate')}</label>
               <input
                 type="date"
                 value={recurringEndDate}
                 onChange={e => setRecurringEndDate(e.target.value)}
                 className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
-              <p className="text-xs text-zinc-400 mt-1">Leave empty for indefinite recurring</p>
+              <p className="text-xs text-zinc-400 mt-1">{t('invoices.indefinite')}</p>
             </div>
           )}
         </div>
@@ -357,10 +357,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           <div className="space-y-2">
             {/* Header */}
             <div className="hidden sm:grid sm:grid-cols-[1fr,80px,100px,100px,40px] gap-2 text-xs font-medium text-zinc-500 uppercase px-1">
-              <span>Description</span>
-              <span>Qty</span>
-              <span>Price</span>
-              <span>Amount</span>
+              <span>{t('invoices.description')}</span>
+              <span>{t('invoices.qty')}</span>
+              <span>{t('invoices.price')}</span>
+              <span>{t('invoices.amount')}</span>
               <span></span>
             </div>
 
@@ -370,7 +370,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   type="text"
                   value={item.description}
                   onChange={e => updateItem(i, 'description', e.target.value)}
-                  placeholder="Item description"
+                  placeholder={t('invoices.itemDescPlaceholder')}
                   className="px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <input
@@ -415,7 +415,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
 
         {/* Totals */}
         <div className="flex justify-end">
-          <div className="w-64 space-y-2 text-sm">
+          <div className="w-full sm:w-64 space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-zinc-500">{t('invoices.subtotal')}</span>
               <span className="font-medium">{currencySymbol}{subtotal.toFixed(2)}</span>
@@ -445,7 +445,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             value={message}
             onChange={e => setMessage(e.target.value)}
             rows={3}
-            placeholder="Payment terms, bank details, thank you note..."
+            placeholder={t('invoices.messagePlaceholder')}
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
         </div>
@@ -462,7 +462,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               onChange={e => setBankAccountId(e.target.value)}
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">None — no bank details on invoice</option>
+              <option value="">{t('invoices.noBankAccount')}</option>
               {bankAccounts.map(ba => (
                 <option key={ba.id} value={ba.id}>{ba.label} ({ba.currency})</option>
               ))}
@@ -480,19 +480,19 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             value={notes}
             onChange={e => setNotes(e.target.value)}
             rows={2}
-            placeholder="Notes for your reference (not shown to customer)"
+            placeholder={t('invoices.notesPlaceholder')}
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
         </div>
       </div>
 
       {/* Actions */}
-      <div className="flex justify-end gap-3">
+      <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
         <Link
           href="/portal/invoices"
-          className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50"
+          className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50 text-center"
         >
-          Cancel
+          {t('common.cancel')}
         </Link>
         <button
           type="submit"

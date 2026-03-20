@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Save, Loader2, Pencil, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface ProfileEditorProps {
   contactId: string
@@ -19,6 +20,7 @@ interface ProfileEditorProps {
 
 export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [data, setData] = useState(initialData)
@@ -32,11 +34,11 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
         body: JSON.stringify({ contact_id: contactId, ...data }),
       })
       if (!res.ok) throw new Error('Failed to save')
-      toast.success('Profile updated')
+      toast.success(t('profile.updated'))
       setEditing(false)
       router.refresh()
     } catch {
-      toast.error('Failed to save profile')
+      toast.error(t('profile.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -46,19 +48,19 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
     return (
       <div className="space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-          <Field label="Full Name" value={data.full_name} />
-          <Field label="Email" value={data.email} />
-          <Field label="Phone" value={data.phone} />
-          <Field label="Language" value={data.language} />
-          <Field label="Citizenship" value={data.citizenship} />
-          <Field label="Residency" value={data.residency} />
+          <Field label={t('profile.fullName')} value={data.full_name} />
+          <Field label={t('profile.email')} value={data.email} />
+          <Field label={t('profile.phone')} value={data.phone} />
+          <Field label={t('profile.language')} value={data.language} />
+          <Field label={t('profile.citizenship')} value={data.citizenship} />
+          <Field label={t('profile.residency')} value={data.residency} />
         </div>
         <button
           onClick={() => setEditing(true)}
           className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700"
         >
           <Pencil className="h-3.5 w-3.5" />
-          Edit
+          {t('profile.edit')}
         </button>
       </div>
     )
@@ -67,12 +69,12 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <EditField label="Full Name" value={data.full_name} onChange={v => setData(d => ({ ...d, full_name: v }))} />
-        <EditField label="Email" value={data.email} onChange={v => setData(d => ({ ...d, email: v }))} disabled />
-        <EditField label="Phone" value={data.phone} onChange={v => setData(d => ({ ...d, phone: v }))} placeholder="+1 555 123 4567" />
-        <EditField label="Language" value={data.language} onChange={v => setData(d => ({ ...d, language: v }))} placeholder="English, Italian" />
-        <EditField label="Citizenship" value={data.citizenship} onChange={v => setData(d => ({ ...d, citizenship: v }))} />
-        <EditField label="Residency" value={data.residency} onChange={v => setData(d => ({ ...d, residency: v }))} />
+        <EditField label={t('profile.fullName')} value={data.full_name} onChange={v => setData(d => ({ ...d, full_name: v }))} />
+        <EditField label={t('profile.email')} value={data.email} onChange={v => setData(d => ({ ...d, email: v }))} disabled />
+        <EditField label={t('profile.phone')} value={data.phone} onChange={v => setData(d => ({ ...d, phone: v }))} placeholder="+1 555 123 4567" />
+        <EditField label={t('profile.language')} value={data.language} onChange={v => setData(d => ({ ...d, language: v }))} placeholder="English, Italian" />
+        <EditField label={t('profile.citizenship')} value={data.citizenship} onChange={v => setData(d => ({ ...d, citizenship: v }))} />
+        <EditField label={t('profile.residency')} value={data.residency} onChange={v => setData(d => ({ ...d, residency: v }))} />
       </div>
       <div className="flex gap-2">
         <button
@@ -81,14 +83,14 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
           className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Save
+          {t('common.save')}
         </button>
         <button
           onClick={() => { setEditing(false); setData(initialData) }}
           className="flex items-center gap-2 px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50"
         >
           <X className="h-4 w-4" />
-          Cancel
+          {t('common.cancel')}
         </button>
       </div>
     </div>

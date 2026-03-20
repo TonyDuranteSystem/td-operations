@@ -5,6 +5,7 @@ import { Upload, Loader2, X, ImageIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface LogoUploadProps {
   accountId: string
@@ -13,13 +14,14 @@ interface LogoUploadProps {
 
 export function LogoUpload({ accountId, currentUrl }: LogoUploadProps) {
   const router = useRouter()
+  const { t } = useLocale()
   const fileRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [previewUrl, setPreviewUrl] = useState(currentUrl)
 
   const handleUpload = async (file: File) => {
     if (file.size > 2 * 1024 * 1024) {
-      toast.error('Logo must be under 2MB')
+      toast.error(t('logo.tooLarge'))
       return
     }
 
@@ -36,7 +38,7 @@ export function LogoUpload({ accountId, currentUrl }: LogoUploadProps) {
       }
       const data = await res.json()
       setPreviewUrl(data.url)
-      toast.success('Logo uploaded')
+      toast.success(t('logo.uploaded'))
       router.refresh()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Upload failed')
@@ -65,10 +67,10 @@ export function LogoUpload({ accountId, currentUrl }: LogoUploadProps) {
           disabled={uploading}
           className="text-sm text-blue-600 hover:text-blue-700 font-medium"
         >
-          {previewUrl ? 'Change logo' : 'Upload logo'}
+          {previewUrl ? t('logo.change') : t('logo.upload')}
         </button>
-        <p className="text-xs text-zinc-400 mt-0.5">JPEG, PNG, SVG — max 2MB</p>
-        <p className="text-xs text-zinc-400">Appears on your invoices</p>
+        <p className="text-xs text-zinc-400 mt-0.5">{t('logo.formats')}</p>
+        <p className="text-xs text-zinc-400">{t('logo.invoiceNote')}</p>
       </div>
       <input
         ref={fileRef}

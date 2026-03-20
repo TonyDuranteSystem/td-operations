@@ -68,7 +68,7 @@ export function DeadlineCalendar({ deadlines }: { deadlines: Deadline[] }) {
   return (
     <div className="space-y-6">
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
         <div className="bg-white rounded-xl border shadow-sm p-4 text-center">
           <p className="text-2xl font-bold text-zinc-900">{deadlines.length}</p>
           <p className="text-xs text-zinc-500">{t('deadlines.total') || 'Total'}</p>
@@ -111,7 +111,7 @@ export function DeadlineCalendar({ deadlines }: { deadlines: Deadline[] }) {
       </div>
 
       {view === 'calendar' ? (
-        <div className="bg-white rounded-xl border shadow-sm p-6">
+        <div className="bg-white rounded-xl border shadow-sm p-3 sm:p-6">
           {/* Month Navigation */}
           <div className="flex items-center justify-between mb-6">
             <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} className="p-2 rounded-lg hover:bg-zinc-100">
@@ -127,7 +127,7 @@ export function DeadlineCalendar({ deadlines }: { deadlines: Deadline[] }) {
 
           {/* Day Headers */}
           <div className="grid grid-cols-7 gap-1 mb-2">
-            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
+            {[t('deadlines.dayMon'), t('deadlines.dayTue'), t('deadlines.dayWed'), t('deadlines.dayThu'), t('deadlines.dayFri'), t('deadlines.daySat'), t('deadlines.daySun')].map(d => (
               <div key={d} className="text-center text-xs font-medium text-zinc-400 py-2">{d}</div>
             ))}
           </div>
@@ -136,7 +136,7 @@ export function DeadlineCalendar({ deadlines }: { deadlines: Deadline[] }) {
           <div className="grid grid-cols-7 gap-1">
             {/* Padding for start of month */}
             {Array.from({ length: paddingDays }).map((_, i) => (
-              <div key={`pad-${i}`} className="h-20" />
+              <div key={`pad-${i}`} className="h-14 sm:h-20" />
             ))}
 
             {days.map(day => {
@@ -149,7 +149,7 @@ export function DeadlineCalendar({ deadlines }: { deadlines: Deadline[] }) {
                   key={dateKey}
                   onClick={() => setSelectedDate(isSelected ? null : day)}
                   className={cn(
-                    'h-20 rounded-lg border p-1.5 text-left transition-colors relative',
+                    'h-14 sm:h-20 rounded-lg border p-1 sm:p-1.5 text-left transition-colors relative',
                     isToday(day) && 'border-blue-300 bg-blue-50/50',
                     isSelected && 'border-blue-500 ring-2 ring-blue-200',
                     !isToday(day) && !isSelected && 'hover:bg-zinc-50 border-transparent',
@@ -239,7 +239,7 @@ export function DeadlineCalendar({ deadlines }: { deadlines: Deadline[] }) {
                     <p className={cn('text-xs mt-1 font-medium',
                       isOverdue ? 'text-red-600' : daysUntil <= 7 ? 'text-amber-600' : 'text-zinc-500'
                     )}>
-                      {isOverdue ? `${Math.abs(daysUntil)}d overdue` : daysUntil === 0 ? 'Today' : `${daysUntil}d left`}
+                      {isOverdue ? `${Math.abs(daysUntil)}${t('deadlines.dOverdue')}` : daysUntil === 0 ? t('deadlines.today') : `${daysUntil}${t('deadlines.dLeft')}`}
                     </p>
                   </div>
                 </div>
