@@ -5,7 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 
-const MAX_SIZE = 10 * 1024 * 1024 // 10MB
+const MAX_SIZE = 4 * 1024 * 1024 // 4MB (Vercel serverless limit is 4.5MB)
 const ALLOWED_TYPES = [
   'application/pdf',
   'image/jpeg',
@@ -18,7 +18,8 @@ const ALLOWED_TYPES = [
 /**
  * POST /api/portal/documents/upload
  * Uploads a file to the client's Google Drive folder.
- * Body: multipart/form-data with file + account_id + category
+ * Client selects document type (Passport, Tax Return, etc.) — system auto-classifies
+ * into the correct category (1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence).
  */
 export async function POST(request: NextRequest) {
   // Rate limit: 10 uploads per minute per IP
@@ -32,9 +33,9 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData()
   const file = formData.get('file') as File | null
   const accountId = formData.get('account_id') as string | null
-  const category = formData.get('category') as string | null
-  const taxYear = formData.get('tax_year') as string | null
-  const docType = formData.get('doc_type') as string | null
+  const docType = formData.get('doc_type') as string | null     // e.g. "Passport", "Tax Return"
+  const category = formData.get('category') as string | null     // auto-mapped: 1-5
+  const taxYear = formData.get('tax_year') as string | null      // only for tax doc uploads
 
   if (!file || !accountId) {
     return NextResponse.json({ error: 'file and account_id required' }, { status: 400 })
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
 
   // Size check
   if (file.size > MAX_SIZE) {
-    return NextResponse.json({ error: 'File too large (max 10MB)' }, { status: 400 })
+    return NextResponse.json({ error: 'File too large (max 4MB)' }, { status: 400 })
   }
 
   // Type check
@@ -80,11 +81,11 @@ export async function POST(request: NextRequest) {
       account.drive_folder_id
     )
 
-    // Record in documents table
-    const categoryNum = category ? parseInt(category) : 5 // Default: Correspondence
+    // Auto-classify based on client's document type selection
+    const categoryNum = category ? parseInt(category) : 5
     const typeName = taxYear
       ? `${docType || 'Tax Document'} - ${taxYear}`
-      : 'Client Upload'
+      : docType || 'Client Upload'
 
     const { data: doc, error: insertError } = await supabaseAdmin
       .from('documents')
@@ -108,22 +109,22 @@ export async function POST(request: NextRequest) {
     }
 
     // For tax documents: create task + notification for admin
-    if (taxYear) {
+    if (taxYear || categoryNum === 3) {
       await supabaseAdmin.from('tasks').insert({
-        task_title: `Review tax document: ${file.name} (${taxYear})`,
+        task_title: `Review tax document: ${file.name}${taxYear ? ` (${taxYear})` : ''}`,
         assigned_to: 'Luca',
         category: 'Document',
         account_id: accountId,
         status: 'To Do',
         priority: 'Normal',
-        description: `Client uploaded ${file.name} (${docType || 'Tax Document'}) for tax year ${taxYear} via portal.`,
+        description: `Client uploaded ${typeName}: ${file.name} via portal.`,
       })
 
       await supabaseAdmin.from('portal_notifications').insert({
         account_id: accountId,
         type: 'tax_document_uploaded',
-        title: `Tax document uploaded for ${taxYear}`,
-        body: `${file.name} uploaded for tax year ${taxYear}`,
+        title: `Tax document uploaded${taxYear ? ` for ${taxYear}` : ''}`,
+        body: `${file.name} (${typeName}) uploaded via portal`,
       })
     }
 
