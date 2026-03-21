@@ -140,6 +140,103 @@ export async function getPortalActiveServices(accountId: string): Promise<string
   return (data ?? []).map(d => d.service_name)
 }
 
+/**
+ * Nav visibility flags based on actual data.
+ * Each flag tells the sidebar whether to show a nav item.
+ */
+export interface PortalNavVisibility {
+  services: boolean       // has any services or SDs
+  billing: boolean        // has invoices from TD LLC
+  invoices: boolean       // has client invoicing feature (client_invoices or client_customers)
+  taxDocuments: boolean   // has tax-related SD or tax return
+  deadlines: boolean      // has any pending/overdue deadlines
+  documents: boolean      // always true (every client can upload docs)
+  customers: boolean      // same as invoices
+}
+
+export async function getPortalNavVisibility(accountId: string): Promise<PortalNavVisibility> {
+  // Run all checks in parallel
+  const [
+    serviceDeliveries,
+    billingCount,
+    clientInvoiceCount,
+    clientCustomerCount,
+    deadlineCount,
+    taxReturnCount,
+  ] = await Promise.all([
+    // Active SDs
+    supabaseAdmin
+      .from('service_deliveries')
+      .select('service_name', { count: 'exact', head: true })
+      .eq('account_id', accountId)
+      .then(r => ({
+        count: r.count ?? 0,
+        names: [] as string[],
+      })),
+    // TD LLC invoices sent to client
+    supabaseAdmin
+      .from('payments')
+      .select('id', { count: 'exact', head: true })
+      .eq('account_id', accountId)
+      .not('invoice_status', 'is', null)
+      .then(r => r.count ?? 0),
+    // Client's own invoices
+    supabaseAdmin
+      .from('client_invoices')
+      .select('id', { count: 'exact', head: true })
+      .eq('account_id', accountId)
+      .then(r => r.count ?? 0),
+    // Client's customers
+    supabaseAdmin
+      .from('client_customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('account_id', accountId)
+      .then(r => r.count ?? 0),
+    // Pending deadlines
+    supabaseAdmin
+      .from('deadlines')
+      .select('id', { count: 'exact', head: true })
+      .eq('account_id', accountId)
+      .in('status', ['Pending', 'Overdue'])
+      .then(r => r.count ?? 0),
+    // Tax returns (need company_name lookup)
+    supabaseAdmin
+      .from('accounts')
+      .select('company_name')
+      .eq('id', accountId)
+      .single()
+      .then(async ({ data: acct }) => {
+        if (!acct?.company_name) return 0
+        const { count } = await supabaseAdmin
+          .from('tax_returns')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_name', acct.company_name)
+        return count ?? 0
+      }),
+  ])
+
+  // Also check if any SD is tax-related
+  const { data: taxSDs } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('service_name')
+    .eq('account_id', accountId)
+    .ilike('service_name', '%tax%')
+    .limit(1)
+
+  const hasTaxSD = (taxSDs ?? []).length > 0
+  const hasInvoicing = clientInvoiceCount > 0 || clientCustomerCount > 0
+
+  return {
+    services: serviceDeliveries.count > 0,
+    billing: billingCount > 0,
+    invoices: hasInvoicing,
+    taxDocuments: hasTaxSD || taxReturnCount > 0,
+    deadlines: deadlineCount > 0,
+    documents: true, // always available
+    customers: hasInvoicing,
+  }
+}
+
 export async function getPortalTaxReturns(accountId: string) {
   // Tax returns are matched by company_name, not account_id
   const { data: account } = await supabaseAdmin

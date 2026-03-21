@@ -26,12 +26,14 @@ import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
 import type { PortalAccount } from '@/lib/types'
+import type { PortalNavVisibility } from '@/lib/portal/queries'
 
 interface PortalSidebarProps {
   user: { email?: string }
   accounts: PortalAccount[]
   selectedAccountId: string
   activeServices?: string[]
+  navVisibility?: PortalNavVisibility
 }
 
 // Nav items organized into collapsible groups
@@ -39,6 +41,7 @@ interface NavItem {
   key: string
   href: string
   icon: typeof LayoutDashboard
+  visibilityKey?: keyof PortalNavVisibility // if set, item only shows when this flag is true
 }
 
 interface NavGroup {
@@ -53,24 +56,24 @@ const topItems: NavItem[] = [
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
 ]
 
-// Grouped items
+// Grouped items — each item can have a visibilityKey
 const navGroups: NavGroup[] = [
   {
     key: 'nav.group.business',
     items: [
-      { key: 'nav.documents', href: '/portal/documents', icon: FileText },
-      { key: 'nav.services', href: '/portal/services', icon: Activity },
-      { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays },
-      { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload },
+      { key: 'nav.documents', href: '/portal/documents', icon: FileText, visibilityKey: 'documents' },
+      { key: 'nav.services', href: '/portal/services', icon: Activity, visibilityKey: 'services' },
+      { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays, visibilityKey: 'deadlines' },
+      { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload, visibilityKey: 'taxDocuments' },
     ],
     defaultOpen: true,
   },
   {
     key: 'nav.group.finance',
     items: [
-      { key: 'nav.billing', href: '/portal/billing', icon: CreditCard },
-      { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt },
-      { key: 'nav.customers', href: '/portal/customers', icon: Users },
+      { key: 'nav.billing', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
+      { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
+      { key: 'nav.customers', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
     ],
     defaultOpen: true,
   },
@@ -87,7 +90,7 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices, navVisibility }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -197,9 +200,18 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
           {/* Collapsible groups */}
           {navGroups.map(group => {
+            // Filter items by visibility flags
+            const visibleItems = group.items.filter(item => {
+              if (!item.visibilityKey || !navVisibility) return true
+              return navVisibility[item.visibilityKey]
+            })
+
+            // Skip entire group if no visible items
+            if (visibleItems.length === 0) return null
+
             const isCollapsed = collapsedGroups.has(group.key)
             const groupLabel = GROUP_LABELS[group.key]?.[locale] ?? GROUP_LABELS[group.key]?.en ?? group.key
-            const hasActiveItem = group.items.some(item => isActive(item.href))
+            const hasActiveItem = visibleItems.some(item => isActive(item.href))
 
             return (
               <div key={group.key} className="pt-3">
@@ -212,7 +224,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
                 </button>
                 {(!isCollapsed || hasActiveItem) && (
                   <div className="mt-1 space-y-0.5">
-                    {group.items.map(item => {
+                    {visibleItems.map(item => {
                       // If collapsed, only show the active item
                       if (isCollapsed && !isActive(item.href)) return null
                       return renderNavItem(item)
