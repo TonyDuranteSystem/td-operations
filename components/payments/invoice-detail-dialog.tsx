@@ -93,6 +93,8 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
 
   if (!open) return null
 
+  // Use fresh updated_at from DB, not the stale prop from board data
+  const freshUpdatedAt = (payment?.updated_at as string) ?? updatedAt
   const status = (payment?.invoice_status as string) ?? invoiceStatus ?? 'Draft'
   const style = STATUS_STYLES[status] ?? STATUS_STYLES.Draft
   const isDraft = status === 'Draft'
@@ -146,7 +148,7 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
   const handleSaveEdit = () => {
     startTransition(async () => {
       try {
-        const result = await updateInvoice(paymentId, updatedAt, {
+        const result = await updateInvoice(paymentId, freshUpdatedAt, {
           description: editDescription,
           amount_currency: editCurrency,
           issue_date: editIssueDate,
@@ -187,7 +189,7 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
   const handleVoid = () => {
     startTransition(async () => {
       try {
-        const result = await voidInvoice(paymentId, updatedAt)
+        const result = await voidInvoice(paymentId, freshUpdatedAt)
         if (result.success) {
           toast.success('Invoice voided')
           onClose()
@@ -203,7 +205,7 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
   const handleMarkPaid = () => {
     startTransition(async () => {
       try {
-        const result = await markInvoicePaid(paymentId, updatedAt)
+        const result = await markInvoicePaid(paymentId, freshUpdatedAt)
         if (result.success) {
           toast.success('Invoice marked as paid')
           onClose()
