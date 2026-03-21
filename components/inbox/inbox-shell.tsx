@@ -43,12 +43,29 @@ export function InboxShell() {
       return res.json()
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      // After archive or trash, deselect the conversation
+      // After archive or trash, immediately remove from list + deselect
       if (variables.action === 'archive' || variables.action === 'trash') {
+        if (selected) {
+          // Optimistically remove the conversation from the cache
+          queryClient.setQueriesData(
+            { queryKey: ['inbox-conversations'] },
+            (old: unknown) => {
+              if (!old || typeof old !== 'object') return old
+              const data = old as { conversations?: InboxConversation[]; total?: number }
+              if (!data.conversations) return old
+              return {
+                ...data,
+                conversations: data.conversations.filter(c => c.id !== selected.id),
+                total: (data.total ?? data.conversations.length) - 1,
+              }
+            }
+          )
+        }
         setSelected(null)
       }
+      // Refetch to get fresh data from server
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
     },
   })
 
