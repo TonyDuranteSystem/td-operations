@@ -135,7 +135,7 @@ export async function GET(req: NextRequest) {
         await supabaseAdmin
           .from("tasks")
           .insert({
-            task_title: `Annual Report bloccato — ${account.company_name} non ha pagato`,
+            task_title: `Annual Report blocked — ${account.company_name} has overdue payment`,
             assigned_to: "Antonio",
             status: "To Do",
             priority: "Urgent",
@@ -143,7 +143,7 @@ export async function GET(req: NextRequest) {
             due_date: account.annual_report_due_date,
             account_id: account.id,
             delivery_id: sd?.id,
-            description: `Annual report due ${account.annual_report_due_date} ma pagamento overdue. Risolvere pagamento prima di procedere.`,
+            description: `Annual report due ${account.annual_report_due_date} but payment is overdue. Resolve payment before proceeding.`,
           })
         blocked++
         results.push({ company: account.company_name, action: "created SD (BLOCKED) + task Antonio" })
@@ -152,7 +152,7 @@ export async function GET(req: NextRequest) {
         await supabaseAdmin
           .from("tasks")
           .insert({
-            task_title: `Filing Annual Report per ${account.company_name} — deadline ${account.annual_report_due_date}`,
+            task_title: `File Annual Report for ${account.company_name} — deadline ${account.annual_report_due_date}`,
             assigned_to: "Luca",
             status: "To Do",
             priority: "High",
@@ -160,7 +160,7 @@ export async function GET(req: NextRequest) {
             due_date: account.annual_report_due_date,
             account_id: account.id,
             delivery_id: sd?.id,
-            description: `Accedere a ${portal}, cercare ${account.company_name}, compilare e sottomettere annual report, pagare ${fee}, scaricare ricevuta, upload su Drive.`,
+            description: `Go to ${portal}, search for ${account.company_name}, complete and submit annual report, pay ${fee}, download receipt, upload to Drive.`,
           })
         created++
         results.push({ company: account.company_name, action: "created SD + task Luca" })
@@ -189,7 +189,7 @@ export async function GET(req: NextRequest) {
 
         const blockedRows = results
           .filter(r => r.action.includes("BLOCKED"))
-          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">🚫 Bloccato — pagamento overdue</td></tr>`)
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">🚫 Blocked — overdue payment</td></tr>`)
           .join("")
 
         const skippedRows = results
@@ -199,28 +199,28 @@ export async function GET(req: NextRequest) {
 
         const html = `
           <h2>📋 Annual Report Check — ${today.toISOString().split("T")[0]}</h2>
-          <p><strong>${created}</strong> nuovi filing | <strong>${blocked}</strong> bloccati | <strong>${skipped}</strong> skippati | <strong>${accounts.length}</strong> verificati</p>
-          ${newRows ? `<h3>✅ Nuovi filing da fare (Luca)</h3>
+          <p><strong>${created}</strong> new filings | <strong>${blocked}</strong> blocked | <strong>${skipped}</strong> skipped | <strong>${accounts.length}</strong> checked</p>
+          ${newRows ? `<h3>✅ New filings to do (Luca)</h3>
           <table style="border-collapse:collapse;width:100%">
-            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Azione</th></tr>
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Action</th></tr>
             ${newRows}
           </table>` : ""}
-          ${blockedRows ? `<h3 style="margin-top:16px">🚫 Bloccati — pagamento overdue (Antonio)</h3>
+          ${blockedRows ? `<h3 style="margin-top:16px">🚫 Blocked — overdue payment (Antonio)</h3>
           <table style="border-collapse:collapse;width:100%">
-            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Stato</th></tr>
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Status</th></tr>
             ${blockedRows}
           </table>` : ""}
-          ${skippedRows ? `<h3 style="margin-top:16px;color:#888">⏭️ Skippati</h3>
+          ${skippedRows ? `<h3 style="margin-top:16px;color:#888">⏭️ Skipped</h3>
           <table style="border-collapse:collapse;width:100%">
-            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Società</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Motivo</th></tr>
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Reason</th></tr>
             ${skippedRows}
           </table>` : ""}
-          <p style="margin-top:16px;color:#888;font-size:12px">Generato automaticamente da /api/cron/annual-report-check</p>
+          <p style="margin-top:16px;color:#888;font-size:12px">Auto-generated by /api/cron/annual-report-check</p>
         `
 
         await gmailPost("/messages/send", {
           to: "support@tonydurante.us",
-          subject: `📋 Annual Report: ${created} filing${blocked ? ` + ${blocked} bloccati` : ""}`,
+          subject: `📋 Annual Report: ${created} filing${blocked ? ` + ${blocked} blocked` : ""}`,
           htmlBody: html,
         })
       } catch (emailErr) {
