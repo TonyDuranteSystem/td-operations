@@ -3,11 +3,13 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier } from '@/lib/portal/queries'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, AlertCircle, CheckCircle2, CreditCard, Users, Mail, Phone, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
+import { supabaseAdmin } from '@/lib/supabase-admin'
+import { WelcomeDashboard } from './welcome-dashboard'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
 function formatEin(ein: string | null): string {
@@ -72,6 +74,61 @@ export default async function PortalDashboardPage() {
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id
+
+  // Check tier — show welcome dashboard for lead/onboarding
+  const portalTier = await getPortalTier(selectedAccountId)
+
+  if (portalTier === 'lead' || portalTier === 'onboarding') {
+    // Get offer data for welcome dashboard
+    const contactEmail = user.email
+    let offerData = null
+
+    if (contactEmail) {
+      const { data: offer } = await supabaseAdmin
+        .from('offers')
+        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, signed_at, language')
+        .eq('client_email', contactEmail)
+        .not('status', 'eq', 'expired')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!offer && contactId) {
+        // Try via lead
+        const { data: lead } = await supabaseAdmin
+          .from('leads')
+          .select('id')
+          .eq('email', contactEmail)
+          .limit(1)
+          .maybeSingle()
+
+        if (lead) {
+          const { data: leadOffer } = await supabaseAdmin
+            .from('offers')
+            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, signed_at, language')
+            .eq('lead_id', lead.id)
+            .not('status', 'eq', 'expired')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          offerData = leadOffer
+        }
+      } else {
+        offerData = offer
+      }
+    }
+
+    const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
+
+    return (
+      <WelcomeDashboard
+        tier={portalTier}
+        firstName={firstName}
+        offerData={offerData}
+        locale={locale}
+      />
+    )
+  }
 
   // Fetch all data in parallel
   const [account, services, deadlines, payments, taxReturns, members] = await Promise.all([
