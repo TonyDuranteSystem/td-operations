@@ -152,6 +152,23 @@ export async function gmailPost(
   return res.json()
 }
 
+// ─── DELETE ────────────────────────────────────────────
+
+export async function gmailDelete(endpoint: string, asUser?: string) {
+  const { token, userEmail } = await getGmailToken(asUser)
+  const res = await fetch(`${GMAIL_API}/users/${userEmail}${endpoint}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Gmail DELETE ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  // DELETE returns 204 No Content
+  if (res.status === 204) return {}
+  return res.json()
+}
+
 // ─── Attachment Download ────────────────────────────────
 
 /**

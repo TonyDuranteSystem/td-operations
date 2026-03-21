@@ -13,6 +13,9 @@ interface ConversationListProps {
   bulkMode: boolean
   selectedIds: Set<string>
   onToggleSelect: (id: string) => void
+  // Gmail filters
+  labelFilter?: string | null
+  searchQuery?: string
 }
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
@@ -42,16 +45,18 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode, selectedIds, onToggleSelect }: ConversationListProps) {
+export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery }: ConversationListProps) {
   const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
-    queryKey: ['inbox-conversations', activeChannel],
+    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery],
     queryFn: () => {
       const params = new URLSearchParams()
       if (activeChannel) params.set('channel', activeChannel)
+      if (labelFilter) params.set('label', labelFilter)
+      if (searchQuery) params.set('q', searchQuery)
       params.set('limit', '50')
       return fetch(`/api/inbox/conversations?${params}`).then((r) => r.json())
     },
-    refetchInterval: 30_000,
+    refetchInterval: searchQuery ? false : 30_000,
   })
 
   const conversations = data?.conversations || []

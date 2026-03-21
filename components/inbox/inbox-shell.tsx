@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, Link2, X, CheckSquare } from 'lucide-react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { InboxHeader } from './inbox-header'
+import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
 import { MessageThread } from './message-thread'
 import { ComposeReply } from './compose-reply'
@@ -25,32 +26,55 @@ const channelLabels: Record<InboxChannel, string> = {
   gmail: 'Gmail',
 }
 
+interface GmailLabel {
+  id: string
+  name: string
+  type: 'system' | 'user'
+}
+
 export function InboxShell() {
   const [activeChannel, setActiveChannel] = useState<InboxChannel | null>(null)
+  const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [selected, setSelected] = useState<InboxConversation | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [forwardData, setForwardData] = useState<{ subject: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchActive, setSearchActive] = useState(false)
+  const [moveToOpen, setMoveToOpen] = useState(false)
   const queryClient = useQueryClient()
 
   const bulkMode = selectedIds.size > 0
 
+  // Fetch labels for Move To dropdown
+  const { data: labelsData } = useQuery<{ labels: GmailLabel[] }>({
+    queryKey: ['gmail-labels'],
+    queryFn: () => fetch('/api/inbox/labels').then(r => r.json()),
+    refetchInterval: 60_000,
+  })
+  const userLabels = (labelsData?.labels || []).filter(l => l.type === 'user')
+
   const handleToggleSelect = useCallback((id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }, [])
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set())
+    setMoveToOpen(false)
   }, [])
+
+  // When switching to a Gmail label view, set channel to gmail
+  const handleLabelChange = (labelId: string | null) => {
+    setActiveLabel(labelId)
+    if (labelId) setActiveChannel('gmail')
+    setSelected(null)
+  }
 
   // Single email action
   const emailActionMutation = useMutation({
@@ -84,19 +108,23 @@ export function InboxShell() {
         }
         setSelected(null)
       }
+      if (variables.action === 'mark_unread') {
+        toast.success('Marked as unread')
+      }
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
     },
   })
 
   // Bulk email action
   const bulkActionMutation = useMutation({
-    mutationFn: async ({ action }: { action: 'trash' | 'archive' | 'mark_read' }) => {
+    mutationFn: async ({ action, labelId }: { action: string; labelId?: string }) => {
       const threadIds = Array.from(selectedIds).map(id => id.replace('gmail:', ''))
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadIds, action, bulk: true }),
+        body: JSON.stringify({ threadIds, action, labelId, bulk: true }),
       })
       if (!res.ok) throw new Error('Bulk action failed')
       return res.json()
@@ -104,7 +132,6 @@ export function InboxShell() {
     onSuccess: (_, variables) => {
       const count = selectedIds.size
       if (variables.action === 'archive' || variables.action === 'trash') {
-        // Remove all selected from list
         queryClient.setQueriesData(
           { queryKey: ['inbox-conversations'] },
           (old: unknown) => {
@@ -118,14 +145,15 @@ export function InboxShell() {
             }
           }
         )
-        if (selected && selectedIds.has(selected.id)) {
-          setSelected(null)
-        }
+        if (selected && selectedIds.has(selected.id)) setSelected(null)
       }
       clearSelection()
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      toast.success(`${count} email${count > 1 ? 's' : ''} ${variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : 'marked as read'}`)
+      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+
+      const actionLabel = variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : variables.action === 'mark_read' ? 'marked as read' : 'moved'
+      toast.success(`${count} email${count > 1 ? 's' : ''} ${actionLabel}`)
     },
   })
 
@@ -143,6 +171,21 @@ export function InboxShell() {
     setComposeOpen(true)
   }
 
+  const handleSearch = () => {
+    if (!searchQuery.trim()) return
+    setSearchActive(true)
+    setActiveChannel('gmail')
+    setActiveLabel(null)
+    // The ConversationList will refetch with the search query
+    queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+  }
+
+  const clearSearch = () => {
+    setSearchQuery('')
+    setSearchActive(false)
+    queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+  }
+
   const isGmail = selected?.channel === 'gmail'
 
   return (
@@ -151,7 +194,12 @@ export function InboxShell() {
       <div className="flex items-center justify-between border-b bg-white">
         <InboxHeader
           activeChannel={activeChannel}
-          onChannelChange={setActiveChannel}
+          onChannelChange={(ch) => {
+            setActiveChannel(ch)
+            setActiveLabel(null)
+            setSearchActive(false)
+            setSearchQuery('')
+          }}
         />
         <div className="pr-4">
           <button
@@ -167,6 +215,24 @@ export function InboxShell() {
         </div>
       </div>
 
+      {/* Search bar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+        <Search className="h-4 w-4 text-zinc-400 shrink-0" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleSearch() }}
+          placeholder="Search emails... (from:, subject:, has:attachment)"
+          className="flex-1 text-sm bg-transparent outline-none placeholder:text-zinc-400"
+        />
+        {searchActive && (
+          <button onClick={clearSearch} className="p-0.5 rounded hover:bg-zinc-200 text-zinc-400">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Bulk Action Bar */}
       {bulkMode && (
         <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
@@ -174,7 +240,7 @@ export function InboxShell() {
           <span className="text-sm font-medium text-blue-700">
             {selectedIds.size} selected
           </span>
-          <div className="flex items-center gap-1 ml-auto">
+          <div className="flex items-center gap-1 ml-auto relative">
             <button
               onClick={() => bulkActionMutation.mutate({ action: 'trash' })}
               disabled={bulkActionMutation.isPending}
@@ -199,6 +265,38 @@ export function InboxShell() {
               <MailOpen className="h-3.5 w-3.5" />
               Mark Read
             </button>
+            {/* Move to folder */}
+            <div className="relative">
+              <button
+                onClick={() => setMoveToOpen(!moveToOpen)}
+                disabled={bulkActionMutation.isPending}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
+              >
+                <FolderInput className="h-3.5 w-3.5" />
+                Move to
+              </button>
+              {moveToOpen && userLabels.length > 0 && (
+                <div className="absolute right-0 top-full mt-1 bg-white border rounded-md shadow-lg z-20 min-w-[160px]">
+                  {userLabels.map(label => (
+                    <button
+                      key={label.id}
+                      onClick={() => {
+                        bulkActionMutation.mutate({ action: 'move_to_label', labelId: label.id })
+                        setMoveToOpen(false)
+                      }}
+                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-50 transition-colors"
+                    >
+                      {label.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {moveToOpen && userLabels.length === 0 && (
+                <div className="absolute right-0 top-full mt-1 bg-white border rounded-md shadow-lg z-20 px-3 py-2 text-xs text-zinc-400 min-w-[160px]">
+                  No folders yet. Create one in the sidebar.
+                </div>
+              )}
+            </div>
             <button
               onClick={clearSelection}
               className="p-1 rounded hover:bg-zinc-200 text-zinc-500 ml-1"
@@ -211,7 +309,17 @@ export function InboxShell() {
       )}
 
       <div className="flex flex-1 min-h-0">
-        {/* ─── Left Panel: Conversation List ─────────── */}
+        {/* ─── Gmail Sidebar (folders) ──────────────── */}
+        {(activeChannel === 'gmail' || activeChannel === null) && (
+          <div className="hidden lg:flex w-[180px] shrink-0 border-r bg-zinc-50/50 overflow-y-auto">
+            <InboxSidebar
+              activeLabel={activeLabel}
+              onLabelChange={handleLabelChange}
+            />
+          </div>
+        )}
+
+        {/* ─── Conversation List ─────────────── */}
         <div
           className={cn(
             'w-full lg:w-[350px] lg:shrink-0 flex flex-col border-r',
@@ -225,10 +333,12 @@ export function InboxShell() {
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
+            labelFilter={activeLabel}
+            searchQuery={searchActive ? searchQuery : undefined}
           />
         </div>
 
-        {/* ─── Right Panel: Message Thread ────────────── */}
+        {/* ─── Message Thread ────────────── */}
         <div
           className={cn(
             'flex-1 flex flex-col min-w-0',
@@ -239,15 +349,10 @@ export function InboxShell() {
             <>
               {/* Thread header with actions */}
               <div className="flex items-center gap-3 px-4 py-3 border-b bg-white shrink-0">
-                {/* Back button (mobile only) */}
-                <button
-                  onClick={handleBack}
-                  className="lg:hidden p-1 rounded hover:bg-zinc-100"
-                >
+                <button onClick={handleBack} className="lg:hidden p-1 rounded hover:bg-zinc-100">
                   <ArrowLeft className="h-5 w-5" />
                 </button>
 
-                {/* Channel icon + name */}
                 {(() => {
                   const Icon = channelIcons[selected.channel]
                   return <Icon className="h-4 w-4 text-zinc-400 shrink-0" />
@@ -265,7 +370,7 @@ export function InboxShell() {
 
                 {/* Action buttons */}
                 <div className="flex items-center gap-1 shrink-0">
-                  {/* Create from email actions */}
+                  {/* Create from email */}
                   <button
                     onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
                     className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
@@ -288,10 +393,9 @@ export function InboxShell() {
                     <Receipt className="h-4 w-4" />
                   </button>
 
-                  {/* Separator */}
                   <div className="w-px h-4 bg-zinc-200 mx-0.5" />
 
-                  {/* Gmail-specific actions */}
+                  {/* Gmail actions */}
                   {isGmail && (
                     <>
                       <button
@@ -311,9 +415,7 @@ export function InboxShell() {
                         <Star className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => {
-                          emailActionMutation.mutate({ action: 'mark_unread' })
-                        }}
+                        onClick={() => emailActionMutation.mutate({ action: 'mark_unread' })}
                         disabled={emailActionMutation.isPending}
                         className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
                         title="Mark Unread"
@@ -341,36 +443,25 @@ export function InboxShell() {
                 </div>
               </div>
 
-              {/* Messages */}
               <MessageThread conversation={selected} />
-
-              {/* Reply composer */}
               <ComposeReply conversation={selected} />
             </>
           ) : (
-            /* Empty state */
             <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
               <MessageSquare className="h-12 w-12 mb-3 stroke-1" />
               <p className="text-sm font-medium">Select a conversation</p>
-              <p className="text-xs mt-1">
-                Choose from WhatsApp, Telegram, or Gmail
-              </p>
+              <p className="text-xs mt-1">Choose from WhatsApp, Telegram, or Gmail</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Compose email dialog */}
       <ComposeDialog
         open={composeOpen}
-        onClose={() => {
-          setComposeOpen(false)
-          setForwardData(null)
-        }}
+        onClose={() => { setComposeOpen(false); setForwardData(null) }}
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
       />
 
-      {/* Create Task/Service/Invoice from email dialog */}
       {createDialog && (
         <CreateFromEmailDialog
           type={createDialog.type}

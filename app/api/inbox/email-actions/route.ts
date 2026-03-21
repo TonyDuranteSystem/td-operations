@@ -3,16 +3,17 @@ import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } fro
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward" | "mark_unread"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward" | "mark_unread" | "move_to_label"
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { threadId, threadIds, action, forwardTo, bulk } = body as {
+    const { threadId, threadIds, action, forwardTo, labelId, bulk } = body as {
       threadId?: string
       threadIds?: string[]
       action: EmailAction | 'mark_read'
       forwardTo?: string
+      labelId?: string
       bulk?: boolean
     }
 
@@ -31,6 +32,8 @@ export async function POST(req: NextRequest) {
                 gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] })
               )
             )
+          } else if (action === 'move_to_label' && labelId) {
+            await gmailPost(`/threads/${tid}/modify`, { addLabelIds: [labelId] })
           }
         })
       )
@@ -105,6 +108,14 @@ export async function POST(req: NextRequest) {
           )
         )
         return NextResponse.json({ success: true, action: "marked_unread" })
+      }
+
+      case "move_to_label": {
+        if (!labelId) {
+          return NextResponse.json({ error: "labelId is required" }, { status: 400 })
+        }
+        await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: [labelId] })
+        return NextResponse.json({ success: true, action: "labeled" })
       }
 
       case "forward": {

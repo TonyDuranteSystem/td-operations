@@ -39,6 +39,8 @@ async function buildEmailLookup(): Promise<
 export async function GET(req: NextRequest) {
   try {
     const channel = req.nextUrl.searchParams.get("channel") // whatsapp | telegram | gmail | null (all)
+    const searchQuery = req.nextUrl.searchParams.get("q") // Gmail search query
+    const labelFilter = req.nextUrl.searchParams.get("label") // Gmail label ID filter
     const limit = Math.min(
       parseInt(req.nextUrl.searchParams.get("limit") || "30"),
       100
@@ -89,10 +91,25 @@ export async function GET(req: NextRequest) {
     if (!channel || channel === "gmail") {
       try {
         const gmailLimit = channel === "gmail" ? limit : Math.min(limit, 20)
-        const listResult = (await gmailGet("/threads", {
+
+        // Build Gmail query params
+        const gmailParams: Record<string, string> = {
           maxResults: String(gmailLimit),
-          labelIds: "INBOX",
-        })) as {
+        }
+
+        // Label filter: INBOX (default), SENT, DRAFT, STARRED, TRASH, or custom label ID
+        if (labelFilter) {
+          gmailParams.labelIds = labelFilter
+        } else if (!searchQuery) {
+          gmailParams.labelIds = "INBOX"
+        }
+
+        // Search query (Gmail search syntax)
+        if (searchQuery) {
+          gmailParams.q = searchQuery
+        }
+
+        const listResult = (await gmailGet("/threads", gmailParams)) as {
           threads?: Array<{ id: string; snippet: string; historyId: string }>
         }
 
