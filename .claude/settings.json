@@ -20,8 +20,13 @@
             "timeout": 5
           },
           {
+            "type": "command",
+            "command": "bash .claude/hooks/post-push-qa.sh",
+            "timeout": 5
+          },
+          {
             "type": "prompt",
-            "prompt": "The stop-check script above reports your session state. If SAVE_NEEDED=true, you MUST run session_checkpoint NOW with: (1) summary of what was done (files, commits, DB changes, decisions), (2) next_steps with specific pending items. NO EXCEPTIONS. If SAVE_NEEDED=false AND your response was purely answering a question with zero tool calls, you may skip. Otherwise SAVE.",
+            "prompt": "Check both hook outputs above. (1) SAVE: If SAVE_NEEDED=true, run session_checkpoint with summary + next_steps. (2) QA: If 'QA REQUIRED' appeared, you MUST test the deployed changes in Chrome BEFORE telling Antonio it's done. Open the browser, navigate to the page, screenshot, interact, verify. If you haven't done browser QA yet, tell Antonio you need to test first.",
             "timeout": 60
           }
         ]

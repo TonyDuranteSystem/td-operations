@@ -301,9 +301,44 @@ Never use `createClient()` at module level in API routes or lib files — Next.j
 - `import { supabaseAdmin } from "@/lib/supabase-admin"` (Proxy-based lazy init), or
 - A local `getSupabase()` getter function
 
+## Mandatory QA Testing — NEVER SKIP
+
+### Rule: Every UI feature MUST be tested in the browser before declaring it done
+After building or fixing any CRM/Portal feature, you MUST:
+1. Open Chrome via `tabs_context_mcp` → `navigate` to the relevant page
+2. **Screenshot** the page to verify it renders correctly
+3. **Interact** with every new/changed element (click buttons, fill forms, submit)
+4. **Screenshot** the result to verify the action succeeded
+5. **Check for errors** — red toasts, console errors, broken layouts
+6. **Test edge cases** — empty fields, invalid inputs, rapid clicks
+
+### What counts as "tested":
+- ✅ Created an invoice → saw it in the list with correct data
+- ✅ Clicked Edit → changed a field → Save → no error, data updated
+- ✅ Clicked Delete → confirmed → item disappeared
+- ❌ "I pushed the code" — NOT tested
+- ❌ "Build passed" — NOT tested
+- ❌ "It should work" — NOT tested
+
+### When to test:
+- **After every `git push`** that changes UI components, API routes, or server actions
+- **After fixing a bug** — verify the fix AND check for regressions
+- **Before telling Antonio "it's done"** — if you haven't screenshotted the working result, it's NOT done
+
+### Test data:
+- Always use **Uxio Test LLC** for invoice/payment tests
+- Always use **QA Test** prefix for task/form tests
+- Clean up test data after testing (delete drafts, void test invoices)
+
+### If Chrome is not available:
+- Test API routes via `curl` in Bash
+- Test server actions by checking DB state via `execute_sql`
+- But ALWAYS flag: "⚠️ Browser test pending — needs Chrome verification"
+
 ## Do NOT
 - Use Make, Zapier, n8n — all automation via Supabase Edge Functions
 - Commit `.env.local` or credentials
 - Create README.md or documentation files unless asked
 - Push to main without building first (`npm run build`)
 - Use `git add -A` or `git add .` — always add specific files
+- Declare a feature "done" without browser-testing it first
