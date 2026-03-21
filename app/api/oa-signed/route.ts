@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 
 export async function POST(req: NextRequest) {
   try {
@@ -155,6 +156,17 @@ export async function POST(req: NextRequest) {
 
               const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
               results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+
+              // Auto-save to documents table for portal
+              if (oa.account_id) {
+                await autoSaveDocument({
+                  accountId: oa.account_id,
+                  fileName,
+                  documentType: 'Operating Agreement',
+                  category: 1, // Company
+                  driveFileId: driveResult.id,
+                })
+              }
             } else {
               results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
             }

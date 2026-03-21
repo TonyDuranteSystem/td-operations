@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 
 export async function POST(req: NextRequest) {
   try {
@@ -188,6 +189,28 @@ export async function POST(req: NextRequest) {
           const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
           driveUploadResult = `ok: ${driveResult.id}`
           console.log(`[offer-signed] Uploaded contract PDF to Drive: ${driveResult.id}`)
+
+          // Auto-save to documents table for portal visibility
+          if (offer.lead_id) {
+            const { data: leadForDoc } = await supabase.from("leads").select("account_id").eq("id", offer.lead_id).maybeSingle()
+            if (leadForDoc?.account_id) {
+              await autoSaveDocument({
+                accountId: leadForDoc.account_id,
+                fileName,
+                documentType: 'Signed Contract',
+                category: 5, // Correspondence
+                driveFileId: driveResult.id,
+              })
+            }
+          } else if (offer.account_id) {
+            await autoSaveDocument({
+              accountId: offer.account_id,
+              fileName,
+              documentType: 'Signed Contract',
+              category: 5,
+              driveFileId: driveResult.id,
+            })
+          }
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
         }
