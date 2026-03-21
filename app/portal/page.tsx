@@ -53,30 +53,75 @@ export default async function PortalDashboardPage() {
   const contactId = getClientContactId(user)
   const locale = getLocale(user)
 
-  if (!contactId) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
-        <p className="text-zinc-500">{t('dashboard.noAccount', locale)}</p>
-      </div>
-    )
-  }
-
-  const accounts = await getPortalAccounts(contactId)
-  if (accounts.length === 0) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
-        <p className="text-zinc-500">{t('dashboard.noCompanies', locale)}</p>
-      </div>
-    )
-  }
+  // Get accounts (may be empty for leads)
+  const accounts = contactId ? await getPortalAccounts(contactId) : []
 
   // Get selected account
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id
+  const selectedAccountId = accounts.length > 0
+    ? (accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id)
+    : ''
 
-  // Check tier — show welcome dashboard for lead/onboarding
-  const portalTier = await getPortalTier(selectedAccountId)
+  // Check tier
+  const portalTier = selectedAccountId
+    ? await getPortalTier(selectedAccountId)
+    : 'lead' // No account = lead tier
+
+  // Lead/onboarding without account = show welcome dashboard
+  if (!selectedAccountId || accounts.length === 0) {
+    // This is a lead — no account yet. Show welcome dashboard with offer data.
+    const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
+
+    // Find offer by email
+    const emails = new Set<string>()
+    if (user.email) emails.add(user.email)
+    const emailArr = Array.from(emails)
+
+    let offerData = null
+    if (emailArr.length > 0) {
+      const { data: offer } = await supabaseAdmin
+        .from('offers')
+        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, signed_at, language')
+        .in('client_email', emailArr)
+        .not('status', 'eq', 'expired')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (offer) {
+        offerData = offer
+      } else {
+        // Try via lead
+        const { data: leads } = await supabaseAdmin
+          .from('leads')
+          .select('id')
+          .in('email', emailArr)
+          .limit(1)
+
+        if (leads?.length) {
+          const { data: leadOffer } = await supabaseAdmin
+            .from('offers')
+            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, signed_at, language')
+            .eq('lead_id', leads[0].id)
+            .not('status', 'eq', 'expired')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          offerData = leadOffer
+        }
+      }
+    }
+
+    return (
+      <WelcomeDashboard
+        tier="lead"
+        firstName={firstName}
+        offerData={offerData}
+        locale={locale}
+      />
+    )
+  }
 
   if (portalTier === 'lead' || portalTier === 'onboarding') {
     // Get offer data for welcome dashboard

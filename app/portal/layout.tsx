@@ -75,7 +75,7 @@ export default async function PortalLayout({
     : [[] as string[], {
         services: false, billing: false, invoices: false,
         taxDocuments: false, deadlines: false, documents: true, customers: false,
-      } as PortalNavVisibility, 'active' as string]
+      } as PortalNavVisibility, 'lead' as string]  // No account = lead tier
 
   return (
     <Providers>
