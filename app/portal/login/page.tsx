@@ -134,6 +134,15 @@ export default function PortalLoginPage() {
             >
               Cookie Policy
             </a>
+            <span>·</span>
+            <a
+              href="https://www.iubenda.com/terms-and-conditions/51522422"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-zinc-600 underline"
+            >
+              Terms
+            </a>
           </div>
         </div>
       </div>
