@@ -385,6 +385,16 @@ export function registerFormationTools(server: McpServer) {
           lines.push(`   Steps: Contact update → Lead → Converted → Form → reviewed`)
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${jobId}')`)
+
+          // Upgrade portal tier: onboarding → active
+          if (sub.account_id) {
+            await supabaseAdmin
+              .from("accounts")
+              .update({ portal_tier: "active", updated_at: new Date().toISOString() })
+              .eq("id", sub.account_id)
+              .in("portal_tier", ["onboarding"])
+            lines.push(`🔓 Portal tier upgraded: onboarding → active`)
+          }
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

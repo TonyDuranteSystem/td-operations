@@ -70,14 +70,53 @@ export async function POST(req: NextRequest) {
       companyName = acct?.company_name || ''
     }
 
-    // 4. Create task for staff to review
+    // 4. Save to form submissions table (same format as external forms)
+    // This allows the existing MCP tools (formation_form_review, onboarding_form_review) to process it
+    const submissionTable = wizard_type === 'formation' ? 'formation_submissions'
+      : wizard_type === 'onboarding' ? 'onboarding_submissions'
+      : null
+
+    let submissionToken: string | null = null
+    if (submissionTable) {
+      // Generate a token for the submission
+      const nameSlug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-')
+      submissionToken = `portal-${nameSlug}-${new Date().getFullYear()}`
+
+      // Collect upload paths from data (fields that contain storage paths)
+      const uploadPaths: string[] = []
+      for (const [key, val] of Object.entries(data)) {
+        if (typeof val === 'string' && (val.includes('/passport_') || val.includes('/articles_') || val.includes('/ein_') || val.includes('/ss4_'))) {
+          uploadPaths.push(val)
+        }
+      }
+
+      await supabaseAdmin.from(submissionTable).upsert({
+        token: submissionToken,
+        lead_id: null, // Portal submissions don't have a lead
+        contact_id: contact_id || null,
+        account_id: account_id || null,
+        entity_type: entity_type || 'SMLLC',
+        language: 'en',
+        prefilled_data: {}, // No prefill tracking for portal wizard
+        submitted_data: data,
+        changed_fields: {},
+        upload_paths: uploadPaths,
+        status: 'completed', // Ready for review
+      }, { onConflict: 'token' })
+    }
+
+    // 5. Create task for staff to review
     const taskTitle = wizard_type === 'formation'
       ? `Portal Wizard: Formation data submitted — ${clientName}${companyName ? ` (${companyName})` : ''}`
       : `Portal Wizard: Onboarding data submitted — ${clientName}${companyName ? ` (${companyName})` : ''}`
 
     await supabaseAdmin.from('tasks').insert({
       task_title: taskTitle,
-      description: `${entity_type || 'SMLLC'} ${wizard_type} wizard completed via portal.\nReview submitted data and process CRM setup.`,
+      description: [
+        `${entity_type || 'SMLLC'} ${wizard_type} wizard completed via portal.`,
+        submissionToken ? `Review with: ${wizard_type}_form_review(token="${submissionToken}")` : '',
+        `Then apply changes to create CRM records.`,
+      ].filter(Boolean).join('\n'),
       status: 'To Do',
       priority: 'High',
       category: wizard_type === 'formation' ? 'Formation' : 'Client Response',

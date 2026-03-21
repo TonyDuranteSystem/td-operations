@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+import { Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface FieldConfig {
@@ -21,6 +23,7 @@ interface WizardFieldProps {
   field: FieldConfig
   value: string | boolean | number
   onChange: (name: string, value: string | boolean | number) => void
+  onFileUpload?: (name: string, file: File) => Promise<string | null> // returns storage path or null on error
   locale: 'en' | 'it'
   error?: string
 }
@@ -36,7 +39,9 @@ const COUNTRIES = [
   'United Arab Emirates', 'Saudi Arabia', 'Russia', 'Ukraine',
 ].sort()
 
-export function WizardField({ field, value, onChange, locale, error }: WizardFieldProps) {
+export function WizardField({ field, value, onChange, onFileUpload, locale, error }: WizardFieldProps) {
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
   const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
   const hint = locale === 'it' && field.hintIt ? field.hintIt : field.hint
@@ -102,15 +107,53 @@ export function WizardField({ field, value, onChange, locale, error }: WizardFie
           <span className="text-sm text-zinc-600">{hint}</span>
         </label>
       ) : field.type === 'file' ? (
-        <input
-          type="file"
-          onChange={e => {
-            const file = e.target.files?.[0]
-            if (file) onChange(field.name, file.name)
-          }}
-          accept=".pdf,.jpg,.jpeg,.png,.heic"
-          className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100"
-        />
+        <div className="space-y-1">
+          <input
+            type="file"
+            onChange={async e => {
+              const file = e.target.files?.[0]
+              if (!file) return
+              if (file.size > 10 * 1024 * 1024) {
+                setUploadError(locale === 'it' ? 'File troppo grande (max 10MB)' : 'File too large (max 10MB)')
+                return
+              }
+              setUploadError(null)
+              if (onFileUpload) {
+                setUploading(true)
+                const path = await onFileUpload(field.name, file)
+                setUploading(false)
+                if (path) {
+                  onChange(field.name, path)
+                } else {
+                  setUploadError(locale === 'it' ? 'Upload fallito' : 'Upload failed')
+                }
+              } else {
+                onChange(field.name, file.name)
+              }
+            }}
+            disabled={uploading}
+            accept=".pdf,.jpg,.jpeg,.png,.heic"
+            className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
+          />
+          {uploading && (
+            <div className="flex items-center gap-2 text-xs text-blue-600">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {locale === 'it' ? 'Caricamento...' : 'Uploading...'}
+            </div>
+          )}
+          {value && !uploading && !uploadError && (
+            <div className="flex items-center gap-1 text-xs text-green-600">
+              <CheckCircle className="h-3 w-3" />
+              {locale === 'it' ? 'File caricato' : 'File uploaded'}
+            </div>
+          )}
+          {uploadError && (
+            <div className="flex items-center gap-1 text-xs text-red-500">
+              <AlertCircle className="h-3 w-3" />
+              {uploadError}
+            </div>
+          )}
+        </div>
       ) : (
         <input
           type={field.type}

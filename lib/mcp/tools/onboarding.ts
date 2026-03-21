@@ -647,6 +647,16 @@ export function registerOnboardingTools(server: McpServer) {
             lines.push(`⚠️ Cannot enqueue background job: missing contact_id (${contactId}) or account_id (${accountId})`)
           }
 
+          // Upgrade portal tier: onboarding → active
+          if (accountId) {
+            await supabaseAdmin
+              .from("accounts")
+              .update({ portal_tier: "active", updated_at: new Date().toISOString() })
+              .eq("id", accountId)
+              .in("portal_tier", ["onboarding"])
+            lines.push(`🔓 Portal tier upgraded: onboarding → active`)
+          }
+
           // Summary
           lines.push("")
           lines.push("───────────────────────────────────")

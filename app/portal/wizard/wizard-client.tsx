@@ -46,6 +46,28 @@ export function WizardClient({
     setFormData(prev => ({ ...prev, [name]: value }))
   }, [])
 
+  // File upload handler — uploads to Supabase Storage, returns path
+  const handleFileUpload = useCallback(async (fieldName: string, file: File): Promise<string | null> => {
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('field_name', fieldName)
+      fd.append('wizard_type', wizardType)
+      fd.append('identifier', accountId || contactId || 'unknown')
+
+      const res = await fetch('/api/portal/wizard-upload', {
+        method: 'POST',
+        body: fd,
+      })
+
+      if (!res.ok) return null
+      const { path } = await res.json()
+      return path
+    } catch {
+      return null
+    }
+  }, [wizardType, accountId, contactId])
+
   // Validate current step
   const validateStep = useCallback(() => {
     const stepId = steps[currentStep].id
@@ -198,6 +220,7 @@ export function WizardClient({
               field={{ ...field, prefilled: !!prefillData[field.name] }}
               value={formData[field.name] ?? ''}
               onChange={handleFieldChange}
+              onFileUpload={handleFileUpload}
               locale={locale}
             />
           </div>
