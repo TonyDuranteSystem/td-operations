@@ -158,20 +158,27 @@ export async function updateInvoice(
 
 export async function markInvoicePaid(
   paymentId: string,
-  updatedAt: string,
+  _updatedAt: string,
   paymentMethod?: string
 ): Promise<ActionResult> {
   return safeAction(async () => {
+    const supabase = createClient()
     const today = new Date().toISOString().split('T')[0]
     const updates: Record<string, unknown> = {
       status: 'Paid',
       invoice_status: 'Paid',
       paid_date: today,
+      updated_at: new Date().toISOString(),
     }
     if (paymentMethod) updates.payment_method = paymentMethod
 
-    const result = await updateWithLock('payments', paymentId, updates, updatedAt)
-    if (!result.success) throw new Error(result.error)
+    const { error } = await supabase
+      .from('payments')
+      .update(updates)
+      .eq('id', paymentId)
+      .in('invoice_status', ['Sent', 'Overdue'])
+
+    if (error) throw new Error(error.message)
 
     // QB sync (non-blocking best-effort)
     syncPaymentToQB(paymentId, {
@@ -194,14 +201,21 @@ export async function markInvoicePaid(
 
 export async function voidInvoice(
   paymentId: string,
-  updatedAt: string
+  _updatedAt: string
 ): Promise<ActionResult> {
   return safeAction(async () => {
-    const result = await updateWithLock('payments', paymentId, {
-      invoice_status: 'Voided',
-      status: 'Waived',
-    }, updatedAt)
-    if (!result.success) throw new Error(result.error)
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('payments')
+      .update({
+        invoice_status: 'Voided',
+        status: 'Waived',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', paymentId)
+      .in('invoice_status', ['Draft', 'Sent', 'Overdue'])
+
+    if (error) throw new Error(error.message)
 
     // QB sync (non-blocking best-effort)
     syncVoidToQB(paymentId).catch(() => {})
