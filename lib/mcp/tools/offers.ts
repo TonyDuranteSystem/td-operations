@@ -524,6 +524,53 @@ export function registerOfferTools(server: McpServer) {
 
         const accessCode = data.access_code || ""
 
+        // Auto-create Whop plan if payment_type is checkout and no payment_links provided
+        let autoWhopLine = ""
+        if (params.payment_type === "checkout" && (!params.payment_links || (params.payment_links as unknown[]).length === 0)) {
+          try {
+            const { createWhopPlan } = await import("@/lib/whop-auto-plan")
+            // Extract total amount from cost_summary
+            const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
+            const firstCost = costArr[0] as Record<string, unknown> | undefined
+            const totalStr = (firstCost?.total as string) || ""
+            const totalNum = parseFloat(totalStr.replace(/[^0-9.]/g, ""))
+            const isEUR = totalStr.includes("\u20AC") || totalStr.toUpperCase().includes("EUR")
+
+            if (totalNum > 0) {
+              // Get primary service name
+              const servArr = Array.isArray(params.services) ? params.services : []
+              const primaryService = (servArr[0] as Record<string, unknown>)?.name as string || undefined
+
+              const whopResult = await createWhopPlan({
+                clientName: params.client_name,
+                amount: totalNum,
+                currency: isEUR ? "eur" : "usd",
+                contractType: params.contract_type || "formation",
+                serviceName: primaryService,
+              })
+
+              if (whopResult.success && whopResult.checkoutUrl) {
+                // Update the offer with the auto-generated payment link
+                const cardAmount = isEUR ? Math.round(totalNum * 1.05) : Math.round(totalNum * 1.05)
+                await supabaseAdmin
+                  .from("offers")
+                  .update({
+                    payment_links: [{
+                      url: whopResult.checkoutUrl,
+                      label: `Pay ${isEUR ? "\u20AC" : "$"}${totalNum.toLocaleString()} by Card`,
+                      amount: cardAmount,
+                    }],
+                  })
+                  .eq("token", params.token)
+
+                autoWhopLine = `\n💳 Whop plan auto-created: ${whopResult.planId}\n   Checkout: ${whopResult.checkoutUrl}`
+              }
+            }
+          } catch (whopErr) {
+            autoWhopLine = `\n⚠️ Whop auto-plan failed: ${whopErr instanceof Error ? whopErr.message : String(whopErr)}`
+          }
+        }
+
         logAction({
           action_type: "create",
           table_name: "offers",
@@ -548,7 +595,7 @@ export function registerOfferTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer created as DRAFT: ${params.token}\nURL: ${APP_BASE_URL}/offer/${params.token}/${accessCode}${referralLine}\n\nReview with offer_get, then use offer_send to approve and create Gmail draft.`,
+            text: `✅ Offer created as DRAFT: ${params.token}\nURL: ${APP_BASE_URL}/offer/${params.token}/${accessCode}${referralLine}${autoWhopLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
           }],
         }
       } catch (err: unknown) {
