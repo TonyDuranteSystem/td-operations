@@ -80,41 +80,53 @@ export default async function PortalDashboardPage() {
 
   if (portalTier === 'lead' || portalTier === 'onboarding') {
     // Get offer data for welcome dashboard
-    const contactEmail = user.email
-    let offerData = null
+    // Collect all possible emails: auth email + contact email
+    const emails = new Set<string>()
+    if (user.email) emails.add(user.email)
+    if (contactId) {
+      const { data: contactData } = await supabaseAdmin
+        .from('contacts')
+        .select('email')
+        .eq('id', contactId)
+        .single()
+      if (contactData?.email) emails.add(contactData.email)
+    }
 
-    if (contactEmail) {
+    let offerData = null
+    const emailArr = Array.from(emails)
+
+    // Try finding offer by any matching email
+    if (emailArr.length > 0) {
       const { data: offer } = await supabaseAdmin
         .from('offers')
         .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, signed_at, language')
-        .eq('client_email', contactEmail)
+        .in('client_email', emailArr)
         .not('status', 'eq', 'expired')
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
 
-      if (!offer && contactId) {
+      if (offer) {
+        offerData = offer
+      } else {
         // Try via lead
-        const { data: lead } = await supabaseAdmin
+        const { data: leads } = await supabaseAdmin
           .from('leads')
           .select('id')
-          .eq('email', contactEmail)
+          .in('email', emailArr)
           .limit(1)
-          .maybeSingle()
 
-        if (lead) {
+        if (leads?.length) {
           const { data: leadOffer } = await supabaseAdmin
             .from('offers')
             .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, signed_at, language')
-            .eq('lead_id', lead.id)
+            .eq('lead_id', leads[0].id)
             .not('status', 'eq', 'expired')
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle()
           offerData = leadOffer
         }
-      } else {
-        offerData = offer
       }
     }
 
