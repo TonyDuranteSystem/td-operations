@@ -237,6 +237,20 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
   }
 }
 
+/**
+ * Get the portal tier for an account.
+ * Returns 'lead', 'onboarding', 'active', or 'full'.
+ */
+export async function getPortalTier(accountId: string): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('accounts')
+    .select('portal_tier')
+    .eq('id', accountId)
+    .single()
+
+  return data?.portal_tier || 'active'
+}
+
 export async function getPortalTaxReturns(accountId: string) {
   // Tax returns are matched by company_name, not account_id
   const { data: account } = await supabaseAdmin

@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTier } from '@/lib/portal/queries'
 import type { PortalNavVisibility } from '@/lib/portal/queries'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
@@ -66,15 +66,16 @@ export default async function PortalLayout({
   const showOnboarding = isClient(user) && !mustChangePassword && !user.user_metadata?.onboarding_completed
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
-  const [activeServices, navVisibility] = selectedAccountId
+  const [activeServices, navVisibility, portalTier] = selectedAccountId
     ? await Promise.all([
         getPortalActiveServices(selectedAccountId),
         getPortalNavVisibility(selectedAccountId),
+        getPortalTier(selectedAccountId),
       ])
     : [[] as string[], {
         services: false, billing: false, invoices: false,
         taxDocuments: false, deadlines: false, documents: true, customers: false,
-      } as PortalNavVisibility]
+      } as PortalNavVisibility, 'active' as string]
 
   return (
     <Providers>
@@ -88,6 +89,7 @@ export default async function PortalLayout({
             selectedAccountId={selectedAccountId}
             activeServices={activeServices}
             navVisibility={navVisibility}
+            portalTier={portalTier}
           />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />
