@@ -4,8 +4,8 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
 import { WizardField } from '@/components/portal/wizard/wizard-field'
-import { getWizardConfig } from '@/components/portal/wizard/wizard-configs'
-import { CheckCircle } from 'lucide-react'
+import { getWizardConfig, MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { CheckCircle, Plus, Trash2 } from 'lucide-react'
 
 interface WizardClientProps {
   wizardType: string
@@ -37,6 +37,7 @@ export function WizardClient({
 
   const [currentStep, setCurrentStep] = useState(savedStep)
   const [formData, setFormData] = useState<Record<string, string | boolean | number>>(initialData)
+  const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
@@ -153,8 +154,9 @@ export function WizardClient({
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
     setCurrentStep(step)
-    // Auto-save in background
-    if (accountId || contactId) {
+    // Auto-save in background (only if user has entered data)
+    const hasData = Object.keys(formData).some(k => formData[k] !== undefined && formData[k] !== '')
+    if (hasData && (accountId || contactId)) {
       fetch('/api/portal/wizard-progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -168,7 +170,9 @@ export function WizardClient({
         }),
       }).then(res => res.ok ? res.json() : null)
         .then(result => { if (result?.id) setCurrentProgressId(result.id) })
-        .catch(() => {}) // silent
+        .catch(() => {
+          console.warn('[wizard] Auto-save failed — data preserved in memory')
+        })
     }
   }, [wizardType, formData, accountId, contactId, currentProgressId])
 
@@ -200,6 +204,7 @@ export function WizardClient({
   // Render current step fields
   const stepId = steps[currentStep].id
   const stepFields = fields[stepId] || []
+  const isMembersStep = stepId === 'members'
 
   return (
     <WizardShell
@@ -213,19 +218,74 @@ export function WizardClient({
       isSaving={isSaving}
       locale={locale}
     >
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {stepFields.map(field => (
-          <div key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
-            <WizardField
-              field={{ ...field, prefilled: !!prefillData[field.name] }}
-              value={formData[field.name] ?? ''}
-              onChange={handleFieldChange}
-              onFileUpload={handleFileUpload}
-              locale={locale}
-            />
-          </div>
-        ))}
-      </div>
+      {isMembersStep ? (
+        /* Members repeater — add/remove members */
+        <div className="space-y-6">
+          {Array.from({ length: memberCount }).map((_, idx) => (
+            <div key={idx} className="border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-zinc-700">
+                  {locale === 'it' ? `Membro ${idx + 1}` : `Member ${idx + 1}`}
+                </h3>
+                {memberCount > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMemberCount(c => c - 1)
+                      // Clear this member's fields
+                      setFormData(prev => {
+                        const next = { ...prev }
+                        MEMBER_FIELDS.forEach(f => { delete next[`member_${idx}_${f.name}`] })
+                        return next
+                      })
+                    }}
+                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
+                  >
+                    <Trash2 className="h-3 w-3" /> {locale === 'it' ? 'Rimuovi' : 'Remove'}
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {MEMBER_FIELDS.map(field => (
+                  <div key={`${idx}_${field.name}`} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
+                    <WizardField
+                      field={field}
+                      value={formData[`member_${idx}_${field.name}`] ?? ''}
+                      onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
+                      locale={locale}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              setMemberCount(c => c + 1)
+              handleFieldChange('member_count', memberCount + 1)
+            }}
+            className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            <Plus className="h-4 w-4" />
+            {locale === 'it' ? 'Aggiungi membro' : 'Add member'}
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {stepFields.map(field => (
+            <div key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
+              <WizardField
+                field={{ ...field, prefilled: !!prefillData[field.name] }}
+                value={formData[field.name] ?? ''}
+                onChange={handleFieldChange}
+                onFileUpload={handleFileUpload}
+                locale={locale}
+              />
+            </div>
+          ))}
+        </div>
+      )}
     </WizardShell>
   )
 }
