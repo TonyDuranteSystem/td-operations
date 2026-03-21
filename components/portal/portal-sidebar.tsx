@@ -44,6 +44,7 @@ interface NavItem {
   href: string
   icon: typeof LayoutDashboard
   visibilityKey?: keyof PortalNavVisibility // if set, item only shows when this flag is true
+  tierOnly?: string[] // if set, only show for these tiers
 }
 
 interface NavGroup {
@@ -55,6 +56,7 @@ interface NavGroup {
 // Flat items (always visible, no group)
 const topItems: NavItem[] = [
   { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
+  { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
 ]
 
@@ -197,8 +199,11 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {/* Top items (always visible) */}
-          {topItems.map(renderNavItem)}
+          {/* Top items (filtered by tier) */}
+          {topItems.filter(item => {
+            if (!item.tierOnly) return true
+            return item.tierOnly.includes(portalTier || 'active')
+          }).map(renderNavItem)}
 
           {/* Collapsible groups */}
           {navGroups.map(group => {

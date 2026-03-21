@@ -643,18 +643,7 @@ export function registerOfferTools(server: McpServer) {
                 }
               },
             },
-            {
-              name: "auto_create_portal",
-              fn: async () => {
-                // Auto-create portal user with 'lead' tier when offer is sent
-                if (offer.lead_id) {
-                  await autoCreatePortalUser({
-                    leadId: offer.lead_id,
-                    tier: "lead",
-                  })
-                }
-              },
-            },
+            // Phase 4: auto_create_portal will be added here once portal offer page is built
           ],
         })
 
