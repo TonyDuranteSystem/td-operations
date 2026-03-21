@@ -231,7 +231,23 @@ export function decodeBase64Url(data: string): string {
 
 export function extractBody(payload: GmailAPIMessage["payload"]): string {
   if (payload.body?.data) {
-    return decodeBase64Url(payload.body.data)
+    const decoded = decodeBase64Url(payload.body.data)
+    // If the top-level body is HTML, strip tags
+    if (payload.mimeType === "text/html" || decoded.trimStart().startsWith("<")) {
+      return decoded
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/p>/gi, "\n\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    }
+    return decoded
   }
 
   if (payload.parts) {
