@@ -109,6 +109,24 @@ export function InboxShell() {
         setSelected(null)
       }
       if (variables.action === 'mark_unread') {
+        // Optimistically mark as unread in the list + close detail view
+        if (selected) {
+          queryClient.setQueriesData(
+            { queryKey: ['inbox-conversations'] },
+            (old: unknown) => {
+              if (!old || typeof old !== 'object') return old
+              const data = old as { conversations?: InboxConversation[]; total?: number }
+              if (!data.conversations) return old
+              return {
+                ...data,
+                conversations: data.conversations.map(c =>
+                  c.id === selected.id ? { ...c, unread: 1 } : c
+                ),
+              }
+            }
+          )
+        }
+        setSelected(null) // Close email so user sees bold text + badge in list
         toast.success('Marked as unread')
       }
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
