@@ -20,6 +20,7 @@ import {
   CalendarDays,
   CreditCard,
   ChevronDown,
+  PenSquare,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -57,6 +58,7 @@ interface NavGroup {
 const topItems: NavItem[] = [
   { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
+  { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'] },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
 ]
 
