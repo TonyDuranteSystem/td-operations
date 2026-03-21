@@ -13,6 +13,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { logAction } from "@/lib/mcp/action-log"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
@@ -367,11 +368,13 @@ Prerequisites:
 
         if (einFileId) {
           steps.push({ step: "EIN letter", status: "existing", detail: `Drive file ID: ${einFileId}` })
+          await autoSaveDocument({ accountId: account_id, fileName: "EIN Letter (CP 575)", documentType: "EIN Letter", category: 1, driveFileId: einFileId })
         } else {
           steps.push({ step: "EIN letter", status: "skipped", detail: "Not found on Drive — attach manually" })
         }
         if (articlesFileId) {
           steps.push({ step: "Articles", status: "existing", detail: `Drive file ID: ${articlesFileId}` })
+          await autoSaveDocument({ accountId: account_id, fileName: "Articles of Organization", documentType: "Articles of Organization", category: 1, driveFileId: articlesFileId })
         } else {
           steps.push({ step: "Articles", status: "skipped", detail: "Not found on Drive — attach manually" })
         }

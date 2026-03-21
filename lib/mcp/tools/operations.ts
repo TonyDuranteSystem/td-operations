@@ -976,6 +976,30 @@ export function registerOperationsTools(server: McpServer) {
           }
         }
 
+        // 7b. Check portal tier upgrade: active → full
+        // Triggers: EIN received (stage_order >= 4 in formation), or service completed
+        if (delivery.account_id) {
+          const shouldUpgradeToFull = isCompleted
+            || targetStage.stage_name === "EIN Received"
+            || targetStage.stage_name === "Welcome Package"
+            || targetStage.stage_order >= 8 // Late-stage milestone
+
+          if (shouldUpgradeToFull) {
+            const { data: acct } = await supabaseAdmin
+              .from("accounts")
+              .select("portal_tier")
+              .eq("id", delivery.account_id)
+              .single()
+
+            if (acct?.portal_tier === "active") {
+              await supabaseAdmin
+                .from("accounts")
+                .update({ portal_tier: "full", updated_at: new Date().toISOString() })
+                .eq("id", delivery.account_id)
+            }
+          }
+        }
+
         // 8. Format response with structured status
         const overallStatus = failedTasks.length > 0 ? "partial" : "success"
         const statusIcon = failedTasks.length > 0 ? "⚠️" : "✅"

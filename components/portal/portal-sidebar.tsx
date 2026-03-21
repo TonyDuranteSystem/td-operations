@@ -190,11 +190,12 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         </div>
 
         {/* Company Switcher */}
-        {accounts.length > 0 && (
+        {(accounts.length > 0 || user.email) && (
           <div className="px-3 py-3 border-b">
             <CompanySwitcher
               accounts={accounts}
               selectedAccountId={selectedAccountId}
+              userName={user.email?.split('@')[0]}
             />
           </div>
         )}

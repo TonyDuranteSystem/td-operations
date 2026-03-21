@@ -120,6 +120,97 @@ export const MEMBER_FIELDS: FieldConfig[] = [
   { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
 ]
 
+// ─── TAX RETURN ────────────────────────────────────────────
+
+export const TAX_STEPS: WizardStep[] = [
+  { id: 'owner', title: 'Owner Information', titleIt: 'Informazioni Titolare', description: 'Personal and tax details', descriptionIt: 'Dati personali e fiscali' },
+  { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
+  { id: 'financials', title: 'Financial Information', titleIt: 'Informazioni Finanziarie', description: 'Income, expenses, and transactions', descriptionIt: 'Entrate, spese e transazioni' },
+  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload bank statements and review', descriptionIt: 'Carica estratti conto e rivedi' },
+]
+
+export const TAX_FIELDS: Record<string, FieldConfig[]> = {
+  owner: [
+    { name: 'owner_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+    { name: 'owner_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+    { name: 'owner_email', label: 'Email', type: 'email', required: true },
+    { name: 'owner_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
+    { name: 'owner_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
+    { name: 'owner_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
+    { name: 'owner_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true },
+    { name: 'owner_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
+    { name: 'owner_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+    { name: 'owner_tax_residency', label: 'Tax Residency Country', labelIt: 'Residenza Fiscale', type: 'country', required: true },
+    { name: 'owner_local_tax_number', label: 'Local Tax ID (VAT/Codice Fiscale)', labelIt: 'Codice Fiscale / P.IVA', type: 'text', required: true },
+  ],
+  company: [
+    { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
+    { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true },
+    { name: 'date_of_incorporation', label: 'Date of Incorporation', labelIt: 'Data Costituzione', type: 'date', required: true },
+    { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato Costituzione', type: 'text', required: true },
+    { name: 'principal_product_service', label: 'Principal Product/Service', labelIt: 'Prodotto/Servizio Principale', type: 'textarea', required: true },
+    { name: 'us_business_activities', label: 'US Business Activities', labelIt: 'Attività Commerciali USA', type: 'textarea', required: true },
+    { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
+  ],
+  financials: [
+    { name: 'formation_costs', label: 'Formation Costs ($)', labelIt: 'Costi di Costituzione ($)', type: 'number', required: true, hint: 'Total LLC formation expenses', hintIt: 'Spese totali di costituzione LLC' },
+    { name: 'bank_contributions', label: 'Bank Contributions ($)', labelIt: 'Conferimenti Bancari ($)', type: 'number', required: true, hint: 'Capital contributed to bank account', hintIt: 'Capitale conferito su conto bancario' },
+    { name: 'distributions_withdrawals', label: 'Distributions/Withdrawals ($)', labelIt: 'Distribuzioni/Prelievi ($)', type: 'number', required: true },
+    { name: 'personal_expenses', label: 'Personal Expenses ($)', labelIt: 'Spese Personali ($)', type: 'number', required: true },
+    { name: 'smllc_additional_comments', label: 'Additional Comments', labelIt: 'Commenti Aggiuntivi', type: 'textarea', required: false },
+  ],
+  documents: [
+    { name: 'bank_statements', label: 'Bank Statements (CSV preferred)', labelIt: 'Estratti Conto (CSV preferito)', type: 'file', required: false, hint: 'Upload all bank statements for the tax year', hintIt: 'Carica tutti gli estratti conto dell\'anno fiscale' },
+    { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false },
+    { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false },
+    { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
+  ],
+}
+
+// ─── ITIN ──────────────────────────────────────────────────
+
+export const ITIN_STEPS: WizardStep[] = [
+  { id: 'personal', title: 'Personal Information', titleIt: 'Informazioni Personali', description: 'W-7 application details', descriptionIt: 'Dati per la richiesta W-7' },
+  { id: 'address', title: 'Address & Passport', titleIt: 'Indirizzo e Passaporto', description: 'Foreign address and entry information', descriptionIt: 'Indirizzo estero e informazioni di ingresso' },
+  { id: 'review', title: 'Review & Submit', titleIt: 'Revisione e Invio', description: 'Review your information and submit', descriptionIt: 'Rivedi le informazioni e invia' },
+]
+
+export const ITIN_FIELDS: Record<string, FieldConfig[]> = {
+  personal: [
+    { name: 'first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+    { name: 'last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+    { name: 'email', label: 'Email', type: 'email', required: true },
+    { name: 'phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
+    { name: 'dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true },
+    { name: 'country_of_birth', label: 'Country of Birth', labelIt: 'Paese di Nascita', type: 'country', required: true },
+    { name: 'city_of_birth', label: 'City of Birth', labelIt: 'Città di Nascita', type: 'text', required: true },
+    { name: 'gender', label: 'Gender', labelIt: 'Sesso', type: 'select', required: true, options: [
+      { value: 'Male', label: 'Male', labelIt: 'Maschio' },
+      { value: 'Female', label: 'Female', labelIt: 'Femmina' },
+    ]},
+    { name: 'citizenship', label: 'Citizenship', labelIt: 'Cittadinanza', type: 'country', required: true },
+  ],
+  address: [
+    { name: 'foreign_street', label: 'Foreign Street Address', labelIt: 'Indirizzo Estero', type: 'text', required: true },
+    { name: 'foreign_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
+    { name: 'foreign_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: false },
+    { name: 'foreign_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
+    { name: 'foreign_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+    { name: 'foreign_tax_id', label: 'Foreign Tax ID (optional)', labelIt: 'Codice Fiscale Estero (opzionale)', type: 'text', required: false },
+    { name: 'passport_number', label: 'Passport Number', labelIt: 'Numero Passaporto', type: 'text', required: true },
+    { name: 'passport_country', label: 'Passport Country', labelIt: 'Paese del Passaporto', type: 'country', required: true },
+    { name: 'passport_expiry', label: 'Passport Expiry Date', labelIt: 'Scadenza Passaporto', type: 'date', required: true },
+    { name: 'has_previous_itin', label: 'Do you have a previous ITIN?', labelIt: 'Hai un ITIN precedente?', type: 'select', required: true, options: [
+      { value: 'No', label: 'No' },
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    ]},
+    { name: 'previous_itin', label: 'Previous ITIN Number', labelIt: 'Numero ITIN Precedente', type: 'text', required: false, hint: 'Only if you answered Yes above', hintIt: 'Solo se hai risposto Sì sopra' },
+  ],
+  review: [
+    { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate and I understand the passport must be mailed physically', labelIt: 'Confermo che le informazioni sono corrette e comprendo che il passaporto deve essere spedito fisicamente', type: 'checkbox', required: true },
+  ],
+}
+
 /**
  * Get the correct steps and fields based on wizard type and entity type.
  */
@@ -136,6 +227,17 @@ export function getWizardConfig(wizardType: string, entityType?: string) {
       return {
         steps: isMMLLC ? ONBOARDING_STEPS_MMLLC : ONBOARDING_STEPS,
         fields: ONBOARDING_FIELDS,
+      }
+    case 'tax':
+    case 'tax_return':
+      return {
+        steps: TAX_STEPS,
+        fields: TAX_FIELDS,
+      }
+    case 'itin':
+      return {
+        steps: ITIN_STEPS,
+        fields: ITIN_FIELDS,
       }
     default:
       return {

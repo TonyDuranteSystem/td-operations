@@ -9,13 +9,14 @@ import type { PortalAccount } from '@/lib/types'
 interface CompanySwitcherProps {
   accounts: PortalAccount[]
   selectedAccountId: string
+  userName?: string
 }
 
 /**
  * Company switcher for multi-LLC clients.
  * Persists selection in sessionStorage (cleared on tab close — better for shared devices).
  */
-export function CompanySwitcher({ accounts, selectedAccountId }: CompanySwitcherProps) {
+export function CompanySwitcher({ accounts, selectedAccountId, userName }: CompanySwitcherProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const router = useRouter()
@@ -39,7 +40,7 @@ export function CompanySwitcher({ accounts, selectedAccountId }: CompanySwitcher
       <div className="flex items-center gap-2 px-3 py-2">
         <Building2 className="h-4 w-4 text-blue-600 shrink-0" />
         <span className="text-sm font-medium text-zinc-900 truncate">
-          {selected?.company_name ?? 'No Company'}
+          {selected?.company_name ?? userName ?? 'My Account'}
         </span>
       </div>
     )
