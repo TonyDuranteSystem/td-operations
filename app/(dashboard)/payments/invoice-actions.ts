@@ -108,7 +108,7 @@ export async function updateInvoice(
       throw new Error('Can only edit Draft invoices')
     }
 
-    // Update payment record
+    // Update payment record (Draft status already verified above — no optimistic lock needed)
     const updates = {
       description: input.description,
       amount: total,
@@ -120,10 +120,16 @@ export async function updateInvoice(
       total,
       message: input.message || null,
       billing_entity_id: input.billing_entity_id || null,
+      updated_at: new Date().toISOString(),
     }
 
-    const result = await updateWithLock('payments', paymentId, updates, updatedAt)
-    if (!result.success) throw new Error(result.error)
+    const { error: updateErr } = await supabase
+      .from('payments')
+      .update(updates)
+      .eq('id', paymentId)
+      .eq('invoice_status', 'Draft')
+
+    if (updateErr) throw new Error(updateErr.message)
 
     // Replace items: delete old, insert new
     await supabase.from('payment_items').delete().eq('payment_id', paymentId)
