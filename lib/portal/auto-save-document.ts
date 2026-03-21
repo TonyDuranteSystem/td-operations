@@ -15,12 +15,10 @@ interface AutoSaveDocumentParams {
   documentType: string  // e.g. 'Signed Contract', 'Operating Agreement', 'Lease Agreement'
   category: number      // 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence
   driveFileId?: string
-  storagePath?: string  // Supabase Storage path
-  storageBucket?: string
 }
 
 export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<{ id?: string; error?: string }> {
-  const { accountId, fileName, documentType, category, driveFileId, storagePath, storageBucket } = params
+  const { accountId, fileName, documentType, category, driveFileId } = params
 
   try {
     // Check if already exists (idempotent)
@@ -37,20 +35,20 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       }
     }
 
+    const record: Record<string, unknown> = {
+      account_id: accountId,
+      file_name: fileName,
+      document_type_name: documentType,
+      category,
+      drive_file_id: driveFileId || null,
+      status: 'classified',
+      confidence: 1.0,
+      processed_at: new Date().toISOString(),
+    }
+
     const { data, error } = await supabaseAdmin
       .from('documents')
-      .insert({
-        account_id: accountId,
-        file_name: fileName,
-        document_type_name: documentType,
-        category,
-        drive_file_id: driveFileId || null,
-        storage_path: storagePath || null,
-        storage_bucket: storageBucket || null,
-        status: 'classified',
-        confidence: 1.0,
-        processed_at: new Date().toISOString(),
-      })
+      .insert(record)
       .select('id')
       .single()
 

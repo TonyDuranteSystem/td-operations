@@ -86,25 +86,54 @@ export default async function WizardPage() {
     if (types.includes('Company Formation')) wizardType = 'formation'
   }
 
-  // Also check via lead/offer
-  if (!accountId && contactId) {
-    const { data: lead } = await supabaseAdmin
-      .from('leads')
-      .select('id')
-      .eq('email', contact.email || user.email)
-      .limit(1)
-      .maybeSingle()
+  // Also check via lead/offer (for leads without account)
+  if (wizardType === 'onboarding') {
+    // Collect all emails to search
+    const searchEmails = new Set<string>()
+    if (user.email) searchEmails.add(user.email)
+    if (contact.email) searchEmails.add(contact.email)
+    const emailArr = Array.from(searchEmails)
 
-    if (lead) {
-      const { data: offer } = await supabaseAdmin
-        .from('offers')
-        .select('contract_type, bundled_pipelines')
-        .eq('lead_id', lead.id)
-        .order('created_at', { ascending: false })
+    if (emailArr.length > 0) {
+      // Try to find lead by email
+      const { data: leads } = await supabaseAdmin
+        .from('leads')
+        .select('id')
+        .in('email', emailArr)
         .limit(1)
-        .maybeSingle()
 
-      if (offer?.contract_type === 'formation') wizardType = 'formation'
+      const leadId = leads?.[0]?.id
+      if (leadId) {
+        const { data: offer } = await supabaseAdmin
+          .from('offers')
+          .select('contract_type, bundled_pipelines')
+          .eq('lead_id', leadId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (offer?.contract_type) {
+          if (offer.contract_type === 'formation') wizardType = 'formation'
+          else if (offer.contract_type === 'tax_return') wizardType = 'tax'
+          else if (offer.contract_type === 'itin') wizardType = 'itin'
+        }
+      }
+
+      // Also try directly via offer client_email
+      if (wizardType === 'onboarding') {
+        const { data: directOffer } = await supabaseAdmin
+          .from('offers')
+          .select('contract_type')
+          .in('client_email', emailArr)
+          .not('status', 'eq', 'expired')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (directOffer?.contract_type === 'formation') wizardType = 'formation'
+        else if (directOffer?.contract_type === 'tax_return') wizardType = 'tax'
+        else if (directOffer?.contract_type === 'itin') wizardType = 'itin'
+      }
     }
   }
 

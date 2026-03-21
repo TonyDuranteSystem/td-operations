@@ -98,8 +98,8 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
         </div>
       </div>
 
-      {/* Payment section — shows when contract is signed but not paid */}
-      {isSigned && !isPaid && (
+      {/* Payment section — shows when contract is signed but not paid, and payment methods exist */}
+      {isSigned && !isPaid && (offerData?.payment_links?.length || offerData?.bank_details) && (
         <div className="bg-white rounded-xl border border-orange-200 p-6">
           <h2 className="text-sm font-semibold text-orange-600 uppercase tracking-wider mb-4">{t.paymentRequired}</h2>
           <p className="text-sm text-zinc-600 mb-4">{t.paymentDesc}</p>

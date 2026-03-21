@@ -842,7 +842,7 @@ export function registerOfferTools(server: McpServer) {
               `👁️ Open tracking: ${trackingId}`,
               ``,
               hasPortalCredentials
-                ? `🔑 Portal credentials sent (temp password: ${tempPassword})`
+                ? `🔑 Portal credentials sent to ${offer.client_email} (check email for password)`
                 : portalResult.alreadyExists
                   ? `👤 Portal user already exists — sent direct offer link`
                   : `⚠️ Portal creation failed: ${portalResult.error} — sent direct offer link`,

@@ -205,7 +205,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           {/* Top items (filtered by tier) */}
           {topItems.filter(item => {
             if (!item.tierOnly) return true
-            return item.tierOnly.includes(portalTier || 'active')
+            return item.tierOnly.includes(portalTier || 'lead')
           }).map(renderNavItem)}
 
           {/* Collapsible groups */}
