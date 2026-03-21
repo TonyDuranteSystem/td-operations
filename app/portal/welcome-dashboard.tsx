@@ -29,6 +29,9 @@ interface WelcomeDashboardProps {
     contract_type: string | null
     signed_at: string | null
     language: string | null
+    payment_links: { url: string; label: string; amount: number }[] | null
+    bank_details: { beneficiary?: string; account_number?: string; routing_number?: string; iban?: string; bic?: string; bank_name?: string } | null
+    payment_type: string | null
   } | null
   locale: 'en' | 'it'
 }
@@ -95,6 +98,67 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
           />
         </div>
       </div>
+
+      {/* Payment section — shows when contract is signed but not paid */}
+      {isSigned && !isPaid && (
+        <div className="bg-white rounded-xl border border-orange-200 p-6">
+          <h2 className="text-sm font-semibold text-orange-600 uppercase tracking-wider mb-4">{t.paymentRequired}</h2>
+          <p className="text-sm text-zinc-600 mb-4">{t.paymentDesc}</p>
+
+          <div className="space-y-3">
+            {/* Card payment */}
+            {offerData?.payment_links?.map((link, i) => (
+              <a
+                key={i}
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between p-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <CreditCard className="h-5 w-5" />
+                  <div>
+                    <p className="font-semibold">{t.payByCard}</p>
+                    <p className="text-xs text-blue-200">{t.payByCardDesc}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-bold">${link.amount.toLocaleString()}</p>
+                  <p className="text-xs text-blue-200">+5% {t.cardFee}</p>
+                </div>
+              </a>
+            ))}
+
+            {/* Bank transfer */}
+            {offerData?.bank_details && (
+              <div className="p-4 bg-zinc-50 rounded-xl border">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg">🏦</span>
+                  <p className="font-semibold text-sm">{t.bankTransfer}</p>
+                  <span className="text-xs text-zinc-400 ml-auto">{t.noFee}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {offerData.bank_details.beneficiary && (
+                    <><span className="text-zinc-500">{t.beneficiary}</span><span className="font-medium">{offerData.bank_details.beneficiary}</span></>
+                  )}
+                  {offerData.bank_details.account_number && (
+                    <><span className="text-zinc-500">{t.accountNumber}</span><span className="font-medium font-mono">{offerData.bank_details.account_number}</span></>
+                  )}
+                  {offerData.bank_details.routing_number && (
+                    <><span className="text-zinc-500">{t.routingNumber}</span><span className="font-medium font-mono">{offerData.bank_details.routing_number}</span></>
+                  )}
+                  {offerData.bank_details.iban && (
+                    <><span className="text-zinc-500">IBAN</span><span className="font-medium font-mono">{offerData.bank_details.iban}</span></>
+                  )}
+                  {offerData.bank_details.bank_name && (
+                    <><span className="text-zinc-500">{t.bankName}</span><span className="font-medium">{offerData.bank_details.bank_name}</span></>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Services purchased (from offer) */}
       {(services.length > 0 || pipelines.length > 0) && (
@@ -235,6 +299,17 @@ const EN = {
   completeSetupDesc: 'Fill in your details to start the process',
   chatWithUs: 'Chat With Us',
   chatWithUsDesc: 'Ask questions or get help anytime',
+  paymentRequired: 'Payment Required',
+  paymentDesc: 'Your contract is signed. Complete your payment to start the process.',
+  payByCard: 'Pay by Card',
+  payByCardDesc: 'Secure payment via credit card',
+  cardFee: 'card fee',
+  bankTransfer: 'Pay by Bank Transfer',
+  noFee: 'No fee',
+  beneficiary: 'Beneficiary',
+  accountNumber: 'Account #',
+  routingNumber: 'Routing #',
+  bankName: 'Bank',
 }
 
 const IT = {
@@ -257,4 +332,15 @@ const IT = {
   completeSetupDesc: 'Inserisci i tuoi dati per avviare il processo',
   chatWithUs: 'Chatta Con Noi',
   chatWithUsDesc: 'Fai domande o chiedi aiuto in qualsiasi momento',
+  paymentRequired: 'Pagamento Richiesto',
+  paymentDesc: 'Il contratto è firmato. Completa il pagamento per avviare il processo.',
+  payByCard: 'Paga con Carta',
+  payByCardDesc: 'Pagamento sicuro con carta di credito',
+  cardFee: 'commissione carta',
+  bankTransfer: 'Paga con Bonifico',
+  noFee: 'Senza commissioni',
+  beneficiary: 'Beneficiario',
+  accountNumber: 'N° Conto',
+  routingNumber: 'Routing #',
+  bankName: 'Banca',
 }
