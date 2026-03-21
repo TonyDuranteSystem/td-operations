@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:portal": "npx tsx tests/portal/verify-portal.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",
