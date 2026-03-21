@@ -27,7 +27,6 @@ interface WelcomeDashboardProps {
     recurring_costs: { label: string; price: string }[] | null
     bundled_pipelines: string[] | null
     contract_type: string | null
-    signed_at: string | null
     language: string | null
     payment_links: { url: string; label: string; amount: number }[] | null
     bank_details: { beneficiary?: string; account_number?: string; routing_number?: string; iban?: string; bic?: string; bank_name?: string } | null
@@ -39,7 +38,7 @@ interface WelcomeDashboardProps {
 export function WelcomeDashboard({ tier, firstName, offerData, locale }: WelcomeDashboardProps) {
   const isLead = tier === 'lead'
   const isOnboarding = tier === 'onboarding'
-  const isSigned = offerData?.signed_at || offerData?.status === 'signed' || offerData?.status === 'completed'
+  const isSigned = offerData?.status === 'signed' || offerData?.status === 'completed'
   const isPaid = offerData?.status === 'completed'
 
   // Parse services from offer
