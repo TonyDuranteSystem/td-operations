@@ -244,6 +244,35 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
       .eq("id", leadId)
   }
 
+  // 4b. Upgrade portal tier: lead → onboarding (paid, needs to fill data)
+  if (accountId) {
+    await getSupabase()
+      .from("accounts")
+      .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
+      .eq("id", accountId)
+      .in("portal_tier", ["lead"]) // only upgrade leads, don't downgrade active/full
+  }
+  // Also check via lead — if lead has no account yet but has a portal user
+  if (!accountId && email) {
+    // Find any account linked to this email's contact
+    const { data: contactAccounts } = await getSupabase()
+      .from("contacts")
+      .select("account_contacts(account_id)")
+      .ilike("email", email)
+      .limit(1)
+
+    if (contactAccounts?.length) {
+      const ac = contactAccounts[0].account_contacts as Array<{ account_id: string }> | null
+      if (ac?.length) {
+        await getSupabase()
+          .from("accounts")
+          .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
+          .eq("id", ac[0].account_id)
+          .in("portal_tier", ["lead"])
+      }
+    }
+  }
+
   // 5. Check if there's a pending_activation waiting for this payment
   if (email) {
     const { data: pendingList } = await getSupabase()

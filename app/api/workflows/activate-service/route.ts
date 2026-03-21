@@ -270,6 +270,30 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "service_deliveries", status: "skipped", detail: "No bundled_pipelines on offer" })
     }
 
+    // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
+    // Upgrade portal tier from lead → onboarding after payment
+    {
+      let portalAccountId = offer?.account_id || null
+      if (!portalAccountId && contactId) {
+        const { data: ac } = await supabase
+          .from("account_contacts")
+          .select("account_id")
+          .eq("contact_id", contactId)
+          .limit(1)
+        if (ac?.length) portalAccountId = ac[0].account_id
+      }
+      if (portalAccountId) {
+        await supabase
+          .from("accounts")
+          .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
+          .eq("id", portalAccountId)
+          .in("portal_tier", ["lead"])
+        steps.push({ step: "portal_tier_upgrade", status: "done", detail: `lead → onboarding` })
+      } else {
+        steps.push({ step: "portal_tier_upgrade", status: "skipped", detail: "No account linked" })
+      }
+    }
+
     // ─── STEP 3: QB Invoice (SUPERVISED) ────────────────────
     preparedSteps.push({
       step: "qb_invoice",
