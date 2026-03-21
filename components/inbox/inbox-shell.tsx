@@ -1,14 +1,16 @@
 'use client'
 
-import { useState } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, Link2, X, CheckSquare } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 import { InboxHeader } from './inbox-header'
 import { ConversationList } from './conversation-list'
 import { MessageThread } from './message-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
+import { CreateFromEmailDialog } from './create-from-email-dialog'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
@@ -28,8 +30,29 @@ export function InboxShell() {
   const [selected, setSelected] = useState<InboxConversation | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [forwardData, setForwardData] = useState<{ subject: string } | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
   const queryClient = useQueryClient()
 
+  const bulkMode = selectedIds.size > 0
+
+  const handleToggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }, [])
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set())
+  }, [])
+
+  // Single email action
   const emailActionMutation = useMutation({
     mutationFn: async ({ action, forwardTo }: { action: string; forwardTo?: string }) => {
       if (!selected) return
@@ -43,10 +66,8 @@ export function InboxShell() {
       return res.json()
     },
     onSuccess: (_, variables) => {
-      // After archive or trash, immediately remove from list + deselect
       if (variables.action === 'archive' || variables.action === 'trash') {
         if (selected) {
-          // Optimistically remove the conversation from the cache
           queryClient.setQueriesData(
             { queryKey: ['inbox-conversations'] },
             (old: unknown) => {
@@ -63,9 +84,48 @@ export function InboxShell() {
         }
         setSelected(null)
       }
-      // Refetch to get fresh data from server
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+    },
+  })
+
+  // Bulk email action
+  const bulkActionMutation = useMutation({
+    mutationFn: async ({ action }: { action: 'trash' | 'archive' | 'mark_read' }) => {
+      const threadIds = Array.from(selectedIds).map(id => id.replace('gmail:', ''))
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadIds, action, bulk: true }),
+      })
+      if (!res.ok) throw new Error('Bulk action failed')
+      return res.json()
+    },
+    onSuccess: (_, variables) => {
+      const count = selectedIds.size
+      if (variables.action === 'archive' || variables.action === 'trash') {
+        // Remove all selected from list
+        queryClient.setQueriesData(
+          { queryKey: ['inbox-conversations'] },
+          (old: unknown) => {
+            if (!old || typeof old !== 'object') return old
+            const data = old as { conversations?: InboxConversation[]; total?: number }
+            if (!data.conversations) return old
+            return {
+              ...data,
+              conversations: data.conversations.filter(c => !selectedIds.has(c.id)),
+              total: (data.total ?? data.conversations.length) - count,
+            }
+          }
+        )
+        if (selected && selectedIds.has(selected.id)) {
+          setSelected(null)
+        }
+      }
+      clearSelection()
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      toast.success(`${count} email${count > 1 ? 's' : ''} ${variables.action === 'trash' ? 'deleted' : variables.action === 'archive' ? 'archived' : 'marked as read'}`)
     },
   })
 
@@ -107,6 +167,49 @@ export function InboxShell() {
         </div>
       </div>
 
+      {/* Bulk Action Bar */}
+      {bulkMode && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
+          <CheckSquare className="h-4 w-4 text-blue-500" />
+          <span className="text-sm font-medium text-blue-700">
+            {selectedIds.size} selected
+          </span>
+          <div className="flex items-center gap-1 ml-auto">
+            <button
+              onClick={() => bulkActionMutation.mutate({ action: 'trash' })}
+              disabled={bulkActionMutation.isPending}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+            <button
+              onClick={() => bulkActionMutation.mutate({ action: 'archive' })}
+              disabled={bulkActionMutation.isPending}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Archive
+            </button>
+            <button
+              onClick={() => bulkActionMutation.mutate({ action: 'mark_read' })}
+              disabled={bulkActionMutation.isPending}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200 transition-colors"
+            >
+              <MailOpen className="h-3.5 w-3.5" />
+              Mark Read
+            </button>
+            <button
+              onClick={clearSelection}
+              className="p-1 rounded hover:bg-zinc-200 text-zinc-500 ml-1"
+              title="Clear selection"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-1 min-h-0">
         {/* ─── Left Panel: Conversation List ─────────── */}
         <div
@@ -119,6 +222,9 @@ export function InboxShell() {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
+            bulkMode={bulkMode}
+            selectedIds={selectedIds}
+            onToggleSelect={handleToggleSelect}
           />
         </div>
 
@@ -157,53 +263,82 @@ export function InboxShell() {
                   </p>
                 </div>
 
-                {/* Gmail action buttons */}
-                {isGmail && (
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() => emailActionMutation.mutate({ action: 'archive' })}
-                      disabled={emailActionMutation.isPending}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                      title="Archive"
-                    >
-                      <Archive className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => emailActionMutation.mutate({ action: 'star' })}
-                      disabled={emailActionMutation.isPending}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
-                      title="Star"
-                    >
-                      <Star className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        emailActionMutation.mutate({ action: 'mark_unread' })
-                      }}
-                      disabled={emailActionMutation.isPending}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
-                      title="Mark Unread"
-                    >
-                      <MailOpen className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={handleForward}
-                      disabled={emailActionMutation.isPending}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
-                      title="Forward"
-                    >
-                      <Forward className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => emailActionMutation.mutate({ action: 'trash' })}
-                      disabled={emailActionMutation.isPending}
-                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-red-500 transition-colors"
-                      title="Trash"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
+                {/* Action buttons */}
+                <div className="flex items-center gap-1 shrink-0">
+                  {/* Create from email actions */}
+                  <button
+                    onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
+                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
+                    title="Create Task"
+                  >
+                    <ClipboardList className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
+                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
+                    title="Create Service"
+                  >
+                    <Cog className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
+                    className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                    title="Create Invoice"
+                  >
+                    <Receipt className="h-4 w-4" />
+                  </button>
+
+                  {/* Separator */}
+                  <div className="w-px h-4 bg-zinc-200 mx-0.5" />
+
+                  {/* Gmail-specific actions */}
+                  {isGmail && (
+                    <>
+                      <button
+                        onClick={() => emailActionMutation.mutate({ action: 'archive' })}
+                        disabled={emailActionMutation.isPending}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                        title="Archive"
+                      >
+                        <Archive className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => emailActionMutation.mutate({ action: 'star' })}
+                        disabled={emailActionMutation.isPending}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-amber-500 transition-colors"
+                        title="Star"
+                      >
+                        <Star className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          emailActionMutation.mutate({ action: 'mark_unread' })
+                        }}
+                        disabled={emailActionMutation.isPending}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                        title="Mark Unread"
+                      >
+                        <MailOpen className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={handleForward}
+                        disabled={emailActionMutation.isPending}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-700 transition-colors"
+                        title="Forward"
+                      >
+                        <Forward className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => emailActionMutation.mutate({ action: 'trash' })}
+                        disabled={emailActionMutation.isPending}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-red-500 transition-colors"
+                        title="Trash"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
 
               {/* Messages */}
@@ -234,6 +369,15 @@ export function InboxShell() {
         }}
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
       />
+
+      {/* Create Task/Service/Invoice from email dialog */}
+      {createDialog && (
+        <CreateFromEmailDialog
+          type={createDialog.type}
+          conversation={createDialog.conversation}
+          onClose={() => setCreateDialog(null)}
+        />
+      )}
     </div>
   )
 }

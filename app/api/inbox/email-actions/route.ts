@@ -8,10 +8,35 @@ type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward" | "mark_u
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { threadId, action, forwardTo } = body as {
-      threadId: string
-      action: EmailAction
-      forwardTo?: string // required for forward
+    const { threadId, threadIds, action, forwardTo, bulk } = body as {
+      threadId?: string
+      threadIds?: string[]
+      action: EmailAction | 'mark_read'
+      forwardTo?: string
+      bulk?: boolean
+    }
+
+    // Bulk operations
+    if (bulk && threadIds?.length) {
+      const results = await Promise.allSettled(
+        threadIds.map(async (tid) => {
+          if (action === 'trash') {
+            await gmailPost(`/threads/${tid}/trash`, {})
+          } else if (action === 'archive') {
+            await gmailPost(`/threads/${tid}/modify`, { removeLabelIds: ['INBOX'] })
+          } else if (action === 'mark_read') {
+            const thread = (await gmailGet(`/threads/${tid}`, { format: 'minimal' })) as { messages: Array<{ id: string }> }
+            await Promise.all(
+              thread.messages.map((m) =>
+                gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] })
+              )
+            )
+          }
+        })
+      )
+      const succeeded = results.filter(r => r.status === 'fulfilled').length
+      const failed = results.filter(r => r.status === 'rejected').length
+      return NextResponse.json({ success: true, action, succeeded, failed, total: threadIds.length })
     }
 
     if (!threadId || !action) {
