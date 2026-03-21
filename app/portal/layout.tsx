@@ -63,7 +63,8 @@ export default async function PortalLayout({
 
   // Show onboarding wizard on first login
   const mustChangePassword = !!user.user_metadata?.must_change_password
-  const showOnboarding = isClient(user) && !mustChangePassword && !user.user_metadata?.onboarding_completed
+  // Only show product tour for active/full tier clients, not leads/onboarding
+  const showOnboarding = false // Disabled until tier-specific tour is built
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
   const [activeServices, navVisibility, portalTier] = selectedAccountId
