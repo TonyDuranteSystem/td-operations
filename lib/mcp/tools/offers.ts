@@ -15,6 +15,7 @@ import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { APP_BASE_URL } from "@/lib/config"
+import { autoCreatePortalUser } from "@/lib/portal/auto-create"
 
 // ─── JSONB Validation Helpers ───────────────────────────────
 
@@ -639,6 +640,18 @@ export function registerOfferTools(server: McpServer) {
                     .from("leads")
                     .update({ offer_status: "Sent" })
                     .eq("id", offer.lead_id)
+                }
+              },
+            },
+            {
+              name: "auto_create_portal",
+              fn: async () => {
+                // Auto-create portal user with 'lead' tier when offer is sent
+                if (offer.lead_id) {
+                  await autoCreatePortalUser({
+                    leadId: offer.lead_id,
+                    tier: "lead",
+                  })
                 }
               },
             },
