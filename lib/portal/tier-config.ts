@@ -68,7 +68,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
  * Returns true if the feature is allowed at this tier.
  */
 export function isTierFeatureVisible(tier: PortalTier | string | null, featureKey: string): boolean {
-  const t = (tier || 'active') as PortalTier
+  const t = (tier || 'lead') as PortalTier // Default to most restricted tier, not 'active'
   const allowed = TIER_FEATURES[t]
   if (!allowed) return true // Unknown tier = show everything (safe fallback)
   return allowed.includes(featureKey)

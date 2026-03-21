@@ -22,6 +22,21 @@ const OWNER_FIELDS: FieldConfig[] = [
   { name: 'owner_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
 ]
 
+// ─── MEMBER FIELDS (shared for MMLLC formation/onboarding) ──
+
+export const MEMBER_FIELDS: FieldConfig[] = [
+  { name: 'member_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+  { name: 'member_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+  { name: 'member_email', label: 'Email', type: 'email', required: true },
+  { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true },
+  { name: 'member_dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true },
+  { name: 'member_nationality', label: 'Nationality', labelIt: 'Nazionalità', type: 'country', required: true },
+  { name: 'member_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
+  { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
+  { name: 'member_zip', label: 'ZIP Code', labelIt: 'CAP', type: 'text', required: true },
+  { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+]
+
 // ─── FORMATION ─────────────────────────────────────────────
 
 export const FORMATION_STEPS: WizardStep[] = [
@@ -45,6 +60,7 @@ export const FORMATION_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'llc_name_3', label: '3rd Choice (backup)', labelIt: 'Nome Società (3ª scelta)', type: 'text', required: true },
     { name: 'business_purpose', label: 'Business Purpose', labelIt: 'Scopo Aziendale', type: 'textarea', required: true, hint: 'Describe the main activities of the LLC', hintIt: 'Descrivi le attività principali della LLC' },
   ],
+  members: MEMBER_FIELDS,
   documents: [
     { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, hint: 'Clear photo of passport data page', hintIt: 'Foto chiara della pagina dati del passaporto' },
     { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
@@ -96,6 +112,7 @@ export const ONBOARDING_FIELDS: Record<string, FieldConfig[]> = {
       { value: 'Not sure', label: 'Not sure', labelIt: 'Non sono sicuro' },
     ]},
   ],
+  members: MEMBER_FIELDS,
   documents: [
     { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true },
     { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
@@ -104,21 +121,6 @@ export const ONBOARDING_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
   ],
 }
-
-// ─── MEMBER FIELDS (shared for MMLLC formation/onboarding) ──
-
-export const MEMBER_FIELDS: FieldConfig[] = [
-  { name: 'member_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
-  { name: 'member_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
-  { name: 'member_email', label: 'Email', type: 'email', required: true },
-  { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true },
-  { name: 'member_dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true },
-  { name: 'member_nationality', label: 'Nationality', labelIt: 'Nazionalità', type: 'country', required: true },
-  { name: 'member_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
-  { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
-  { name: 'member_zip', label: 'ZIP Code', labelIt: 'CAP', type: 'text', required: true },
-  { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
-]
 
 // ─── TAX RETURN ────────────────────────────────────────────
 

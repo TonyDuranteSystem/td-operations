@@ -29,6 +29,18 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // 0. Deduplication — check if already submitted
+    if (progress_id) {
+      const { data: existing } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('status')
+        .eq('id', progress_id)
+        .single()
+      if (existing?.status === 'submitted') {
+        return NextResponse.json({ success: true, message: 'Already submitted' })
+      }
+    }
+
     // 1. Mark wizard_progress as submitted
     if (progress_id) {
       await supabaseAdmin

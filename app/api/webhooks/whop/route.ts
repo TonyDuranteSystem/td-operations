@@ -246,11 +246,12 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
   // 4b. Upgrade portal tier: lead → onboarding (paid, needs to fill data)
   if (accountId) {
+    // Upgrade only leads or uninitialized — don't downgrade active/full
     await getSupabase()
       .from("accounts")
       .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
       .eq("id", accountId)
-      .in("portal_tier", ["lead"]) // only upgrade leads, don't downgrade active/full
+      .not("portal_tier", "in", '("onboarding","active","full")')
   }
   // Also check via lead — if lead has no account yet but has a portal user
   if (!accountId && email) {
