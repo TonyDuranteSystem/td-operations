@@ -57,12 +57,12 @@ export function EditTaskDialog({ task, open, onClose }: EditTaskDialogProps) {
   }
 
   return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/50" onClick={onClose} />
+    <div className="fixed inset-0 z-50">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
 
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
         <div
-          className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+          className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto pointer-events-auto"
           onClick={e => e.stopPropagation()}
         >
           {/* Header */}
@@ -202,6 +202,6 @@ export function EditTaskDialog({ task, open, onClose }: EditTaskDialogProps) {
           </form>
         </div>
       </div>
-    </>
+    </div>
   )
 }
