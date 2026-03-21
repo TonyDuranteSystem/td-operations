@@ -114,9 +114,28 @@ export default function PortalLoginPage() {
           </div>
         </div>
 
-        <p className="text-center text-xs text-zinc-400 mt-6">
-          &copy; {new Date().getFullYear()} Tony Durante LLC
-        </p>
+        <div className="text-center text-xs text-zinc-400 mt-6 space-y-1">
+          <p>&copy; {new Date().getFullYear()} Tony Durante LLC</p>
+          <div className="flex items-center justify-center gap-3">
+            <a
+              href="https://www.iubenda.com/privacy-policy/51522422"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-zinc-600 underline"
+            >
+              Privacy Policy
+            </a>
+            <span>·</span>
+            <a
+              href="https://www.iubenda.com/privacy-policy/51522422/cookie-policy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-zinc-600 underline"
+            >
+              Cookie Policy
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   )

@@ -12,6 +12,7 @@ import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { cookies } from 'next/headers'
+import Script from 'next/script'
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -104,6 +105,11 @@ export default async function PortalLayout({
         </main>
         </div>
       </LocaleProvider>
+      {/* Iubenda Cookie Consent Banner */}
+      <Script
+        src="https://embeds.iubenda.com/widgets/e5dba7a9-75ac-453c-8542-ffbc914deb88.js"
+        strategy="lazyOnload"
+      />
     </Providers>
   )
 }
