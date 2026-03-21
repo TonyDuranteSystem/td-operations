@@ -3,7 +3,7 @@ import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } fro
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward" | "mark_unread"
 
 export async function POST(req: NextRequest) {
   try {
@@ -64,6 +64,22 @@ export async function POST(req: NextRequest) {
       case "trash": {
         await gmailPost(`/threads/${threadId}/trash`, {})
         return NextResponse.json({ success: true, action: "trashed" })
+      }
+
+      case "mark_unread": {
+        // Add UNREAD label to all messages in thread
+        const thread = (await gmailGet(`/threads/${threadId}`, {
+          format: "minimal",
+        })) as { messages: Array<{ id: string }> }
+
+        await Promise.all(
+          thread.messages.map((m) =>
+            gmailPost(`/messages/${m.id}/modify`, {
+              addLabelIds: ["UNREAD"],
+            })
+          )
+        )
+        return NextResponse.json({ success: true, action: "marked_unread" })
       }
 
       case "forward": {

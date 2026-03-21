@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2 } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { InboxHeader } from './inbox-header'
@@ -175,6 +175,16 @@ export function InboxShell() {
                       title="Star"
                     >
                       <Star className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        emailActionMutation.mutate({ action: 'mark_unread' })
+                      }}
+                      disabled={emailActionMutation.isPending}
+                      className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                      title="Mark Unread"
+                    >
+                      <MailOpen className="h-4 w-4" />
                     </button>
                     <button
                       onClick={handleForward}
