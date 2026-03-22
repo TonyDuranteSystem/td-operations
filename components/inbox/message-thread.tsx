@@ -57,14 +57,30 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
         }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      // Delay the refetch to give Gmail time to process
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }, 2000)
     },
   })
 
   useEffect(() => {
-    // Always attempt to mark as read when opening a conversation
-    // The API is idempotent — if already read, it's a no-op
+    // Optimistically clear unread badge immediately in the cache
+    queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
+      { queryKey: ['inbox-conversations'] },
+      (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          conversations: old.conversations.map((c) =>
+            c.id === conversation.id ? { ...c, unread: 0 } : c
+          ),
+        }
+      }
+    )
+
+    // Then fire the actual API call to Gmail
     markReadMutation.mutate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id])
