@@ -303,3 +303,149 @@ export async function generatePnlExcel(
 
   return { buffer, fileName, summary, netIncome, totalRevenue: totalIncome, totalExpenses, uncategorizedCount: uncategorized.length }
 }
+
+/**
+ * Generate CSV versions of P&L + Balance Sheet for India team.
+ * Returns two CSV strings: pnl and balance_sheet.
+ * All amounts in USD (converted from original currency using IRS rate).
+ */
+export async function generatePnlCsv(
+  accountId: string,
+  taxYear: number,
+): Promise<{ pnlCsv: string; balanceSheetCsv: string; transactionsCsv: string; companyName: string }> {
+  const ctx = await getAccountContext(accountId)
+
+  const { data: transactions, error } = await supabaseAdmin
+    .from("bank_transactions")
+    .select("*")
+    .eq("account_id", accountId)
+    .eq("tax_year", taxYear)
+    .order("transaction_date", { ascending: true })
+
+  if (error) throw new Error(error.message)
+  if (!transactions || transactions.length === 0) {
+    throw new Error("No transactions found. Run bank_statement_process first.")
+  }
+
+  // Get IRS rates
+  const currencies = Array.from(new Set(transactions.map(t => t.currency)))
+  const rates: Record<string, number> = {}
+  for (const curr of currencies) {
+    rates[curr] = await getIrsRate(curr, taxYear)
+  }
+  const toUSD = (amount: number, currency: string) => {
+    const rate = rates[currency] || 1
+    return rate === 1 ? amount : amount / rate
+  }
+
+  const primaryCurrency = Object.entries(
+    transactions.reduce((acc, t) => { acc[t.currency] = (acc[t.currency] || 0) + 1; return acc }, {} as Record<string, number>)
+  ).sort((a, b) => (b[1] as number) - (a[1] as number))[0]?.[0] || "USD"
+  const irsRate = rates[primaryCurrency]
+
+  // Categorize
+  const income = transactions.filter(t => t.category === "income")
+  const cogs = transactions.filter(t => t.category === "cogs")
+  const expenses = transactions.filter(t => ["expense", "fee", "refund"].includes(t.category))
+  const distributions = transactions.filter(t => t.category === "distribution")
+
+  const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
+  const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const grossProfit = totalIncome - totalCogs
+  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const netIncome = grossProfit - totalExpenses
+  const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+
+  // Group expenses by subcategory
+  const expBySubcat: Record<string, number> = {}
+  for (const t of expenses) {
+    const key = t.subcategory || t.category || "other"
+    expBySubcat[key] = (expBySubcat[key] || 0) + Math.abs(Number(t.amount))
+  }
+
+  // ── P&L CSV ──
+  const pnlLines = [
+    `"${ctx.companyName} - Profit & Loss Statement ${taxYear}"`,
+    `"Currency","${primaryCurrency}","IRS Rate","${irsRate}"`,
+    `""`,
+    `"Category","${primaryCurrency}","USD"`,
+    `"Revenue","${totalIncome.toFixed(2)}","${toUSD(totalIncome, primaryCurrency).toFixed(2)}"`,
+    `"Cost of Goods Sold","${totalCogs.toFixed(2)}","${toUSD(totalCogs, primaryCurrency).toFixed(2)}"`,
+    `"Gross Profit","${grossProfit.toFixed(2)}","${toUSD(grossProfit, primaryCurrency).toFixed(2)}"`,
+    `""`,
+    `"Operating Expenses","",""`,
+  ]
+
+  // Add expense breakdown
+  for (const [sub, amt] of Object.entries(expBySubcat).sort((a, b) => b[1] - a[1])) {
+    pnlLines.push(`"  ${sub}","${amt.toFixed(2)}","${toUSD(amt, primaryCurrency).toFixed(2)}"`)
+  }
+
+  pnlLines.push(
+    `"Total Operating Expenses","${totalExpenses.toFixed(2)}","${toUSD(totalExpenses, primaryCurrency).toFixed(2)}"`,
+    `""`,
+    `"Net Income","${netIncome.toFixed(2)}","${toUSD(netIncome, primaryCurrency).toFixed(2)}"`,
+    `""`,
+    `"Distributions","${totalDistributions.toFixed(2)}","${toUSD(totalDistributions, primaryCurrency).toFixed(2)}"`,
+  )
+
+  // K-1 allocation
+  if (ctx.members.length > 0) {
+    pnlLines.push(`""`, `"K-1 Allocation","",""`)
+    for (const m of ctx.members) {
+      const share = netIncome * (m.ownership_pct / 100)
+      pnlLines.push(`"  ${m.name} (${m.ownership_pct}%)","${share.toFixed(2)}","${toUSD(share, primaryCurrency).toFixed(2)}"`)
+    }
+  }
+
+  // ── Balance Sheet CSV ──
+  const accountBalances: Record<string, number> = {}
+  for (const tx of transactions) {
+    const key = `${tx.bank_name} ${tx.account_type || "Checking"}`
+    if (tx.balance_after !== null) accountBalances[key] = Number(tx.balance_after)
+  }
+  const totalCash = Object.values(accountBalances).reduce((s, v) => s + v, 0)
+  const totalAssets = totalCash
+  const retainedEarnings = netIncome - totalDistributions
+
+  const bsLines = [
+    `"${ctx.companyName} - Balance Sheet as of Dec 31, ${taxYear}"`,
+    `"Currency","${primaryCurrency}","IRS Rate","${irsRate}"`,
+    `""`,
+    `"","${primaryCurrency}","USD"`,
+    `"ASSETS","",""`,
+    `"Current Assets","",""`,
+  ]
+
+  for (const [acct, bal] of Object.entries(accountBalances)) {
+    bsLines.push(`"  ${acct}","${bal.toFixed(2)}","${toUSD(bal, primaryCurrency).toFixed(2)}"`)
+  }
+
+  bsLines.push(
+    `"Total Cash","${totalCash.toFixed(2)}","${toUSD(totalCash, primaryCurrency).toFixed(2)}"`,
+    `"Total Assets","${totalAssets.toFixed(2)}","${toUSD(totalAssets, primaryCurrency).toFixed(2)}"`,
+    `""`,
+    `"EQUITY","",""`,
+    `"Retained Earnings","${retainedEarnings.toFixed(2)}","${toUSD(retainedEarnings, primaryCurrency).toFixed(2)}"`,
+    `"Net Income","${netIncome.toFixed(2)}","${toUSD(netIncome, primaryCurrency).toFixed(2)}"`,
+    `"Total Equity","${totalAssets.toFixed(2)}","${toUSD(totalAssets, primaryCurrency).toFixed(2)}"`,
+  )
+
+  // ── Transactions CSV (all transactions for India team) ──
+  const txLines = [
+    `"Date","Description","Counterparty","Category","Subcategory","${primaryCurrency}","USD","Related Party","Reference"`,
+  ]
+  for (const t of transactions) {
+    const amt = Number(t.amount)
+    txLines.push(
+      `"${t.transaction_date}","${(t.description || "").replace(/"/g, '""')}","${(t.counterparty || "").replace(/"/g, '""')}","${t.category}","${t.subcategory || ""}","${amt.toFixed(2)}","${toUSD(amt, t.currency).toFixed(2)}","${t.is_related_party ? "Yes" : ""}","${t.transaction_ref || ""}"`
+    )
+  }
+
+  return {
+    pnlCsv: pnlLines.join("\n"),
+    balanceSheetCsv: bsLines.join("\n"),
+    transactionsCsv: txLines.join("\n"),
+    companyName: ctx.companyName,
+  }
+}
