@@ -5,7 +5,7 @@ import { X, Loader2, Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { TASK_STATUS, TASK_PRIORITY, TASK_CATEGORY } from '@/lib/constants'
 import { AccountCombobox } from '@/components/shared/account-combobox'
-import { updateTask } from '@/app/(dashboard)/tasks/actions'
+import { updateTask, getTaskLatestTimestamp } from '@/app/(dashboard)/tasks/actions'
 import type { Task } from '@/lib/types'
 import type { UpdateTaskInput } from '@/lib/schemas/task'
 import { format, parseISO } from 'date-fns'
@@ -34,9 +34,11 @@ export function EditTaskDialog({ task, open, onClose }: EditTaskDialogProps) {
     e.preventDefault()
 
     startTransition(async () => {
+      // Fetch latest timestamp to avoid stale lock error
+      const latestTs = await getTaskLatestTimestamp(task.id)
       const result = await updateTask({
         id: task.id,
-        updated_at: task.updated_at,
+        updated_at: latestTs ?? task.updated_at,
         task_title: title.trim(),
         description: description.trim() || undefined,
         priority: priority as 'Urgent' | 'High' | 'Normal' | 'Low',

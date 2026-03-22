@@ -84,6 +84,16 @@ export async function createTask(input: CreateTaskInput): Promise<ActionResult<{
   })
 }
 
+export async function getTaskLatestTimestamp(taskId: string): Promise<string | null> {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('tasks')
+    .select('updated_at')
+    .eq('id', taskId)
+    .single()
+  return data?.updated_at ?? null
+}
+
 export async function updateTask(input: UpdateTaskInput): Promise<ActionResult> {
   const parsed = updateTaskSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }

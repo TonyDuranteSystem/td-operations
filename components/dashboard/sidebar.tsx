@@ -61,7 +61,6 @@ export function Sidebar({
     { name: 'Accounts', href: '/accounts', icon: Building2 },
     { name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
     { name: 'Trackers', href: '/trackers', icon: Gauge },
-    { name: 'Services', href: '/services', icon: Cog },
     { name: 'Payments', href: '/payments', icon: CreditCard },
     { name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, adminOnly: true },
     { name: 'Reconciliation', href: '/reconciliation', icon: ArrowLeftRight, adminOnly: true },
