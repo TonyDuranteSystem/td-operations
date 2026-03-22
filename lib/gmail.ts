@@ -130,13 +130,14 @@ export async function gmailPost(
 ) {
   const { token, userEmail } = await getGmailToken(asUser)
 
+  const hasBody = Object.keys(body).length > 0
   const res = await fetch(`${GMAIL_API}/users/${userEmail}${endpoint}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
     },
-    body: JSON.stringify(body),
+    ...(hasBody ? { body: JSON.stringify(body) } : {}),
   })
 
   if (!res.ok) {

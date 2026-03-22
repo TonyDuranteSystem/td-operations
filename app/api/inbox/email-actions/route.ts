@@ -85,8 +85,11 @@ export async function POST(req: NextRequest) {
       }
 
       case "trash": {
-        await gmailPost(`/threads/${threadId}/trash`, {}, asUser)
-        return NextResponse.json({ success: true, action: "trashed" })
+        const trashResult = await gmailPost(`/threads/${threadId}/trash`, {}, asUser) as { id?: string; messages?: Array<{ labelIds?: string[] }> }
+        // Verify Gmail actually applied the TRASH label
+        const hasTrashLabel = trashResult.messages?.some(m => m.labelIds?.includes('TRASH'))
+        console.log(`[Inbox] Trash thread ${threadId}: Gmail response id=${trashResult.id}, hasTrashLabel=${hasTrashLabel}`)
+        return NextResponse.json({ success: true, action: "trashed", threadId: trashResult.id, verified: hasTrashLabel })
       }
 
       case "mark_unread": {
