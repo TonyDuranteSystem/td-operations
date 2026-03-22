@@ -41,12 +41,14 @@ export async function GET(req: NextRequest) {
     const channel = req.nextUrl.searchParams.get("channel") // whatsapp | telegram | gmail | null (all)
     const searchQuery = req.nextUrl.searchParams.get("q") // Gmail search query
     const labelFilter = req.nextUrl.searchParams.get("label") // Gmail label ID filter
+    const pageToken = req.nextUrl.searchParams.get("pageToken") // Gmail pagination
     const limit = Math.min(
-      parseInt(req.nextUrl.searchParams.get("limit") || "30"),
-      100
+      parseInt(req.nextUrl.searchParams.get("limit") || "50"),
+      200
     )
 
     const conversations: InboxConversation[] = []
+    let gmailNextPageToken: string | undefined
 
     // Start email lookup in parallel (used later for Gmail matching)
     const emailLookupPromise =
@@ -90,7 +92,7 @@ export async function GET(req: NextRequest) {
     // ─── Gmail threads ──────────────────────────────────
     if (!channel || channel === "gmail") {
       try {
-        const gmailLimit = channel === "gmail" ? limit : Math.min(limit, 20)
+        const gmailLimit = channel === "gmail" ? limit : Math.min(limit, 50)
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
@@ -109,9 +111,17 @@ export async function GET(req: NextRequest) {
           gmailParams.q = searchQuery
         }
 
+        // Pagination
+        if (pageToken) {
+          gmailParams.pageToken = pageToken
+        }
+
         const listResult = (await gmailGet("/threads", gmailParams)) as {
           threads?: Array<{ id: string; snippet: string; historyId: string }>
+          nextPageToken?: string
         }
+
+        gmailNextPageToken = listResult.nextPageToken
 
         // Wait for email lookup to complete
         const emailLookup = await emailLookupPromise
@@ -178,6 +188,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       conversations: conversations.slice(0, limit),
       total: conversations.length,
+      ...(gmailNextPageToken ? { nextPageToken: gmailNextPageToken } : {}),
     })
   } catch (error) {
     console.error("Inbox conversations error:", error)
