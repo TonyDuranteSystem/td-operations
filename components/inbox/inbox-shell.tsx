@@ -51,10 +51,10 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
     setDeletedIds(prev => new Set(prev).add(id))
     // If the deleted email was selected, deselect it
     setSelected(prev => prev?.id === id ? null : prev)
-    // Clear from deletedIds after 5s (Gmail will have processed by then)
+    // Keep hidden for 60s — Gmail needs time to process the trash action
     setTimeout(() => {
       setDeletedIds(prev => { const n = new Set(prev); n.delete(id); return n })
-    }, 5000)
+    }, 60_000)
   }, [])
 
   const bulkMode = selectedIds.size > 0
