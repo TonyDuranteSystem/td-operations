@@ -22,6 +22,7 @@ import {
   Bot,
   Rocket,
   ArrowLeftRight,
+  Gauge,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -59,6 +60,7 @@ export function Sidebar({
     { name: 'Tax Returns', href: '/tax-returns', icon: FileText },
     { name: 'Accounts', href: '/accounts', icon: Building2 },
     { name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
+    { name: 'Trackers', href: '/trackers', icon: Gauge },
     { name: 'Services', href: '/services', icon: Cog },
     { name: 'Payments', href: '/payments', icon: CreditCard },
     { name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, adminOnly: true },

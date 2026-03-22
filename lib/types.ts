@@ -336,3 +336,45 @@ export interface GmailMessageDetail {
   date: string
   labelIds: string[]
 }
+
+// Service Delivery Tracker types
+export interface ServiceDelivery {
+  id: string
+  service_name: string
+  service_type: string
+  pipeline: string | null
+  stage: string | null
+  stage_order: number | null
+  stage_entered_at: string | null
+  account_id: string | null
+  contact_id: string | null
+  deal_id: string | null
+  status: string
+  assigned_to: string | null
+  amount: number | null
+  amount_currency: string | null
+  notes: string | null
+  start_date: string | null
+  end_date: string | null
+  updated_at: string
+  created_at: string
+  // Joined fields
+  company_name?: string | null
+  tasks?: Task[]
+  task_count?: number
+  open_task_count?: number
+}
+
+export interface PipelineStage {
+  id: string
+  service_type: string
+  stage_name: string
+  stage_order: number
+  auto_tasks: { title: string; assigned_to: string; category: string; priority: string }[] | null
+  requires_approval: boolean
+}
+
+export interface TrackerColumn {
+  stage: PipelineStage
+  deliveries: ServiceDelivery[]
+}

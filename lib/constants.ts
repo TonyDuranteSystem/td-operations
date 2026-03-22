@@ -117,3 +117,38 @@ export const STATUS_COLORS: Record<string, string> = {
   'Normal': 'bg-blue-100 text-blue-800',
   'Low': 'bg-zinc-100 text-zinc-800',
 }
+
+// Service tracker slugs — URL path → DB service_type
+export const SERVICE_TRACKER_SLUGS: Record<string, string> = {
+  'formation': 'Company Formation',
+  'onboarding': 'Client Onboarding',
+  'tax-return': 'Tax Return',
+  'itin': 'ITIN',
+  'banking': 'Banking Fintech',
+  'closure': 'Company Closure',
+  'ein': 'EIN',
+  'annual-report': 'State Annual Report',
+  'ra-renewal': 'State RA Renewal',
+  'cmra': 'CMRA Mailing Address',
+  'billing-renewal': 'Billing Annual Renewal',
+}
+
+// Reverse: DB service_type → URL slug
+export const SERVICE_TYPE_TO_SLUG: Record<string, string> = Object.fromEntries(
+  Object.entries(SERVICE_TRACKER_SLUGS).map(([slug, type]) => [type, slug])
+)
+
+// Icons for each tracker type (lucide icon names)
+export const TRACKER_ICONS: Record<string, string> = {
+  'Company Formation': 'Building',
+  'Client Onboarding': 'UserPlus',
+  'Tax Return': 'FileText',
+  'ITIN': 'CreditCard',
+  'Banking Fintech': 'Landmark',
+  'Company Closure': 'XCircle',
+  'EIN': 'Hash',
+  'State Annual Report': 'CalendarDays',
+  'State RA Renewal': 'Shield',
+  'CMRA Mailing Address': 'Mail',
+  'Billing Annual Renewal': 'Receipt',
+}
