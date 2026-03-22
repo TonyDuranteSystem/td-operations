@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     return new NextResponse(new Uint8Array(data), {
       headers: {
         "Content-Type": mimeType,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+        "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`,
         "Content-Length": data.length.toString(),
       },
     })

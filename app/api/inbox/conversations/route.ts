@@ -155,7 +155,9 @@ export async function GET(req: NextRequest) {
             const from = getHeader(firstMsg?.payload?.headers, "From")
             const subject = getHeader(firstMsg?.payload?.headers, "Subject")
             const lastDate = getHeader(lastMsg?.payload?.headers, "Date")
-            const isUnread = lastMsg?.labelIds?.includes("UNREAD") || false
+            // Count ALL unread messages in the thread (not just last)
+            const unreadCount = thread.messages.filter(m => m.labelIds?.includes("UNREAD")).length
+            const isUnread = unreadCount > 0
             // Check for attachments (multipart/mixed = has attachments)
             const hasAttachment = thread.messages.some(m =>
               m.payload?.mimeType === 'multipart/mixed' ||
@@ -171,7 +173,7 @@ export async function GET(req: NextRequest) {
               channel: "gmail",
               name: from.replace(/<.*>/, "").trim() || from,
               preview: firstMsg?.snippet || "",
-              unread: isUnread ? 1 : 0,
+              unread: unreadCount,
               lastMessageAt: lastDate
                 ? new Date(lastDate).toISOString()
                 : new Date(

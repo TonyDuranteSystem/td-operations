@@ -63,9 +63,9 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
   })
 
   useEffect(() => {
-    if (conversation.unread > 0) {
-      markReadMutation.mutate()
-    }
+    // Always attempt to mark as read when opening a conversation
+    // The API is idempotent — if already read, it's a no-op
+    markReadMutation.mutate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id])
 
