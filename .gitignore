@@ -44,3 +44,5 @@ next-env.d.ts
 !.claude/hooks/
 !.claude/settings.json
 .vercel
+test-results/
+.auth-state.json

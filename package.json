@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "prepare": "husky",
-    "test:portal": "npx tsx tests/portal/verify-portal.ts"
+    "test:portal": "npx tsx tests/portal/verify-portal.ts",
+    "test:e2e": "npx playwright test",
+    "test:e2e:api": "npx playwright test api-health",
+    "test:e2e:portal": "npx playwright test portal-lead"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^17.0.0",
@@ -47,6 +50,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
