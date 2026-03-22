@@ -14,6 +14,9 @@
     "test:e2e:portal": "npx playwright test portal-lead"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@hello-pangea/dnd": "^17.0.0",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "@radix-ui/react-dialog": "^1.1.6",
