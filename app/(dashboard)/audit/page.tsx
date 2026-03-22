@@ -101,8 +101,8 @@ export default async function AuditPage({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Audit Log</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Cronologia di tutte le operazioni MCP — {stats.total} azioni
-          {daysFilter !== 'all' ? ` negli ultimi ${daysFilter} giorni` : ''}
+          All MCP operations history — {stats.total} actions
+          {daysFilter !== 'all' ? ` in the last ${daysFilter} days` : ''}
         </p>
       </div>
       <AuditBoard

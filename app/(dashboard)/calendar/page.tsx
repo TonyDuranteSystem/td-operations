@@ -96,9 +96,9 @@ export default async function CalendarPage({
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Calendario Annuale {year}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Annual Calendar {year}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {deadlines.length} scadenze nel {year}
+          {deadlines.length} deadlines in {year}
         </p>
       </div>
       <AnnualCalendar deadlines={deadlines} year={year} today={today} />

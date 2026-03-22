@@ -82,7 +82,7 @@ function CompleteButton({ serviceId, serviceName }: { serviceId: string; service
         startTransition(async () => {
           const result = await completeService(serviceId)
           if (result.success) {
-            toast.success('Servizio completato', { description: serviceName })
+            toast.success('Service completed', { description: serviceName })
           } else {
             toast.error(result.error ?? 'Errore nel completare il servizio')
           }
@@ -144,11 +144,11 @@ export function ServiceBoard({ columns, stats, serviceTypes, typeFilter, today }
     <div className="space-y-6">
       {/* Stats */}
       <div className="flex gap-3 flex-wrap">
-        <StatCard label="Totale Attivi" value={stats.total} color="text-foreground" />
-        <StatCard label="Da Iniziare" value={stats.notStarted} color="text-zinc-600" />
-        <StatCard label="In Corso" value={stats.inProgress} color="text-blue-600" />
-        <StatCard label="Bloccati" value={stats.blocked} color="text-red-600" />
-        <StatCard label="SLA Scaduti" value={stats.withSla} color="text-amber-600" />
+        <StatCard label="Total Active" value={stats.total} color="text-foreground" />
+        <StatCard label="Not Started" value={stats.notStarted} color="text-zinc-600" />
+        <StatCard label="In Progress" value={stats.inProgress} color="text-blue-600" />
+        <StatCard label="Blocked" value={stats.blocked} color="text-red-600" />
+        <StatCard label="SLA Overdue" value={stats.withSla} color="text-amber-600" />
       </div>
 
       {/* Filters + view toggle */}
@@ -160,7 +160,7 @@ export function ServiceBoard({ columns, stats, serviceTypes, typeFilter, today }
             onChange={e => router.push(`/services${e.target.value ? `?type=${encodeURIComponent(e.target.value)}` : ''}`)}
             className="px-3 py-1.5 rounded-lg border bg-white text-sm"
           >
-            <option value="">Tutti i tipi</option>
+            <option value="">All types</option>
             {serviceTypes.map(st => (
               <option key={st.type} value={st.type}>
                 {st.type} ({st.count})
@@ -330,7 +330,7 @@ function ServiceCard({ service: s, today, showComplete = false, onClick }: { ser
               slaDays < 0 ? 'text-red-600 font-medium' : slaDays <= 3 ? 'text-amber-600' : ''
             )}>
               <Clock className="h-3 w-3" />
-              {slaDays < 0 ? `${Math.abs(slaDays)}g scaduto` : slaDays === 0 ? 'Oggi' : `${slaDays}g`}
+              {slaDays < 0 ? `${Math.abs(slaDays)}d overdue` : slaDays === 0 ? 'Today' : `${slaDays}d`}
             </span>
           )}
           {showComplete && s.status === 'In Progress' && (
@@ -374,7 +374,7 @@ function KanbanView({ columns, today, onEditService }: { columns: Column[]; toda
       startTransition(async () => {
         const result = await updateServiceStatus(moved.id, dstStatus)
         if (result.success) {
-          toast.success(`Servizio spostato in "${dstStatus}"`, { description: moved.service_name })
+          toast.success(`Service moved to "${dstStatus}"`, { description: moved.service_name })
         } else {
           toast.error(result.error ?? 'Errore nello spostamento del servizio')
           setCols(columns) // revert

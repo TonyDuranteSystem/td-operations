@@ -118,11 +118,11 @@ export function TaxBoard({
     <div className="space-y-6">
       {/* Summary bar */}
       <div className="flex gap-3 flex-wrap">
-        <StatCard label="Totale" value={stats.total} color="text-foreground" />
+        <StatCard label="Total" value={stats.total} color="text-foreground" />
         <StatCard label="MMLLC" value={stats.mmllc} color="text-indigo-600" />
         <StatCard label="SMLLC" value={stats.smllc} color="text-blue-600" />
-        <StatCard label="Pagati" value={stats.paid} color="text-emerald-600" />
-        <StatCard label="Dati Ricevuti" value={stats.dataReceived} color="text-blue-600" />
+        <StatCard label="Paid" value={stats.paid} color="text-emerald-600" />
+        <StatCard label="Data Received" value={stats.dataReceived} color="text-blue-600" />
         <StatCard label="Extension" value={stats.extensionFiled} color="text-purple-600" />
       </div>
 

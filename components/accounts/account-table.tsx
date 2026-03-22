@@ -92,9 +92,9 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
           onChange={e => updateFilter('status', e.target.value)}
           className="px-3 py-2 rounded-lg border bg-white text-sm"
         >
-          <option value="Active">Attivi</option>
-          <option value="all">Tutti</option>
-          <option value="Closed">Chiusi</option>
+          <option value="Active">Active</option>
+          <option value="all">All</option>
+          <option value="Closed">Closed</option>
           <option value="Cancelled">Cancellati</option>
         </select>
         <select
@@ -102,7 +102,7 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
           onChange={e => updateFilter('type', e.target.value)}
           className="px-3 py-2 rounded-lg border bg-white text-sm"
         >
-          <option value="">Tutti i tipi</option>
+          <option value="">All types</option>
           <option value="Single Member LLC">SMLLC</option>
           <option value="Multi Member LLC">MMLLC</option>
           <option value="C-Corp Elected">C-Corp</option>
@@ -124,7 +124,7 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
         {stats.withOverdue > 0 && (
           <span className="px-3 py-1 rounded-full bg-red-100 text-red-700 font-medium flex items-center gap-1">
             <AlertCircle className="h-3.5 w-3.5" />
-            {stats.withOverdue} con pagamenti scaduti
+            {stats.withOverdue} with overdue payments
           </span>
         )}
       </div>
@@ -137,9 +137,9 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
             <span>Azienda</span>
             <span>Contatto</span>
             <span>Tipo</span>
-            <span>Stato</span>
-            <span className="text-center">Servizi</span>
-            <span className="text-center">Scaduti</span>
+            <span>Status</span>
+            <span className="text-center">Services</span>
+            <span className="text-center">Overdue</span>
             <span></span>
           </div>
 

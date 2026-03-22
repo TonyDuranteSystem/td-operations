@@ -16,13 +16,13 @@ const TYPE_COLORS: Record<string, string> = {
 }
 
 const STATUS_SHORT: Record<string, string> = {
-  'Payment Pending': 'Pagamento',
-  'Link Sent - Awaiting Data': 'Attesa Dati',
-  'Data Received': 'Dati OK',
+  'Payment Pending': 'Payment',
+  'Link Sent - Awaiting Data': 'Awaiting Data',
+  'Data Received': 'Data OK',
   'Sent to India': 'India',
   'Extension Filed': 'Extension',
-  'TR Completed - Awaiting Signature': 'Firma',
-  'TR Filed': 'Completato',
+  'TR Completed - Awaiting Signature': 'Signature',
+  'TR Filed': 'Completed',
 }
 
 function getDeadlineInfo(deadline: string, today: string) {

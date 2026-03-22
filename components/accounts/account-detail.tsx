@@ -17,11 +17,11 @@ import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 const TABS = [
-  { key: 'panoramica', label: 'Panoramica', icon: Building2 },
-  { key: 'servizi', label: 'Servizi', icon: Briefcase },
-  { key: 'pagamenti', label: 'Pagamenti', icon: CreditCard },
+  { key: 'panoramica', label: 'Overview', icon: Building2 },
+  { key: 'servizi', label: 'Services', icon: Briefcase },
+  { key: 'pagamenti', label: 'Payments', icon: CreditCard },
   { key: 'tax', label: 'Tax Returns', icon: FileText },
-  { key: 'comunicazioni', label: 'Comunicazioni', icon: MessageSquare },
+  { key: 'comunicazioni', label: 'Communications', icon: MessageSquare },
 ]
 
 const SERVICE_STATUS_COLORS: Record<string, string> = {
@@ -114,7 +114,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
           </div>
           <p className="text-muted-foreground text-sm mt-1">
             {account.state_of_formation && `${account.state_of_formation} · `}
-            {activeServices.length} servizi attivi · {overduePayments.length} pagamenti scaduti
+            {activeServices.length} active services · {overduePayments.length} overdue payments
           </p>
         </div>
       </div>
@@ -123,7 +123,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       {overduePayments.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
           <AlertCircle className="h-4 w-4 shrink-0" />
-          <span className="font-medium">{overduePayments.length} pagament{overduePayments.length === 1 ? 'o' : 'i'} scadut{overduePayments.length === 1 ? 'o' : 'i'}</span>
+          <span className="font-medium">{overduePayments.length} overdue payment{overduePayments.length === 1 ? '' : 's'}</span>
           <span className="text-red-600">
             — totale: {formatCurrency(overduePayments.reduce((sum, p) => sum + (p.amount_due ?? p.amount), 0))}
           </span>
@@ -430,8 +430,8 @@ function ServiceCard({ service: s, today }: { service: Service; today: string })
             slaDays <= 3 ? 'text-amber-600' : ''
           )}>
             <Clock className="h-3 w-3" />
-            {slaDays < 0 ? `Scaduto ${Math.abs(slaDays)}g` :
-             slaDays === 0 ? 'Scade oggi' : `${slaDays}g`}
+            {slaDays < 0 ? `${Math.abs(slaDays)}d overdue` :
+             slaDays === 0 ? 'Due today' : `${slaDays}d`}
           </span>
         )}
       </div>
@@ -512,9 +512,9 @@ function PaymentSection({
           <div className="hidden md:grid md:grid-cols-[1fr,100px,100px,100px,100px,100px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
             <span>Descrizione</span>
             <span className="text-right">Importo</span>
-            <span className="text-right">Dovuto</span>
-            <span>Scadenza</span>
-            <span>Stato</span>
+            <span className="text-right">Amount</span>
+            <span>Due Date</span>
+            <span>Status</span>
             <span>Follow-up</span>
           </div>
           {payments.map(p => {
@@ -589,7 +589,7 @@ function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string 
                     'ml-1 font-medium',
                     diff < 0 ? 'text-red-600' : diff <= 7 ? 'text-red-500' : 'text-amber-600'
                   )}>
-                    ({diff < 0 ? `scaduto ${Math.abs(diff)}g` : diff === 0 ? 'oggi' : `${diff}g`})
+                    ({diff < 0 ? `${Math.abs(diff)}d overdue` : diff === 0 ? 'today' : `${diff}d`})
                   </span>
                 )}
               </span>

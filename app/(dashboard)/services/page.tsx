@@ -70,7 +70,7 @@ export default async function ServicesPage({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Service Delivery</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {stats.total} servizi attivi — {stats.blocked} bloccati, {stats.withSla} SLA scaduti
+          {stats.total} active services — {stats.blocked} blocked, {stats.withSla} SLA overdue
         </p>
       </div>
       <ServiceBoard

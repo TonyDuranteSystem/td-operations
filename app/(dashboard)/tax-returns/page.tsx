@@ -2,13 +2,15 @@ import { createClient } from '@/lib/supabase/server'
 import { TaxBoard } from '@/components/tax-returns/tax-board'
 import type { TaxReturn, TaxSection } from '@/lib/types'
 
+const currentYear = new Date().getFullYear()
+
 const SECTION_DEFS = [
-  { key: 'da_elaborare', title: 'Da Elaborare', statuses: ['Payment Pending'], color: 'amber', icon: 'clipboard' },
-  { key: 'attesa_dati', title: 'Attesa Dati', statuses: ['Link Sent - Awaiting Data'], color: 'orange', icon: 'clock' },
-  { key: 'pronti_india', title: 'Pronti India', statuses: ['Data Received'], color: 'blue', icon: 'send' },
-  { key: 'in_corso_india', title: 'In Corso India', statuses: ['Sent to India'], color: 'indigo', icon: 'loader' },
+  { key: 'pending', title: 'Pending', statuses: ['Payment Pending'], color: 'amber', icon: 'clipboard' },
+  { key: 'awaiting_data', title: 'Awaiting Data', statuses: ['Link Sent - Awaiting Data'], color: 'orange', icon: 'clock' },
+  { key: 'ready_india', title: 'Ready for India', statuses: ['Data Received'], color: 'blue', icon: 'send' },
+  { key: 'in_progress_india', title: 'India In Progress', statuses: ['Sent to India'], color: 'indigo', icon: 'loader' },
   { key: 'extension', title: 'Extension Filed', statuses: ['Extension Filed'], color: 'purple', icon: 'calendar' },
-  { key: 'completati', title: 'Completati', statuses: ['TR Completed - Awaiting Signature', 'TR Filed'], color: 'emerald', icon: 'check' },
+  { key: 'completed', title: 'Completed', statuses: ['TR Completed - Awaiting Signature', 'TR Filed'], color: 'emerald', icon: 'check' },
 ]
 
 export default async function TaxReturnsPage() {
@@ -18,7 +20,7 @@ export default async function TaxReturnsPage() {
   const { data: rawReturns } = await supabase
     .from('tax_returns')
     .select('id, company_name, client_name, return_type, tax_year, deadline, status, paid, data_received, sent_to_india, india_status, special_case, extension_filed, extension_deadline, notes, updated_at')
-    .eq('tax_year', 2025)
+    .eq('tax_year', currentYear)
     .order('deadline', { ascending: true })
 
   const returns: TaxReturn[] = rawReturns ?? []
@@ -36,7 +38,7 @@ export default async function TaxReturnsPage() {
   // Add special cases section before completati
   sections.splice(sections.length - 1, 0, {
     key: 'speciali',
-    title: 'Casi Speciali',
+    title: 'Special Cases',
     items: specialCases,
     color: 'rose',
     icon: 'alert',
@@ -54,9 +56,9 @@ export default async function TaxReturnsPage() {
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Tax Returns 2025</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Tax Returns {currentYear}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Tracker dichiarazioni fiscali — MMLLC deadline 15 Mar, SMLLC deadline 15 Apr
+          Tax return tracker — MMLLC deadline Mar 15, SMLLC deadline Apr 15
         </p>
       </div>
       <TaxBoard sections={sections} stats={stats} today={today} />
