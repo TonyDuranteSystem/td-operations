@@ -84,6 +84,10 @@ export default async function WizardPage() {
 
     const types = (sds || []).map(s => s.service_type)
     if (types.includes('Company Formation')) wizardType = 'formation'
+    else if (types.includes('Banking Fintech')) wizardType = 'banking'
+    else if (types.includes('Company Closure')) wizardType = 'closure'
+    else if (types.includes('ITIN')) wizardType = 'itin'
+    else if (types.includes('Tax Return')) wizardType = 'tax'
   }
 
   // Also check via lead/offer (for leads without account)
@@ -172,7 +176,14 @@ export default async function WizardPage() {
   if (contact.address_country) prefillData.owner_country = contact.address_country
   if (contact.itin) prefillData.owner_itin = contact.itin
   if (contact.itin_issue_date) prefillData.owner_itin_issue_date = contact.itin_issue_date
-  if (account.company_name) prefillData.company_name = account.company_name
+  // Banking-specific prefills
+  if (contact.first_name) prefillData.first_name = contact.first_name
+  if (contact.last_name) prefillData.last_name = contact.last_name
+  if (contact.email) { prefillData.email = contact.email; prefillData.personal_email = contact.email }
+  if (contact.phone) { prefillData.phone = contact.phone; prefillData.personal_phone = contact.phone }
+  if (contact.citizenship) prefillData.personal_country = contact.citizenship
+  if (account.company_name) { prefillData.business_name = account.company_name; prefillData.company_name = account.company_name; prefillData.llc_name = account.company_name }
+  if (account.ein) { prefillData.ein = account.ein; prefillData.llc_ein = account.ein }
   if (account.state_of_formation) prefillData.state_of_formation = account.state_of_formation
   if (account.formation_date) prefillData.formation_date = account.formation_date
   if (account.ein) prefillData.ein = account.ein
