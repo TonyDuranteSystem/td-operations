@@ -81,7 +81,7 @@ export default async function PortalOfferPage() {
 
       if (leadOffer) {
         const offerUrl = `${APP_BASE_URL}/offer/${leadOffer.token}/${leadOffer.access_code}`
-        return <PortalOfferClient offerUrl={offerUrl} status={leadOffer.status} clientName={leadOffer.client_name} />
+        return <PortalOfferClient offerUrl={offerUrl} status={leadOffer.status} clientName={leadOffer.client_name} language={leadOffer.language} />
       }
     }
 
@@ -96,5 +96,5 @@ export default async function PortalOfferPage() {
   }
 
   const offerUrl = `${APP_BASE_URL}/offer/${offer.token}/${offer.access_code}`
-  return <PortalOfferClient offerUrl={offerUrl} status={offer.status} clientName={offer.client_name} />
+  return <PortalOfferClient offerUrl={offerUrl} status={offer.status} clientName={offer.client_name} language={offer.language} />
 }

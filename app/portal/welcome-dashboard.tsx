@@ -38,6 +38,7 @@ interface WelcomeDashboardProps {
 export function WelcomeDashboard({ tier, firstName, offerData, locale }: WelcomeDashboardProps) {
   const isLead = tier === 'lead'
   const isOnboarding = tier === 'onboarding'
+  const isViewed = offerData?.status === 'viewed' || offerData?.status === 'signed' || offerData?.status === 'completed'
   const isSigned = offerData?.status === 'signed' || offerData?.status === 'completed'
   const isPaid = offerData?.status === 'completed'
 
@@ -67,16 +68,16 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
             icon={FileText}
             label={t.step1}
             description={t.step1Desc}
-            completed={!!offerData}
-            active={isLead && !isSigned}
-            href={isLead && !isSigned ? '/portal/offer' : undefined}
+            completed={isViewed}
+            active={!isViewed && !!offerData}
+            href={!isSigned ? '/portal/offer' : undefined}
           />
           <ProgressStep
             icon={CheckCircle}
             label={t.step2}
             description={t.step2Desc}
-            completed={!!isSigned}
-            active={isLead && !!offerData && !isSigned}
+            completed={isSigned}
+            active={isViewed && !isSigned}
             href={isLead && !isSigned ? '/portal/offer' : undefined}
           />
           <ProgressStep
@@ -160,21 +161,21 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
       )}
 
       {/* Services purchased (from offer) */}
-      {(services.length > 0 || pipelines.length > 0) && (
+      {services.length > 0 && (
         <div className="bg-white rounded-xl border p-6">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-4">{t.servicesPurchased}</h2>
           <div className="grid gap-3">
-            {(pipelines.length > 0 ? pipelines : services.map(s => s.name)).map((name, i) => (
+            {services.map((svc, i) => (
               <div key={i} className="flex items-center gap-3 p-3 bg-zinc-50 rounded-lg">
                 <Package className="h-5 w-5 text-blue-500 shrink-0" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium">{name}</p>
-                  {services[i]?.description && (
-                    <p className="text-xs text-zinc-500">{services[i].description}</p>
+                  <p className="text-sm font-medium">{svc.name}</p>
+                  {svc.description && (
+                    <p className="text-xs text-zinc-500">{svc.description}</p>
                   )}
                 </div>
-                {services[i]?.price && (
-                  <span className="text-sm font-semibold text-zinc-700">{services[i].price}</span>
+                {svc.price && (
+                  <span className="text-sm font-semibold text-zinc-700">{svc.price}</span>
                 )}
               </div>
             ))}

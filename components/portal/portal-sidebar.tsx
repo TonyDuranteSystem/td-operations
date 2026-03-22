@@ -31,7 +31,7 @@ import type { PortalNavVisibility } from '@/lib/portal/queries'
 import { isTierFeatureVisible } from '@/lib/portal/tier-config'
 
 interface PortalSidebarProps {
-  user: { email?: string }
+  user: { email?: string; user_metadata?: { full_name?: string } }
   accounts: PortalAccount[]
   selectedAccountId: string
   activeServices?: string[]
@@ -195,7 +195,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             <CompanySwitcher
               accounts={accounts}
               selectedAccountId={selectedAccountId}
-              userName={user.email?.split('@')[0]}
+              userName={user.user_metadata?.full_name || user.email?.split('@')[0]}
             />
           </div>
         )}
