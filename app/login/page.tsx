@@ -20,7 +20,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {
-      setError('Credenziali non valide')
+      setError('Invalid credentials')
       setLoading(false)
       return
     }
@@ -73,7 +73,7 @@ export default function LoginPage() {
               disabled={loading}
               className="inline-flex items-center justify-center w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
-              {loading ? 'Accesso in corso...' : 'Accedi'}
+              {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
         </div>
