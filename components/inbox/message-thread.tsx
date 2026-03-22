@@ -128,9 +128,16 @@ export function MessageThread({ conversation }: MessageThreadProps) {
                 </p>
               )}
 
-              <p className="text-sm whitespace-pre-wrap break-words">
-                {msg.content}
-              </p>
+              {msg.content?.includes('<') && msg.content?.includes('>') ? (
+                <div
+                  className="text-sm prose prose-sm max-w-none break-words [&_a]:text-blue-600 [&_a]:underline"
+                  dangerouslySetInnerHTML={{ __html: msg.content }}
+                />
+              ) : (
+                <p className="text-sm whitespace-pre-wrap break-words">
+                  {msg.content}
+                </p>
+              )}
 
               <p
                 className={cn(

@@ -54,7 +54,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode
       if (labelFilter) params.set('label', labelFilter)
       if (searchQuery) params.set('q', searchQuery)
       if (mailbox) params.set('mailbox', mailbox)
-      params.set('limit', '50')
+      params.set('limit', '100')
       return fetch(`/api/inbox/conversations?${params}`).then((r) => r.json())
     },
     refetchInterval: searchQuery ? false : 30_000,
