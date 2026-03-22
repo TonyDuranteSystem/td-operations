@@ -61,7 +61,7 @@ export async function createWhopPlan(params: {
         plan_type: 'one_time',
         initial_price: amount,
         currency: currency,
-        title: title.slice(0, 80), // Whop title limit
+        title: title.slice(0, 30), // Whop title limit is 30 chars
         visibility: 'hidden', // Only accessible via direct link
       }),
     })

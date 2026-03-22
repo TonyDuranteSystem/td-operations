@@ -897,6 +897,6 @@ export function t(key: string, locale: Locale = 'en'): string {
  * Get locale from Supabase user metadata.
  */
 export function getLocale(user: { user_metadata?: Record<string, unknown> } | null): Locale {
-  const lang = user?.user_metadata?.portal_language
+  const lang = user?.user_metadata?.portal_language || user?.user_metadata?.language
   return lang === 'it' ? 'it' : 'en'
 }
