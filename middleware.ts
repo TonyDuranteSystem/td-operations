@@ -136,6 +136,17 @@ export async function middleware(request: NextRequest) {
       url.pathname = '/portal'
       return NextResponse.redirect(url)
     }
+
+    // Admin-only paths: team users redirected to home
+    const ADMIN_ONLY_PATHS = ['/invoice-settings', '/reconciliation', '/portal-launch', '/portal-chats', '/audit']
+    const isAdminEmail = user.email && ['antonio.durante@tonydurante.us'].includes(user.email)
+    const isAdminRole = user.app_metadata?.role === 'admin' || user.user_metadata?.role === 'admin'
+    if (ADMIN_ONLY_PATHS.some(p => pathname === p || pathname.startsWith(p + '/')) && !isAdminEmail && !isAdminRole) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/'
+      url.searchParams.set('denied', 'admin_only')
+      return NextResponse.redirect(url)
+    }
   }
 
   // --- Logged-in user on /login: redirect to home ---
