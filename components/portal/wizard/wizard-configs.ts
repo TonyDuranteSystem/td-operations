@@ -213,10 +213,156 @@ export const ITIN_FIELDS: Record<string, FieldConfig[]> = {
   ],
 }
 
+// ─── BANKING (Payset EUR + Relay USD) ─────────────────────
+
+export const BANKING_PAYSET_STEPS: WizardStep[] = [
+  { id: 'personal', title: 'Personal Information', titleIt: 'Informazioni Personali', description: 'Your personal details', descriptionIt: 'I tuoi dati personali' },
+  { id: 'business', title: 'Business Information & Documents', titleIt: 'Informazioni Aziendali e Documenti', description: 'Business details and required documents', descriptionIt: 'Dettagli aziendali e documenti richiesti' },
+]
+
+export const BANKING_PAYSET_FIELDS: Record<string, FieldConfig[]> = {
+  personal: [
+    { name: 'first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+    { name: 'last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+    { name: 'personal_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
+    { name: 'personal_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
+    { name: 'personal_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true },
+    { name: 'personal_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
+    { name: 'personal_country', label: 'Country of Residence', labelIt: 'Paese di Residenza', type: 'country', required: true },
+  ],
+  business: [
+    { name: 'business_name', label: 'Business Name (LLC)', labelIt: 'Nome Azienda (LLC)', type: 'text', required: true },
+    { name: 'business_street', label: 'Business Address', labelIt: 'Indirizzo Aziendale', type: 'text', required: true },
+    { name: 'business_city', label: 'Business City', labelIt: 'Città Aziendale', type: 'text', required: true },
+    { name: 'business_state_province', label: 'Business State/Province', labelIt: 'Stato/Provincia Aziendale', type: 'text', required: true },
+    { name: 'business_zip', label: 'Business ZIP', labelIt: 'CAP Aziendale', type: 'text', required: true },
+    { name: 'business_country', label: 'Business Country', labelIt: 'Paese Aziendale', type: 'country', required: true },
+    { name: 'business_type', label: 'Business Type', labelIt: 'Tipo di Attività', type: 'select', required: true, options: [
+      { value: 'Retail', label: 'Retail', labelIt: 'Commercio' },
+      { value: 'Manufacturing', label: 'Manufacturing', labelIt: 'Produzione' },
+      { value: 'Services', label: 'Services', labelIt: 'Servizi' },
+      { value: 'Technology', label: 'Technology', labelIt: 'Tecnologia' },
+      { value: 'Marketing', label: 'Marketing' },
+      { value: 'Agency', label: 'Agency', labelIt: 'Agenzia' },
+      { value: 'E-Commerce', label: 'E-Commerce' },
+      { value: 'Business Consulting', label: 'Business Consulting', labelIt: 'Consulenza' },
+      { value: 'Finance', label: 'Finance', labelIt: 'Finanza' },
+    ]},
+    { name: 'us_physical_presence', label: 'US Physical Presence?', labelIt: 'Presenza Fisica USA?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+      { value: 'No', label: 'No' },
+    ]},
+    { name: 'business_model', label: 'Business Model', labelIt: 'Modello di Business', type: 'select', required: true, options: [
+      { value: 'B2B', label: 'B2B' }, { value: 'B2C', label: 'B2C' }, { value: 'C2B', label: 'C2B' },
+    ]},
+    { name: 'products_services', label: 'Products/Services', labelIt: 'Prodotti/Servizi', type: 'textarea', required: true },
+    { name: 'operating_countries', label: 'Operating Countries', labelIt: 'Paesi Operativi', type: 'text', required: true },
+    { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
+    { name: 'phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
+    { name: 'email', label: 'Email', type: 'email', required: true },
+    { name: 'crypto_transactions', label: 'Cryptocurrency Transactions?', labelIt: 'Transazioni in Criptovaluta?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+      { value: 'No', label: 'No' },
+    ]},
+    { name: 'monthly_volume', label: 'Expected Monthly Volume (EUR)', labelIt: 'Volume Mensile Previsto (EUR)', type: 'number', required: true },
+    { name: 'proof_of_address', label: 'Proof of Address (utility bill or bank statement)', labelIt: 'Prova di Residenza (bolletta o estratto conto)', type: 'file', required: true },
+    { name: 'business_bank_statement', label: 'Business Bank Statement (last 3 months)', labelIt: 'Estratto Conto Aziendale (ultimi 3 mesi)', type: 'file', required: true },
+    { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate', labelIt: 'Confermo che le informazioni sono corrette', type: 'checkbox', required: true },
+  ],
+}
+
+export const BANKING_RELAY_STEPS: WizardStep[] = [
+  { id: 'business', title: 'Business Information', titleIt: 'Informazioni Aziendali', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
+  { id: 'owner', title: 'Owner Information & Documents', titleIt: 'Informazioni Titolare e Documenti', description: 'Personal details and documents', descriptionIt: 'Dati personali e documenti' },
+  { id: 'partner', title: 'Partner Information', titleIt: 'Informazioni Socio', description: 'If your LLC has additional members', descriptionIt: 'Se la tua LLC ha altri membri' },
+]
+
+export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
+  business: [
+    { name: 'business_name', label: 'Business Name (LLC)', labelIt: 'Nome Azienda (LLC)', type: 'text', required: true },
+    { name: 'phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
+    { name: 'email', label: 'Email', type: 'email', required: true },
+    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true },
+    { name: 'business_description', label: 'Business Description', labelIt: 'Descrizione Attività', type: 'textarea', required: true, hint: 'Be as detailed as possible — the bank evaluates your business here', hintIt: 'Sii il più dettagliato possibile — la banca valuta la tua attività qui' },
+    { name: 'avg_monthly_revenue', label: 'Average Monthly Revenue (USD)', labelIt: 'Fatturato Mensile Medio (USD)', type: 'number', required: true },
+    { name: 'other_us_bank', label: 'Other US Bank Account (optional)', labelIt: 'Altro Conto USA (opzionale)', type: 'text', required: false },
+  ],
+  owner: [
+    { name: 'first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+    { name: 'last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+    { name: 'personal_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
+    { name: 'personal_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
+    { name: 'personal_state', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true },
+    { name: 'personal_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
+    { name: 'personal_phone', label: 'Personal Phone', labelIt: 'Telefono Personale', type: 'tel', required: true },
+    { name: 'personal_email', label: 'Personal Email', labelIt: 'Email Personale', type: 'email', required: true },
+    { name: 'equity_pct', label: 'Ownership %', labelIt: 'Quota Societaria %', type: 'number', required: true },
+    { name: 'has_partner', label: 'Do you have a business partner?', labelIt: 'Hai un socio?', type: 'select', required: true, options: [
+      { value: 'No', label: 'No' },
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    ]},
+    { name: 'passport_image', label: 'Passport Photo (JPG, all 4 corners visible)', labelIt: 'Foto Passaporto (JPG, 4 angoli visibili)', type: 'file', required: true },
+    { name: 'proof_of_address', label: 'Proof of Address', labelIt: 'Prova di Residenza', type: 'file', required: true },
+    { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate', labelIt: 'Confermo che le informazioni sono corrette', type: 'checkbox', required: true },
+  ],
+  partner: [
+    { name: 'partner_first_name', label: 'Partner First Name', labelIt: 'Nome Socio', type: 'text', required: true },
+    { name: 'partner_last_name', label: 'Partner Last Name', labelIt: 'Cognome Socio', type: 'text', required: true },
+    { name: 'partner_street', label: 'Partner Address', labelIt: 'Indirizzo Socio', type: 'text', required: true },
+    { name: 'partner_city', label: 'Partner City', labelIt: 'Città Socio', type: 'text', required: true },
+    { name: 'partner_state', label: 'Partner State', labelIt: 'Stato Socio', type: 'text', required: true },
+    { name: 'partner_zip', label: 'Partner ZIP', labelIt: 'CAP Socio', type: 'text', required: true },
+    { name: 'partner_phone', label: 'Partner Phone', labelIt: 'Telefono Socio', type: 'tel', required: true },
+    { name: 'partner_email', label: 'Partner Email', labelIt: 'Email Socio', type: 'email', required: true },
+    { name: 'partner_equity_pct', label: 'Partner Ownership %', labelIt: 'Quota Socio %', type: 'number', required: true },
+  ],
+}
+
+// ─── CLOSURE (LLC Dissolution) ────────────────────────────
+
+export const CLOSURE_STEPS: WizardStep[] = [
+  { id: 'contact', title: 'Contact Information', titleIt: 'Informazioni di Contatto', description: 'Your personal details', descriptionIt: 'I tuoi dati personali' },
+  { id: 'company', title: 'Company Details', titleIt: 'Dettagli Società', description: 'The LLC to dissolve', descriptionIt: 'La LLC da chiudere' },
+  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload documents and review', descriptionIt: 'Carica documenti e rivedi' },
+]
+
+export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
+  contact: [
+    { name: 'owner_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+    { name: 'owner_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+    { name: 'owner_email', label: 'Email', type: 'email', required: true },
+    { name: 'owner_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
+  ],
+  company: [
+    { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
+    { name: 'llc_ein', label: 'EIN Number (optional)', labelIt: 'Numero EIN (opzionale)', type: 'text', required: false },
+    { name: 'llc_state', label: 'State of Formation', labelIt: 'Stato di Costituzione', type: 'select', required: true, options: [
+      { value: 'Wyoming', label: 'Wyoming' }, { value: 'Delaware', label: 'Delaware' },
+      { value: 'Florida', label: 'Florida' }, { value: 'New Mexico', label: 'New Mexico' },
+      { value: 'Texas', label: 'Texas' }, { value: 'California', label: 'California' },
+      { value: 'New York', label: 'New York' }, { value: 'Nevada', label: 'Nevada' },
+    ]},
+    { name: 'llc_formation_year', label: 'Formation Year', labelIt: 'Anno di Costituzione', type: 'number', required: true },
+    { name: 'registered_agent', label: 'Current Registered Agent (optional)', labelIt: 'Agente Registrato Attuale (opzionale)', type: 'text', required: false },
+    { name: 'tax_returns_filed', label: 'Tax Returns Filed?', labelIt: 'Dichiarazioni Presentate?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+      { value: 'No', label: 'No' },
+      { value: 'Not sure', label: 'Not sure', labelIt: 'Non sono sicuro' },
+    ]},
+    { name: 'tax_returns_years', label: 'Which years? (e.g. 2024, 2025)', labelIt: 'Quali anni? (es. 2024, 2025)', type: 'text', required: false },
+  ],
+  documents: [
+    { name: 'articles_of_organization', label: 'Articles of Organization (optional)', labelIt: 'Atto Costitutivo (opzionale)', type: 'file', required: false },
+    { name: 'ein_letter', label: 'EIN Letter (optional)', labelIt: 'Lettera EIN (opzionale)', type: 'file', required: false },
+    { name: 'other_documents', label: 'Other Relevant Documents', labelIt: 'Altri Documenti Rilevanti', type: 'file', required: false },
+    { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate. I understand the closure fee does not include outstanding state taxes or fees.', labelIt: 'Confermo che le informazioni sono corrette. Comprendo che la tariffa di chiusura non include tasse o spese statali pendenti.', type: 'checkbox', required: true },
+  ],
+}
+
 /**
  * Get the correct steps and fields based on wizard type and entity type.
  */
-export function getWizardConfig(wizardType: string, entityType?: string) {
+export function getWizardConfig(wizardType: string, entityType?: string, bankingProvider?: string) {
   const isMMLLC = entityType === 'MMLLC'
 
   switch (wizardType) {
@@ -240,6 +386,29 @@ export function getWizardConfig(wizardType: string, entityType?: string) {
       return {
         steps: ITIN_STEPS,
         fields: ITIN_FIELDS,
+      }
+    case 'banking':
+    case 'banking_payset':
+      if (bankingProvider === 'relay') {
+        return {
+          steps: BANKING_RELAY_STEPS,
+          fields: BANKING_RELAY_FIELDS,
+        }
+      }
+      return {
+        steps: BANKING_PAYSET_STEPS,
+        fields: BANKING_PAYSET_FIELDS,
+      }
+    case 'banking_relay':
+      return {
+        steps: BANKING_RELAY_STEPS,
+        fields: BANKING_RELAY_FIELDS,
+      }
+    case 'closure':
+    case 'company_closure':
+      return {
+        steps: CLOSURE_STEPS,
+        fields: CLOSURE_FIELDS,
       }
     default:
       return {

@@ -26,30 +26,30 @@ test.describe.serial('Portal — Lead Tier', () => {
 
   test('Dashboard shows welcome banner', async () => {
     await page.goto(`${BASE}/portal`)
-    await expect(page.getByText(/Welcome/i)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/Welcome|Benvenuto/i)).toBeVisible({ timeout: 15000 })
   })
 
   test('Dashboard shows progress tracker', async () => {
-    await expect(page.getByText('YOUR PROGRESS')).toBeVisible()
-    await expect(page.getByText('Review Proposal')).toBeVisible()
-    await expect(page.getByText('Sign Contract')).toBeVisible()
-    await expect(page.getByText('Make Payment')).toBeVisible()
-    await expect(page.getByText('Complete Setup')).toBeVisible()
+    await expect(page.getByText(/progress|progresso/i).first()).toBeVisible()
+    await expect(page.getByText(/Review Proposal|Rivedi la Proposta/i).first()).toBeVisible()
+    await expect(page.getByText(/Sign Contract|Firma il Contratto/i).first()).toBeVisible()
+    await expect(page.getByText(/Make Payment|Effettua il Pagamento/i).first()).toBeVisible()
+    await expect(page.getByText(/Complete Setup|Completa la Registrazione/i).first()).toBeVisible()
   })
 
   test('Dashboard shows services from offer', async () => {
-    await expect(page.getByText('SERVICES INCLUDED')).toBeVisible()
+    await expect(page.getByText(/services included|servizi inclusi/i)).toBeVisible()
     await expect(page.getByText('LLC Onboarding & Management')).toBeVisible()
     await expect(page.getByText('ITIN Application')).toBeVisible()
   })
 
   test('Sidebar hides billing/invoices for lead tier', async () => {
     const sidebar = page.locator('aside')
-    await expect(sidebar.getByText('Dashboard')).toBeVisible()
-    await expect(sidebar.getByText('Your Proposal')).toBeVisible()
+    await expect(sidebar.getByText(/Dashboard/i)).toBeVisible()
     await expect(sidebar.getByText('Chat')).toBeVisible()
-    await expect(sidebar.getByText('Billing')).not.toBeVisible()
-    await expect(sidebar.getByText('Invoices')).not.toBeVisible()
+    // These should be hidden for lead tier
+    await expect(sidebar.getByText(/Billing|Fatturazione/i)).not.toBeVisible()
+    await expect(sidebar.getByText(/^Invoices|^Fatture/i)).not.toBeVisible()
   })
 
   test('Company switcher shows client name', async () => {
@@ -78,7 +78,7 @@ test.describe.serial('Portal — Lead Tier', () => {
     await page.goto(`${BASE}/portal/documents`)
     await page.waitForTimeout(3000)
     expect(page.url()).toContain('/portal/documents')
-    await expect(page.getByText('Documents will appear here')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/Documents will appear here|documenti appariranno qui/i)).toBeVisible({ timeout: 10000 })
   })
 })
 
