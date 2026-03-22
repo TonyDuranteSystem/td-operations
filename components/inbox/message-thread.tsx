@@ -142,6 +142,35 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
                 </p>
               )}
 
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {msg.attachments.map((att, i) => (
+                    <a
+                      key={i}
+                      href={`/api/inbox/attachment?messageId=${msg.id}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(att.filename)}&mimeType=${encodeURIComponent(att.mimeType)}${mailbox ? `&mailbox=${mailbox}` : ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={cn(
+                        'flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg transition-colors',
+                        isOutbound
+                          ? 'bg-blue-400/30 hover:bg-blue-400/50 text-white'
+                          : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                      )}
+                    >
+                      <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                      <span className="truncate max-w-[200px]">{att.filename}</span>
+                      <span className="text-[10px] opacity-60 shrink-0">
+                        {att.size > 1024 * 1024
+                          ? `${(att.size / 1024 / 1024).toFixed(1)}MB`
+                          : `${Math.round(att.size / 1024)}KB`}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              )}
+
               <p
                 className={cn(
                   'text-[10px] mt-1',

@@ -4,6 +4,7 @@ import {
   gmailGet,
   getHeader,
   extractBodyHtml,
+  extractAttachments,
   type GmailAPIMessage,
 } from "@/lib/gmail"
 import type { InboxMessage } from "@/lib/types"
@@ -41,6 +42,7 @@ export async function GET(
         const to = getHeader(msg.payload.headers, "To")
         const date = getHeader(msg.payload.headers, "Date")
         const body = extractBodyHtml(msg.payload)
+        const attachments = extractAttachments(msg.payload)
 
         // Determine direction: if from contains support@tonydurante.us → outbound
         const isOutbound =
@@ -57,6 +59,7 @@ export async function GET(
           createdAt: date
             ? new Date(date).toISOString()
             : new Date(parseInt(msg.internalDate)).toISOString(),
+          ...(attachments.length > 0 ? { attachments } : {}),
         }
       })
 

@@ -300,6 +300,13 @@ export interface InboxConversation {
   hasAttachment?: boolean
 }
 
+export interface InboxAttachment {
+  filename: string
+  mimeType: string
+  size: number
+  attachmentId: string
+}
+
 export interface InboxMessage {
   id: string
   direction: 'inbound' | 'outbound'
@@ -309,6 +316,7 @@ export interface InboxMessage {
   status: string
   createdAt: string
   metadata?: Record<string, unknown>
+  attachments?: InboxAttachment[]
 }
 
 export interface InboxStats {

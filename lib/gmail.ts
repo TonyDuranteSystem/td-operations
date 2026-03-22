@@ -212,8 +212,42 @@ interface GmailHeader {
 
 interface GmailPart {
   mimeType: string
-  body?: { data?: string; size?: number }
+  filename?: string
+  body?: { data?: string; size?: number; attachmentId?: string }
   parts?: GmailPart[]
+}
+
+export interface GmailAttachmentInfo {
+  filename: string
+  mimeType: string
+  size: number
+  attachmentId: string
+}
+
+/**
+ * Extract attachment metadata from a Gmail message payload.
+ * Returns filename, mimeType, size, and attachmentId for each attachment.
+ */
+export function extractAttachments(payload: GmailAPIMessage['payload']): GmailAttachmentInfo[] {
+  const attachments: GmailAttachmentInfo[] = []
+
+  function walk(parts: GmailPart[] | undefined) {
+    if (!parts) return
+    for (const part of parts) {
+      if (part.filename && part.filename.length > 0 && part.body?.attachmentId) {
+        attachments.push({
+          filename: part.filename,
+          mimeType: part.mimeType,
+          size: part.body.size || 0,
+          attachmentId: part.body.attachmentId,
+        })
+      }
+      if (part.parts) walk(part.parts)
+    }
+  }
+
+  walk(payload.parts)
+  return attachments
 }
 
 export interface GmailAPIMessage {
