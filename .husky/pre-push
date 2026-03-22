@@ -38,6 +38,17 @@ if [ -n "$HARDCODED" ]; then
   exit 1
 fi
 
+echo "🧪 Running unit tests before push..."
+npm run test:unit 2>&1 | tail -5
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ UNIT TESTS FAILED — push blocked."
+  echo "   Run 'npm run test:unit' to see failures, fix them, then push again."
+  echo ""
+  exit 1
+fi
+
 echo "🔨 Running build check before push (Node $(node -v))..."
 npm run build > /dev/null 2>&1
 
@@ -49,4 +60,4 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-echo "✅ Build passed — pushing."
+echo "✅ Tests + build passed — pushing."

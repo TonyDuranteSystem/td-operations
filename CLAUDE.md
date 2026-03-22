@@ -335,10 +335,30 @@ After building or fixing any CRM/Portal feature, you MUST:
 - Test server actions by checking DB state via `execute_sql`
 - But ALWAYS flag: "⚠️ Browser test pending — needs Chrome verification"
 
+## Mandatory Testing — ENFORCED BY HOOKS
+
+### Rule: Every change MUST pass unit tests + build before push
+The pre-push hook runs `npm run test:unit` THEN `npm run build`. If either fails, push is BLOCKED.
+
+### Rule: Write unit tests for every new function
+When creating a new function in `lib/`, write a corresponding test in `tests/unit/`. Test:
+- Normal inputs
+- Edge cases (null, empty, special characters)
+- Error conditions
+
+### Rule: Run `npm run test:unit` after every code change
+Before saying "it works" or "done", run unit tests. If you didn't run tests, it's NOT done.
+
+### Available test commands
+- `npm run test:unit` — Vitest unit tests (MUST pass before push)
+- `npm run test:e2e` — Playwright E2E tests (run after deploy)
+- `npm run build` — TypeScript compilation + Next.js build (MUST pass before push)
+
 ## Do NOT
 - Use Make, Zapier, n8n — all automation via Supabase Edge Functions
 - Commit `.env.local` or credentials
 - Create README.md or documentation files unless asked
 - Push to main without building first (`npm run build`)
 - Use `git add -A` or `git add .` — always add specific files
-- Declare a feature "done" without browser-testing it first
+- Declare a feature "done" without running `npm run test:unit` first
+- Push code without unit tests for new functions
