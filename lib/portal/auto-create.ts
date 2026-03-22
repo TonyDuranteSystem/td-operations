@@ -51,7 +51,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
       // Get contact from lead's email
       const { data: lead } = await supabaseAdmin
         .from('leads')
-        .select('email, full_name')
+        .select('email, full_name, language')
         .eq('id', leadId)
         .single()
 
@@ -69,7 +69,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
         }
         // If no contact exists yet, we can still create a portal user from the lead email
         if (!targetContactId) {
-          return await createFromEmail(lead.email, lead.full_name, accountId, tier)
+          return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en')
         }
       }
     }
@@ -81,7 +81,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
     // 2. Get contact details
     const { data: contact } = await supabaseAdmin
       .from('contacts')
-      .select('full_name, email')
+      .select('full_name, email, language')
       .eq('id', targetContactId)
       .single()
 
@@ -89,7 +89,8 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
       return { success: false, alreadyExists: false, error: 'Contact has no email address' }
     }
 
-    return await createFromEmail(contact.email, contact.full_name, accountId, tier)
+    const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
+    return await createFromEmail(contact.email, contact.full_name, accountId, tier, contactLang)
   } catch (err) {
     return {
       success: false,
@@ -103,7 +104,8 @@ async function createFromEmail(
   email: string,
   fullName: string,
   accountId: string | undefined,
-  tier: PortalTier
+  tier: PortalTier,
+  language?: string
 ): Promise<AutoCreateResult> {
   // Check if user already exists
   const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
@@ -134,6 +136,7 @@ async function createFromEmail(
     user_metadata: {
       full_name: fullName,
       must_change_password: true,
+      ...(language ? { language } : {}),
     },
   })
 
