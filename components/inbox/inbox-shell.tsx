@@ -109,8 +109,13 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
         }
         setSelected(null)
       }
+      if (variables.action === 'trash') {
+        toast.success('Email deleted')
+      }
+      if (variables.action === 'archive') {
+        toast.success('Email archived')
+      }
       if (variables.action === 'mark_unread') {
-        // Optimistically mark as unread in the list + close detail view
         if (selected) {
           queryClient.setQueriesData(
             { queryKey: ['inbox-conversations'] },
@@ -127,12 +132,21 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             }
           )
         }
-        setSelected(null) // Close email so user sees bold text + badge in list
+        setSelected(null)
         toast.success('Marked as unread')
       }
-      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+      // Delay refetch for trash/archive to let Gmail process
+      if (variables.action === 'trash' || variables.action === 'archive') {
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+          queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+          queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+        }, 2000)
+      } else {
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+        queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+        queryClient.invalidateQueries({ queryKey: ['gmail-labels'] })
+      }
     },
   })
 
@@ -474,8 +488,8 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
                       <button
                         onClick={() => emailActionMutation.mutate({ action: 'trash' })}
                         disabled={emailActionMutation.isPending}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-red-500 transition-colors"
-                        title="Trash"
+                        className="p-1.5 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-colors ml-1"
+                        title="Delete"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
