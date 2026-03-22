@@ -5,35 +5,44 @@ export const dynamic = "force-dynamic"
 
 type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward" | "mark_unread" | "move_to_label"
 
+function resolveMailbox(mailbox?: string): string {
+  return mailbox === 'antonio'
+    ? 'antonio.durante@tonydurante.us'
+    : 'support@tonydurante.us'
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { threadId, threadIds, action, forwardTo, labelId, bulk } = body as {
+    const { threadId, threadIds, action, forwardTo, labelId, bulk, mailbox } = body as {
       threadId?: string
       threadIds?: string[]
       action: EmailAction | 'mark_read'
       forwardTo?: string
       labelId?: string
       bulk?: boolean
+      mailbox?: string
     }
+
+    const asUser = resolveMailbox(mailbox)
 
     // Bulk operations
     if (bulk && threadIds?.length) {
       const results = await Promise.allSettled(
         threadIds.map(async (tid) => {
           if (action === 'trash') {
-            await gmailPost(`/threads/${tid}/trash`, {})
+            await gmailPost(`/threads/${tid}/trash`, {}, asUser)
           } else if (action === 'archive') {
-            await gmailPost(`/threads/${tid}/modify`, { removeLabelIds: ['INBOX'] })
+            await gmailPost(`/threads/${tid}/modify`, { removeLabelIds: ['INBOX'] }, asUser)
           } else if (action === 'mark_read') {
-            const thread = (await gmailGet(`/threads/${tid}`, { format: 'minimal' })) as { messages: Array<{ id: string }> }
+            const thread = (await gmailGet(`/threads/${tid}`, { format: 'minimal' }, asUser)) as { messages: Array<{ id: string }> }
             await Promise.all(
               thread.messages.map((m) =>
-                gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] })
+                gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] }, asUser)
               )
             )
           } else if (action === 'move_to_label' && labelId) {
-            await gmailPost(`/threads/${tid}/modify`, { addLabelIds: [labelId] })
+            await gmailPost(`/threads/${tid}/modify`, { addLabelIds: [labelId] }, asUser)
           }
         })
       )
@@ -51,60 +60,40 @@ export async function POST(req: NextRequest) {
 
     switch (action) {
       case "archive": {
-        // Remove INBOX label → archives the thread
-        await gmailPost(`/threads/${threadId}/modify`, {
-          removeLabelIds: ["INBOX"],
-        })
+        await gmailPost(`/threads/${threadId}/modify`, { removeLabelIds: ["INBOX"] }, asUser)
         return NextResponse.json({ success: true, action: "archived" })
       }
 
       case "star": {
-        // Add STARRED label to all messages in thread
-        const thread = (await gmailGet(`/threads/${threadId}`, {
-          format: "minimal",
-        })) as { messages: Array<{ id: string }> }
-
+        const thread = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as { messages: Array<{ id: string }> }
         await Promise.all(
           thread.messages.map((m) =>
-            gmailPost(`/messages/${m.id}/modify`, {
-              addLabelIds: ["STARRED"],
-            })
+            gmailPost(`/messages/${m.id}/modify`, { addLabelIds: ["STARRED"] }, asUser)
           )
         )
         return NextResponse.json({ success: true, action: "starred" })
       }
 
       case "unstar": {
-        const thread = (await gmailGet(`/threads/${threadId}`, {
-          format: "minimal",
-        })) as { messages: Array<{ id: string }> }
-
+        const thread = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as { messages: Array<{ id: string }> }
         await Promise.all(
           thread.messages.map((m) =>
-            gmailPost(`/messages/${m.id}/modify`, {
-              removeLabelIds: ["STARRED"],
-            })
+            gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ["STARRED"] }, asUser)
           )
         )
         return NextResponse.json({ success: true, action: "unstarred" })
       }
 
       case "trash": {
-        await gmailPost(`/threads/${threadId}/trash`, {})
+        await gmailPost(`/threads/${threadId}/trash`, {}, asUser)
         return NextResponse.json({ success: true, action: "trashed" })
       }
 
       case "mark_unread": {
-        // Add UNREAD label to all messages in thread
-        const thread = (await gmailGet(`/threads/${threadId}`, {
-          format: "minimal",
-        })) as { messages: Array<{ id: string }> }
-
+        const thread = (await gmailGet(`/threads/${threadId}`, { format: "minimal" }, asUser)) as { messages: Array<{ id: string }> }
         await Promise.all(
           thread.messages.map((m) =>
-            gmailPost(`/messages/${m.id}/modify`, {
-              addLabelIds: ["UNREAD"],
-            })
+            gmailPost(`/messages/${m.id}/modify`, { addLabelIds: ["UNREAD"] }, asUser)
           )
         )
         return NextResponse.json({ success: true, action: "marked_unread" })
@@ -114,23 +103,16 @@ export async function POST(req: NextRequest) {
         if (!labelId) {
           return NextResponse.json({ error: "labelId is required" }, { status: 400 })
         }
-        await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: [labelId] })
+        await gmailPost(`/threads/${threadId}/modify`, { addLabelIds: [labelId] }, asUser)
         return NextResponse.json({ success: true, action: "labeled" })
       }
 
       case "forward": {
         if (!forwardTo) {
-          return NextResponse.json(
-            { error: "forwardTo is required for forward action" },
-            { status: 400 }
-          )
+          return NextResponse.json({ error: "forwardTo is required for forward action" }, { status: 400 })
         }
 
-        // Get the last message in thread to forward
-        const fwdThread = (await gmailGet(`/threads/${threadId}`, {
-          format: "full",
-        })) as { messages: GmailAPIMessage[] }
-
+        const fwdThread = (await gmailGet(`/threads/${threadId}`, { format: "full" }, asUser)) as { messages: GmailAPIMessage[] }
         const lastMsg = fwdThread.messages[fwdThread.messages.length - 1]
         const origFrom = getHeader(lastMsg.payload.headers, "From")
         const origSubject = getHeader(lastMsg.payload.headers, "Subject")
@@ -146,13 +128,11 @@ export async function POST(req: NextRequest) {
           origBody.length > 5000 ? origBody.slice(0, 5000) + "..." : origBody,
         ].join("\n")
 
-        const fwdSubject = origSubject.startsWith("Fwd:")
-          ? origSubject
-          : `Fwd: ${origSubject}`
-
+        const fwdSubject = origSubject.startsWith("Fwd:") ? origSubject : `Fwd: ${origSubject}`
         const encodedFwdSubject = `=?utf-8?B?${Buffer.from(fwdSubject).toString("base64")}?=`
+        const fromAddr = asUser
         const headers = [
-          `From: support@tonydurante.us`,
+          `From: ${fromAddr}`,
           `To: ${forwardTo}`,
           `Subject: ${encodedFwdSubject}`,
           "Content-Type: text/plain; charset=utf-8",
@@ -161,10 +141,7 @@ export async function POST(req: NextRequest) {
         const raw = headers.join("\r\n") + "\r\n\r\n" + fwdBody
         const encodedRaw = Buffer.from(raw).toString("base64url")
 
-        const result = await gmailPost("/messages/send", {
-          raw: encodedRaw,
-        })
-
+        const result = await gmailPost("/messages/send", { raw: encodedRaw }, asUser)
         return NextResponse.json({
           success: true,
           action: "forwarded",
@@ -173,16 +150,10 @@ export async function POST(req: NextRequest) {
       }
 
       default:
-        return NextResponse.json(
-          { error: `Unknown action: ${action}` },
-          { status: 400 }
-        )
+        return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })
     }
   } catch (error) {
     console.error("Email action error:", error)
-    return NextResponse.json(
-      { error: "Failed to perform email action" },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "Failed to perform email action" }, { status: 500 })
   }
 }

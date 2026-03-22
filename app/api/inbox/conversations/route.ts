@@ -42,6 +42,7 @@ export async function GET(req: NextRequest) {
     const searchQuery = req.nextUrl.searchParams.get("q") // Gmail search query
     const labelFilter = req.nextUrl.searchParams.get("label") // Gmail label ID filter
     const pageToken = req.nextUrl.searchParams.get("pageToken") // Gmail pagination
+    const mailbox = req.nextUrl.searchParams.get("mailbox") // support | antonio | null (support default)
     const limit = Math.min(
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
       200
@@ -116,7 +117,12 @@ export async function GET(req: NextRequest) {
           gmailParams.pageToken = pageToken
         }
 
-        const listResult = (await gmailGet("/threads", gmailParams)) as {
+        // Determine which mailbox to read
+        const gmailUser = mailbox === 'antonio'
+          ? 'antonio.durante@tonydurante.us'
+          : 'support@tonydurante.us'
+
+        const listResult = (await gmailGet("/threads", gmailParams, gmailUser)) as {
           threads?: Array<{ id: string; snippet: string; historyId: string }>
           nextPageToken?: string
         }
@@ -133,7 +139,7 @@ export async function GET(req: NextRequest) {
               gmailGet(`/threads/${t.id}`, {
                 format: "metadata",
                 metadataHeaders: ["From", "Subject", "Date"],
-              }) as Promise<{
+              }, gmailUser) as Promise<{
                 id: string
                 messages: GmailAPIMessage[]
               }>

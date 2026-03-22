@@ -45,14 +45,15 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery }: ConversationListProps) {
+export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
   const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
-    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery],
+    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
     queryFn: () => {
       const params = new URLSearchParams()
       if (activeChannel) params.set('channel', activeChannel)
       if (labelFilter) params.set('label', labelFilter)
       if (searchQuery) params.set('q', searchQuery)
+      if (mailbox) params.set('mailbox', mailbox)
       params.set('limit', '50')
       return fetch(`/api/inbox/conversations?${params}`).then((r) => r.json())
     },

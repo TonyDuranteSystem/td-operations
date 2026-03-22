@@ -17,13 +17,18 @@ interface GmailLabel {
 /**
  * GET /api/inbox/labels — List Gmail labels (system + user-created)
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const mailbox = req.nextUrl.searchParams.get('mailbox')
+  const asUser = mailbox === 'antonio'
+    ? 'antonio.durante@tonydurante.us'
+    : 'support@tonydurante.us'
+
   try {
-    const result = await gmailGet('/labels') as { labels: GmailLabel[] }
+    const result = await gmailGet('/labels', undefined, asUser) as { labels: GmailLabel[] }
 
     // System labels we want to show
     const systemLabels = ['INBOX', 'SENT', 'DRAFT', 'STARRED', 'TRASH', 'SPAM']
@@ -63,17 +68,21 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { name } = await req.json()
+  const { name, mailbox } = await req.json()
   if (!name?.trim()) {
     return NextResponse.json({ error: 'Label name is required' }, { status: 400 })
   }
+
+  const asUserPost = mailbox === 'antonio'
+    ? 'antonio.durante@tonydurante.us'
+    : 'support@tonydurante.us'
 
   try {
     const result = await gmailPost('/labels', {
       name: name.trim(),
       labelListVisibility: 'labelShow',
       messageListVisibility: 'show',
-    }) as GmailLabel
+    }, asUserPost) as GmailLabel
 
     return NextResponse.json({
       success: true,
@@ -93,13 +102,17 @@ export async function DELETE(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { labelId } = await req.json()
+  const { labelId, mailbox: delMailbox } = await req.json()
   if (!labelId) {
     return NextResponse.json({ error: 'labelId is required' }, { status: 400 })
   }
 
+  const asUserDel = delMailbox === 'antonio'
+    ? 'antonio.durante@tonydurante.us'
+    : 'support@tonydurante.us'
+
   try {
-    await gmailDelete(`/labels/${labelId}`)
+    await gmailDelete(`/labels/${labelId}`, asUserDel)
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('[labels] Delete error:', err)
