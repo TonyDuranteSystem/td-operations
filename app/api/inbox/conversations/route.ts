@@ -156,6 +156,11 @@ export async function GET(req: NextRequest) {
             const subject = getHeader(firstMsg?.payload?.headers, "Subject")
             const lastDate = getHeader(lastMsg?.payload?.headers, "Date")
             const isUnread = lastMsg?.labelIds?.includes("UNREAD") || false
+            // Check for attachments (multipart/mixed = has attachments)
+            const hasAttachment = thread.messages.some(m =>
+              m.payload?.mimeType === 'multipart/mixed' ||
+              m.payload?.mimeType === 'multipart/related'
+            )
 
             // Match sender email to CRM account
             const senderEmail = extractEmail(from)
@@ -175,6 +180,7 @@ export async function GET(req: NextRequest) {
               subject,
               accountId: accountMatch?.accountId ?? null,
               accountName: accountMatch?.accountName ?? null,
+              hasAttachment,
             })
           }
         }

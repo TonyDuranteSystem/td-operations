@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { MessageSquare, Mail, Send, CheckSquare, Square } from 'lucide-react'
+import { MessageSquare, Mail, Send, CheckSquare, Square, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
@@ -149,11 +149,16 @@ export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode
                 <p className="text-xs text-zinc-500 truncate flex-1">
                   {conv.preview}
                 </p>
-                {conv.unread > 0 && (
-                  <span className="ml-2 px-1.5 py-0.5 bg-blue-500 text-white text-xs rounded-full font-semibold shrink-0">
-                    {conv.unread}
-                  </span>
-                )}
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  {conv.hasAttachment && (
+                    <Paperclip className="h-3 w-3 text-zinc-400" />
+                  )}
+                  {conv.unread > 0 && (
+                    <span className="px-1.5 py-0.5 bg-blue-500 text-white text-xs rounded-full font-semibold">
+                      {conv.unread}
+                    </span>
+                  )}
+                </div>
               </div>
             </button>
           </div>

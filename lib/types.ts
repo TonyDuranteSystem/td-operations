@@ -297,6 +297,7 @@ export interface InboxConversation {
   contactId?: string | null
   // Gmail-specific
   subject?: string
+  hasAttachment?: boolean
 }
 
 export interface InboxMessage {

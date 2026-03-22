@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { gmailPost } from "@/lib/gmail"
+import { gmailGet, gmailPost } from "@/lib/gmail"
 
 export const dynamic = "force-dynamic"
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { conversationId, channel } = body as {
+    const { conversationId, channel, mailbox } = body as {
       conversationId: string
       channel?: string
+      mailbox?: string
     }
 
     if (!conversationId) {
@@ -19,15 +20,29 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // ─── Gmail: remove UNREAD label ──────────────────
+    const asUser = mailbox === 'antonio'
+      ? 'antonio.durante@tonydurante.us'
+      : 'support@tonydurante.us'
+
+    // ─── Gmail: remove UNREAD label from ALL messages in thread ──────────────────
     if (channel === "gmail" || conversationId.startsWith("gmail:")) {
       const threadId = conversationId.replace("gmail:", "")
 
-      await gmailPost(`/threads/${threadId}/modify`, {
-        removeLabelIds: ["UNREAD"],
-      })
+      // Get all messages in thread, then remove UNREAD from each
+      const thread = (await gmailGet(`/threads/${threadId}`, { format: 'minimal' }, asUser)) as {
+        messages: Array<{ id: string; labelIds?: string[] }>
+      }
 
-      return NextResponse.json({ success: true, channel: "gmail", marked: 1 })
+      const unreadMsgs = (thread.messages ?? []).filter(m => m.labelIds?.includes('UNREAD'))
+      if (unreadMsgs.length > 0) {
+        await Promise.all(
+          unreadMsgs.map(m =>
+            gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] }, asUser)
+          )
+        )
+      }
+
+      return NextResponse.json({ success: true, channel: "gmail", marked: unreadMsgs.length })
     }
 
     // ─── Supabase: mark all new inbound as read ──────

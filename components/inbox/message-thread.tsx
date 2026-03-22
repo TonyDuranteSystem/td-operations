@@ -53,6 +53,7 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
         body: JSON.stringify({
           conversationId: conversation.id,
           channel: conversation.channel,
+          mailbox,
         }),
       }),
     onSuccess: () => {
