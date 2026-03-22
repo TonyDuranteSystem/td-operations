@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { isAdmin } from '@/lib/auth'
 import { PaymentBoard } from '@/components/payments/payment-board'
 
 export default async function PaymentsPage({
@@ -7,6 +8,8 @@ export default async function PaymentsPage({
   searchParams: { tab?: string }
 }) {
   const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const admin = isAdmin(user)
   const today = new Date().toISOString().split('T')[0]
   const activeTab = searchParams.tab ?? 'overdue'
 
@@ -65,17 +68,18 @@ export default async function PaymentsPage({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Payment Tracker</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {stats.overdueCount} overdue (${stats.overdueTotal.toLocaleString()}) · {stats.upcomingCount} upcoming
+          {stats.overdueCount} overdue{admin && ` ($${stats.overdueTotal.toLocaleString()})`} · {stats.upcomingCount} upcoming
         </p>
       </div>
       <PaymentBoard
         overdue={overdue}
         upcoming={upcoming}
-        paid={paid}
+        paid={admin ? paid : []}
         invoices={invoices}
         stats={stats}
         activeTab={activeTab}
         today={today}
+        isAdmin={admin}
       />
     </div>
   )

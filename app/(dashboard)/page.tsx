@@ -1,4 +1,6 @@
 import { Suspense } from 'react'
+import { createClient } from '@/lib/supabase/server'
+import { isAdmin } from '@/lib/auth'
 import { CardSkeleton } from '@/components/dashboard/card-skeleton'
 import { CardErrorBoundary } from '@/components/dashboard/card-error-boundary'
 import { UrgentTasksCard } from '@/components/dashboard/cards/urgent-tasks'
@@ -8,7 +10,10 @@ import { PendingFormsCard } from '@/components/dashboard/cards/pending-forms'
 import { RecentPaymentsCard } from '@/components/dashboard/cards/recent-payments'
 import { PendingActions } from '@/components/dashboard/pending-actions'
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const admin = isAdmin(user)
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6">
@@ -47,12 +52,14 @@ export default function DashboardPage() {
           </Suspense>
         </CardErrorBoundary>
 
-        {/* Row 3: Recent Payments */}
-        <CardErrorBoundary fallbackTitle="Recent Payments">
-          <Suspense fallback={<CardSkeleton title="Recent Payments" />}>
-            <RecentPaymentsCard />
-          </Suspense>
-        </CardErrorBoundary>
+        {/* Row 3: Recent Payments (admin only — financial data) */}
+        {admin && (
+          <CardErrorBoundary fallbackTitle="Recent Payments">
+            <Suspense fallback={<CardSkeleton title="Recent Payments" />}>
+              <RecentPaymentsCard />
+            </Suspense>
+          </CardErrorBoundary>
+        )}
       </div>
     </div>
   )

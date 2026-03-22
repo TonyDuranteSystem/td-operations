@@ -71,6 +71,7 @@ interface PaymentBoardProps {
   }
   activeTab: string
   today: string
+  isAdmin?: boolean
 }
 
 const INVOICE_STATUS_COLORS: Record<string, string> = {
@@ -224,7 +225,7 @@ function InvoiceActions({ payment }: { payment: PaymentItem }) {
 
 const PAYMENTS_PER_PAGE = 30
 
-export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeTab, today }: PaymentBoardProps) {
+export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeTab, today, isAdmin = true }: PaymentBoardProps) {
   const router = useRouter()
   const [page, setPage] = useState(1)
   const [showCreate, setShowCreate] = useState(false)
@@ -236,7 +237,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
   const tabs = [
     { key: 'overdue', label: 'Overdue', count: stats.overdueCount, icon: AlertCircle, color: 'text-red-600' },
     { key: 'upcoming', label: 'Upcoming', count: stats.upcomingCount, icon: Clock, color: 'text-amber-600' },
-    { key: 'paid', label: 'Paid', count: stats.paidCount, icon: CheckCircle2, color: 'text-emerald-600' },
+    ...(isAdmin ? [{ key: 'paid', label: 'Paid', count: stats.paidCount, icon: CheckCircle2, color: 'text-emerald-600' }] : []),
     { key: 'invoices', label: 'Invoices', count: stats.invoiceCount, icon: FileText, color: 'text-blue-600' },
   ]
 
@@ -258,10 +259,12 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
           <p className="text-2xl font-semibold text-amber-600">{formatCurrency(stats.upcomingTotal)}</p>
           <p className="text-xs text-muted-foreground mt-1">{stats.upcomingCount} upcoming</p>
         </div>
-        <div className="bg-white rounded-lg border p-4 flex-1 min-w-[140px]">
-          <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(stats.paidTotal)}</p>
-          <p className="text-xs text-muted-foreground mt-1">{stats.paidCount} paid</p>
-        </div>
+        {isAdmin && (
+          <div className="bg-white rounded-lg border p-4 flex-1 min-w-[140px]">
+            <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(stats.paidTotal)}</p>
+            <p className="text-xs text-muted-foreground mt-1">{stats.paidCount} paid</p>
+          </div>
+        )}
         {activeTab === 'invoices' ? (
           <div className="flex gap-2">
             <button
