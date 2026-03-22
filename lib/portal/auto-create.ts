@@ -125,6 +125,27 @@ async function createFromEmail(
   // Generate temp password
   const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
 
+  // Find or create contact so we can set contact_id in app_metadata
+  let portalContactId: string | undefined
+  const { data: existingContact } = await supabaseAdmin
+    .from('contacts')
+    .select('id')
+    .eq('email', email)
+    .limit(1)
+    .maybeSingle()
+
+  if (existingContact) {
+    portalContactId = existingContact.id
+  } else {
+    // Create contact from email + name
+    const { data: newContact } = await supabaseAdmin
+      .from('contacts')
+      .insert({ full_name: fullName, email, language: language === 'it' ? 'Italian' : 'English' })
+      .select('id')
+      .single()
+    portalContactId = newContact?.id
+  }
+
   // Create auth user
   const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
     email,
@@ -132,6 +153,7 @@ async function createFromEmail(
     email_confirm: true,
     app_metadata: {
       role: 'client',
+      ...(portalContactId ? { contact_id: portalContactId } : {}),
     },
     user_metadata: {
       full_name: fullName,
