@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
   gmailGet,
   getHeader,
-  extractBody,
+  extractBodyHtml,
   type GmailAPIMessage,
 } from "@/lib/gmail"
 import type { InboxMessage } from "@/lib/types"
@@ -20,6 +20,10 @@ export async function GET(
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
       200
     )
+    const mailbox = req.nextUrl.searchParams.get("mailbox")
+    const asUser = mailbox === 'antonio'
+      ? 'antonio.durante@tonydurante.us'
+      : 'support@tonydurante.us'
 
     // ─── Gmail thread ────────────────────────────────
     if (id.startsWith("gmail:")) {
@@ -27,7 +31,7 @@ export async function GET(
 
       const thread = (await gmailGet(`/threads/${threadId}`, {
         format: "full",
-      })) as {
+      }, asUser)) as {
         id: string
         messages: GmailAPIMessage[]
       }
@@ -36,7 +40,7 @@ export async function GET(
         const from = getHeader(msg.payload.headers, "From")
         const to = getHeader(msg.payload.headers, "To")
         const date = getHeader(msg.payload.headers, "Date")
-        const body = extractBody(msg.payload)
+        const body = extractBodyHtml(msg.payload)
 
         // Determine direction: if from contains support@tonydurante.us → outbound
         const isOutbound =
@@ -47,7 +51,7 @@ export async function GET(
           id: msg.id,
           direction: isOutbound ? "outbound" : "inbound",
           sender: isOutbound ? to : from,
-          content: body.length > 3000 ? body.slice(0, 3000) + "..." : body,
+          content: body.length > 50000 ? body.slice(0, 50000) + "..." : body,
           type: "email",
           status: msg.labelIds?.includes("UNREAD") ? "new" : "read",
           createdAt: date

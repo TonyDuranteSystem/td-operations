@@ -29,16 +29,18 @@ function formatMessageTime(dateStr: string) {
   })
 }
 
-export function MessageThread({ conversation }: MessageThreadProps) {
+export function MessageThread({ conversation, mailbox }: MessageThreadProps & { mailbox?: string }) {
   const queryClient = useQueryClient()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const { data, isLoading } = useQuery<ThreadResponse>({
-    queryKey: ['inbox-messages', conversation.id],
-    queryFn: () =>
-      fetch(`/api/inbox/messages/${encodeURIComponent(conversation.id)}`).then(
+    queryKey: ['inbox-messages', conversation.id, mailbox],
+    queryFn: () => {
+      const params = mailbox ? `?mailbox=${mailbox}` : ''
+      return fetch(`/api/inbox/messages/${encodeURIComponent(conversation.id)}${params}`).then(
         (r) => r.json()
-      ),
+      )
+    },
     refetchInterval: 15_000,
   })
 

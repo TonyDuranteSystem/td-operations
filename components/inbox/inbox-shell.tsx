@@ -484,7 +484,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
                 </div>
               </div>
 
-              <MessageThread conversation={selected} />
+              <MessageThread conversation={selected} mailbox={activeMailbox} />
               <ComposeReply conversation={selected} />
             </>
           ) : (

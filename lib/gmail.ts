@@ -246,6 +246,45 @@ export function decodeBase64Url(data: string): string {
   return Buffer.from(base64, "base64").toString("utf-8")
 }
 
+/**
+ * Extract email body preserving HTML for rich rendering.
+ * Falls back to text/plain if no HTML part found.
+ */
+export function extractBodyHtml(payload: GmailAPIMessage["payload"]): string {
+  // Direct body
+  if (payload.body?.data) {
+    return decodeBase64Url(payload.body.data)
+  }
+
+  if (payload.parts) {
+    // Prefer HTML
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/html" && part.body?.data) {
+        return decodeBase64Url(part.body.data)
+      }
+    }
+    // Fallback to plain text
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        return decodeBase64Url(part.body.data)
+      }
+    }
+    // Nested parts
+    for (const part of payload.parts) {
+      if (part.parts) {
+        const body = extractBodyHtml({ headers: [], mimeType: part.mimeType, parts: part.parts })
+        if (body) return body
+      }
+    }
+  }
+
+  return ""
+}
+
+/**
+ * Extract email body as plain text (strips HTML tags).
+ * Used for snippets, forwarding, and non-HTML contexts.
+ */
 export function extractBody(payload: GmailAPIMessage["payload"]): string {
   if (payload.body?.data) {
     const decoded = decodeBase64Url(payload.body.data)
