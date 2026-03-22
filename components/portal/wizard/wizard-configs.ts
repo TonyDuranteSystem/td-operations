@@ -124,6 +124,42 @@ export const ONBOARDING_FIELDS: Record<string, FieldConfig[]> = {
 
 // ─── TAX RETURN ────────────────────────────────────────────
 
+// Shared owner fields for all tax entity types
+const TAX_OWNER_BASE: FieldConfig[] = [
+  { name: 'owner_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
+  { name: 'owner_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+  { name: 'owner_email', label: 'Email', type: 'email', required: true },
+  { name: 'owner_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
+  { name: 'owner_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
+  { name: 'owner_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
+  { name: 'owner_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true },
+  { name: 'owner_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
+  { name: 'owner_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+  { name: 'owner_tax_residency', label: 'Tax Residency Country', labelIt: 'Residenza Fiscale', type: 'country', required: true },
+  { name: 'owner_local_tax_number', label: 'Local Tax ID (VAT/Codice Fiscale)', labelIt: 'Codice Fiscale / P.IVA', type: 'text', required: true },
+]
+
+// Shared company fields
+const TAX_COMPANY_BASE: FieldConfig[] = [
+  { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
+  { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true },
+  { name: 'date_of_incorporation', label: 'Date of Incorporation', labelIt: 'Data Costituzione', type: 'date', required: true },
+  { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato Costituzione', type: 'text', required: true },
+  { name: 'principal_product_service', label: 'Principal Product/Service', labelIt: 'Prodotto/Servizio Principale', type: 'textarea', required: true },
+  { name: 'us_business_activities', label: 'US Business Activities', labelIt: 'Attività Commerciali USA', type: 'textarea', required: true },
+  { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
+]
+
+// Shared document fields
+const TAX_DOCUMENTS_BASE: FieldConfig[] = [
+  { name: 'bank_statements', label: 'Bank Statements (CSV preferred)', labelIt: 'Estratti Conto (CSV preferito)', type: 'file', required: false, hint: 'Upload all bank statements for the tax year', hintIt: 'Carica tutti gli estratti conto dell\'anno fiscale' },
+  { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false },
+  { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false },
+  { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
+]
+
+// ─── TAX SMLLC (Form 1120/5472) ───────────────────────────
+
 export const TAX_STEPS: WizardStep[] = [
   { id: 'owner', title: 'Owner Information', titleIt: 'Informazioni Titolare', description: 'Personal and tax details', descriptionIt: 'Dati personali e fiscali' },
   { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
@@ -133,27 +169,20 @@ export const TAX_STEPS: WizardStep[] = [
 
 export const TAX_FIELDS: Record<string, FieldConfig[]> = {
   owner: [
-    { name: 'owner_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
-    { name: 'owner_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
-    { name: 'owner_email', label: 'Email', type: 'email', required: true },
-    { name: 'owner_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
-    { name: 'owner_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
-    { name: 'owner_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
-    { name: 'owner_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true },
-    { name: 'owner_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
-    { name: 'owner_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
-    { name: 'owner_tax_residency', label: 'Tax Residency Country', labelIt: 'Residenza Fiscale', type: 'country', required: true },
-    { name: 'owner_local_tax_number', label: 'Local Tax ID (VAT/Codice Fiscale)', labelIt: 'Codice Fiscale / P.IVA', type: 'text', required: true },
+    ...TAX_OWNER_BASE,
+    // SMLLC-specific: 5472 ownership questions
+    { name: 'owner_direct_100_pct', label: 'Are you the 100% direct owner?', labelIt: 'Sei il proprietario diretto al 100%?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'owner_ultimate_25_pct', label: 'Do you own 25%+ of the ultimate parent?', labelIt: 'Possiedi il 25%+ della società madre?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'ultimate_owner_name', label: 'Ultimate Owner Name (if not 100% direct)', labelIt: 'Nome Proprietario Finale (se non 100% diretto)', type: 'text', required: false },
+    { name: 'ultimate_owner_address', label: 'Ultimate Owner Address', labelIt: 'Indirizzo Proprietario Finale', type: 'text', required: false },
+    { name: 'ultimate_owner_country', label: 'Ultimate Owner Country', labelIt: 'Paese Proprietario Finale', type: 'country', required: false },
+    { name: 'ultimate_owner_tax_id', label: 'Ultimate Owner Tax ID', labelIt: 'Codice Fiscale Proprietario Finale', type: 'text', required: false },
   ],
-  company: [
-    { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
-    { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true },
-    { name: 'date_of_incorporation', label: 'Date of Incorporation', labelIt: 'Data Costituzione', type: 'date', required: true },
-    { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato Costituzione', type: 'text', required: true },
-    { name: 'principal_product_service', label: 'Principal Product/Service', labelIt: 'Prodotto/Servizio Principale', type: 'textarea', required: true },
-    { name: 'us_business_activities', label: 'US Business Activities', labelIt: 'Attività Commerciali USA', type: 'textarea', required: true },
-    { name: 'website_url', label: 'Website (optional)', labelIt: 'Sito Web (opzionale)', type: 'text', required: false },
-  ],
+  company: TAX_COMPANY_BASE,
   financials: [
     { name: 'formation_costs', label: 'Formation Costs ($)', labelIt: 'Costi di Costituzione ($)', type: 'number', required: true, hint: 'Total LLC formation expenses', hintIt: 'Spese totali di costituzione LLC' },
     { name: 'bank_contributions', label: 'Bank Contributions ($)', labelIt: 'Conferimenti Bancari ($)', type: 'number', required: true, hint: 'Capital contributed to bank account', hintIt: 'Capitale conferito su conto bancario' },
@@ -161,12 +190,130 @@ export const TAX_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'personal_expenses', label: 'Personal Expenses ($)', labelIt: 'Spese Personali ($)', type: 'number', required: true },
     { name: 'smllc_additional_comments', label: 'Additional Comments', labelIt: 'Commenti Aggiuntivi', type: 'textarea', required: false },
   ],
-  documents: [
-    { name: 'bank_statements', label: 'Bank Statements (CSV preferred)', labelIt: 'Estratti Conto (CSV preferito)', type: 'file', required: false, hint: 'Upload all bank statements for the tax year', hintIt: 'Carica tutti gli estratti conto dell\'anno fiscale' },
-    { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false },
-    { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false },
-    { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
+  documents: TAX_DOCUMENTS_BASE,
+}
+
+// ─── TAX MMLLC / Partnership (Form 1065) ──────────────────
+
+export const TAX_MMLLC_STEPS: WizardStep[] = [
+  { id: 'owner', title: 'Owner & Members', titleIt: 'Titolare e Membri', description: 'All partners/members details', descriptionIt: 'Dettagli di tutti i soci/membri' },
+  { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
+  { id: 'financials', title: 'Financial Information', titleIt: 'Informazioni Finanziarie', description: 'Partnership financial details', descriptionIt: 'Dettagli finanziari della partnership' },
+  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload statements and review', descriptionIt: 'Carica estratti conto e rivedi' },
+]
+
+export const TAX_MMLLC_FIELDS: Record<string, FieldConfig[]> = {
+  owner: [
+    ...TAX_OWNER_BASE,
+    // MMLLC members are added dynamically via repeater
   ],
+  company: [
+    ...TAX_COMPANY_BASE,
+    { name: 'has_payroll_w2', label: 'Does the LLC have payroll / W-2 employees?', labelIt: 'La LLC ha dipendenti / W-2?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'payroll_details', label: 'Payroll Details (if applicable)', labelIt: 'Dettagli Payroll (se applicabile)', type: 'textarea', required: false },
+  ],
+  financials: [
+    { name: 'prior_year_returns_filed', label: 'Prior Year Returns Filed?', labelIt: 'Dichiarazioni anno precedente presentate?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'financial_statements_sent', label: 'Financial Statements Prepared?', labelIt: 'Rendiconti finanziari preparati?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_ownership_change', label: 'Any ownership changes during the year?', labelIt: 'Cambiamenti nella proprietà durante l\'anno?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_foreign_partners', label: 'Any foreign partners?', labelIt: 'Soci stranieri?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_assets_over_50k', label: 'Total assets over $50,000?', labelIt: 'Attivi totali superiori a $50.000?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_received_1099', label: 'Received any 1099 forms?', labelIt: 'Ricevuti moduli 1099?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_issued_1099', label: 'Issued any 1099 forms?', labelIt: 'Emessi moduli 1099?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_crypto_transactions', label: 'Any cryptocurrency transactions?', labelIt: 'Transazioni in criptovaluta?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_real_estate', label: 'Any real estate owned?', labelIt: 'Immobili di proprietà?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_foreign_bank_accounts', label: 'Foreign bank accounts (FBAR)?', labelIt: 'Conti bancari esteri (FBAR)?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_related_party_trans', label: 'Related party transactions?', labelIt: 'Transazioni con parti correlate?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_debt_forgiveness', label: 'Any debt forgiveness?', labelIt: 'Cancellazione di debiti?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_vehicle_business_use', label: 'Vehicle used for business?', labelIt: 'Veicolo usato per l\'attività?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_home_office', label: 'Home office deduction?', labelIt: 'Deduzione ufficio in casa?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_retirement_plan', label: 'Retirement plan contributions?', labelIt: 'Contributi piano pensionistico?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_health_insurance', label: 'Health insurance for partners?', labelIt: 'Assicurazione sanitaria per i soci?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'mmllc_additional_info', label: 'Additional Information', labelIt: 'Informazioni Aggiuntive', type: 'textarea', required: false },
+  ],
+  documents: TAX_DOCUMENTS_BASE,
+}
+
+// ─── TAX CORP / Elected C-Corp (Form 1120) ────────────────
+
+export const TAX_CORP_STEPS: WizardStep[] = [
+  { id: 'owner', title: 'Ownership & Directors', titleIt: 'Proprietà e Amministratori', description: 'Corporate ownership structure', descriptionIt: 'Struttura proprietaria della società' },
+  { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Corporation details', descriptionIt: 'Dettagli della società' },
+  { id: 'financials', title: 'Financial Information', titleIt: 'Informazioni Finanziarie', description: 'Corporate financial details', descriptionIt: 'Dettagli finanziari della società' },
+  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload statements and review', descriptionIt: 'Carica estratti conto e rivedi' },
+]
+
+export const TAX_CORP_FIELDS: Record<string, FieldConfig[]> = {
+  owner: [
+    ...TAX_OWNER_BASE,
+    { name: 'ownership_structure', label: 'Ownership Structure (describe all shareholders)', labelIt: 'Struttura Proprietaria (descrivi tutti gli azionisti)', type: 'textarea', required: true },
+    { name: 'foreign_owned_25_pct', label: 'Foreign ownership >= 25%?', labelIt: 'Proprietà estera >= 25%?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'foreign_owner_details', label: 'Foreign Owner Details (if applicable)', labelIt: 'Dettagli Proprietario Estero (se applicabile)', type: 'textarea', required: false },
+  ],
+  company: [
+    ...TAX_COMPANY_BASE,
+    { name: 'has_payroll_w2', label: 'Does the corporation have payroll / W-2 employees?', labelIt: 'La società ha dipendenti / W-2?', type: 'select', required: true, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'payroll_details', label: 'Payroll Details', labelIt: 'Dettagli Payroll', type: 'textarea', required: false },
+    { name: 'state_revenue_breakdown', label: 'Revenue by State (if multi-state)', labelIt: 'Fatturato per Stato (se multi-stato)', type: 'textarea', required: false },
+    { name: 'new_activities_markets', label: 'New Activities or Markets This Year', labelIt: 'Nuove Attività o Mercati Quest\'Anno', type: 'textarea', required: false },
+  ],
+  financials: [
+    { name: 'corp_contributions', label: 'Capital Contributions ($)', labelIt: 'Conferimenti di Capitale ($)', type: 'number', required: false },
+    { name: 'corp_distributions', label: 'Distributions ($)', labelIt: 'Distribuzioni ($)', type: 'number', required: false },
+    { name: 'corp_dividends_paid', label: 'Dividends Paid ($)', labelIt: 'Dividendi Pagati ($)', type: 'number', required: false },
+    { name: 'corp_estimated_taxes_paid', label: 'Estimated Taxes Paid ($)', labelIt: 'Tasse Stimate Pagate ($)', type: 'number', required: false },
+    { name: 'corp_rental_passive_income', label: 'Rental/Passive Income ($)', labelIt: 'Reddito da Affitto/Passivo ($)', type: 'number', required: false },
+    { name: 'corp_debt_modifications', label: 'Debt Modifications or Forgiveness', labelIt: 'Modifiche o Cancellazione Debiti', type: 'textarea', required: false },
+    { name: 'corp_minute_book_updated', label: 'Corporate Minute Book Updated?', labelIt: 'Libro dei Verbali Aggiornato?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'corp_received_1099', label: 'Received any 1099 forms?', labelIt: 'Ricevuti moduli 1099?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'corp_vehicle_ownership', label: 'Company-owned vehicles?', labelIt: 'Veicoli di proprietà della società?', type: 'select', required: false, options: [
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
+    ]},
+    { name: 'corp_additional_info', label: 'Additional Information', labelIt: 'Informazioni Aggiuntive', type: 'textarea', required: false },
+  ],
+  documents: TAX_DOCUMENTS_BASE,
 }
 
 // ─── ITIN ──────────────────────────────────────────────────
@@ -378,10 +525,13 @@ export function getWizardConfig(wizardType: string, entityType?: string, banking
       }
     case 'tax':
     case 'tax_return':
-      return {
-        steps: TAX_STEPS,
-        fields: TAX_FIELDS,
+      if (entityType === 'MMLLC' || entityType === 'Multi-Member LLC') {
+        return { steps: TAX_MMLLC_STEPS, fields: TAX_MMLLC_FIELDS }
       }
+      if (entityType === 'Corp' || entityType === 'Corporation' || entityType === 'C-Corp') {
+        return { steps: TAX_CORP_STEPS, fields: TAX_CORP_FIELDS }
+      }
+      return { steps: TAX_STEPS, fields: TAX_FIELDS }
     case 'itin':
       return {
         steps: ITIN_STEPS,
