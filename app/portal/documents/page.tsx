@@ -32,9 +32,22 @@ export default async function PortalDocumentsPage() {
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
 
-  if (!selectedAccountId) redirect('/portal')
-
   const locale = getLocale(user)
+
+  // Leads without an account see empty documents
+  if (!selectedAccountId) {
+    return (
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
+        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900 mb-1">{t('documents.title', locale)}</h1>
+        <p className="text-zinc-500 text-sm mb-6">{t('documents.subtitle', locale)}</p>
+        <div className="bg-white rounded-xl border p-12 text-center">
+          <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-4" />
+          <p className="text-zinc-500 text-sm">{locale === 'it' ? 'I documenti appariranno qui dopo la firma del contratto.' : 'Documents will appear here after you sign the contract.'}</p>
+        </div>
+      </div>
+    )
+  }
+
   const { data: documents } = await supabaseAdmin
     .from('documents')
     .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')

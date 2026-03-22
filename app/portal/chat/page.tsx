@@ -18,7 +18,8 @@ export default async function PortalChatPage() {
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
-  if (!selectedAccountId) redirect('/portal')
+  // Leads without an account can still use chat via contact_id
+  const chatId = selectedAccountId || contactId
 
   const locale = getLocale(user)
 
@@ -28,7 +29,7 @@ export default async function PortalChatPage() {
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('chat.title', locale)}</h1>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('chat.team', locale)}</p>
       </div>
-      <PortalChat accountId={selectedAccountId} userId={user.id} />
+      <PortalChat accountId={chatId} userId={user.id} />
     </div>
   )
 }
