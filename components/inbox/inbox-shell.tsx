@@ -488,10 +488,11 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
                       <button
                         onClick={() => emailActionMutation.mutate({ action: 'trash' })}
                         disabled={emailActionMutation.isPending}
-                        className="p-1.5 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-colors ml-1"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 text-xs font-medium transition-colors ml-1"
                         title="Delete"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
                       </button>
                     </>
                   )}

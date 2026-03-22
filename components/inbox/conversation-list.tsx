@@ -1,7 +1,9 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { MessageSquare, Mail, Send, CheckSquare, Square, Paperclip } from 'lucide-react'
+import { MessageSquare, Mail, Send, CheckSquare, Square, Paperclip, Trash2 } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
@@ -9,6 +11,7 @@ interface ConversationListProps {
   activeChannel: InboxChannel | null
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
+  onDeleted?: (id: string) => void
   // Bulk selection
   bulkMode: boolean
   selectedIds: Set<string>
@@ -45,7 +48,33 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
+  const queryClient = useQueryClient()
+
+  const deleteMutation = useMutation({
+    mutationFn: async (conv: InboxConversation) => {
+      if (conv.channel !== 'gmail') return
+      const threadId = conv.id.replace('gmail:', '')
+      const asUser = mailbox === 'antonio' ? 'antonio.durante@tonydurante.us' : 'support@tonydurante.us'
+      const res = await fetch('/api/inbox/email-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId, action: 'trash', mailbox }),
+      })
+      if (!res.ok) throw new Error('Failed to delete')
+      return conv.id
+    },
+    onSuccess: (deletedId) => {
+      toast.success('Email deleted')
+      if (deletedId && onDeleted) onDeleted(deletedId)
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+        queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+      }, 1000)
+    },
+    onError: () => toast.error('Failed to delete email'),
+  })
+
   const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
     queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, mailbox],
     queryFn: () => {
@@ -94,7 +123,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode
           <div
             key={conv.id}
             className={cn(
-              'w-full text-left px-4 py-3 border-b transition-colors hover:bg-zinc-50 flex items-start gap-2',
+              'group w-full text-left px-4 py-3 border-b transition-colors hover:bg-zinc-50 flex items-start gap-2',
               isSelected && 'bg-blue-50 border-l-2 border-l-blue-500',
               isChecked && !isSelected && 'bg-blue-50/50',
               conv.unread > 0 && !isSelected && !isChecked && 'bg-white'
@@ -161,6 +190,21 @@ export function ConversationList({ activeChannel, selectedId, onSelect, bulkMode
                 </div>
               </div>
             </button>
+
+            {/* Delete button — visible on hover (Gmail only) */}
+            {conv.channel === 'gmail' && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  deleteMutation.mutate(conv)
+                }}
+                disabled={deleteMutation.isPending}
+                className="shrink-0 self-center opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-all"
+                title="Delete"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
           </div>
         )
       })}
