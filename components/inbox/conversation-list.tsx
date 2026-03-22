@@ -54,15 +54,27 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   const deleteMutation = useMutation({
     mutationFn: async (conv: InboxConversation) => {
       if (conv.channel !== 'gmail') return
-      const threadId = conv.id.replace('gmail:', '')
-      const asUser = mailbox === 'antonio' ? 'antonio.durante@tonydurante.us' : 'support@tonydurante.us'
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId, action: 'trash', mailbox }),
+        body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: 'trash', mailbox }),
       })
       if (!res.ok) throw new Error('Failed to delete')
       return conv.id
+    },
+    onMutate: async (conv) => {
+      // Optimistically remove from list immediately
+      queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
+        { queryKey: ['inbox-conversations'] },
+        (old) => {
+          if (!old) return old
+          return {
+            ...old,
+            conversations: old.conversations.filter((c) => c.id !== conv.id),
+            total: old.total - 1,
+          }
+        }
+      )
     },
     onSuccess: (deletedId) => {
       toast.success('Email deleted')
@@ -70,9 +82,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      }, 1000)
+      }, 2000)
     },
-    onError: () => toast.error('Failed to delete email'),
+    onError: () => {
+      toast.error('Failed to delete email')
+      // Revert — refetch to restore the list
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+    },
   })
 
   const { data, isLoading } = useQuery<{ conversations: InboxConversation[]; total: number }>({
