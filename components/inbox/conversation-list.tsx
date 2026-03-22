@@ -12,6 +12,7 @@ interface ConversationListProps {
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
   onDeleted?: (id: string) => void
+  deletedIds?: Set<string>
   // Bulk selection
   bulkMode: boolean
   selectedIds: Set<string>
@@ -48,7 +49,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
   const queryClient = useQueryClient()
 
   const deleteMutation = useMutation({
@@ -63,30 +64,18 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       return conv.id
     },
     onMutate: async (conv) => {
-      // Optimistically remove from list immediately
-      queryClient.setQueriesData<{ conversations: InboxConversation[]; total: number }>(
-        { queryKey: ['inbox-conversations'] },
-        (old) => {
-          if (!old) return old
-          return {
-            ...old,
-            conversations: old.conversations.filter((c) => c.id !== conv.id),
-            total: old.total - 1,
-          }
-        }
-      )
+      // Tell parent to hide this ID immediately
+      if (onDeleted) onDeleted(conv.id)
     },
-    onSuccess: (deletedId) => {
+    onSuccess: () => {
       toast.success('Email deleted')
-      if (deletedId && onDeleted) onDeleted(deletedId)
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      }, 2000)
+      }, 3000)
     },
     onError: () => {
       toast.error('Failed to delete email')
-      // Revert — refetch to restore the list
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
     },
   })
@@ -105,7 +94,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     refetchInterval: searchQuery ? false : 30_000,
   })
 
-  const conversations = data?.conversations || []
+  const conversations = (data?.conversations || []).filter(c => !deletedIds?.has(c.id))
 
   if (isLoading) {
     return (

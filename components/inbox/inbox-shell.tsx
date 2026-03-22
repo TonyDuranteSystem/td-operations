@@ -44,7 +44,18 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
   const queryClient = useQueryClient()
+
+  const handleEmailDeleted = useCallback((id: string) => {
+    setDeletedIds(prev => new Set(prev).add(id))
+    // If the deleted email was selected, deselect it
+    setSelected(prev => prev?.id === id ? null : prev)
+    // Clear from deletedIds after 5s (Gmail will have processed by then)
+    setTimeout(() => {
+      setDeletedIds(prev => { const n = new Set(prev); n.delete(id); return n })
+    }, 5000)
+  }, [])
 
   const bulkMode = selectedIds.size > 0
 
@@ -93,21 +104,8 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
     onSuccess: (_, variables) => {
       if (variables.action === 'archive' || variables.action === 'trash') {
         if (selected) {
-          queryClient.setQueriesData(
-            { queryKey: ['inbox-conversations'] },
-            (old: unknown) => {
-              if (!old || typeof old !== 'object') return old
-              const data = old as { conversations?: InboxConversation[]; total?: number }
-              if (!data.conversations) return old
-              return {
-                ...data,
-                conversations: data.conversations.filter(c => c.id !== selected.id),
-                total: (data.total ?? data.conversations.length) - 1,
-              }
-            }
-          )
+          handleEmailDeleted(selected.id)
         }
-        setSelected(null)
       }
       if (variables.action === 'trash') {
         toast.success('Email deleted')
@@ -384,6 +382,8 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
+            onDeleted={handleEmailDeleted}
+            deletedIds={deletedIds}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
