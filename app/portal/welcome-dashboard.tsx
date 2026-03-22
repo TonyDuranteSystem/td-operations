@@ -228,6 +228,19 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
           </div>
           <ArrowRight className="h-4 w-4 text-zinc-400 group-hover:text-green-500 transition-colors" />
         </Link>
+        <Link
+          href="/portal/services/request"
+          className="flex items-center gap-3 p-4 bg-white rounded-xl border hover:border-blue-300 hover:shadow-sm transition-all group"
+        >
+          <div className="h-10 w-10 rounded-lg bg-purple-50 flex items-center justify-center group-hover:bg-purple-100 transition-colors">
+            <Package className="h-5 w-5 text-purple-600" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold">{t.requestService}</p>
+            <p className="text-xs text-zinc-500">{t.requestServiceDesc}</p>
+          </div>
+          <ArrowRight className="h-4 w-4 text-zinc-400 group-hover:text-purple-500 transition-colors" />
+        </Link>
       </div>
     </div>
   )
@@ -299,6 +312,8 @@ const EN = {
   completeSetupDesc: 'Fill in your details to start the process',
   chatWithUs: 'Chat With Us',
   chatWithUsDesc: 'Ask questions or get help anytime',
+  requestService: 'Request a Service',
+  requestServiceDesc: 'Notary, shipping, ITIN, banking, and more',
   paymentRequired: 'Payment Required',
   paymentDesc: 'Your contract is signed. Complete your payment to start the process.',
   payByCard: 'Pay by Card',
@@ -332,6 +347,8 @@ const IT = {
   completeSetupDesc: 'Inserisci i tuoi dati per avviare il processo',
   chatWithUs: 'Chatta Con Noi',
   chatWithUsDesc: 'Fai domande o chiedi aiuto in qualsiasi momento',
+  requestService: 'Richiedi un Servizio',
+  requestServiceDesc: 'Notaio, spedizioni, ITIN, banking e altro',
   paymentRequired: 'Pagamento Richiesto',
   paymentDesc: 'Il contratto è firmato. Completa il pagamento per avviare il processo.',
   payByCard: 'Paga con Carta',
