@@ -34,11 +34,11 @@ export function EditTaskDialog({ task, open, onClose }: EditTaskDialogProps) {
     e.preventDefault()
 
     startTransition(async () => {
-      // Fetch latest timestamp to avoid stale lock error
-      const latestTs = await getTaskLatestTimestamp(task.id)
+      // Always fetch latest timestamp to avoid stale lock after drag-drop
+      const freshTs = await getTaskLatestTimestamp(task.id)
       const result = await updateTask({
         id: task.id,
-        updated_at: latestTs ?? task.updated_at,
+        updated_at: freshTs ?? task.updated_at,
         task_title: title.trim(),
         description: description.trim() || undefined,
         priority: priority as 'Urgent' | 'High' | 'Normal' | 'Low',

@@ -76,17 +76,19 @@ export async function updateWithLock(
   const supabase = createClient()
   const now = new Date().toISOString()
 
-  const { count, error } = await supabase
+  const { data, error } = await supabase
     .from(table)
     .update({ ...updates, updated_at: now })
     .eq("id", id)
     .eq("updated_at", originalUpdatedAt)
+    .select("id")
 
   if (error) {
     return { success: false, error: error.message }
   }
 
-  if ((count ?? 0) === 0) {
+  // .select("id") returns matched rows — if 0, timestamp didn't match
+  if (!data || data.length === 0) {
     return {
       success: false,
       error: "Record modified by another user. Please refresh.",
