@@ -114,9 +114,18 @@ export async function POST(req: NextRequest) {
       }
 
       case "untrash": {
+        // Gmail doesn't allow removing TRASH via modify — must use /untrash endpoint per message
+        const trashThread = (await gmailGet(`/threads/${threadId}`, { format: 'minimal' }, asUser)) as {
+          messages: Array<{ id: string }>
+        }
+        await Promise.all(
+          trashThread.messages.map((m) =>
+            gmailPost(`/messages/${m.id}/untrash`, {}, asUser)
+          )
+        )
+        // Also add back to INBOX
         await gmailPost(`/threads/${threadId}/modify`, {
-          addLabelIds: ["INBOX"],
-          removeLabelIds: ["TRASH"]
+          addLabelIds: ["INBOX"]
         }, asUser)
         return NextResponse.json({ success: true, action: "untrashed" })
       }
