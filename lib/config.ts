@@ -3,11 +3,12 @@
  *
  * ## Domain Architecture (established 2026-03-17)
  *
- * THREE domains point to the same Vercel deployment (td-operations):
+ * FOUR domains point to the same Vercel deployment (td-operations):
  *
  * 1. app.tonydurante.us        — CLIENT-FACING: all forms, offers, leases, OA, tracking pixels
- * 2. td-operations.vercel.app  — INTERNAL: OAuth issuer, QB callback, dashboard login
- * 3. offerte.tonydurante.us    — LEGACY: old offer links still work, but new ones use app.*
+ * 2. crm.tonydurante.us        — CRM DASHBOARD: internal team login
+ * 3. td-operations.vercel.app  — INTERNAL: OAuth issuer, QB callback only
+ * 4. offerte.tonydurante.us    — LEGACY: old offer links still work, but new ones use app.*
  *
  * ## Rules
  *
@@ -26,4 +27,4 @@
 
 export const APP_BASE_URL = "https://app.tonydurante.us"
 export const PORTAL_BASE_URL = "https://portal.tonydurante.us"
-export const CRM_BASE_URL = "https://td-operations.vercel.app"
+export const CRM_BASE_URL = "https://crm.tonydurante.us"
