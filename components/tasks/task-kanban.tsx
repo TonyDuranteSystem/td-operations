@@ -326,17 +326,40 @@ function KanbanView({
 
 /* ── Main Component ───────────────────────────────────── */
 
+interface ServiceTab {
+  key: string
+  label: string
+  count: number
+  overdue: number
+  dueSoon: number
+  health: 'green' | 'orange' | 'red'
+}
+
 export interface TaskKanbanProps {
   tasks: Task[]
   stats: TaskStats
   today: string
+  serviceTabs?: ServiceTab[]
 }
 
-export function TaskKanban({ tasks: initialTasks, stats, today }: TaskKanbanProps) {
+const HEALTH_COLORS = {
+  green: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  orange: 'bg-amber-100 text-amber-700 border-amber-200',
+  red: 'bg-red-100 text-red-700 border-red-200',
+} as const
+
+const HEALTH_DOT = {
+  green: 'bg-emerald-500',
+  orange: 'bg-amber-500',
+  red: 'bg-red-500',
+} as const
+
+export function TaskKanban({ tasks: initialTasks, stats, today, serviceTabs = [] }: TaskKanbanProps) {
   const [allTasks, setAllTasks] = useState(initialTasks)
   const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban')
   const [showCreate, setShowCreate] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
+  const [selectedService, setSelectedService] = useState<string | null>(null)
   const [filters, setFilters] = useState<Filters>({
     assignee: '',
     category: '',
@@ -344,9 +367,17 @@ export function TaskKanban({ tasks: initialTasks, stats, today }: TaskKanbanProp
     search: '',
   })
 
-  // Apply filters
+  // Apply filters (including service tab)
   const filteredTasks = useMemo(() => {
     return allTasks.filter(t => {
+      // Service tab filter
+      if (selectedService) {
+        if (selectedService === 'General') {
+          if (t.service_type) return false
+        } else {
+          if (t.service_type !== selectedService) return false
+        }
+      }
       if (filters.assignee && t.assigned_to !== filters.assignee) return false
       if (filters.category && t.category !== filters.category) return false
       if (filters.priority && t.priority !== filters.priority) return false
@@ -358,7 +389,7 @@ export function TaskKanban({ tasks: initialTasks, stats, today }: TaskKanbanProp
       }
       return true
     })
-  }, [allTasks, filters])
+  }, [allTasks, filters, selectedService])
 
   // Build columns from filtered tasks
   const columns = useMemo(() => {
@@ -382,6 +413,43 @@ export function TaskKanban({ tasks: initialTasks, stats, today }: TaskKanbanProp
 
   return (
     <div className="space-y-6">
+      {/* Service Tabs */}
+      {serviceTabs.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setSelectedService(null)}
+            className={cn(
+              'px-3 py-2 rounded-lg text-sm font-medium border transition-colors',
+              !selectedService
+                ? 'bg-zinc-900 text-white border-zinc-900'
+                : 'bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50'
+            )}
+          >
+            All Services
+            <span className="ml-1.5 text-xs opacity-70">{stats.total}</span>
+          </button>
+          {serviceTabs.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setSelectedService(selectedService === tab.key ? null : tab.key)}
+              className={cn(
+                'px-3 py-2 rounded-lg text-sm font-medium border transition-colors flex items-center gap-2',
+                selectedService === tab.key
+                  ? 'bg-zinc-900 text-white border-zinc-900'
+                  : `${HEALTH_COLORS[tab.health]} hover:opacity-80`
+              )}
+            >
+              <span className={cn('h-2 w-2 rounded-full', selectedService === tab.key ? 'bg-white' : HEALTH_DOT[tab.health])} />
+              {tab.label}
+              <span className="text-xs opacity-70">{tab.count}</span>
+              {tab.overdue > 0 && selectedService !== tab.key && (
+                <span className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded-full">{tab.overdue}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="flex gap-3 flex-wrap">
         <StatCard label="Active Total" value={stats.total} color="text-foreground" />

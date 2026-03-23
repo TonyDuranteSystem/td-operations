@@ -8,7 +8,9 @@ export interface Task {
   category: string | null
   description: string | null
   account_id: string | null
+  delivery_id?: string | null
   company_name: string | null
+  service_type?: string | null
   updated_at: string
   created_at: string
 }
