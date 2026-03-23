@@ -25,8 +25,13 @@ import {
   Gauge,
   GripVertical,
   Users,
+  KeyRound,
+  Loader2,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
   DndContext,
@@ -155,6 +160,7 @@ export function Sidebar({
   const [mobileOpen, setMobileOpen] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [navOrder, setNavOrder] = useState<string[]>([])
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
 
   // Load saved order from localStorage
   useEffect(() => {
@@ -352,16 +358,150 @@ export function Sidebar({
               <p className="font-medium capitalize">{displayName}</p>
               <p className="text-xs text-sidebar-foreground/50 truncate">{user.email}</p>
             </div>
-            <button
-              onClick={handleLogout}
-              className="p-1.5 rounded hover:bg-sidebar-accent shrink-0"
-              title="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                onClick={() => setPasswordDialogOpen(true)}
+                className="p-1.5 rounded hover:bg-sidebar-accent"
+                title="Change password"
+              >
+                <KeyRound className="h-4 w-4" />
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-1.5 rounded hover:bg-sidebar-accent"
+                title="Sign out"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
+
+      {/* Change Password Dialog */}
+      {passwordDialogOpen && (
+        <ChangePasswordDialog onClose={() => setPasswordDialogOpen(false)} />
+      )}
+    </>
+  )
+}
+
+function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [showCurrent, setShowCurrent] = useState(false)
+  const [showNew, setShowNew] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPassword !== confirmPassword) {
+      toast.error('New passwords do not match')
+      return
+    }
+    if (newPassword.length < 8) {
+      toast.error('Password must be at least 8 characters')
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      toast.success('Password changed successfully')
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to change password')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[60] bg-black/50" onClick={onClose} />
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-5 py-4 border-b">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-zinc-600" />
+              <h2 className="text-base font-semibold">Change Password</h2>
+            </div>
+            <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Current Password</label>
+              <div className="relative">
+                <input
+                  type={showCurrent ? 'text' : 'password'}
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  required
+                  autoFocus
+                  className="w-full px-3 py-2 pr-10 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-600">
+                  {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">New Password</label>
+              <div className="relative">
+                <input
+                  type={showNew ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  className="w-full px-3 py-2 pr-10 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Min 8 characters"
+                />
+                <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-600">
+                  {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Confirm New Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={e => setConfirmPassword(e.target.value)}
+                required
+                className={cn(
+                  "w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500",
+                  confirmPassword && confirmPassword !== newPassword && "border-red-300 focus:ring-red-500"
+                )}
+              />
+              {confirmPassword && confirmPassword !== newPassword && (
+                <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading || !currentPassword || !newPassword || newPassword !== confirmPassword}
+                className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-2"
+              >
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                Change Password
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </>
   )
 }
