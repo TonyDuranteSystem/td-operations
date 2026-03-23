@@ -93,8 +93,10 @@ export async function GET(req: NextRequest) {
     // ─── Gmail threads ──────────────────────────────────
     if (!channel || channel === "gmail") {
       try {
-        // Gmail threads API returns max ~100 per page. Fetch multiple pages to get more.
-        const targetGmailThreads = Math.min(limit, 300)
+        // Gmail threads API returns max ~100 per page. Always fetch 5 pages (500 threads)
+        // to ensure we capture all client emails, even when system notifications take up slots.
+        // The frontend limit only controls how many we return, not how many we fetch.
+        const targetGmailThreads = 500
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
@@ -140,7 +142,7 @@ export async function GET(req: NextRequest) {
         let allThreadIds: Array<{ id: string; snippet: string }> = []
         let currentPageToken = pageToken || undefined
 
-        for (let page = 0; page < 3 && allThreadIds.length < targetGmailThreads; page++) {
+        for (let page = 0; page < 5 && allThreadIds.length < targetGmailThreads; page++) {
           const pageParams = { ...gmailParams }
           if (currentPageToken) pageParams.pageToken = currentPageToken
 
@@ -164,8 +166,8 @@ export async function GET(req: NextRequest) {
         const emailLookup = await emailLookupPromise
 
         if (allThreadIds.length > 0) {
-          // Fetch metadata for each thread — limit to 200 to avoid rate limits
-          const threadsToFetch = allThreadIds.slice(0, 200)
+          // Fetch metadata for each thread — limit to 300 to balance completeness vs speed
+          const threadsToFetch = allThreadIds.slice(0, 300)
           const threadDetails = await Promise.allSettled(
             threadsToFetch.map((t) =>
               gmailGet(`/threads/${t.id}`, {
