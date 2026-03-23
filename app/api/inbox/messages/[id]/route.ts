@@ -26,7 +26,7 @@ export async function GET(
       ? 'antonio.durante@tonydurante.us'
       : 'support@tonydurante.us'
 
-    // ─── Gmail thread ────────────────────────────────
+    // ─── Gmail thread (with related thread merging) ──
     if (id.startsWith("gmail:")) {
       const threadId = id.replace("gmail:", "")
 
@@ -37,14 +37,78 @@ export async function GET(
         messages: GmailAPIMessage[]
       }
 
-      const messages: InboxMessage[] = thread.messages.map((msg) => {
+      // Get subject from first message
+      const subject = getHeader(
+        thread.messages[0]?.payload?.headers,
+        "Subject"
+      )
+
+      // Collect all Gmail messages — start with this thread's messages
+      let allGmailMessages: GmailAPIMessage[] = [...thread.messages]
+      const seenMessageIds = new Set(thread.messages.map(m => m.id))
+
+      // Find related threads: same subject, different thread ID
+      // Strip "Re: " / "Fwd: " prefixes for matching
+      const baseSubject = subject
+        .replace(/^(Re|Fwd|FW|RE):\s*/gi, '')
+        .replace(/^(Re|Fwd|FW|RE):\s*/gi, '') // double strip for "Re: Re:"
+        .trim()
+
+      if (baseSubject.length > 3) {
+        try {
+          const searchResult = (await gmailGet("/threads", {
+            q: `subject:"${baseSubject}"`,
+            maxResults: "10",
+          }, asUser)) as {
+            threads?: Array<{ id: string }>
+          }
+
+          // Fetch related threads (different ID, same subject)
+          const relatedThreadIds = (searchResult.threads || [])
+            .map(t => t.id)
+            .filter(tid => tid !== threadId)
+            .slice(0, 5) // max 5 related threads
+
+          if (relatedThreadIds.length > 0) {
+            const relatedResults = await Promise.allSettled(
+              relatedThreadIds.map(tid =>
+                gmailGet(`/threads/${tid}`, { format: "full" }, asUser) as Promise<{
+                  id: string
+                  messages: GmailAPIMessage[]
+                }>
+              )
+            )
+
+            for (const result of relatedResults) {
+              if (result.status !== "fulfilled") continue
+              for (const msg of result.value.messages) {
+                if (!seenMessageIds.has(msg.id)) {
+                  seenMessageIds.add(msg.id)
+                  allGmailMessages.push(msg)
+                }
+              }
+            }
+          }
+        } catch {
+          // If related search fails, just use the original thread
+        }
+      }
+
+      // Sort all messages chronologically
+      allGmailMessages.sort((a, b) => {
+        const dateA = parseInt(a.internalDate || "0")
+        const dateB = parseInt(b.internalDate || "0")
+        return dateA - dateB
+      })
+
+      // Convert to InboxMessage format
+      const messages: InboxMessage[] = allGmailMessages.map((msg) => {
         const from = getHeader(msg.payload.headers, "From")
         const to = getHeader(msg.payload.headers, "To")
         const date = getHeader(msg.payload.headers, "Date")
         const body = extractBodyHtml(msg.payload)
         const attachments = extractAttachments(msg.payload)
 
-        // Determine direction: if from contains support@tonydurante.us → outbound
         const isOutbound =
           from.includes("support@tonydurante.us") ||
           from.includes("antonio.durante@tonydurante.us")
@@ -62,12 +126,6 @@ export async function GET(
           ...(attachments.length > 0 ? { attachments } : {}),
         }
       })
-
-      // Get subject from first message
-      const subject = getHeader(
-        thread.messages[0]?.payload?.headers,
-        "Subject"
-      )
 
       return NextResponse.json({
         conversationId: id,
