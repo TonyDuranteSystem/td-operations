@@ -44,7 +44,9 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
-  const [readIds, setReadIds] = useState<Set<string>>(new Set())
+  // Track unread overrides — key: conversation ID, value: unread count to show
+  // This prevents Gmail's slow index from reverting optimistic read/unread changes
+  const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
   // Persist deleted IDs in localStorage — Gmail's index takes 30-60s to update
   // after label changes, so we need to filter client-side across page refreshes
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
@@ -137,22 +139,8 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
       }
       if (variables.action === 'mark_unread') {
         if (selected) {
-          // Remove from readIds so the unread badge shows again
-          setReadIds(prev => { const n = new Set(prev); n.delete(selected.id); return n })
-          queryClient.setQueriesData(
-            { queryKey: ['inbox-conversations'] },
-            (old: unknown) => {
-              if (!old || typeof old !== 'object') return old
-              const data = old as { conversations?: InboxConversation[]; total?: number }
-              if (!data.conversations) return old
-              return {
-                ...data,
-                conversations: data.conversations.map(c =>
-                  c.id === selected.id ? { ...c, unread: 1 } : c
-                ),
-              }
-            }
-          )
+          // Override to unread=1 — persists across refetches until Gmail catches up
+          setUnreadOverrides(prev => new Map(prev).set(selected.id, 1))
         }
         setSelected(null)
         toast.success('Marked as unread')
@@ -214,9 +202,9 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
 
   const handleSelect = (conversation: InboxConversation) => {
     setSelected(conversation)
-    // Track as read so refetches don't revert the unread badge
+    // Override unread to 0 — opening an email marks it as read
     if (conversation.unread > 0) {
-      setReadIds(prev => new Set(prev).add(conversation.id))
+      setUnreadOverrides(prev => new Map(prev).set(conversation.id, 0))
     }
   }
 
@@ -412,7 +400,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             onSelect={handleSelect}
             onDeleted={handleEmailDeleted}
             deletedIds={deletedIds}
-            readIds={readIds}
+            unreadOverrides={unreadOverrides}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
