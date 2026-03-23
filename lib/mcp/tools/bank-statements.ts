@@ -16,7 +16,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { downloadFileBinary, listFolder, uploadBinaryToDrive } from "@/lib/google-drive"
+import { downloadFileBinary, listFolder, uploadBinaryToDrive, findTaxFolder } from "@/lib/google-drive"
 import { parseBankStatement, categorizeTransaction } from "@/lib/bank-statement-parser"
 import type { CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
@@ -67,16 +67,7 @@ async function getAccountContext(accountId: string) {
   }
 }
 
-/** Find the "3. Tax" subfolder in a client's Drive folder */
-async function findTaxFolder(driveFolderId: string): Promise<string | null> {
-  const listing = (await listFolder(driveFolderId)) as {
-    files?: { id: string; name: string; mimeType: string }[]
-  }
-  const taxFolder = listing.files?.find(
-    f => f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name)
-  )
-  return taxFolder?.id || null
-}
+// findTaxFolder imported from @/lib/google-drive (shared helper)
 
 /** Get IRS exchange rate for a currency/year */
 async function getIrsRate(currency: string, taxYear: number): Promise<number | null> {

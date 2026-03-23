@@ -7,7 +7,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { listFolder } from "@/lib/google-drive"
+import { listFolder, findTaxFolder, findOrCreateYearFolder, downloadFileBinary } from "@/lib/google-drive"
+import { gmailPost } from "@/lib/gmail"
+import { logAction } from "@/lib/mcp/action-log"
 
 export function registerTaxTools(server: McpServer) {
 
@@ -870,6 +872,299 @@ export function registerTaxTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // tax_send_to_accountant
+  // ═══════════════════════════════════════
+  server.tool(
+    "tax_send_to_accountant",
+    `Send all tax return documents to the accountant for preparation. Gathers all required documents from Drive for a given account + tax_year: Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior year return, and bank statements. Sends one email with all attachments. Updates tax_returns status. Idempotent: skips if already sent unless force_resend=true. Prerequisites: tax form must be completed, documents must be in Drive 3.Tax/{year}/ folder. Use tax_search first to find the tax return.`,
+    {
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      tax_year: z.number().describe("Tax year (e.g., 2025)"),
+      accountant_email: z.string().email().optional().default("tax@adasglobus.com").describe("Accountant email (default: tax@adasglobus.com)"),
+      force_resend: z.boolean().optional().default(false).describe("Override idempotency check to re-send"),
+    },
+    async ({ account_id, tax_year, accountant_email, force_resend }) => {
+      try {
+        const toEmail = accountant_email || "tax@adasglobus.com"
+
+        // ── 1. Gather context ──
+        const { data: account } = await supabaseAdmin
+          .from("accounts")
+          .select("company_name, ein_number, entity_type, drive_folder_id")
+          .eq("id", account_id)
+          .single()
+
+        if (!account) return { content: [{ type: "text" as const, text: "❌ Account not found" }] }
+        if (!account.drive_folder_id) return { content: [{ type: "text" as const, text: "❌ Account has no Drive folder" }] }
+
+        // Get primary contact
+        const { data: contactLink } = await supabaseAdmin
+          .from("account_contacts")
+          .select("contacts(full_name, first_name, last_name, email)")
+          .eq("account_id", account_id)
+          .limit(1)
+          .single()
+
+        const contact = (contactLink as unknown as { contacts: { full_name?: string; first_name: string; last_name: string; email: string } | null })?.contacts
+        const contactName = contact?.full_name || `${contact?.first_name || ""} ${contact?.last_name || ""}`.trim() || "Unknown"
+
+        // Get tax return record
+        const { data: taxReturn } = await supabaseAdmin
+          .from("tax_returns")
+          .select("*")
+          .eq("account_id", account_id)
+          .eq("tax_year", tax_year)
+          .maybeSingle()
+
+        if (!taxReturn) return { content: [{ type: "text" as const, text: `❌ No tax return found for ${account.company_name} (${tax_year})` }] }
+
+        // ── 2. Idempotency check ──
+        if (taxReturn.sent_to_india && !force_resend) {
+          return { content: [{ type: "text" as const, text: `⚠️ Already sent to accountant on ${taxReturn.sent_to_india_date}. Use force_resend=true to re-send.` }] }
+        }
+
+        // ── 3. Determine required docs by entity type ──
+        const entityType = account.entity_type || "SMLLC"
+        const returnTypeMap: Record<string, string> = { "Single Member LLC": "5472", "Multi-Member LLC": "1065", "Corporation": "1120", "SMLLC": "5472", "MMLLC": "1065", "Corp": "1120" }
+        const returnType = returnTypeMap[entityType] || taxReturn.return_type || entityType
+        const needsPnl = ["MMLLC", "Multi-Member LLC", "Corp", "Corporation"].includes(entityType)
+
+        // ── 4. Find files on Drive ──
+        const taxFolderId = await findTaxFolder(account.drive_folder_id)
+        if (!taxFolderId) return { content: [{ type: "text" as const, text: "❌ No '3. Tax' folder found in Drive" }] }
+
+        // Find year subfolder
+        const yearListing = (await listFolder(taxFolderId, 100)) as { files?: { id: string; name: string; mimeType: string }[] }
+        const yearFolder = yearListing.files?.find(f => f.name === String(tax_year) && f.mimeType === "application/vnd.google-apps.folder")
+        const priorYearFolder = yearListing.files?.find(f => f.name === String(tax_year - 1) && f.mimeType === "application/vnd.google-apps.folder")
+
+        interface DriveFile { id: string; name: string; mimeType: string; category: string }
+        const foundFiles: DriveFile[] = []
+        const missing: string[] = []
+
+        // Tax Organizer PDF (in current year folder)
+        if (yearFolder) {
+          const yearFiles = (await listFolder(yearFolder.id, 100)) as { files?: { id: string; name: string; mimeType: string }[] }
+          const taxOrganizerPdf = yearFiles.files?.find(f => /tax.?data|tax.?organizer|complete.?data/i.test(f.name) && /pdf/i.test(f.mimeType || f.name))
+          if (taxOrganizerPdf) {
+            foundFiles.push({ ...taxOrganizerPdf, category: "Tax Organizer" })
+          } else {
+            missing.push("Tax Organizer PDF")
+          }
+
+          // P&L Excel (in current year folder)
+          if (needsPnl) {
+            const pnlExcel = yearFiles.files?.find(f => /p&l|pnl|profit.?loss/i.test(f.name) && /spreadsheet|xlsx/i.test(f.mimeType || f.name))
+            if (pnlExcel) {
+              foundFiles.push({ ...pnlExcel, category: "P&L + Balance Sheet" })
+            } else {
+              missing.push("P&L Excel")
+            }
+          }
+
+          // Bank statements in year folder
+          if (needsPnl) {
+            const stmtPattern = /wise|mercury|relay|statement|bank|estratto/i
+            const stmts = (yearFiles.files || []).filter(f => stmtPattern.test(f.name) && /pdf|csv/i.test(f.mimeType || f.name))
+            for (const s of stmts) foundFiles.push({ ...s, category: "Bank Statement" })
+          }
+        } else {
+          missing.push(`Tax year folder (${tax_year})`)
+        }
+
+        // Also check Tax root for bank statements
+        if (needsPnl) {
+          const rootStmtPattern = /wise|mercury|relay|statement|bank|estratto/i
+          const rootStmts = (yearListing.files || []).filter(f => rootStmtPattern.test(f.name) && f.mimeType !== "application/vnd.google-apps.folder" && /pdf|csv/i.test(f.mimeType || f.name))
+          for (const s of rootStmts) {
+            if (!foundFiles.some(ff => ff.id === s.id)) foundFiles.push({ ...s, category: "Bank Statement" })
+          }
+        }
+
+        // Prior year return
+        if (priorYearFolder) {
+          const priorFiles = (await listFolder(priorYearFolder.id, 50)) as { files?: { id: string; name: string; mimeType: string }[] }
+          const priorReturn = priorFiles.files?.find(f => /return|1065|1120|5472|filed/i.test(f.name) && /pdf/i.test(f.mimeType || f.name))
+          if (priorReturn) {
+            foundFiles.push({ ...priorReturn, category: "Prior Year Return" })
+          }
+          // Not a hard requirement — prior year might not exist for first-year LLCs
+        }
+
+        // ── 5. Validate ──
+        if (missing.length > 0 && !force_resend) {
+          const lines = [
+            `⚠️ Missing documents for ${account.company_name} (${tax_year}):`,
+            ...missing.map(m => `   ❌ ${m}`),
+            "",
+            `Found ${foundFiles.length} documents:`,
+            ...foundFiles.map(f => `   ✅ ${f.category}: ${f.name}`),
+            "",
+            "Upload missing documents to Drive first, or use force_resend=true to send anyway.",
+          ]
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        if (foundFiles.length === 0) {
+          return { content: [{ type: "text" as const, text: `❌ No documents found in Drive for ${account.company_name} (${tax_year}). Upload documents first.` }] }
+        }
+
+        // ── 6. Download all files and build MIME email ──
+        const attachments: { filename: string; content: string; content_type: string }[] = []
+        for (const file of foundFiles) {
+          try {
+            const { buffer, mimeType, fileName } = await downloadFileBinary(file.id)
+            attachments.push({
+              filename: fileName || file.name,
+              content: buffer.toString("base64"),
+              content_type: mimeType || "application/octet-stream",
+            })
+          } catch (dlErr) {
+            // Skip files that fail to download
+          }
+        }
+
+        if (attachments.length === 0) {
+          return { content: [{ type: "text" as const, text: "❌ Failed to download any files from Drive" }] }
+        }
+
+        const emailSubject = `${account.company_name} - ${contactName} - ${account.ein_number || "NO EIN"} - ${returnType}`
+        const docList = foundFiles.map(f => `<li>${f.category}: ${f.name}</li>`).join("")
+        const htmlBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">
+<p>Please find attached the tax return documents for preparation.</p>
+<table style="border-collapse:collapse;margin:12px 0">
+<tr><td style="padding:4px 12px;font-weight:bold">Company:</td><td style="padding:4px 12px">${account.company_name}</td></tr>
+<tr><td style="padding:4px 12px;font-weight:bold">Owner/Contact:</td><td style="padding:4px 12px">${contactName}</td></tr>
+<tr><td style="padding:4px 12px;font-weight:bold">EIN:</td><td style="padding:4px 12px">${account.ein_number || "N/A"}</td></tr>
+<tr><td style="padding:4px 12px;font-weight:bold">Entity Type:</td><td style="padding:4px 12px">${entityType}</td></tr>
+<tr><td style="padding:4px 12px;font-weight:bold">Return Type:</td><td style="padding:4px 12px">Form ${returnType}</td></tr>
+<tr><td style="padding:4px 12px;font-weight:bold">Tax Year:</td><td style="padding:4px 12px">${tax_year}</td></tr>
+</table>
+<p><strong>Documents attached (${attachments.length}):</strong></p>
+<ul>${docList}</ul>
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+<p style="font-size:12px;color:#6b7280">Sent by Tony Durante LLC CRM</p>
+</div>`
+
+        const plainText = `Tax return documents for ${account.company_name} (${tax_year})\nEIN: ${account.ein_number}\nEntity: ${entityType}\nReturn: Form ${returnType}\n\nDocuments: ${foundFiles.map(f => f.name).join(", ")}`
+
+        // Build MIME with attachments
+        const outerBoundary = `boundary_${Date.now()}`
+        const altBoundary = `alt_boundary_${Date.now()}`
+
+        const mimeHeaders = [
+          "From: Tony Durante LLC <support@tonydurante.us>",
+          `To: ${toEmail}`,
+          `Subject: ${emailSubject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/mixed; boundary="${outerBoundary}"`,
+        ]
+
+        const mimeParts: string[] = [mimeHeaders.join("\r\n"), ""]
+
+        // Body part (multipart/alternative)
+        mimeParts.push(`--${outerBoundary}`)
+        mimeParts.push(`Content-Type: multipart/alternative; boundary="${altBoundary}"`)
+        mimeParts.push("")
+        mimeParts.push(`--${altBoundary}`)
+        mimeParts.push("Content-Type: text/plain; charset=utf-8")
+        mimeParts.push("Content-Transfer-Encoding: base64")
+        mimeParts.push("")
+        mimeParts.push(Buffer.from(plainText).toString("base64"))
+        mimeParts.push("")
+        mimeParts.push(`--${altBoundary}`)
+        mimeParts.push("Content-Type: text/html; charset=utf-8")
+        mimeParts.push("Content-Transfer-Encoding: base64")
+        mimeParts.push("")
+        mimeParts.push(Buffer.from(htmlBody).toString("base64"))
+        mimeParts.push("")
+        mimeParts.push(`--${altBoundary}--`)
+
+        // Attachment parts
+        for (const att of attachments) {
+          mimeParts.push("")
+          mimeParts.push(`--${outerBoundary}`)
+          mimeParts.push(`Content-Type: ${att.content_type}; name="${att.filename}"`)
+          mimeParts.push("Content-Transfer-Encoding: base64")
+          mimeParts.push(`Content-Disposition: attachment; filename="${att.filename}"`)
+          mimeParts.push("")
+          mimeParts.push(att.content)
+        }
+        mimeParts.push("")
+        mimeParts.push(`--${outerBoundary}--`)
+
+        const raw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
+
+        // ── 7. Send email ──
+        await gmailPost("/messages/send", { raw })
+
+        // ── 8. Update CRM ──
+        const today = new Date().toISOString().slice(0, 10)
+        await supabaseAdmin
+          .from("tax_returns")
+          .update({
+            sent_to_india: true,
+            sent_to_india_date: today,
+            india_status: "Sent - Pending",
+            status: "Sent to India",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", taxReturn.id)
+
+        // Advance SD if appropriate
+        const { data: sd } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, current_stage")
+          .eq("account_id", account_id)
+          .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
+          .eq("status", "active")
+          .maybeSingle()
+
+        if (sd) {
+          await supabaseAdmin
+            .from("service_deliveries")
+            .update({
+              current_stage: "Preparation - Sent to Accountant",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", sd.id)
+        }
+
+        // Log action
+        logAction({
+          action_type: "tax_send_to_accountant",
+          table_name: "tax_returns",
+          record_id: taxReturn.id,
+          account_id,
+          summary: `Tax documents sent to accountant for ${account.company_name} (${tax_year})`,
+          details: { files: foundFiles.map(f => f.name), entity_type: entityType, email: toEmail },
+        })
+
+        // ── 9. Return summary ──
+        const lines = [
+          `✅ Tax documents sent to accountant`,
+          "",
+          `📧 To: ${toEmail}`,
+          `📋 Subject: ${emailSubject}`,
+          "",
+          `📎 Documents attached (${attachments.length}):`,
+          ...foundFiles.map(f => `   • ${f.category}: ${f.name}`),
+          "",
+          `📝 CRM Updates:`,
+          `   • tax_returns: status → "Sent to India", india_status → "Sent - Pending"`,
+          sd ? `   • Service delivery: stage → "Preparation - Sent to Accountant"` : `   • No active service delivery found`,
+          "",
+          missing.length > 0 ? `⚠️ Missing (sent anyway): ${missing.join(", ")}` : "",
+        ].filter(Boolean)
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `❌ Error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
     }
   )

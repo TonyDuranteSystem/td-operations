@@ -660,3 +660,35 @@ export async function trashFile(fileId: string): Promise<{ id: string; name: str
   const data = await res.json() as { id: string; name: string }
   return { id: data.id, name: data.name }
 }
+
+// ─── Tax Folder Helpers (shared by bank-statements + tax tools) ───
+
+/**
+ * Find the "3. Tax" subfolder in a client's Drive folder.
+ * Returns the folder ID or null if not found.
+ */
+export async function findTaxFolder(driveFolderId: string): Promise<string | null> {
+  const listing = (await listFolder(driveFolderId)) as {
+    files?: { id: string; name: string; mimeType: string }[]
+  }
+  const taxFolder = listing.files?.find(
+    f => f.mimeType === "application/vnd.google-apps.folder" && /^3\.\s*Tax/i.test(f.name)
+  )
+  return taxFolder?.id || null
+}
+
+/**
+ * Find or create a year subfolder inside a Tax folder (e.g., "2025").
+ * Returns the year folder ID.
+ */
+export async function findOrCreateYearFolder(taxFolderId: string, year: number): Promise<string> {
+  const listing = (await listFolder(taxFolderId)) as {
+    files?: { id: string; name: string; mimeType: string }[]
+  }
+  const yearFolder = listing.files?.find(
+    f => f.name === String(year) && f.mimeType === "application/vnd.google-apps.folder"
+  )
+  if (yearFolder) return yearFolder.id
+  const created = await createFolder(taxFolderId, String(year))
+  return created.id
+}

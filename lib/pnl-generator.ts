@@ -3,7 +3,7 @@
  *
  * Generates a comprehensive Profit & Loss Excel file with:
  * - Sheet 1: P&L Statement (revenue, COGS, expenses, net income, K-1, distributions)
- * - Sheet 2: Balance Sheet (assets, liabilities, equity)
+ * - Sheet 2: Comparative Balance Sheet (prior year vs current year)
  * - Sheet 3: Income Detail (every income transaction)
  * - Sheet 4: Expense Detail (every expense transaction)
  * - Sheet 5: Distribution Detail
@@ -79,9 +79,37 @@ async function getAccountContext(accountId: string): Promise<AccountContext> {
   }
 }
 
+/** Compute P&L totals from a set of transactions (reusable for current + prior year) */
+function computePnlTotals(txs: Array<{ category: string; amount: number | string }>) {
+  const income = txs.filter(t => t.category === "income")
+  const cogs = txs.filter(t => t.category === "cogs")
+  const expenses = txs.filter(t => ["expense", "fee", "refund"].includes(t.category))
+  const distributions = txs.filter(t => t.category === "distribution")
+
+  const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
+  const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const grossProfit = totalIncome - totalCogs
+  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const netIncome = grossProfit - totalExpenses
+  const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+
+  return { totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions }
+}
+
+/** Compute year-end balances from transactions (last balance_after per bank account) */
+function computeAccountBalances(txs: Array<{ bank_name: string; account_type: string | null; balance_after: number | null }>) {
+  const balances: Record<string, number> = {}
+  for (const tx of txs) {
+    const key = `${tx.bank_name} ${tx.account_type || "Checking"}`
+    if (tx.balance_after !== null) balances[key] = Number(tx.balance_after)
+  }
+  return balances
+}
+
 /**
  * Generate P&L Excel from bank_transactions table.
  * Returns the Excel buffer + summary text.
+ * Sheet 2 is a Comparative Balance Sheet (prior year vs current year).
  */
 export async function generatePnlExcel(
   accountId: string,
@@ -89,7 +117,7 @@ export async function generatePnlExcel(
 ): Promise<PnlResult> {
   const ctx = await getAccountContext(accountId)
 
-  // Get transactions
+  // Get current year transactions
   const { data: transactions, error } = await supabaseAdmin
     .from("bank_transactions")
     .select("*")
@@ -102,31 +130,53 @@ export async function generatePnlExcel(
     throw new Error("No transactions found. Run bank_statement_process first.")
   }
 
-  // Get IRS rates
+  // Get prior year transactions (for comparative balance sheet)
+  const { data: priorTransactions } = await supabaseAdmin
+    .from("bank_transactions")
+    .select("*")
+    .eq("account_id", accountId)
+    .eq("tax_year", taxYear - 1)
+    .order("transaction_date", { ascending: true })
+
+  const hasPriorYear = (priorTransactions?.length || 0) > 0
+
+  // Get IRS rates for current year
   const currencies = Array.from(new Set(transactions.map(t => t.currency)))
   const rates: Record<string, number> = {}
   for (const curr of currencies) {
     rates[curr] = await getIrsRate(curr, taxYear)
   }
 
+  // Get IRS rates for prior year (if data exists)
+  const priorRates: Record<string, number> = {}
+  if (hasPriorYear) {
+    const priorCurrencies = Array.from(new Set(priorTransactions!.map(t => t.currency)))
+    for (const curr of priorCurrencies) {
+      priorRates[curr] = await getIrsRate(curr, taxYear - 1)
+    }
+  }
+
   const toUSD = (amount: number, currency: string) => {
     const rate = rates[currency] || 1
     return rate === 1 ? amount : amount / rate
   }
+  const toPriorUSD = (amount: number, currency: string) => {
+    const rate = priorRates[currency] || 1
+    return rate === 1 ? amount : amount / rate
+  }
 
-  // Calculate P&L categories
+  // Calculate P&L categories (current year)
   const income = transactions.filter(t => t.category === "income")
   const cogs = transactions.filter(t => t.category === "cogs")
   const expenses = transactions.filter(t => ["expense", "fee", "refund"].includes(t.category))
   const distributions = transactions.filter(t => t.category === "distribution")
   const uncategorized = transactions.filter(t => t.category === "uncategorized")
 
-  const totalIncome = income.reduce((s, t) => s + Number(t.amount), 0)
-  const totalCogs = cogs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
-  const grossProfit = totalIncome - totalCogs
-  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
-  const netIncome = grossProfit - totalExpenses
-  const totalDistributions = distributions.reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+  const currentTotals = computePnlTotals(transactions)
+  const { totalIncome, totalCogs, grossProfit, totalExpenses, netIncome, totalDistributions } = currentTotals
+
+  // Prior year totals
+  const priorTotals = hasPriorYear ? computePnlTotals(priorTransactions!) : null
 
   // Primary currency
   const currencyCounts = transactions.reduce((acc, t) => {
@@ -136,12 +186,9 @@ export async function generatePnlExcel(
   const primaryCurrency = Object.entries(currencyCounts).sort((a, b) => (b[1] as number) - (a[1] as number))[0]?.[0] || "USD"
   const irsRate = rates[primaryCurrency]
 
-  // Year-end balances
-  const accountBalances: Record<string, number> = {}
-  for (const tx of transactions) {
-    const key = `${tx.bank_name} ${tx.account_type}`
-    if (tx.balance_after !== null) accountBalances[key] = Number(tx.balance_after)
-  }
+  // Year-end balances (current + prior)
+  const accountBalances = computeAccountBalances(transactions)
+  const priorAccountBalances = hasPriorYear ? computeAccountBalances(priorTransactions!) : {}
 
   // Generate Excel
   const ExcelJS = (await import("exceljs")).default
@@ -218,33 +265,72 @@ export async function generatePnlExcel(
   for (const [name, amt] of Object.entries(distByMember)) addRow(plSheet, name, -amt, false, 1)
   addRow(plSheet, "Total Distributions", -totalDistributions, true)
 
-  // ── Sheet 2: Balance Sheet ──
+  // ── Sheet 2: Comparative Balance Sheet ──
   const bsSheet = workbook.addWorksheet("Balance Sheet")
   bsSheet.columns = [
     { header: "", key: "label", width: 40 },
-    { header: primaryCurrency, key: "original", width: 18 },
-    { header: "USD", key: "usd", width: 18 },
+    { header: `${taxYear - 1} ${primaryCurrency}`, key: "prior_orig", width: 18 },
+    { header: `${taxYear - 1} USD`, key: "prior_usd", width: 18 },
+    { header: `${taxYear} ${primaryCurrency}`, key: "curr_orig", width: 18 },
+    { header: `${taxYear} USD`, key: "curr_usd", width: 18 },
   ]
   bsSheet.getRow(1).font = { bold: true }
-  bsSheet.addRow({ label: `${ctx.companyName} -- Balance Sheet as of 12/31/${taxYear}` }).font = { bold: true, size: 14 }
+  bsSheet.addRow({ label: `${ctx.companyName} -- Comparative Balance Sheet` }).font = { bold: true, size: 14 }
+  bsSheet.addRow({ label: `As of 12/31/${taxYear - 1} vs 12/31/${taxYear}` }).font = { italic: true }
+  if (!hasPriorYear) bsSheet.addRow({ label: `Note: No prior year (${taxYear - 1}) data available` }).font = { italic: true, color: { argb: "FF888888" } }
   bsSheet.addRow({})
 
+  // Helper for comparative rows
+  const addCompRow = (sheet: import("exceljs").Worksheet, label: string, priorAmt: number | null, currAmt: number, bold = false, indent = 0) => {
+    const prefix = "  ".repeat(indent)
+    const row = sheet.addRow({
+      label: `${prefix}${label}`,
+      prior_orig: priorAmt,
+      prior_usd: priorAmt !== null ? toPriorUSD(priorAmt, primaryCurrency) : null,
+      curr_orig: currAmt,
+      curr_usd: toUSD(currAmt, primaryCurrency),
+    })
+    if (bold) row.font = { bold: true }
+    for (const key of ["prior_orig", "prior_usd", "curr_orig", "curr_usd"]) {
+      const cell = row.getCell(key)
+      if (cell.value === null) cell.value = hasPriorYear ? 0 : "N/A"
+      cell.numFmt = key.includes("usd") ? "$#,##0.00" : "#,##0.00"
+    }
+    return row
+  }
+
+  // ASSETS — current year balances
   let totalAssets = 0
-  addRow(bsSheet, "ASSETS", 0, true)
-  for (const [acct, bal] of Object.entries(accountBalances)) { addRow(bsSheet, `Cash -- ${acct}`, bal, false, 1); totalAssets += bal }
-  addRow(bsSheet, "Total Assets", totalAssets, true)
-  bsSheet.addRow({})
-  addRow(bsSheet, "LIABILITIES", 0, true)
-  addRow(bsSheet, "Total Liabilities", 0, true)
+  let priorTotalAssets = 0
+  addCompRow(bsSheet, "ASSETS", null, 0, true)
+  // Combine all account keys from both years
+  const allAccountKeys = Array.from(new Set([...Object.keys(accountBalances), ...Object.keys(priorAccountBalances)]))
+  for (const acct of allAccountKeys) {
+    const currBal = accountBalances[acct] || 0
+    const priorBal = priorAccountBalances[acct] || 0
+    addCompRow(bsSheet, `Cash -- ${acct}`, hasPriorYear ? priorBal : null, currBal, false, 1)
+    totalAssets += currBal
+    priorTotalAssets += priorBal
+  }
+  addCompRow(bsSheet, "Total Assets", hasPriorYear ? priorTotalAssets : null, totalAssets, true)
   bsSheet.addRow({})
 
+  addCompRow(bsSheet, "LIABILITIES", null, 0, true)
+  addCompRow(bsSheet, "Total Liabilities", hasPriorYear ? 0 : null, 0, true)
+  bsSheet.addRow({})
+
+  // PARTNERS' EQUITY
   const equity = totalAssets
-  addRow(bsSheet, "PARTNERS' EQUITY", 0, true)
-  addRow(bsSheet, "Net Income", netIncome, false, 1)
-  addRow(bsSheet, "Less: Distributions", -totalDistributions, false, 1)
+  const priorEquity = priorTotalAssets
+  addCompRow(bsSheet, "PARTNERS' EQUITY", null, 0, true)
+  addCompRow(bsSheet, "Net Income", hasPriorYear ? priorTotals!.netIncome : null, netIncome, false, 1)
+  addCompRow(bsSheet, "Less: Distributions", hasPriorYear ? -priorTotals!.totalDistributions : null, -totalDistributions, false, 1)
   const fxAdj = equity - netIncome + totalDistributions
-  if (Math.abs(fxAdj) > 0.01) addRow(bsSheet, "Beginning Capital + FX Adjustment", fxAdj, false, 1)
-  addRow(bsSheet, "Total Partners' Equity", equity, true)
+  const priorFxAdj = hasPriorYear ? priorEquity - priorTotals!.netIncome + priorTotals!.totalDistributions : 0
+  if (Math.abs(fxAdj) > 0.01 || (hasPriorYear && Math.abs(priorFxAdj) > 0.01)) {
+    addCompRow(bsSheet, "Beginning Capital + FX Adjustment", hasPriorYear ? priorFxAdj : null, fxAdj, false, 1)
+  }
+  addCompRow(bsSheet, "Total Partners' Equity", hasPriorYear ? priorEquity : null, equity, true)
 
   // ── Sheet 3: Income Detail ──
   const incSheet = workbook.addWorksheet("Income Detail")
@@ -398,37 +484,50 @@ export async function generatePnlCsv(
     }
   }
 
-  // ── Balance Sheet CSV ──
-  const accountBalances: Record<string, number> = {}
-  for (const tx of transactions) {
-    const key = `${tx.bank_name} ${tx.account_type || "Checking"}`
-    if (tx.balance_after !== null) accountBalances[key] = Number(tx.balance_after)
+  // ── Comparative Balance Sheet CSV ──
+  const csvAccountBalances = computeAccountBalances(transactions)
+  const totalCash = Object.values(csvAccountBalances).reduce((s, v) => s + v, 0)
+  const csvTotalAssets = totalCash
+
+  // Get prior year for CSV too
+  const { data: csvPriorTx } = await supabaseAdmin
+    .from("bank_transactions")
+    .select("bank_name, account_type, balance_after, category, amount")
+    .eq("account_id", accountId)
+    .eq("tax_year", taxYear - 1)
+    .order("transaction_date", { ascending: true })
+
+  const csvHasPrior = (csvPriorTx?.length || 0) > 0
+  const csvPriorBalances = csvHasPrior ? computeAccountBalances(csvPriorTx!) : {}
+  const csvPriorTotals = csvHasPrior ? computePnlTotals(csvPriorTx!) : null
+  const csvPriorTotalAssets = Object.values(csvPriorBalances).reduce((s, v) => s + v, 0)
+
+  let csvPriorRate = 1
+  if (csvHasPrior && primaryCurrency !== "USD") {
+    csvPriorRate = await getIrsRate(primaryCurrency, taxYear - 1)
   }
-  const totalCash = Object.values(accountBalances).reduce((s, v) => s + v, 0)
-  const totalAssets = totalCash
-  const retainedEarnings = netIncome - totalDistributions
+  const toCsvPriorUSD = (amt: number) => csvPriorRate === 1 ? amt : amt / csvPriorRate
 
   const bsLines = [
-    `"${ctx.companyName} - Balance Sheet as of Dec 31, ${taxYear}"`,
-    `"Currency","${primaryCurrency}","IRS Rate","${irsRate}"`,
-    `""`,
-    `"","${primaryCurrency}","USD"`,
-    `"ASSETS","",""`,
-    `"Current Assets","",""`,
+    `"${ctx.companyName} - Comparative Balance Sheet"`,
+    `"","${taxYear - 1}","","${taxYear}",""`,
+    `"","${primaryCurrency}","USD","${primaryCurrency}","USD"`,
+    `"ASSETS","","","",""`,
   ]
 
-  for (const [acct, bal] of Object.entries(accountBalances)) {
-    bsLines.push(`"  ${acct}","${bal.toFixed(2)}","${toUSD(bal, primaryCurrency).toFixed(2)}"`)
+  const allCsvAccts = Array.from(new Set([...Object.keys(csvAccountBalances), ...Object.keys(csvPriorBalances)]))
+  for (const acct of allCsvAccts) {
+    const curr = csvAccountBalances[acct] || 0
+    const prior = csvPriorBalances[acct] || 0
+    bsLines.push(`"  ${acct}","${csvHasPrior ? prior.toFixed(2) : "N/A"}","${csvHasPrior ? toCsvPriorUSD(prior).toFixed(2) : "N/A"}","${curr.toFixed(2)}","${toUSD(curr, primaryCurrency).toFixed(2)}"`)
   }
 
   bsLines.push(
-    `"Total Cash","${totalCash.toFixed(2)}","${toUSD(totalCash, primaryCurrency).toFixed(2)}"`,
-    `"Total Assets","${totalAssets.toFixed(2)}","${toUSD(totalAssets, primaryCurrency).toFixed(2)}"`,
+    `"Total Assets","${csvHasPrior ? csvPriorTotalAssets.toFixed(2) : "N/A"}","${csvHasPrior ? toCsvPriorUSD(csvPriorTotalAssets).toFixed(2) : "N/A"}","${csvTotalAssets.toFixed(2)}","${toUSD(csvTotalAssets, primaryCurrency).toFixed(2)}"`,
     `""`,
-    `"EQUITY","",""`,
-    `"Retained Earnings","${retainedEarnings.toFixed(2)}","${toUSD(retainedEarnings, primaryCurrency).toFixed(2)}"`,
-    `"Net Income","${netIncome.toFixed(2)}","${toUSD(netIncome, primaryCurrency).toFixed(2)}"`,
-    `"Total Equity","${totalAssets.toFixed(2)}","${toUSD(totalAssets, primaryCurrency).toFixed(2)}"`,
+    `"EQUITY","","","",""`,
+    `"Net Income","${csvHasPrior ? csvPriorTotals!.netIncome.toFixed(2) : "N/A"}","${csvHasPrior ? toCsvPriorUSD(csvPriorTotals!.netIncome).toFixed(2) : "N/A"}","${netIncome.toFixed(2)}","${toUSD(netIncome, primaryCurrency).toFixed(2)}"`,
+    `"Total Equity","${csvHasPrior ? csvPriorTotalAssets.toFixed(2) : "N/A"}","${csvHasPrior ? toCsvPriorUSD(csvPriorTotalAssets).toFixed(2) : "N/A"}","${csvTotalAssets.toFixed(2)}","${toUSD(csvTotalAssets, primaryCurrency).toFixed(2)}"`,
   )
 
   // ── Transactions CSV (all transactions for India team) ──
