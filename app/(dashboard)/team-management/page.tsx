@@ -14,6 +14,7 @@ import {
   Mail,
   Clock,
   Trash2,
+  Bot,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
@@ -35,6 +36,10 @@ export default function TeamManagementPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editRole, setEditRole] = useState<'admin' | 'team'>('team')
 
+  // AI Agent settings
+  const [aiEnabledForTeam, setAiEnabledForTeam] = useState(false)
+  const [aiLoading, setAiLoading] = useState(true)
+
   // Create form state
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
@@ -54,6 +59,34 @@ export default function TeamManagementPage() {
   }, [])
 
   useEffect(() => { fetchUsers() }, [fetchUsers])
+
+  // Fetch AI agent settings
+  useEffect(() => {
+    fetch('/api/app-settings?key=ai_agent')
+      .then(r => r.json())
+      .then(data => {
+        if (data.value) setAiEnabledForTeam(data.value.enabled_for_team === true)
+      })
+      .catch(() => {})
+      .finally(() => setAiLoading(false))
+  }, [])
+
+  const toggleAiForTeam = async () => {
+    const newVal = !aiEnabledForTeam
+    setAiEnabledForTeam(newVal)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'ai_agent', value: { enabled_for_team: newVal, enabled_services: ['all'] } }),
+      })
+      if (!res.ok) throw new Error()
+      toast.success(`AI Agent ${newVal ? 'enabled' : 'disabled'} for team members`)
+    } catch {
+      setAiEnabledForTeam(!newVal) // revert
+      toast.error('Failed to update AI Agent setting')
+    }
+  }
 
   const handleCreate = async () => {
     if (!newEmail || !newName) {
@@ -172,6 +205,28 @@ export default function TeamManagementPage() {
         <div className="bg-white border border-zinc-200 rounded-lg p-4">
           <div className="text-2xl font-bold text-blue-600">{teamCount}</div>
           <div className="text-xs text-zinc-500">Team Members</div>
+        </div>
+      </div>
+
+      {/* AI Agent Settings */}
+      <div className="bg-white border border-zinc-200 rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-violet-100 rounded-lg">
+              <Bot className="h-5 w-5 text-violet-600" />
+            </div>
+            <div>
+              <h3 className="font-medium text-zinc-900">AI Agent for Team</h3>
+              <p className="text-xs text-zinc-500">Allow team members to use the AI assistant in the dashboard</p>
+            </div>
+          </div>
+          <button
+            onClick={toggleAiForTeam}
+            disabled={aiLoading}
+            className={`relative w-11 h-6 rounded-full transition-colors ${aiEnabledForTeam ? 'bg-violet-600' : 'bg-zinc-300'}`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${aiEnabledForTeam ? 'translate-x-5' : ''}`} />
+          </button>
         </div>
       </div>
 

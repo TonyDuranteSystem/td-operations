@@ -40,6 +40,17 @@ export default async function DashboardLayout({
   const admin = isAdmin(user)
   const badgeCounts = await getBadgeCounts(supabase)
 
+  // Check if AI agent is enabled for this user
+  let showAiAgent = admin // Admin always sees it
+  if (!admin) {
+    const { data: aiSetting } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'ai_agent')
+      .single()
+    showAiAgent = aiSetting?.value?.enabled_for_team === true
+  }
+
   return (
     <Providers>
       <div className="flex h-screen">
@@ -53,7 +64,7 @@ export default async function DashboardLayout({
           {children}
         </main>
         <CommandPalette />
-        <AiAgentPanel />
+        {showAiAgent && <AiAgentPanel />}
       </div>
     </Providers>
   )
