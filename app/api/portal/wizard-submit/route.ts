@@ -311,6 +311,15 @@ export async function POST(req: NextRequest) {
       }),
     }).catch(() => {}) // silent
 
+    // 9. Advance portal_tier from "onboarding" to "active" now that wizard is complete
+    if (account_id) {
+      await supabaseAdmin
+        .from('accounts')
+        .update({ portal_tier: 'active' })
+        .eq('id', account_id)
+        .eq('portal_tier', 'onboarding') // Only advance if currently onboarding
+    }
+
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('[wizard-submit] Error:', err)

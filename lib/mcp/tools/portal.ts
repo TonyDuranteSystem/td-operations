@@ -104,16 +104,9 @@ export function registerPortalTools(server: McpServer) {
             .in("status", ["completed", "signed"])
             .limit(1)
           if (offers?.length) {
-            portalTier = offers[0].status === "completed" ? "active" : "onboarding"
-          }
-          // Also check by lead_id linked to account
-          if (portalTier === "lead") {
-            const { data: acct } = await supabaseAdmin
-              .from("accounts")
-              .select("status")
-              .eq("id", account_id)
-              .single()
-            if (acct?.status === "Active") portalTier = "active"
+            // Paid client → "onboarding" (needs to complete wizard first)
+            // After wizard is submitted, wizard-submit will advance to "active"
+            portalTier = offers[0].status === "completed" ? "onboarding" : "onboarding"
           }
 
           await supabaseAdmin
