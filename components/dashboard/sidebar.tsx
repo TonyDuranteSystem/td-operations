@@ -24,6 +24,7 @@ import {
   ArrowLeftRight,
   Gauge,
   GripVertical,
+  Users,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { cn } from '@/lib/utils'
@@ -78,6 +79,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, adminOnly: true },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, adminOnly: true },
+  { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true },
 ]
 
 function SortableNavItem({ item, isActive, onMobileClose, editMode }: {

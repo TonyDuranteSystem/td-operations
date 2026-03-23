@@ -44,4 +44,5 @@ export const ADMIN_ONLY_PATHS = [
   '/portal-launch',
   '/portal-chats',
   '/audit',
+  '/team-management',
 ]
