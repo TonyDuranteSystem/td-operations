@@ -256,7 +256,7 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
   },
 
   banking: {
-    bucket: "onboarding-uploads",
+    bucket: "banking-uploads",
     driveSubfolder: "4. Banking",
     pdfTitle: "Banking Application Data",
     filePrefix: "Banking_Data",
