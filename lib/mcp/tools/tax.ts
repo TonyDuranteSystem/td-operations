@@ -881,15 +881,17 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_send_to_accountant",
-    `Send all tax return documents to the accountant for preparation. Gathers all required documents from Drive for a given account + tax_year: Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior year return, and bank statements. Sends one email with all attachments. Updates tax_returns status. Idempotent: skips if already sent unless force_resend=true. Prerequisites: tax form must be completed, documents must be in Drive 3.Tax/{year}/ folder. Use tax_search first to find the tax return.`,
+    `Send all tax return documents to the accountant for preparation. Gathers all required documents from Drive for a given account + tax_year: Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior year return, and bank statements. Use dry_run=true FIRST to review the document package before sending. With dry_run=false, sends one email with all attachments and updates tax_returns status. Idempotent: skips if already sent unless force_resend=true. Prerequisites: tax form must be completed, documents must be in Drive 3.Tax/{year}/ folder. Use tax_search first to find the tax return. ALWAYS run with dry_run=true first, get Antonio's approval, then run again with dry_run=false.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
+      dry_run: z.boolean().optional().default(true).describe("REQUIRED: true (default) = preview documents without sending. false = actually send email and update CRM. ALWAYS preview first."),
       accountant_email: z.string().email().optional().default("tax@adasglobus.com").describe("Accountant email (default: tax@adasglobus.com)"),
       force_resend: z.boolean().optional().default(false).describe("Override idempotency check to re-send"),
     },
-    async ({ account_id, tax_year, accountant_email, force_resend }) => {
+    async ({ account_id, tax_year, dry_run, accountant_email, force_resend }) => {
       try {
+        const isDryRun = dry_run !== false // default true
         const toEmail = accountant_email || "tax@adasglobus.com"
 
         // ── 1. Gather context ──
@@ -1020,6 +1022,33 @@ export function registerTaxTools(server: McpServer) {
 
         if (foundFiles.length === 0) {
           return { content: [{ type: "text" as const, text: `❌ No documents found in Drive for ${account.company_name} (${tax_year}). Upload documents first.` }] }
+        }
+
+        // ── 5b. DRY RUN — preview without sending ──
+        if (isDryRun) {
+          const emailSubjectPreview = `${account.company_name} - ${contactName} - ${account.ein_number || "NO EIN"} - ${returnType}`
+          const lines = [
+            `📋 DRY RUN — Document package preview (NOT sent)`,
+            "",
+            `📧 Would send to: ${toEmail}`,
+            `📋 Subject: ${emailSubjectPreview}`,
+            `🏢 Company: ${account.company_name}`,
+            `👤 Contact: ${contactName}`,
+            `🆔 EIN: ${account.ein_number || "N/A"}`,
+            `📊 Entity: ${entityType} → Form ${returnType}`,
+            `📅 Tax Year: ${tax_year}`,
+            "",
+            `📎 Documents to attach (${foundFiles.length}):`,
+            ...foundFiles.map(f => `   ✅ ${f.category}: ${f.name}`),
+          ]
+          if (missing.length > 0) {
+            lines.push("", `⚠️ Missing (optional):`, ...missing.map(m => `   • ${m}`))
+          }
+          lines.push(
+            "",
+            `✅ Ready to send. Run again with dry_run=false to send the email.`,
+          )
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
         }
 
         // ── 6. Download all files and build MIME email ──
