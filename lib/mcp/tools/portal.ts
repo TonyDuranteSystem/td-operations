@@ -63,6 +63,17 @@ export function registerPortalTools(server: McpServer) {
         // Generate temp password
         const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
 
+        // Resolve contact_id for app_metadata (required for portal page access)
+        let resolvedContactId = contact_id
+        if (!resolvedContactId && account_id) {
+          const { data: links } = await supabaseAdmin
+            .from("account_contacts")
+            .select("contact_id")
+            .eq("account_id", account_id)
+            .limit(1)
+          resolvedContactId = links?.[0]?.contact_id || undefined
+        }
+
         // Create auth user
         const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
           email: userEmail,
@@ -70,6 +81,7 @@ export function registerPortalTools(server: McpServer) {
           email_confirm: true,
           app_metadata: {
             role: "client",
+            ...(resolvedContactId ? { contact_id: resolvedContactId } : {}),
           },
           user_metadata: {
             full_name: userName,
@@ -83,11 +95,32 @@ export function registerPortalTools(server: McpServer) {
 
         // Update account portal flags (if account exists)
         if (account_id) {
+          // Check if offer is completed (paid) — if so, set tier to "active"
+          let portalTier = "lead"
+          const { data: offers } = await supabaseAdmin
+            .from("offers")
+            .select("status")
+            .eq("account_id", account_id)
+            .in("status", ["completed", "signed"])
+            .limit(1)
+          if (offers?.length) {
+            portalTier = offers[0].status === "completed" ? "active" : "onboarding"
+          }
+          // Also check by lead_id linked to account
+          if (portalTier === "lead") {
+            const { data: acct } = await supabaseAdmin
+              .from("accounts")
+              .select("status")
+              .eq("id", account_id)
+              .single()
+            if (acct?.status === "Active") portalTier = "active"
+          }
+
           await supabaseAdmin
             .from("accounts")
             .update({
               portal_account: true,
-              portal_tier: "lead",
+              portal_tier: portalTier,
               portal_created_date: new Date().toISOString().split("T")[0],
             })
             .eq("id", account_id)
