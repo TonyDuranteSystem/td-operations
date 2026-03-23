@@ -27,6 +27,8 @@ export const updatePaymentSchema = z.object({
   payment_method: z.string().optional(),
   paid_date: z.string().optional(),
   notes: z.string().optional(),
+  followup_stage: z.string().nullable().optional(),
+  delay_approved_until: z.string().nullable().optional(),
 })
 
 export type CreatePaymentInput = z.infer<typeof createPaymentSchema>
