@@ -185,14 +185,22 @@ export async function GET(req: NextRequest) {
                 break
               }
             }
-            // If all messages are from us (outbound thread), check the To header of the first message
+            // If all messages are from us (outbound thread), check To headers across ALL messages
             if (!externalFrom) {
-              const toHeader = getHeader(firstMsg?.payload?.headers, "To")
-              if (toHeader) {
-                const toEmail = extractEmail(toHeader)
-                if (!OUR_EMAILS.has(toEmail)) {
-                  externalFrom = toHeader
-                  externalEmail = toEmail
+              for (const msg of thread.messages) {
+                const toHeader = getHeader(msg?.payload?.headers, "To")
+                if (toHeader) {
+                  // To can have multiple recipients — split and find external one
+                  const recipients = toHeader.split(',')
+                  for (const recipient of recipients) {
+                    const recEmail = extractEmail(recipient.trim())
+                    if (!OUR_EMAILS.has(recEmail)) {
+                      externalFrom = recipient.trim()
+                      externalEmail = recEmail
+                      break
+                    }
+                  }
+                  if (externalFrom) break
                 }
               }
             }
@@ -213,13 +221,20 @@ export async function GET(req: NextRequest) {
             // Match external email to CRM account
             const accountMatch = emailLookup.get(externalEmail)
 
+            // Determine display name: CRM account name > From display name > email
+            let displayName = externalFrom.replace(/<.*>/, "").trim()
+            // If display name is just the email (no name part), try CRM lookup
+            if (!displayName || displayName === externalEmail) {
+              displayName = accountMatch?.accountName || externalEmail
+            }
+
             // Use latest message snippet as preview (not first message)
             const latestSnippet = lastMsg?.snippet || firstMsg?.snippet || ""
 
             conversations.push({
               id: `gmail:${thread.id}`,
               channel: "gmail",
-              name: externalFrom.replace(/<.*>/, "").trim() || externalFrom,
+              name: displayName,
               preview: latestSnippet,
               unread: unreadCount,
               lastMessageAt: lastDate
