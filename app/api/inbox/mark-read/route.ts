@@ -33,16 +33,38 @@ export async function POST(req: NextRequest) {
         messages: Array<{ id: string; labelIds?: string[] }>
       }
 
-      const unreadMsgs = (thread.messages ?? []).filter(m => m.labelIds?.includes('UNREAD'))
+      const allMsgs = thread.messages ?? []
+      const unreadMsgs = allMsgs.filter(m => m.labelIds?.includes('UNREAD'))
+
+      // Debug: log what Gmail returned
+      console.log(`[MarkRead] Thread ${threadId}: ${allMsgs.length} messages, ${unreadMsgs.length} unread`)
+      if (allMsgs.length > 0) {
+        console.log(`[MarkRead] First message labels: ${JSON.stringify(allMsgs[0].labelIds)}`)
+      }
+
       if (unreadMsgs.length > 0) {
         await Promise.all(
           unreadMsgs.map(m =>
             gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] }, asUser)
           )
         )
+      } else if (allMsgs.length > 0) {
+        // Fallback: if no UNREAD labels found but messages exist,
+        // try removing UNREAD from ALL messages anyway
+        console.log(`[MarkRead] Fallback: removing UNREAD from all ${allMsgs.length} messages`)
+        await Promise.all(
+          allMsgs.map(m =>
+            gmailPost(`/messages/${m.id}/modify`, { removeLabelIds: ['UNREAD'] }, asUser)
+          )
+        )
       }
 
-      return NextResponse.json({ success: true, channel: "gmail", marked: unreadMsgs.length })
+      return NextResponse.json({
+        success: true,
+        channel: "gmail",
+        marked: unreadMsgs.length || allMsgs.length,
+        debug: { totalMessages: allMsgs.length, unreadFound: unreadMsgs.length }
+      })
     }
 
     // ─── Supabase: mark all new inbound as read ──────
