@@ -930,9 +930,9 @@ export function registerTaxTools(server: McpServer) {
 
         // ── 3. Determine required docs by entity type ──
         const entityType = account.entity_type || "SMLLC"
-        const returnTypeMap: Record<string, string> = { "Single Member LLC": "5472", "Multi-Member LLC": "1065", "Corporation": "1120", "SMLLC": "5472", "MMLLC": "1065", "Corp": "1120" }
+        const returnTypeMap: Record<string, string> = { "Single Member LLC": "5472", "Multi-Member LLC": "1065", "Multi Member LLC": "1065", "Corporation": "1120", "SMLLC": "5472", "MMLLC": "1065", "Corp": "1120" }
         const returnType = returnTypeMap[entityType] || taxReturn.return_type || entityType
-        const needsPnl = ["MMLLC", "Multi-Member LLC", "Corp", "Corporation"].includes(entityType)
+        const needsPnl = /multi.?member|mmllc|corp/i.test(entityType)
 
         // ── 4. Find files on Drive ──
         const taxFolderId = await findTaxFolder(account.drive_folder_id)
