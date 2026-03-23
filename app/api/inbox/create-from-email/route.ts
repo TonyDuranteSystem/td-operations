@@ -35,7 +35,6 @@ export async function POST(req: NextRequest) {
           assigned_to: assignedTo || 'Luca',
           status: 'To Do',
           account_id: accountId || null,
-          metadata: threadId ? { source: 'email', gmail_thread_id: threadId } : undefined,
         })
         .select('id, task_title')
         .single()
@@ -76,10 +75,13 @@ export async function POST(req: NextRequest) {
           account_id: accountId,
           service_type: serviceType,
           service_name: serviceName,
+          pipeline: serviceType,
+          stage: 'New',
+          stage_order: 0,
+          stage_entered_at: new Date().toISOString(),
           status: 'active',
           assigned_to: 'Luca',
-          notes: notes || null,
-          metadata: threadId ? { source: 'email', gmail_thread_id: threadId } : undefined,
+          notes: notes ? `${notes}${threadId ? ` | Gmail thread: ${threadId}` : ''}` : (threadId ? `Gmail thread: ${threadId}` : null),
         })
         .select('id, service_name')
         .single()

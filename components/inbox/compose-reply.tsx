@@ -68,7 +68,7 @@ export function ComposeReply({ conversation }: ComposeReplyProps) {
           onKeyDown={handleKeyDown}
           placeholder={`Reply via ${conversation.channel}...`}
           rows={1}
-          className="flex-1 resize-none rounded-xl border border-zinc-300 px-4 py-2.5 text-sm
+          className="compose-reply-textarea flex-1 resize-none rounded-xl border border-zinc-300 px-4 py-2.5 text-sm
             focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
             placeholder:text-zinc-400 max-h-32"
           style={{ minHeight: '42px' }}

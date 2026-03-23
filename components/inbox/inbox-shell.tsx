@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Filter } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -44,6 +44,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
+  const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
   // Track unread overrides — key: conversation ID, value: unread count to show
   // This prevents Gmail's slow index from reverting optimistic read/unread changes
   const [unreadOverrides, setUnreadOverrides] = useState<Map<string, number>>(new Map())
@@ -233,6 +234,15 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
     queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
   }
 
+  const handleReply = () => {
+    // Scroll to and focus the compose reply textarea
+    const textarea = document.querySelector('.compose-reply-textarea') as HTMLTextAreaElement
+    if (textarea) {
+      textarea.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      setTimeout(() => textarea.focus(), 300)
+    }
+  }
+
   const isGmail = selected?.channel === 'gmail'
 
   return (
@@ -283,7 +293,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
       )}
 
-      {/* Search bar */}
+      {/* Search bar + Read/Unread filter */}
       <div className="flex items-center gap-2 px-4 py-2 border-b bg-zinc-50">
         <Search className="h-4 w-4 text-zinc-400 shrink-0" />
         <input
@@ -299,6 +309,22 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             <X className="h-3.5 w-3.5" />
           </button>
         )}
+        <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
+          {(['all', 'unread', 'read'] as const).map(f => (
+            <button
+              key={f}
+              onClick={() => setUnreadFilter(f)}
+              className={cn(
+                'px-2 py-1 rounded text-xs font-medium transition-colors',
+                unreadFilter === f
+                  ? f === 'unread' ? 'bg-blue-100 text-blue-700' : f === 'read' ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-600'
+                  : 'text-zinc-400 hover:bg-zinc-100'
+              )}
+            >
+              {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Bulk Action Bar */}
@@ -407,6 +433,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             labelFilter={activeLabel}
             searchQuery={searchActive ? searchQuery : undefined}
             mailbox={activeMailbox}
+            unreadFilter={unreadFilter}
           />
         </div>
 
@@ -466,6 +493,16 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
                   </button>
 
                   <div className="w-px h-4 bg-zinc-200 mx-0.5" />
+
+                  {/* Reply button — always visible */}
+                  <button
+                    onClick={handleReply}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
+                    title="Reply"
+                  >
+                    <Reply className="h-3.5 w-3.5" />
+                    Reply
+                  </button>
 
                   {/* Gmail actions */}
                   {isGmail && (

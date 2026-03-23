@@ -50,7 +50,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, unreadOverrides, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, unreadOverrides, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox, unreadFilter }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   const deleteMutation = useMutation({
@@ -101,6 +101,12 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   const conversations = (data?.conversations || [])
     .filter(c => !deletedIds?.has(c.id))
     .map(c => unreadOverrides?.has(c.id) ? { ...c, unread: unreadOverrides.get(c.id)! } : c)
+    .filter(c => {
+      if (!unreadFilter || unreadFilter === 'all') return true
+      if (unreadFilter === 'unread') return c.unread > 0
+      if (unreadFilter === 'read') return c.unread === 0
+      return true
+    })
 
   if (isLoading) {
     return (
