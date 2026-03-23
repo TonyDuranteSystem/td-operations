@@ -72,6 +72,7 @@ export default async function WizardPage() {
   // Determine wizard type from offer or service deliveries
   let wizardType = 'onboarding' // default
   let entityType = account.entity_type || 'SMLLC'
+  let isItinRenewal = false
 
   // Check if there's a pending formation SD
   if (accountId) {
@@ -86,6 +87,7 @@ export default async function WizardPage() {
     if (types.includes('Company Formation')) wizardType = 'formation'
     else if (types.includes('Banking Fintech')) wizardType = 'banking'
     else if (types.includes('Company Closure')) wizardType = 'closure'
+    else if (types.includes('ITIN Renewal')) { wizardType = 'itin'; isItinRenewal = true } // Renewal uses same wizard, pre-fills previous ITIN
     else if (types.includes('ITIN')) wizardType = 'itin'
     else if (types.includes('Tax Return')) wizardType = 'tax'
   }
@@ -188,6 +190,12 @@ export default async function WizardPage() {
   if (account.formation_date) prefillData.formation_date = account.formation_date
   if (account.ein) prefillData.ein = account.ein
   if (account.filing_id) prefillData.filing_id = account.filing_id
+
+  // ITIN Renewal: pre-fill previous ITIN from contact
+  if (isItinRenewal && contact.itin) {
+    prefillData.has_previous_itin = 'Yes'
+    prefillData.previous_itin = contact.itin
+  }
 
   // Normalize entity type
   if (entityType === 'Single Member LLC') entityType = 'SMLLC'

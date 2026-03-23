@@ -350,6 +350,7 @@ export const ITIN_FIELDS: Record<string, FieldConfig[]> = {
   personal: [
     { name: 'first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
     { name: 'last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
+    { name: 'name_at_birth', label: 'Name at Birth (if different)', labelIt: 'Nome alla Nascita (se diverso)', type: 'text', required: false, hint: 'Only if your birth name differs from your current legal name', hintIt: 'Solo se il nome alla nascita è diverso dal nome legale attuale' },
     { name: 'email', label: 'Email', type: 'email', required: true },
     { name: 'phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
     { name: 'dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true },
@@ -367,7 +368,14 @@ export const ITIN_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'foreign_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: false },
     { name: 'foreign_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
     { name: 'foreign_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
-    { name: 'foreign_tax_id', label: 'Foreign Tax ID (optional)', labelIt: 'Codice Fiscale Estero (opzionale)', type: 'text', required: false },
+    { name: 'foreign_tax_id', label: 'Foreign Tax ID (optional)', labelIt: 'Codice Fiscale Estero (opzionale)', type: 'text', required: false, hint: 'e.g. Codice Fiscale for Italy', hintIt: 'es. Codice Fiscale' },
+    { name: 'has_us_visa', label: 'Do you have a US visa?', labelIt: 'Hai un visto USA?', type: 'select', required: true, options: [
+      { value: 'No', label: 'No' },
+      { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
+    ]},
+    { name: 'us_visa_type', label: 'US Visa Type', labelIt: 'Tipo di Visto USA', type: 'text', required: true, conditional: { field: 'has_us_visa', value: 'Yes' }, hint: 'e.g. B1, B2, F1, H1B', hintIt: 'es. B1, B2, F1, H1B' },
+    { name: 'us_visa_number', label: 'US Visa Number', labelIt: 'Numero Visto USA', type: 'text', required: true, conditional: { field: 'has_us_visa', value: 'Yes' } },
+    { name: 'us_entry_date', label: 'Date of US Entry', labelIt: 'Data di Ingresso negli USA', type: 'date', required: false, conditional: { field: 'has_us_visa', value: 'Yes' } },
     { name: 'passport_number', label: 'Passport Number', labelIt: 'Numero Passaporto', type: 'text', required: true },
     { name: 'passport_country', label: 'Passport Country', labelIt: 'Paese del Passaporto', type: 'country', required: true },
     { name: 'passport_expiry', label: 'Passport Expiry Date', labelIt: 'Scadenza Passaporto', type: 'date', required: true },
@@ -375,7 +383,7 @@ export const ITIN_FIELDS: Record<string, FieldConfig[]> = {
       { value: 'No', label: 'No' },
       { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
     ]},
-    { name: 'previous_itin', label: 'Previous ITIN Number', labelIt: 'Numero ITIN Precedente', type: 'text', required: false, hint: 'Only if you answered Yes above', hintIt: 'Solo se hai risposto Sì sopra' },
+    { name: 'previous_itin', label: 'Previous ITIN Number', labelIt: 'Numero ITIN Precedente', type: 'text', required: true, conditional: { field: 'has_previous_itin', value: 'Yes' } },
   ],
   review: [
     { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate and I understand the passport must be mailed physically', labelIt: 'Confermo che le informazioni sono corrette e comprendo che il passaporto deve essere spedito fisicamente', type: 'checkbox', required: true },

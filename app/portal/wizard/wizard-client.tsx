@@ -74,6 +74,11 @@ export function WizardClient({
     const stepId = steps[currentStep].id
     const stepFields = fields[stepId] || []
     for (const field of stepFields) {
+      // Skip validation for hidden conditional fields
+      if (field.conditional) {
+        const refValue = formData[field.conditional.field]
+        if (String(refValue) !== field.conditional.value) continue
+      }
       if (field.required) {
         const val = formData[field.name]
         if (!val || (typeof val === 'string' && !val.trim())) return false
@@ -273,7 +278,16 @@ export function WizardClient({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {stepFields.map(field => (
+          {stepFields
+            .filter(field => {
+              // Conditional show/hide: only render if the referenced field has the expected value
+              if (field.conditional) {
+                const refValue = formData[field.conditional.field]
+                return String(refValue) === field.conditional.value
+              }
+              return true
+            })
+            .map(field => (
             <div key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
               <WizardField
                 field={{ ...field, prefilled: !!prefillData[field.name] }}
