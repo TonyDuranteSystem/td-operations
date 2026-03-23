@@ -153,7 +153,7 @@ export async function GET(req: NextRequest) {
             listResult.threads.slice(0, gmailLimit).map((t) =>
               gmailGet(`/threads/${t.id}`, {
                 format: "metadata",
-                metadataHeaders: ["From", "Subject", "Date"],
+                metadataHeaders: ["From", "To", "Subject", "Date"],
               }, gmailUser) as Promise<{
                 id: string
                 messages: GmailAPIMessage[]
