@@ -117,7 +117,168 @@ export async function POST(req: NextRequest) {
       }, { onConflict: 'token' })
     }
 
-    // 5. Create task for staff to review
+    // 5. Create Drive folder + copy uploaded files + register in documents table
+    if (account_id) {
+      try {
+        // Get account details
+        const { data: acct } = await supabaseAdmin
+          .from('accounts')
+          .select('drive_folder_id, company_name, state_of_formation')
+          .eq('id', account_id)
+          .single()
+
+        let driveFolderId = acct?.drive_folder_id || null
+        const stateOfFormation = data.state_of_formation || acct?.state_of_formation || ''
+        const accountCompanyName = data.company_name || acct?.company_name || companyName
+
+        // Create Drive folder if it doesn't exist
+        if (!driveFolderId && accountCompanyName && stateOfFormation) {
+          const { createFolder } = await import('@/lib/google-drive')
+
+          const stateFolderMap: Record<string, string> = {
+            'New Mexico': '1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4',
+            'NM': '1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4',
+            'Wyoming': '110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x',
+            'WY': '110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x',
+            'Delaware': '1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-',
+            'DE': '1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-',
+            'Florida': '1XToxqPl-t6z10raeal_frSpvBBBRY8nG',
+            'FL': '1XToxqPl-t6z10raeal_frSpvBBBRY8nG',
+          }
+          const companiesRootId = '1Z32I4pDzX4enwqJQzolbFw7fK94ISuCb'
+          let parentFolderId = stateFolderMap[stateOfFormation] || null
+
+          if (!parentFolderId) {
+            const newStateFolder = await createFolder(companiesRootId, stateOfFormation) as { id: string }
+            parentFolderId = newStateFolder.id
+          }
+
+          // Folder name: "{Company Name} - {Owner Name}"
+          let folderName = accountCompanyName
+          if (clientName && clientName !== 'Client') {
+            folderName = `${accountCompanyName} - ${clientName}`
+          }
+
+          const companyFolder = await createFolder(parentFolderId, folderName) as { id: string }
+          driveFolderId = companyFolder.id
+
+          // Create 5 subfolders
+          for (const subName of ['1. Company', '2. Contacts', '3. Tax', '4. Banking', '5. Correspondence']) {
+            try { await createFolder(driveFolderId, subName) } catch { /* ignore */ }
+          }
+
+          // Save drive_folder_id on account
+          await supabaseAdmin
+            .from('accounts')
+            .update({ drive_folder_id: driveFolderId })
+            .eq('id', account_id)
+        }
+
+        // Copy uploaded files from Supabase Storage to Drive + register in documents table
+        if (driveFolderId) {
+          const { uploadBinaryToDrive, listFolder } = await import('@/lib/google-drive')
+
+          // Find the right subfolder for each file type
+          const folderContents = await listFolder(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
+          const subfolders = (folderContents.files || []).filter(f => f.mimeType === 'application/vnd.google-apps.folder')
+          const companySubfolder = subfolders.find(f => f.name.includes('Company'))?.id || driveFolderId
+          const contactsSubfolder = subfolders.find(f => f.name.includes('Contacts'))?.id || driveFolderId
+
+          // Map field names to subfolders and document types
+          const fileFieldMap: Record<string, { subfolder: string; docType: string; category: number }> = {
+            passport_owner: { subfolder: contactsSubfolder, docType: 'Passport', category: 2 },
+            articles_of_organization: { subfolder: companySubfolder, docType: 'Articles of Organization', category: 1 },
+            ein_letter: { subfolder: companySubfolder, docType: 'EIN Letter', category: 1 },
+            ss4_form: { subfolder: companySubfolder, docType: 'SS-4 Form', category: 1 },
+          }
+
+          for (const [fieldName, storagePath] of Object.entries(data)) {
+            if (typeof storagePath !== 'string') continue
+            // Match file upload fields by storage path pattern
+            const fieldKey = Object.keys(fileFieldMap).find(k => storagePath.includes(`/${k}`))
+            if (!fieldKey) continue
+
+            const mapping = fileFieldMap[fieldKey]
+            try {
+              const cleanPath = storagePath.replace(/^\/+/, '')
+              const { data: blob, error: dlErr } = await supabaseAdmin.storage
+                .from('onboarding-uploads')
+                .download(cleanPath)
+
+              if (dlErr || !blob) continue
+
+              const arrayBuffer = await blob.arrayBuffer()
+              const fileData = Buffer.from(arrayBuffer)
+              const fileName = cleanPath.split('/').pop() || `${fieldKey}.pdf`
+              const mimeType = blob.type || 'application/pdf'
+
+              // Upload to Drive subfolder
+              const driveResult = await uploadBinaryToDrive(fileName, fileData, mimeType, mapping.subfolder) as { id: string; name: string }
+
+              // Register in documents table so it shows in portal Documents page
+              await supabaseAdmin.from('documents').insert({
+                file_name: fileName,
+                drive_file_id: driveResult.id,
+                document_type_name: mapping.docType,
+                category: mapping.category,
+                account_id: account_id,
+                status: 'classified',
+                confidence: 1.0,
+                source: 'portal_wizard',
+              })
+
+              console.log(`[wizard-submit] Uploaded ${fileName} to Drive (${driveResult.id}) → ${mapping.docType}`)
+            } catch (fileErr) {
+              console.error(`[wizard-submit] Failed to copy ${fieldKey}:`, fileErr)
+            }
+          }
+        }
+      } catch (driveErr) {
+        // Non-blocking — don't fail the submit if Drive operations fail
+        console.error('[wizard-submit] Drive/doc error (non-blocking):', driveErr)
+      }
+    }
+
+    // 6. Update CRM account + contact with submitted data
+    if (account_id && (wizard_type === 'onboarding' || wizard_type === 'formation')) {
+      try {
+        // Update account fields from wizard data
+        const accountUpdates: Record<string, string> = {}
+        if (data.company_name) accountUpdates.company_name = data.company_name
+        if (data.ein) accountUpdates.ein = data.ein
+        if (data.formation_date) accountUpdates.formation_date = data.formation_date
+        if (data.state_of_formation) accountUpdates.state_of_formation = data.state_of_formation
+        if (data.business_purpose) accountUpdates.notes = data.business_purpose
+        if (data.registered_agent) accountUpdates.registered_agent_provider = data.registered_agent
+
+        if (Object.keys(accountUpdates).length > 0) {
+          await supabaseAdmin.from('accounts').update(accountUpdates).eq('id', account_id)
+        }
+
+        // Update contact fields
+        if (contact_id) {
+          const contactUpdates: Record<string, string> = {}
+          if (data.owner_first_name) contactUpdates.first_name = data.owner_first_name
+          if (data.owner_last_name) contactUpdates.last_name = data.owner_last_name
+          if (data.owner_dob) contactUpdates.date_of_birth = data.owner_dob
+          if (data.owner_nationality) contactUpdates.citizenship = data.owner_nationality
+          if (data.owner_street) contactUpdates.address_line1 = data.owner_street
+          if (data.owner_city) contactUpdates.address_city = data.owner_city
+          if (data.owner_state_province) contactUpdates.address_state = data.owner_state_province
+          if (data.owner_zip) contactUpdates.address_zip = data.owner_zip
+          if (data.owner_country) contactUpdates.address_country = data.owner_country
+          if (data.owner_itin) contactUpdates.itin = data.owner_itin
+
+          if (Object.keys(contactUpdates).length > 0) {
+            await supabaseAdmin.from('contacts').update(contactUpdates).eq('id', contact_id)
+          }
+        }
+      } catch (crmErr) {
+        console.error('[wizard-submit] CRM update error (non-blocking):', crmErr)
+      }
+    }
+
+    // 7. Create task for staff to review
     const taskTitle = wizard_type === 'formation'
       ? `Portal Wizard: Formation data submitted — ${clientName}${companyName ? ` (${companyName})` : ''}`
       : `Portal Wizard: Onboarding data submitted — ${clientName}${companyName ? ` (${companyName})` : ''}`
@@ -136,7 +297,7 @@ export async function POST(req: NextRequest) {
       account_id: account_id || null,
     })
 
-    // 5. Send notification email to support
+    // 7. Send notification email to support
     // (non-blocking, don't wait)
     fetch(`${APP_BASE_URL}/api/internal/notify`, {
       method: 'POST',
