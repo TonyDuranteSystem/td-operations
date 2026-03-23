@@ -13,7 +13,7 @@ interface Message {
 
 type Provider = 'auto' | 'claude' | 'openai'
 
-export function AiAgentPanel() {
+export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -134,6 +134,20 @@ export function AiAgentPanel() {
   }
 
   if (!open) return null
+
+  if (!enabled) {
+    return (
+      <>
+        <div className="fixed inset-0 z-[55] bg-black/30 lg:hidden" onClick={() => setOpen(false)} />
+        <div className="fixed right-0 top-0 bottom-0 z-[55] w-full sm:w-[420px] bg-white border-l shadow-2xl flex flex-col items-center justify-center p-8">
+          <Bot className="h-12 w-12 text-zinc-300 mb-4" />
+          <h3 className="text-lg font-semibold text-zinc-700 mb-2">AI Agent Not Enabled</h3>
+          <p className="text-sm text-zinc-500 text-center">Ask your admin to enable the AI Agent for team members in Team Management settings.</p>
+          <button onClick={() => setOpen(false)} className="mt-6 px-4 py-2 bg-zinc-900 text-white rounded-lg text-sm">Close</button>
+        </div>
+      </>
+    )
+  }
 
   return (
     <>

@@ -111,8 +111,10 @@ export async function GET(req: NextRequest) {
             gmailParams.q = `in:${labelFilter.toLowerCase()} -in:trash`
           }
         } else if (!searchQuery) {
-          // Default: show inbox, exclude trashed emails
-          gmailParams.q = 'in:inbox -in:trash'
+          // Default: show all mail except trash and spam
+          // Using 'in:anywhere' shows all labels (inbox + sent + categories + archived)
+          // but excludes trash and spam by default
+          gmailParams.q = '-in:trash -in:spam -in:drafts'
         }
 
         // Search query (Gmail search syntax)

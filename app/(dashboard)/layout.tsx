@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { CommandPalette } from '@/components/dashboard/command-palette'
@@ -43,7 +44,7 @@ export default async function DashboardLayout({
   // Check if AI agent is enabled for this user
   let showAiAgent = admin // Admin always sees it
   if (!admin) {
-    const { data: aiSetting } = await supabase
+    const { data: aiSetting } = await supabaseAdmin
       .from('app_settings')
       .select('value')
       .eq('key', 'ai_agent')
@@ -64,7 +65,7 @@ export default async function DashboardLayout({
           {children}
         </main>
         <CommandPalette />
-        {showAiAgent && <AiAgentPanel />}
+        <AiAgentPanel enabled={showAiAgent} />
       </div>
     </Providers>
   )
