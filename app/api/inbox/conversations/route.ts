@@ -93,10 +93,10 @@ export async function GET(req: NextRequest) {
     // ─── Gmail threads ──────────────────────────────────
     if (!channel || channel === "gmail") {
       try {
-        // Gmail threads API returns max ~100 per page. Always fetch 5 pages (500 threads)
-        // to ensure we capture all client emails, even when system notifications take up slots.
-        // The frontend limit only controls how many we return, not how many we fetch.
-        const targetGmailThreads = 500
+        // Gmail threads API returns max ~100 per page. Fetch up to 2 pages (200 threads).
+        // With INBOX as default, this is more than enough (Gmail inbox has ~20-50 threads).
+        // For other labels or search queries, 200 threads covers most use cases.
+        const targetGmailThreads = 200
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
@@ -113,19 +113,14 @@ export async function GET(req: NextRequest) {
             // after modify operations (labelIds index can be stale for 30+ seconds)
             gmailParams.q = `in:${labelFilter.toLowerCase()} -in:trash`
           }
-        } else if (!searchQuery) {
-          // Default: show recent emails across all labels
-          gmailParams.q = 'newer_than:30d -in:trash -in:spam'
-        }
-
-        // Search query (Gmail search syntax)
-        if (searchQuery) {
-          // Append to existing q or set new
-          if (gmailParams.q) {
-            gmailParams.q = `${gmailParams.q} ${searchQuery}`
-          } else {
-            gmailParams.q = searchQuery
-          }
+        } else if (searchQuery) {
+          // Search with no label filter: search ALL mail (not just inbox)
+          gmailParams.q = `${searchQuery} -in:trash -in:spam`
+        } else {
+          // Default (no label, no search): show INBOX — matches what Gmail UI shows.
+          // Previously used 'newer_than:30d' which returned 3000+ threads,
+          // making it impossible to show all emails even with pagination.
+          gmailParams.labelIds = 'INBOX'
         }
 
         // Pagination
@@ -142,7 +137,7 @@ export async function GET(req: NextRequest) {
         let allThreadIds: Array<{ id: string; snippet: string }> = []
         let currentPageToken = pageToken || undefined
 
-        for (let page = 0; page < 5 && allThreadIds.length < targetGmailThreads; page++) {
+        for (let page = 0; page < 2 && allThreadIds.length < targetGmailThreads; page++) {
           const pageParams = { ...gmailParams }
           if (currentPageToken) pageParams.pageToken = currentPageToken
 
