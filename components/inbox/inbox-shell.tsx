@@ -44,6 +44,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
+  const [readIds, setReadIds] = useState<Set<string>>(new Set())
   // Persist deleted IDs in localStorage — Gmail's index takes 30-60s to update
   // after label changes, so we need to filter client-side across page refreshes
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
@@ -211,6 +212,10 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
 
   const handleSelect = (conversation: InboxConversation) => {
     setSelected(conversation)
+    // Track as read so refetches don't revert the unread badge
+    if (conversation.unread > 0) {
+      setReadIds(prev => new Set(prev).add(conversation.id))
+    }
   }
 
   const handleBack = () => {
@@ -405,6 +410,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             onSelect={handleSelect}
             onDeleted={handleEmailDeleted}
             deletedIds={deletedIds}
+            readIds={readIds}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}

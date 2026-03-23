@@ -13,6 +13,7 @@ interface ConversationListProps {
   onSelect: (conversation: InboxConversation) => void
   onDeleted?: (id: string) => void
   deletedIds?: Set<string>
+  readIds?: Set<string>
   // Bulk selection
   bulkMode: boolean
   selectedIds: Set<string>
@@ -49,7 +50,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, deletedIds, readIds, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, mailbox }: ConversationListProps & { mailbox?: string }) {
   const queryClient = useQueryClient()
 
   const deleteMutation = useMutation({
@@ -97,7 +98,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     refetchInterval: searchQuery ? false : 30_000,
   })
 
-  const conversations = (data?.conversations || []).filter(c => !deletedIds?.has(c.id))
+  const conversations = (data?.conversations || [])
+    .filter(c => !deletedIds?.has(c.id))
+    .map(c => readIds?.has(c.id) ? { ...c, unread: 0 } : c)
 
   if (isLoading) {
     return (

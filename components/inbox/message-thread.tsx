@@ -57,11 +57,12 @@ export function MessageThread({ conversation, mailbox }: MessageThreadProps & { 
         }),
       }),
     onSuccess: () => {
-      // Delay the refetch to give Gmail time to process
+      // Delay refetch significantly — Gmail's index takes 30-60s to reflect label changes
+      // The optimistic update in the useEffect below handles immediate UI
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-      }, 2000)
+      }, 60_000)
     },
   })
 
