@@ -3,7 +3,7 @@ import { gmailGet, gmailPost, getHeader, extractBody, type GmailAPIMessage } fro
 
 export const dynamic = "force-dynamic"
 
-type EmailAction = "archive" | "star" | "unstar" | "trash" | "forward" | "mark_unread" | "move_to_label"
+type EmailAction = "archive" | "star" | "unstar" | "trash" | "untrash" | "forward" | "mark_unread" | "move_to_label"
 
 function resolveMailbox(mailbox?: string): string {
   return mailbox === 'antonio'
@@ -111,6 +111,14 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json({ success: true, action: "trashed", threadId: modifyResult.id, verified })
+      }
+
+      case "untrash": {
+        await gmailPost(`/threads/${threadId}/modify`, {
+          addLabelIds: ["INBOX"],
+          removeLabelIds: ["TRASH"]
+        }, asUser)
+        return NextResponse.json({ success: true, action: "untrashed" })
       }
 
       case "mark_unread": {

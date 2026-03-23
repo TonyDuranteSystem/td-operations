@@ -70,8 +70,28 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       // Tell parent to hide this ID immediately (persists for the session)
       if (onDeleted) onDeleted(conv.id)
     },
-    onSuccess: () => {
-      toast.success('Email deleted')
+    onSuccess: (_data, conv) => {
+      toast('Email deleted', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              const res = await fetch('/api/inbox/email-actions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ threadId: conv.id.replace('gmail:', ''), action: 'untrash', mailbox }),
+              })
+              if (res.ok) {
+                toast.success('Email restored')
+                queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+              }
+            } catch {
+              toast.error('Failed to restore email')
+            }
+          },
+        },
+        duration: 8000,
+      })
       // Delay refetch — Gmail needs 10-15s to process the trash
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
