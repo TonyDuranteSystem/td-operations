@@ -102,14 +102,27 @@ export async function GET(req: NextRequest) {
 
         // Label filter: INBOX (default), SENT, DRAFT, STARRED, TRASH, or custom label ID
         if (labelFilter) {
-          gmailParams.labelIds = labelFilter
+          if (labelFilter === 'TRASH') {
+            // When viewing Trash, use label filter directly
+            gmailParams.labelIds = labelFilter
+          } else {
+            // Use q parameter instead of labelIds — it reflects label changes faster
+            // after modify operations (labelIds index can be stale for 30+ seconds)
+            gmailParams.q = `in:${labelFilter.toLowerCase()} -in:trash`
+          }
         } else if (!searchQuery) {
-          gmailParams.labelIds = "INBOX"
+          // Default: show inbox, exclude trashed emails
+          gmailParams.q = 'in:inbox -in:trash'
         }
 
         // Search query (Gmail search syntax)
         if (searchQuery) {
-          gmailParams.q = searchQuery
+          // Append to existing q or set new
+          if (gmailParams.q) {
+            gmailParams.q = `${gmailParams.q} ${searchQuery}`
+          } else {
+            gmailParams.q = searchQuery
+          }
         }
 
         // Pagination
