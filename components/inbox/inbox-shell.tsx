@@ -44,16 +44,38 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [moveToOpen, setMoveToOpen] = useState(false)
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
+  // Persist deleted IDs in localStorage — Gmail's index takes 30-60s to update
+  // after label changes, so we need to filter client-side across page refreshes
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const stored = localStorage.getItem('inbox-deleted-ids')
+      if (!stored) return new Set()
+      const parsed = JSON.parse(stored) as { ids: string[]; ts: number }
+      // Expire after 5 minutes — Gmail index should be updated by then
+      if (Date.now() - parsed.ts > 5 * 60 * 1000) {
+        localStorage.removeItem('inbox-deleted-ids')
+        return new Set()
+      }
+      return new Set(parsed.ids)
+    } catch { return new Set() }
+  })
   const queryClient = useQueryClient()
 
   const handleEmailDeleted = useCallback((id: string) => {
-    setDeletedIds(prev => new Set(prev).add(id))
+    setDeletedIds(prev => {
+      const next = new Set(prev).add(id)
+      // Persist to localStorage so it survives page refresh
+      try {
+        localStorage.setItem('inbox-deleted-ids', JSON.stringify({
+          ids: Array.from(next),
+          ts: Date.now()
+        }))
+      } catch { /* ignore */ }
+      return next
+    })
     // If the deleted email was selected, deselect it
     setSelected(prev => prev?.id === id ? null : prev)
-    // Never remove from deletedIds — Gmail can take minutes to update its index.
-    // The ID stays hidden for the entire session. On page refresh, Gmail will
-    // have processed the trash by then and won't return it anymore.
   }, [])
 
   const bulkMode = selectedIds.size > 0
