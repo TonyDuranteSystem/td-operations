@@ -367,13 +367,54 @@ export async function generateFormSummaryPDF(
       const val = data[field.key]
       if (val === undefined || val === null || val === "") continue
 
-      // Format value
+      // ── Special handling: render array of members/objects as formatted sub-sections ──
+      if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
+        page.drawText(field.label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
+        y -= 16
+
+        const memberFieldLabels: Record<string, string> = {
+          member_name: "Name",
+          member_ownership_pct: "Ownership %",
+          member_itin_ssn: "ITIN / SSN",
+          member_tax_residency: "Tax Residency",
+          member_address: "Address",
+          rpt_company_name: "Company Name",
+          rpt_address: "Address",
+          rpt_country: "Country",
+          rpt_vat_number: "VAT Number",
+          rpt_amount: "Amount",
+          rpt_description: "Description",
+        }
+
+        for (let mi = 0; mi < val.length; mi++) {
+          const item = val[mi] as Record<string, unknown>
+          ensureSpace(30)
+          // Sub-header: "Member 1", "Member 2", etc. or "Transaction 1", etc.
+          const isRpt = Object.keys(item).some(k => k.startsWith("rpt_"))
+          const subLabel = isRpt ? `Transaction ${mi + 1}` : `Member ${mi + 1}`
+          page.drawText(subLabel, { x: 60, y, size: 10, font: fontBold, color: black })
+          y -= 14
+
+          for (const [itemKey, itemVal] of Object.entries(item)) {
+            if (itemVal === undefined || itemVal === null || itemVal === "") continue
+            ensureSpace(14)
+            const itemLabel = memberFieldLabels[itemKey] || itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+            const itemDisplay = typeof itemVal === "boolean" ? (itemVal ? "Yes" : "No") : String(itemVal)
+            page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
+            page.drawText(itemDisplay, { x: 200, y, size: 10, font, color: black })
+            y -= 14
+          }
+          y -= 6
+        }
+        continue
+      }
+
+      // Format scalar value
       let display: string
       if (typeof val === "boolean") {
         display = val ? "Yes" : "No"
       } else if (Array.isArray(val)) {
-        // Handle arrays (e.g., additional_members)
-        display = JSON.stringify(val, null, 2)
+        display = val.join(", ")
       } else {
         display = String(val)
       }
@@ -424,9 +465,34 @@ export async function generateFormSummaryPDF(
     for (const key of extraKeys) {
       ensureSpace(20)
       const val = data[key]
+
+      // Array of objects — render as sub-sections (same as section fields)
+      if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object") {
+        const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+        page.drawText(label + ":", { x: 50, y, size: 9, font: fontBold, color: gray })
+        y -= 16
+        for (let mi = 0; mi < val.length; mi++) {
+          const item = val[mi] as Record<string, unknown>
+          ensureSpace(30)
+          page.drawText(`Item ${mi + 1}`, { x: 60, y, size: 10, font: fontBold, color: black })
+          y -= 14
+          for (const [itemKey, itemVal] of Object.entries(item)) {
+            if (itemVal === undefined || itemVal === null || itemVal === "") continue
+            ensureSpace(14)
+            const itemLabel = itemKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+            page.drawText(`${itemLabel}:`, { x: 70, y, size: 9, font: fontBold, color: gray })
+            page.drawText(String(itemVal), { x: 200, y, size: 10, font, color: black })
+            y -= 14
+          }
+          y -= 6
+        }
+        continue
+      }
+
       let display: string
       if (typeof val === "boolean") display = val ? "Yes" : "No"
-      else if (typeof val === "object") display = JSON.stringify(val)
+      else if (Array.isArray(val)) display = val.join(", ")
+      else if (typeof val === "object" && val !== null) display = JSON.stringify(val, null, 2)
       else display = String(val)
 
       const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
