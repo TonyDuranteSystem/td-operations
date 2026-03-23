@@ -154,7 +154,7 @@ export async function GET(
     const { data: msgs, error } = await supabaseAdmin
       .from("messages")
       .select(
-        "id, direction, sender_phone, sender_name, content_text, message_type, status, created_at, metadata"
+        "id, direction, sender_phone, sender_name, content_text, content_type, status, created_at, metadata"
       )
       .eq("group_id", id)
       .order("created_at", { ascending: true })
@@ -167,7 +167,7 @@ export async function GET(
       direction: m.direction as "inbound" | "outbound",
       sender: m.sender_name || m.sender_phone || "Unknown",
       content: m.content_text || "",
-      type: m.message_type || "text",
+      type: m.content_type || "text",
       status: m.status || "new",
       createdAt: m.created_at,
       metadata: m.metadata as Record<string, unknown> | undefined,
@@ -189,7 +189,7 @@ export async function GET(
     })
   } catch (error) {
     console.error("Inbox messages error:", error)
-    const errMsg = error instanceof Error ? error.message : String(error)
+    const errMsg = error instanceof Error ? error.message : JSON.stringify(error)
     return NextResponse.json(
       { error: "Failed to fetch messages", detail: errMsg },
       { status: 500 }
