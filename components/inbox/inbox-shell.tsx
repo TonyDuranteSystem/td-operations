@@ -137,6 +137,8 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
       }
       if (variables.action === 'mark_unread') {
         if (selected) {
+          // Remove from readIds so the unread badge shows again
+          setReadIds(prev => { const n = new Set(prev); n.delete(selected.id); return n })
           queryClient.setQueriesData(
             { queryKey: ['inbox-conversations'] },
             (old: unknown) => {
