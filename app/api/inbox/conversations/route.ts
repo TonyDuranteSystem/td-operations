@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
     // ─── Gmail threads ──────────────────────────────────
     if (!channel || channel === "gmail") {
       try {
-        const gmailLimit = channel === "gmail" ? limit : Math.min(limit, 50)
+        const gmailLimit = limit // Always use full limit — don't cap Gmail results
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
@@ -111,10 +111,9 @@ export async function GET(req: NextRequest) {
             gmailParams.q = `in:${labelFilter.toLowerCase()} -in:trash`
           }
         } else if (!searchQuery) {
-          // Default: show all mail except trash and spam
-          // Using 'in:anywhere' shows all labels (inbox + sent + categories + archived)
-          // but excludes trash and spam by default
-          gmailParams.q = '-in:trash -in:spam -in:drafts'
+          // Default: show all mail — use 'in:anywhere' to include every label
+          // This ensures no emails are accidentally filtered out
+          gmailParams.q = 'in:anywhere -in:trash -in:spam'
         }
 
         // Search query (Gmail search syntax)
