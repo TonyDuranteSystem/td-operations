@@ -70,8 +70,9 @@ export default async function PortalDashboardPage() {
 
   // Lead/onboarding without account = show welcome dashboard
   if (!selectedAccountId || accounts.length === 0) {
-    // This is a lead — no account yet. Show welcome dashboard with offer data.
-    const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
+    // No account yet — check auth metadata for portal_tier (set by portal_create_user)
+    const authTier = (user.app_metadata?.portal_tier as string) || 'lead'
+    const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
 
     // Find offer by email
     const emails = new Set<string>()
@@ -115,7 +116,7 @@ export default async function PortalDashboardPage() {
 
     return (
       <WelcomeDashboard
-        tier="lead"
+        tier={authTier}
         firstName={firstName}
         offerData={offerData}
         locale={locale}
