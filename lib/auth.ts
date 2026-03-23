@@ -37,12 +37,17 @@ export function getUserDisplayName(user: User): string {
   return user.user_metadata?.full_name || (user.email?.split("@")[0] ?? "User")
 }
 
+/** Check if user is any dashboard user (admin or team — NOT client) */
+export function isDashboardUser(user: User | null): boolean {
+  if (!user) return false
+  return !isClient(user)
+}
+
 /** Paths that require admin role. Team users are redirected to /. */
 export const ADMIN_ONLY_PATHS = [
   '/invoice-settings',
   '/reconciliation',
   '/portal-launch',
-  '/portal-chats',
   '/audit',
   '/team-management',
 ]

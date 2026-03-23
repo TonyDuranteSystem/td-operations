@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -19,8 +19,8 @@ export async function POST(request: NextRequest) {
 
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
   const apiKey = process.env.OPENAI_API_KEY

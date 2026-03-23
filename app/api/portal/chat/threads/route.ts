@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 
 /**
@@ -10,8 +10,8 @@ import { NextResponse } from 'next/server'
 export async function GET() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
   // Get distinct account_ids with messages

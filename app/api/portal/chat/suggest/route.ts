@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -22,8 +22,8 @@ export async function POST(request: NextRequest) {
 
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
   const apiKey = process.env.OPENAI_API_KEY
@@ -143,7 +143,7 @@ ${clientContext}
 
 RULES:
 - Write the reply as if you ARE Antonio. Don't say "I suggest..." — just write the actual reply.
-- Match the language the client is using (if they write in Italian, reply in Italian; if English, reply in English).
+- ALWAYS reply in English. Even if the client writes in Italian or another language, your reply MUST be in English. This is a strict rule.
 - Be specific — reference their actual services, deadlines, or payments when relevant.
 - Keep it concise but helpful. Don't over-explain.
 - If the client is asking something you don't have data for, acknowledge it and say you'll check and get back to them.

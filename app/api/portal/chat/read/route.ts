@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -18,10 +18,10 @@ export async function POST(request: NextRequest) {
   const { account_id } = await request.json()
   if (!account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
-  const adminUser = isAdmin(user)
+  const dashUser = isDashboardUser(user)
 
   // Verify access for clients
-  if (!adminUser) {
+  if (!dashUser) {
     const contactId = getClientContactId(user)
     if (contactId) {
       const accountIds = await getClientAccountIds(contactId)
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Mark opposite sender's messages as read
-  const senderTypeToMark = adminUser ? 'client' : 'admin'
+  const senderTypeToMark = dashUser ? 'client' : 'admin'
 
   const { error, count } = await supabaseAdmin
     .from('portal_messages')
