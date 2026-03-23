@@ -161,33 +161,66 @@ export async function GET(req: NextRequest) {
             )
           )
 
+          // Our own mailbox addresses — used to find external party
+          const OUR_EMAILS = new Set(['support@tonydurante.us', 'antonio.durante@tonydurante.us'])
+
           for (const result of threadDetails) {
             if (result.status !== "fulfilled") continue
             const thread = result.value
             const firstMsg = thread.messages[0]
             const lastMsg = thread.messages[thread.messages.length - 1]
 
-            const from = getHeader(firstMsg?.payload?.headers, "From")
             const subject = getHeader(firstMsg?.payload?.headers, "Subject")
             const lastDate = getHeader(lastMsg?.payload?.headers, "Date")
+
+            // Find the external party (not us) — check all messages for a non-internal sender
+            let externalFrom = ''
+            let externalEmail = ''
+            for (const msg of thread.messages) {
+              const msgFrom = getHeader(msg?.payload?.headers, "From")
+              const msgEmail = extractEmail(msgFrom)
+              if (!OUR_EMAILS.has(msgEmail)) {
+                externalFrom = msgFrom
+                externalEmail = msgEmail
+                break
+              }
+            }
+            // If all messages are from us (outbound thread), check the To header of the first message
+            if (!externalFrom) {
+              const toHeader = getHeader(firstMsg?.payload?.headers, "To")
+              if (toHeader) {
+                const toEmail = extractEmail(toHeader)
+                if (!OUR_EMAILS.has(toEmail)) {
+                  externalFrom = toHeader
+                  externalEmail = toEmail
+                }
+              }
+            }
+            // Final fallback: first message From
+            if (!externalFrom) {
+              externalFrom = getHeader(firstMsg?.payload?.headers, "From")
+              externalEmail = extractEmail(externalFrom)
+            }
+
             // Count ALL unread messages in the thread (not just last)
             const unreadCount = thread.messages.filter(m => m.labelIds?.includes("UNREAD")).length
-            const isUnread = unreadCount > 0
             // Check for attachments (multipart/mixed = has attachments)
             const hasAttachment = thread.messages.some(m =>
               m.payload?.mimeType === 'multipart/mixed' ||
               m.payload?.mimeType === 'multipart/related'
             )
 
-            // Match sender email to CRM account
-            const senderEmail = extractEmail(from)
-            const accountMatch = emailLookup.get(senderEmail)
+            // Match external email to CRM account
+            const accountMatch = emailLookup.get(externalEmail)
+
+            // Use latest message snippet as preview (not first message)
+            const latestSnippet = lastMsg?.snippet || firstMsg?.snippet || ""
 
             conversations.push({
               id: `gmail:${thread.id}`,
               channel: "gmail",
-              name: from.replace(/<.*>/, "").trim() || from,
-              preview: firstMsg?.snippet || "",
+              name: externalFrom.replace(/<.*>/, "").trim() || externalFrom,
+              preview: latestSnippet,
               unread: unreadCount,
               lastMessageAt: lastDate
                 ? new Date(lastDate).toISOString()
