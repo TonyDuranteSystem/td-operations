@@ -947,41 +947,49 @@ export function registerTaxTools(server: McpServer) {
         const foundFiles: DriveFile[] = []
         const missing: string[] = []
 
-        // Tax Organizer PDF (in current year folder)
+        // Search both year subfolder AND Tax root (files may be in either location)
+        const searchFolders: { id: string; files?: { id: string; name: string; mimeType: string }[] }[] = []
+
+        // Year subfolder (if exists)
         if (yearFolder) {
           const yearFiles = (await listFolder(yearFolder.id, 100)) as { files?: { id: string; name: string; mimeType: string }[] }
-          const taxOrganizerPdf = yearFiles.files?.find(f => /tax.?data|tax.?organizer|complete.?data/i.test(f.name) && /pdf/i.test(f.mimeType || f.name))
-          if (taxOrganizerPdf) {
-            foundFiles.push({ ...taxOrganizerPdf, category: "Tax Organizer" })
-          } else {
-            missing.push("Tax Organizer PDF")
-          }
+          searchFolders.push({ id: yearFolder.id, files: yearFiles.files })
+        }
+        // Tax root folder (always search — files may not be in a year subfolder)
+        const rootFiles = (yearListing.files || []).filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+        searchFolders.push({ id: taxFolderId, files: rootFiles })
 
-          // P&L Excel (in current year folder)
-          if (needsPnl) {
-            const pnlExcel = yearFiles.files?.find(f => /p&l|pnl|profit.?loss/i.test(f.name) && /spreadsheet|xlsx/i.test(f.mimeType || f.name))
-            if (pnlExcel) {
-              foundFiles.push({ ...pnlExcel, category: "P&L + Balance Sheet" })
-            } else {
-              missing.push("P&L Excel")
-            }
+        // Flatten all files from both locations (deduplicate by ID)
+        const allSearchFiles: { id: string; name: string; mimeType: string }[] = []
+        for (const folder of searchFolders) {
+          for (const f of (folder.files || [])) {
+            if (!allSearchFiles.some(existing => existing.id === f.id)) allSearchFiles.push(f)
           }
-
-          // Bank statements in year folder
-          if (needsPnl) {
-            const stmtPattern = /wise|mercury|relay|statement|bank|estratto/i
-            const stmts = (yearFiles.files || []).filter(f => stmtPattern.test(f.name) && /pdf|csv/i.test(f.mimeType || f.name))
-            for (const s of stmts) foundFiles.push({ ...s, category: "Bank Statement" })
-          }
-        } else {
-          missing.push(`Tax year folder (${tax_year})`)
         }
 
-        // Also check Tax root for bank statements
+        // Tax Organizer PDF
+        const taxOrganizerPdf = allSearchFiles.find(f => /tax.?data|tax.?organizer|complete.?data/i.test(f.name) && /pdf/i.test(f.mimeType || f.name))
+        if (taxOrganizerPdf) {
+          foundFiles.push({ ...taxOrganizerPdf, category: "Tax Organizer" })
+        } else {
+          missing.push("Tax Organizer PDF")
+        }
+
+        // P&L Excel
         if (needsPnl) {
-          const rootStmtPattern = /wise|mercury|relay|statement|bank|estratto/i
-          const rootStmts = (yearListing.files || []).filter(f => rootStmtPattern.test(f.name) && f.mimeType !== "application/vnd.google-apps.folder" && /pdf|csv/i.test(f.mimeType || f.name))
-          for (const s of rootStmts) {
+          const pnlExcel = allSearchFiles.find(f => /p&l|pnl|profit.?loss/i.test(f.name) && /spreadsheet|xlsx/i.test(f.mimeType || f.name))
+          if (pnlExcel) {
+            foundFiles.push({ ...pnlExcel, category: "P&L + Balance Sheet" })
+          } else {
+            missing.push("P&L Excel")
+          }
+        }
+
+        // Bank statements
+        if (needsPnl) {
+          const stmtPattern = /wise|mercury|relay|statement|bank|estratto/i
+          const stmts = allSearchFiles.filter(f => stmtPattern.test(f.name) && /pdf|csv/i.test(f.mimeType || f.name))
+          for (const s of stmts) {
             if (!foundFiles.some(ff => ff.id === s.id)) foundFiles.push({ ...s, category: "Bank Statement" })
           }
         }
