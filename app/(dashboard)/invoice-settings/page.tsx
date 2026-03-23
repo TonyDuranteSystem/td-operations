@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import {
   Save,
@@ -15,6 +15,7 @@ import {
   Check,
   X,
   Upload,
+  ImageIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -74,6 +75,8 @@ export default function InvoiceSettingsPage() {
   const [newServiceCurrency, setNewServiceCurrency] = useState('USD')
   const [addingBank, setAddingBank] = useState(false)
   const [activeTab, setActiveTab] = useState<'company' | 'services' | 'banks' | 'gateways'>('company')
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const logoInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     Promise.all([
@@ -217,6 +220,48 @@ export default function InvoiceSettingsPage() {
     setSettings({ ...settings, payment_gateways: updated })
   }
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp']
+    if (!allowedTypes.includes(file.type)) {
+      toast.error('Only JPEG, PNG, and WebP files are allowed')
+      return
+    }
+
+    // Validate file size (2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('File must be under 2MB')
+      return
+    }
+
+    setUploadingLogo(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const res = await fetch('/api/invoice-settings/logo', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+
+      // Update local state with the new URL (append cache buster for immediate preview)
+      const freshUrl = `${data.url}?t=${Date.now()}`
+      setSettings(prev => prev ? { ...prev, logo_url: freshUrl } : prev)
+      toast.success('Logo uploaded successfully')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setUploadingLogo(false)
+      // Reset the input so the same file can be re-selected
+      if (logoInputRef.current) logoInputRef.current.value = ''
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-6 lg:p-8 flex items-center justify-center h-64">
@@ -282,26 +327,42 @@ export default function InvoiceSettingsPage() {
               Company Details
             </h2>
 
-            {/* Logo */}
+            {/* Logo Upload */}
             <div>
               <label className="block text-sm font-medium mb-1">Company Logo</label>
               <div className="flex items-center gap-4">
                 {settings.logo_url ? (
-                  <img src={settings.logo_url} alt="Logo" className="h-16 w-auto border rounded" />
+                  <img src={settings.logo_url} alt="Logo" className="h-16 w-auto border rounded bg-white" />
                 ) : (
                   <div className="h-16 w-16 bg-zinc-100 border rounded flex items-center justify-center text-zinc-400">
-                    <Upload className="h-6 w-6" />
+                    <ImageIcon className="h-6 w-6" />
                   </div>
                 )}
                 <div>
                   <input
-                    type="text"
-                    value={settings.logo_url ?? ''}
-                    onChange={e => setSettings({ ...settings, logo_url: e.target.value || null })}
-                    placeholder="Logo URL (e.g. https://...)"
-                    className="w-80 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleLogoUpload}
+                    className="hidden"
+                    id="logo-upload"
                   />
-                  <p className="text-xs text-muted-foreground mt-1">Enter a URL to your company logo. Appears on invoice PDFs.</p>
+                  <button
+                    type="button"
+                    onClick={() => logoInputRef.current?.click()}
+                    disabled={uploadingLogo}
+                    className="inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+                  >
+                    {uploadingLogo ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    {uploadingLogo ? 'Uploading...' : settings.logo_url ? 'Change Logo' : 'Upload Logo'}
+                  </button>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    PNG, JPG, or WebP. Max 2MB. Appears on invoice PDFs.
+                  </p>
                 </div>
               </div>
             </div>
