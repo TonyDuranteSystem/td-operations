@@ -189,8 +189,9 @@ export async function GET(
     })
   } catch (error) {
     console.error("Inbox messages error:", error)
+    const errMsg = error instanceof Error ? error.message : String(error)
     return NextResponse.json(
-      { error: "Failed to fetch messages" },
+      { error: "Failed to fetch messages", detail: errMsg },
       { status: 500 }
     )
   }
