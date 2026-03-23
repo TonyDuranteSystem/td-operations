@@ -77,7 +77,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, adminOnly: true },
   { id: 'reconciliation', name: 'Reconciliation', href: '/reconciliation', icon: ArrowLeftRight, adminOnly: true },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar },
-  { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, adminOnly: true },
+  { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, adminOnly: true },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true },
 ]
