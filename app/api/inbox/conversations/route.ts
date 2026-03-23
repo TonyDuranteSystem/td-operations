@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
     const mailbox = req.nextUrl.searchParams.get("mailbox") // support | antonio | null (support default)
     const limit = Math.min(
       parseInt(req.nextUrl.searchParams.get("limit") || "50"),
-      200
+      500
     )
 
     const conversations: InboxConversation[] = []
@@ -93,11 +93,12 @@ export async function GET(req: NextRequest) {
     // ─── Gmail threads ──────────────────────────────────
     if (!channel || channel === "gmail") {
       try {
-        const gmailLimit = limit // Always use full limit — don't cap Gmail results
+        // Gmail threads API returns max ~100 per page. Fetch multiple pages to get more.
+        const targetGmailThreads = Math.min(limit, 300)
 
         // Build Gmail query params
         const gmailParams: Record<string, string> = {
-          maxResults: String(gmailLimit),
+          maxResults: '100', // Gmail API max per request
         }
 
         // Label filter: INBOX (default), SENT, DRAFT, STARRED, TRASH, or custom label ID
@@ -112,8 +113,6 @@ export async function GET(req: NextRequest) {
           }
         } else if (!searchQuery) {
           // Default: show recent emails across all labels
-          // 'newer_than:30d' returns all emails from last 30 days regardless of label
-          // This avoids Gmail's label-based filtering that hides categorized/archived emails
           gmailParams.q = 'newer_than:30d -in:trash -in:spam'
         }
 
@@ -137,20 +136,38 @@ export async function GET(req: NextRequest) {
           ? 'antonio.durante@tonydurante.us'
           : 'support@tonydurante.us'
 
-        const listResult = (await gmailGet("/threads", gmailParams, gmailUser)) as {
-          threads?: Array<{ id: string; snippet: string; historyId: string }>
-          nextPageToken?: string
-        }
+        // Fetch multiple pages of threads to get enough results
+        let allThreadIds: Array<{ id: string; snippet: string }> = []
+        let currentPageToken = pageToken || undefined
 
-        gmailNextPageToken = listResult.nextPageToken
+        for (let page = 0; page < 3 && allThreadIds.length < targetGmailThreads; page++) {
+          const pageParams = { ...gmailParams }
+          if (currentPageToken) pageParams.pageToken = currentPageToken
+
+          const listResult = (await gmailGet("/threads", pageParams, gmailUser)) as {
+            threads?: Array<{ id: string; snippet: string; historyId: string }>
+            nextPageToken?: string
+          }
+
+          if (listResult.threads) {
+            allThreadIds.push(...listResult.threads)
+          }
+
+          gmailNextPageToken = listResult.nextPageToken
+          currentPageToken = listResult.nextPageToken
+
+          // No more pages
+          if (!listResult.nextPageToken) break
+        }
 
         // Wait for email lookup to complete
         const emailLookup = await emailLookupPromise
 
-        if (listResult.threads) {
-          // Fetch metadata for each thread (first message)
+        if (allThreadIds.length > 0) {
+          // Fetch metadata for each thread — limit to 200 to avoid rate limits
+          const threadsToFetch = allThreadIds.slice(0, 200)
           const threadDetails = await Promise.allSettled(
-            listResult.threads.slice(0, gmailLimit).map((t) =>
+            threadsToFetch.map((t) =>
               gmailGet(`/threads/${t.id}`, {
                 format: "metadata",
                 metadataHeaders: ["From", "To", "Subject", "Date"],
