@@ -59,11 +59,38 @@ export default async function TasksPage() {
     }
   }
 
-  const tasks: Task[] = rawTasks.map(t => ({
-    ...t,
-    company_name: t.account_id ? accountMap[t.account_id] ?? null : null,
-    service_type: t.delivery_id ? deliveryMap[t.delivery_id] ?? null : null,
-  }))
+  // Category fallback: when no delivery_id, infer service_type from category + title
+  // Only for CLEAR cases — ambiguous ones stay null (→ General)
+  function inferServiceType(category: string | null, title: string): string | null {
+    // Category-based (high confidence)
+    if (category === 'Formation') return 'Company Formation'
+    if (category === 'KYC') return 'ITIN' // KYC tasks are almost always ITIN passport collection
+
+    // Title-based keywords (only exact service matches)
+    const t = title.toLowerCase()
+    if (t.includes('itin') || t.includes('w-7') || t.includes('passport')) return 'ITIN'
+    if (t.includes('tax return') || t.includes('tax filing') || t.includes('1120') || t.includes('1065') || t.includes('5472') || t.includes('raccolta dati tax')) return 'Tax Return'
+    if (t.includes('ein ') || t.includes('ein application') || t.includes('ss-4')) return 'EIN'
+    if (t.includes('formation') || t.includes('articles of org') || t.includes('llc formation')) return 'Company Formation'
+    if (t.includes('annual report')) return 'State Annual Report'
+    if (t.includes('registered agent') || t.includes('ra renewal')) return 'State RA Renewal'
+    if (t.includes('banking') || t.includes('relay') || t.includes('mercury') || t.includes('payset')) return 'Banking Fintech'
+    if (t.includes('onboarding') || t.includes('welcome package')) return 'Client Onboarding'
+
+    // Everything else stays null → General
+    return null
+  }
+
+  const tasks: Task[] = rawTasks.map(t => {
+    // delivery_id takes priority, then category/title fallback
+    const serviceFromDelivery = t.delivery_id ? deliveryMap[t.delivery_id] ?? null : null
+    const serviceType = serviceFromDelivery || inferServiceType(t.category, t.task_title)
+    return {
+      ...t,
+      company_name: t.account_id ? accountMap[t.account_id] ?? null : null,
+      service_type: serviceType,
+    }
+  })
 
   // Build service tabs from active tasks
   const activeTasks2 = tasks.filter(t => t.status !== 'Done')
