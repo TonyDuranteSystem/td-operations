@@ -162,16 +162,56 @@ export async function GET(
 
     if (error) throw error
 
-    const messages: InboxMessage[] = (msgs || []).map((m) => ({
-      id: m.id,
-      direction: m.direction as "inbound" | "outbound",
-      sender: m.sender_name || m.sender_phone || "Unknown",
-      content: m.content_text || "",
-      type: m.content_type || "text",
-      status: m.status || "new",
-      createdAt: m.created_at,
-      metadata: m.metadata as Record<string, unknown> | undefined,
-    }))
+    // Build phone-to-name map for resolving sender names
+    const phoneNames: Record<string, string> = {
+      "17274234285": "Antonio Durante",
+      "17272535199": "Tony Durante LLC",
+      "17274521093": "Tony Durante LLC",
+    }
+
+    // Get unique phone-like sender_names to resolve from CRM contacts
+    const phoneSenders = Array.from(new Set(
+      (msgs || [])
+        .map(m => m.sender_name || m.sender_phone)
+        .filter((s): s is string => !!s && /^\d{8,}$/.test(s) && !phoneNames[s])
+    ))
+
+    if (phoneSenders.length > 0) {
+      // Search CRM contacts by phone number
+      const { data: contacts } = await supabaseAdmin
+        .from("contacts")
+        .select("full_name, phone")
+        .not("phone", "is", null)
+
+      if (contacts) {
+        for (const contact of contacts) {
+          if (!contact.phone || !contact.full_name) continue
+          // Normalize phone: strip +, spaces, dashes
+          const normalized = contact.phone.replace(/[\s\-\+\(\)]/g, "")
+          // Match against sender numbers (which may or may not have country code)
+          for (const sender of phoneSenders) {
+            if (normalized.endsWith(sender) || sender.endsWith(normalized) || normalized === sender) {
+              phoneNames[sender] = contact.full_name
+            }
+          }
+        }
+      }
+    }
+
+    const messages: InboxMessage[] = (msgs || []).map((m) => {
+      const rawSender = m.sender_name || m.sender_phone || "Unknown"
+      const resolvedName = phoneNames[rawSender] || rawSender
+      return {
+        id: m.id,
+        direction: m.direction as "inbound" | "outbound",
+        sender: resolvedName,
+        content: m.content_text || "",
+        type: m.content_type || "text",
+        status: m.status || "new",
+        createdAt: m.created_at,
+        metadata: m.metadata as Record<string, unknown> | undefined,
+      }
+    })
 
     const provider =
       group.messaging_channels &&
