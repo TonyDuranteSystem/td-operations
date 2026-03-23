@@ -93,9 +93,9 @@ export async function POST(request: NextRequest) {
         <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
           <p>Hi ${full_name},</p>
           <p>Your CRM dashboard account has been created. Here are your login credentials:</p>
-          <div style="background: #f4f4f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="margin: 0 0 8px;"><strong>Email:</strong> ${email}</p>
-            <p style="margin: 0;"><strong>Temporary Password:</strong> ${tempPassword}</p>
+          <div style="background: #ffffff; border: 2px solid #18181b; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0 0 8px; color: #18181b; font-size: 15px;"><strong>Email:</strong> ${email}</p>
+            <p style="margin: 0; color: #18181b; font-size: 15px;"><strong>Temporary Password:</strong> <code style="background: #fef3c7; padding: 2px 6px; border-radius: 4px; font-size: 15px; color: #92400e;">${tempPassword}</code></p>
           </div>
           <p>You will be asked to change your password on first login.</p>
           <a href="${loginUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 8px;">
