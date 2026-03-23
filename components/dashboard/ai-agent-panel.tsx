@@ -36,14 +36,28 @@ export function AiAgentPanel() {
     isSupported: micSupported,
   } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript })
 
-  // Listen for open event from sidebar
+  // Listen for open event from sidebar (with optional email context)
   useEffect(() => {
-    function handleOpen() {
+    function handleOpen(e: Event) {
       setOpen(true)
+      const detail = (e as CustomEvent)?.detail
+      if (detail?.emailContext) {
+        // Auto-send email analysis request
+        const ctx = detail.emailContext
+        const autoPrompt = `I'm looking at this email. Analyze it and suggest a reply + any CRM actions I should take.\n\n**From:** ${ctx.name}\n**Subject:** ${ctx.subject}\n**Preview:** ${ctx.preview}\n**Thread ID:** ${ctx.threadId}`
+        // Small delay to let panel render
+        setTimeout(() => {
+          setInput('')
+          const userMsg: Message = { role: 'user', content: autoPrompt }
+          setMessages(prev => [...prev, userMsg])
+          // Trigger send
+          sendMessage([...messages, userMsg])
+        }, 200)
+      }
     }
     document.addEventListener('open-ai-agent', handleOpen)
     return () => document.removeEventListener('open-ai-agent', handleOpen)
-  }, [])
+  }, [messages]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Focus input when opening
   useEffect(() => {
@@ -67,23 +81,14 @@ export function AiAgentPanel() {
     el.style.height = Math.max(44, Math.min(el.scrollHeight, 120)) + 'px'
   }, [input])
 
-  const handleSend = async () => {
-    const text = input.trim()
-    if (!text || loading) return
-    if (isRecording) stopRecording()
-
-    const userMessage: Message = { role: 'user', content: text }
-    const newMessages = [...messages, userMessage]
-    setMessages(newMessages)
-    setInput('')
+  const sendMessage = async (msgs: Message[]) => {
     setLoading(true)
-
     try {
       const res = await fetch('/api/ai-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          messages: msgs.map(m => ({ role: m.role, content: m.content })),
           provider: provider !== 'auto' ? provider : undefined,
         }),
       })
@@ -103,6 +108,18 @@ export function AiAgentPanel() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleSend = async () => {
+    const text = input.trim()
+    if (!text || loading) return
+    if (isRecording) stopRecording()
+
+    const userMessage: Message = { role: 'user', content: text }
+    const newMessages = [...messages, userMessage]
+    setMessages(newMessages)
+    setInput('')
+    await sendMessage(newMessages)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

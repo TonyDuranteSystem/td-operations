@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Filter } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Filter, Bot } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -232,6 +232,20 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
     setSearchQuery('')
     setSearchActive(false)
     queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+  }
+
+  const handleAiAssist = () => {
+    if (!selected) return
+    document.dispatchEvent(new CustomEvent('open-ai-agent', {
+      detail: {
+        emailContext: {
+          name: selected.name,
+          subject: selected.subject || '',
+          preview: selected.preview || '',
+          threadId: selected.id.replace('gmail:', ''),
+        }
+      }
+    }))
   }
 
   const handleReply = () => {
@@ -502,6 +516,15 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
                   >
                     <Reply className="h-3.5 w-3.5" />
                     Reply
+                  </button>
+                  {/* AI Assist — opens AI panel with email context */}
+                  <button
+                    onClick={handleAiAssist}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
+                    title="AI Assist — analyze email and suggest reply"
+                  >
+                    <Bot className="h-3.5 w-3.5" />
+                    AI Assist
                   </button>
 
                   {/* Gmail actions */}
