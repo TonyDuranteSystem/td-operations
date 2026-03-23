@@ -180,6 +180,36 @@ export async function PATCH(request: NextRequest) {
   return NextResponse.json({ success: true })
 }
 
+/**
+ * DELETE /api/team-management
+ * Admin-only: permanently delete a dashboard user.
+ * Body: { user_id }
+ */
+export async function DELETE(request: NextRequest) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isAdmin(user)) {
+    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  }
+
+  const body = await request.json()
+  const { user_id } = body
+
+  if (!user_id) {
+    return NextResponse.json({ error: 'user_id required' }, { status: 400 })
+  }
+
+  // Self-protection: can't delete self
+  if (user_id === user.id) {
+    return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 })
+  }
+
+  const { error } = await supabaseAdmin.auth.admin.deleteUser(user_id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  return NextResponse.json({ success: true })
+}
+
 // --- Helpers ---
 
 const ADMIN_EMAILS = ['antonio.durante@tonydurante.us']

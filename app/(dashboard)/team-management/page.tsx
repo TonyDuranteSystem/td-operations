@@ -13,6 +13,7 @@ import {
   Loader2,
   Mail,
   Clock,
+  Trash2,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
@@ -112,6 +113,23 @@ export default function TeamManagementPage() {
       fetchUsers()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : `Failed to ${action} user`)
+    }
+  }
+
+  const handleDelete = async (userId: string, userName: string) => {
+    if (!confirm(`Permanently delete ${userName}? This cannot be undone.`)) return
+    try {
+      const res = await fetch('/api/team-management', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      toast.success(`${userName} deleted`)
+      fetchUsers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete user')
     }
   }
 
@@ -312,6 +330,13 @@ export default function TeamManagementPage() {
                             title={u.disabled ? 'Enable access' : 'Disable access'}
                           >
                             {u.disabled ? <Shield className="h-3.5 w-3.5" /> : <ShieldOff className="h-3.5 w-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => handleDelete(u.id, u.full_name)}
+                            className="p-1.5 text-red-400 hover:text-red-700 hover:bg-red-50 rounded-md"
+                            title="Delete user permanently"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </>
                       )}
