@@ -64,15 +64,18 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       return conv.id
     },
     onMutate: async (conv) => {
-      // Tell parent to hide this ID immediately
+      // Cancel in-flight fetches so stale data doesn't overwrite our removal
+      await queryClient.cancelQueries({ queryKey: ['inbox-conversations'] })
+      // Tell parent to hide this ID immediately (persists for the session)
       if (onDeleted) onDeleted(conv.id)
     },
     onSuccess: () => {
       toast.success('Email deleted')
+      // Delay refetch — Gmail needs 10-15s to process the trash
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
         queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
-      }, 3000)
+      }, 15000)
     },
     onError: () => {
       toast.error('Failed to delete email')
