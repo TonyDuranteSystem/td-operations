@@ -111,9 +111,10 @@ export async function GET(req: NextRequest) {
             gmailParams.q = `in:${labelFilter.toLowerCase()} -in:trash`
           }
         } else if (!searchQuery) {
-          // Default: show all mail — use 'in:anywhere' to include every label
-          // This ensures no emails are accidentally filtered out
-          gmailParams.q = 'in:anywhere -in:trash -in:spam'
+          // Default: show recent emails across all labels
+          // 'newer_than:30d' returns all emails from last 30 days regardless of label
+          // This avoids Gmail's label-based filtering that hides categorized/archived emails
+          gmailParams.q = 'newer_than:30d -in:trash -in:spam'
         }
 
         // Search query (Gmail search syntax)
