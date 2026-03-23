@@ -1,11 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { supabaseAdmin } from '@/lib/supabase-admin'
+import { isAdmin, isClient } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * POST /api/ai-agent
- * Admin-only AI agent — Claude (primary) + GPT-4o (fallback).
+ * AI agent for dashboard users — Claude (primary) + GPT-4o (fallback).
+ * Admin always has access. Team members require ai_agent.enabled_for_team = true in app_settings.
  * Body: { messages: [{ role: 'user'|'assistant', content: string }] }
  * Returns: { content: string, provider: string, tools_used: string[] }
  */
@@ -19,11 +21,23 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Admin auth check
+  // Auth check: admin always allowed, team allowed if toggle is on, clients never
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  if (!user || isClient(user)) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  if (!isAdmin(user)) {
+    // Team member — check if AI agent is enabled for team
+    const { data: aiSetting } = await supabaseAdmin
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'ai_agent')
+      .single()
+    if (!aiSetting?.value?.enabled_for_team) {
+      return NextResponse.json({ error: 'AI Agent is not enabled for team members. Ask your admin to enable it in Team Management.' }, { status: 403 })
+    }
   }
 
   try {

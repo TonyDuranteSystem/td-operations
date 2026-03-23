@@ -1,18 +1,17 @@
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * GET /api/ai-agent/attachment-preview?message_id=xxx&attachment_id=yyy
  * Proxies a Gmail attachment as an image response.
- * Admin-only. Used by the AI Agent chat to show inline image previews.
+ * Dashboard users only. Used by the AI Agent chat to show inline image previews.
  */
 export async function GET(request: NextRequest) {
-  // Admin auth check
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
   const { searchParams } = new URL(request.url)
