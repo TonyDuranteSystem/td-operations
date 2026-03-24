@@ -35,6 +35,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import { readFile } from "fs/promises"
 import { join } from "path"
+import { existsSync } from "fs"
 
 // Tony Durante LLC — Third Party Designee info
 const DESIGNEE = {
@@ -93,10 +94,19 @@ function formatDate(d: string | undefined): string {
 
 /** Load the pre-flattened SS-4 template (no XFA, no form fields) */
 async function loadTemplate(): Promise<Buffer> {
-  // In production (Vercel), public/ files are served as static assets
-  // but we can also read them from the filesystem at build time
+  // Try filesystem first (works locally and in some Vercel configs)
   const templatePath = join(process.cwd(), "public", "templates", "ss4-blank.pdf")
-  return readFile(templatePath)
+  if (existsSync(templatePath)) {
+    return readFile(templatePath)
+  }
+
+  // Fallback: fetch from the app's own static assets (Vercel CDN)
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+    || process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}`
+    || "https://app.tonydurante.us"
+  const res = await fetch(`${baseUrl}/templates/ss4-blank.pdf`)
+  if (!res.ok) throw new Error(`Failed to load SS-4 template: ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
 }
 
 const FONT_SIZE = 10
