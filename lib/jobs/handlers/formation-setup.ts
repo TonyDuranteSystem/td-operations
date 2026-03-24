@@ -1,28 +1,33 @@
 /**
  * Job Handler: formation_setup
  *
- * Executes the apply_changes phase of formation_form_review:
+ * Auto-chain for formation wizard submissions:
+ * - Data validation (required fields)
  * - Contact update with submitted data
  * - CRM Account creation (LLC placeholder — EIN/formation_date added later)
  * - Service Delivery creation (Company Formation, Stage 1)
  * - Form → reviewed
  * - Email notification to support@ (client completed form)
  * - CRM task for Luca (WhatsApp follow-up)
+ * - Portal notification to Contact
  *
- * The MCP tool validates and shows diff inline before enqueuing this job.
+ * Triggered by:
+ * 1. Portal wizard-submit (source: 'portal_wizard')
+ * 2. MCP formation_form_review (source: undefined)
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import type { Job, JobResult } from "../queue"
-import { updateJobProgress } from "../queue"
+import { updateJobProgress, type Job, type JobResult } from "../queue"
+import { validateFormationData } from "../validation"
 
 interface FormationPayload {
   token: string
-  submission_id: string
+  submission_id: string | null
   contact_id: string | null
   lead_id: string | null
   submitted_data: Record<string, unknown>
+  source?: "portal_wizard" | string
 }
 
 // State name → code mapping for formation
@@ -42,6 +47,16 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   const result: JobResult = { steps: [] }
   const now = new Date().toISOString()
   const submitted = p.submitted_data || {}
+
+  // ─── 0. VALIDATE WIZARD DATA ───
+  const validation = validateFormationData(submitted)
+  if (!validation.valid) {
+    const errDetail = validation.errors.map(e => `${e.field}: ${e.message}`).join("; ")
+    result.steps.push(step("validation", "error", errDetail))
+    result.summary = `Validation failed: ${validation.errors.length} error(s)`
+    return result
+  }
+  result.steps.push(step("validation", "ok", "All checks passed"))
 
   // ─── 1. UPDATE CONTACT WITH SUBMITTED DATA ───
   if (p.contact_id) {
@@ -214,13 +229,16 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   await updateJobProgress(job.id, result)
 
   // ─── 3. MARK FORM AS REVIEWED ───
+  if (!p.submission_id) {
+    result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
+  } else {
   try {
     const { error: formErr } = await supabaseAdmin
       .from("formation_submissions")
       .update({
         status: "reviewed",
         reviewed_at: now,
-        reviewed_by: "claude",
+        reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
       })
       .eq("id", p.submission_id)
 
@@ -232,6 +250,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   } catch (e) {
     result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))
   }
+  } // end submission_id check
 
   await updateJobProgress(job.id, result)
 
@@ -255,7 +274,6 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       `Admin Preview: ${APP_BASE_URL}/formation-form/${p.token}?preview=td`,
     ].join("\n")
 
-    const boundary = `boundary_${Date.now()}`
     const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
     const mimeHeaders = [
       `From: Tony Durante LLC <support@tonydurante.us>`,
@@ -306,6 +324,25 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     }
   } catch (e) {
     result.steps.push(step("luca_whatsapp_task", "error", e instanceof Error ? e.message : String(e)))
+  }
+
+  // ─── 6. PORTAL NOTIFICATION TO CONTACT ───
+  if (p.contact_id) {
+    try {
+      const { createPortalNotification } = await import("@/lib/portal/notifications")
+      const llcName = String(submitted.llc_name_1 || "your LLC")
+      await createPortalNotification({
+        contact_id: p.contact_id,
+        account_id: accountId || undefined,
+        type: "service",
+        title: "Formation data received!",
+        body: `We received your information for ${llcName}. Our team will verify and begin the formation process.`,
+        link: "/portal/services",
+      })
+      result.steps.push(step("portal_notification", "ok", "Contact notified in portal"))
+    } catch (e) {
+      result.steps.push(step("portal_notification", "error", e instanceof Error ? e.message : String(e)))
+    }
   }
 
   // Summary

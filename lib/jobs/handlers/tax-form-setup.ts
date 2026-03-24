@@ -12,16 +12,17 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import type { Job, JobResult } from "../queue"
-import { updateJobProgress } from "../queue"
+import { updateJobProgress, type Job, type JobResult } from "../queue"
 
 interface TaxFormPayload {
   token: string
-  submission_id: string
+  submission_id: string | null
   contact_id: string | null
   account_id: string | null
   tax_return_id: string | null
   changed_fields: Record<string, { old: unknown; new: unknown }> | null
+  submitted_data?: Record<string, unknown>
+  source?: "portal_wizard" | string
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -233,23 +234,27 @@ export async function handleTaxFormSetup(job: Job): Promise<JobResult> {
   await updateJobProgress(job.id, result)
 
   // ─── 6. MARK FORM AS REVIEWED ───
-  try {
-    const { error: formErr } = await supabaseAdmin
-      .from("tax_return_submissions")
-      .update({
-        status: "reviewed",
-        reviewed_at: now,
-        reviewed_by: "claude",
-      })
-      .eq("id", p.submission_id)
+  if (!p.submission_id) {
+    result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
+  } else {
+    try {
+      const { error: formErr } = await supabaseAdmin
+        .from("tax_return_submissions")
+        .update({
+          status: "reviewed",
+          reviewed_at: now,
+          reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
+        })
+        .eq("id", p.submission_id)
 
-    if (formErr) {
-      result.steps.push(step("form_reviewed", "error", formErr.message))
-    } else {
-      result.steps.push(step("form_reviewed", "ok", "Form → reviewed"))
+      if (formErr) {
+        result.steps.push(step("form_reviewed", "error", formErr.message))
+      } else {
+        result.steps.push(step("form_reviewed", "ok", "Form → reviewed"))
+      }
+    } catch (e) {
+      result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))
     }
-  } catch (e) {
-    result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))
   }
 
   // Summary
