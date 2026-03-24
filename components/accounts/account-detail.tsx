@@ -731,9 +731,8 @@ function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
           </div>
           <div className="flex-1 p-4" onClick={e => e.stopPropagation()}>
             <iframe
-              src={`https://drive.google.com/file/d/${previewDoc.drive_file_id}/preview`}
+              src={`/api/documents/${previewDoc.id}/preview`}
               className="w-full h-full rounded-lg border-0"
-              allow="autoplay"
             />
           </div>
         </div>
