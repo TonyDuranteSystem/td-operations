@@ -130,11 +130,11 @@
  *   c1_7[0] = Yes → f1_39 (previous EIN, maxLen=10)
  *   c1_7[1] = No
  *
- *   THIRD PARTY DESIGNEE:
- *   f1_40 = Designee's name
- *   f1_41 = Address and ZIP code
- *   f1_42 = Designee's telephone
- *   f1_43 = Designee's fax
+ *   THIRD PARTY DESIGNEE (two rows, each with left+right fields):
+ *   Row y=108: f1_40 (left, w=344) = Designee's name
+ *              f1_41 (right, w=143) = Designee's telephone number
+ *   Row y=84:  f1_42 (left, w=344) = Designee's address and ZIP code
+ *              f1_43 (right, w=143) = Designee's fax number
  *
  *   SIGNATURE (not a form field — left blank for e-sign overlay):
  *   f1_44 = Name and title (type or print clearly)
@@ -324,10 +324,10 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   }
 
   // === THIRD PARTY DESIGNEE ===
-  setText(`${P}.f1_40[0]`, DESIGNEE.name)
-  setText(`${P}.f1_41[0]`, DESIGNEE.address)
-  setText(`${P}.f1_42[0]`, DESIGNEE.phone)
-  setText(`${P}.f1_43[0]`, DESIGNEE.fax)
+  setText(`${P}.f1_40[0]`, DESIGNEE.name) // Left y=108: name
+  setText(`${P}.f1_41[0]`, DESIGNEE.phone) // Right y=108: telephone
+  setText(`${P}.f1_42[0]`, DESIGNEE.address) // Left y=84: address + ZIP
+  setText(`${P}.f1_43[0]`, DESIGNEE.fax) // Right y=84: fax
 
   // === SIGNATURE SECTION (pre-fill name and title, signature added later) ===
   setText(`${P}.f1_44[0]`, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
