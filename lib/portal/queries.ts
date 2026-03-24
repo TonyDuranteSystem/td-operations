@@ -215,7 +215,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
           .eq('company_name', acct.company_name)
         return count ?? 0
       }),
-    // Unsigned OA or Lease agreements
+    // Unsigned OA, Lease, or SS-4 agreements
     Promise.all([
       supabaseAdmin
         .from('oa_agreements')
@@ -227,7 +227,12 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
         .select('id', { count: 'exact', head: true })
         .eq('account_id', accountId)
         .neq('status', 'signed'),
-    ]).then(([oa, lease]) => (oa.count ?? 0) + (lease.count ?? 0)),
+      supabaseAdmin
+        .from('ss4_applications')
+        .select('id', { count: 'exact', head: true })
+        .eq('account_id', accountId)
+        .in('status', ['awaiting_signature', 'draft']),
+    ]).then(([oa, lease, ss4]) => (oa.count ?? 0) + (lease.count ?? 0) + (ss4.count ?? 0)),
   ])
 
   // Also check if any SD is tax-related
