@@ -29,6 +29,8 @@ const PUBLIC_PREFIXES = [
   '/api/itin-form-completed',
   '/api/lease-signed',
   '/api/oa-signed',
+  '/api/ss4-signed',
+  '/api/ss4',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
@@ -41,6 +43,7 @@ const PUBLIC_PREFIXES = [
   '/itin-form',
   '/tax-quote',
   '/contract-template',
+  '/ss4',
   // OAuth and well-known
   '/.well-known',
   '/oauth',
