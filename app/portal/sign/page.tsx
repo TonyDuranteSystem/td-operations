@@ -63,8 +63,8 @@ export default async function PortalSignPage() {
     )
   }
 
-  // Query OA and Lease in parallel
-  const [oaResult, leaseResult] = await Promise.all([
+  // Query OA, Lease, and SS-4 in parallel
+  const [oaResult, leaseResult, ss4Result] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
       .select('token, status, company_name, signed_at')
@@ -75,6 +75,13 @@ export default async function PortalSignPage() {
     supabaseAdmin
       .from('lease_agreements')
       .select('token, status, tenant_company, suite_number, signed_at')
+      .eq('account_id', selectedAccountId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('ss4_applications')
+      .select('token, status, company_name, signed_at')
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -103,6 +110,17 @@ export default async function PortalSignPage() {
       companyName: lease.tenant_company,
       suiteNumber: lease.suite_number,
       signedAt: lease.signed_at,
+    })
+  }
+
+  if (ss4Result.data) {
+    const ss4 = ss4Result.data
+    documents.push({
+      type: 'ss4',
+      status: ss4.status === 'signed' ? 'signed' : 'awaiting',
+      href: '/portal/sign/ss4',
+      companyName: ss4.company_name,
+      signedAt: ss4.signed_at,
     })
   }
 
