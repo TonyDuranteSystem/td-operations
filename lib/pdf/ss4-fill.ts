@@ -157,35 +157,35 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   text(440, 567, data.responsiblePartyItin || "Foreigner")
 
   // === LINE 8a: Is this for an LLC? = Yes ===
-  check(337, 543)
+  check(255, 542)
 
   // === LINE 8b: Number of LLC members ===
   text(530, 543, String(data.memberCount))
 
   // === LINE 8c: Was LLC organized in US? = Yes ===
-  check(467, 527)
+  check(493, 530)
 
   // === LINE 9a: Type of entity ===
   switch (data.entityType) {
     case "SMLLC":
-      // "Other (specify)" checkbox + text
-      check(62, 432)
-      text(155, 434, "Foreign owned disregarded entity", SMALL_SIZE)
+      // "Other (specify)" checkbox + text (c1_3[15]: x=61, y=434)
+      check(61, 434)
+      text(155, 436, "Foreign owned disregarded entity", SMALL_SIZE)
       break
     case "MMLLC":
-      // "Partnership" checkbox
-      check(62, 486)
+      // "Partnership" checkbox (c1_3[2]: x=61, y=494)
+      check(61, 494)
       break
     case "Corporation":
       // "Corporation" checkbox + form number
-      check(62, 470)
-      text(262, 472, "1120")
+      check(61, 478)
+      text(262, 480, "1120")
       break
   }
 
-  // === LINE 10: Reason — Started new business ===
-  check(63, 388)
-  text(220, 390, "Any Legal Activity", SMALL_SIZE)
+  // === LINE 10: Reason — Started new business === (c1_4[0]: x=61, y=386)
+  check(61, 386)
+  text(220, 388, "Any Legal Activity", SMALL_SIZE)
 
   // === LINE 11: Date business started ===
   text(75, 318, formatDate(data.formationDate))
@@ -193,16 +193,16 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   // === LINE 12: Closing month ===
   text(410, 318, "December")
 
-  // === LINE 16: Principal activity — Other (specify) ===
-  check(438, 195)
-  text(490, 197, "Any Legal Activity", SMALL_SIZE)
+  // === LINE 16: Principal activity — Other (specify) === (c1_6[11]: x=320, y=194)
+  check(320, 194)
+  text(385, 196, "Any Legal Activity", SMALL_SIZE)
 
-  // === LINE 18: Applied for EIN before? ===
+  // === LINE 18: Applied for EIN before? === (c1_7[0]=Yes x=356,y=158 / c1_7[1]=No x=399,y=158)
   if (data.hasAppliedBefore) {
-    check(474, 157)
+    check(356, 158)
     if (data.previousEin) text(220, 142, data.previousEin)
   } else {
-    check(519, 157)
+    check(399, 158)
   }
 
   // === THIRD PARTY DESIGNEE ===
