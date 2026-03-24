@@ -3,9 +3,10 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, User, Mail, Phone, Globe, MessageSquare,
-  Calendar, Tag, ExternalLink, FileText, Clock,
+  Calendar, Tag, ExternalLink, FileText, CreditCard,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
+import { APP_BASE_URL } from '@/lib/config'
 import { LeadDetailActions } from '@/components/leads/lead-detail-actions'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -22,10 +23,12 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const OFFER_STATUS_COLORS: Record<string, string> = {
-  'Sent': 'bg-blue-100 text-blue-700',
-  'Viewed': 'bg-amber-100 text-amber-700',
-  'Accepted': 'bg-emerald-100 text-emerald-700',
-  'Rejected': 'bg-red-100 text-red-700',
+  'draft': 'bg-zinc-100 text-zinc-600',
+  'sent': 'bg-blue-100 text-blue-700',
+  'viewed': 'bg-amber-100 text-amber-700',
+  'signed': 'bg-indigo-100 text-indigo-700',
+  'completed': 'bg-emerald-100 text-emerald-700',
+  'expired': 'bg-red-100 text-red-600',
 }
 
 function formatDate(d: string | null): string {
@@ -40,13 +43,13 @@ function formatDate(d: string | null): string {
 function formatCurrency(amount: number | null, currency?: string | null): string {
   if (amount == null) return '\u2014'
   const c = currency === 'EUR' ? '\u20AC' : '$'
-  return `${c}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${c}${amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 }
 
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
 
-  // Fetch lead with all fields
+  // Fetch lead
   const { data: lead } = await supabase
     .from('leads')
     .select('*')
@@ -55,18 +58,26 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
 
   if (!lead) notFound()
 
-  // Fetch pending activation for this lead
-  const { data: activation } = await supabase
-    .from('pending_activations')
-    .select('id, status, amount, currency, payment_method, created_at')
+  // Fetch offer from offers table (source of truth)
+  const { data: offer } = await supabase
+    .from('offers')
+    .select('token, status, contract_type, language, client_email, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at')
     .eq('lead_id', params.id)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  const hasOffer = !!(lead.offer_status || lead.offer_link || lead.offer_year1_amount)
-  const services: string[] = Array.isArray(lead.offer_services) ? lead.offer_services : []
-  const optionalServices: string[] = Array.isArray(lead.offer_optional_services) ? lead.offer_optional_services : []
+  // Fetch pending activation (source of truth for payment)
+  const { data: activation } = await supabase
+    .from('pending_activations')
+    .select('id, status, amount, currency, payment_method, payment_confirmed_at, signed_at, notes, created_at')
+    .eq('lead_id', params.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const selectedServices: string[] = Array.isArray(offer?.selected_services) ? offer.selected_services : []
+  const bundledPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
   return (
     <div className="p-6 lg:p-8 max-w-5xl">
@@ -100,6 +111,9 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           leadName={lead.full_name}
           hasActivation={!!activation}
           activationStatus={activation?.status ?? null}
+          bundledPipelines={bundledPipelines}
+          paymentAmount={activation?.amount ?? null}
+          paymentCurrency={activation?.currency ?? null}
         />
       </div>
 
@@ -157,7 +171,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             </div>
             <div className="flex justify-between">
               <dt className="text-muted-foreground">Referrer</dt>
-              <dd className="font-medium">{lead.referrer_name ?? '\u2014'}</dd>
+              <dd className="font-medium">
+                {offer?.referrer_name
+                  ? `${offer.referrer_name}${offer.referrer_type ? ` (${offer.referrer_type})` : ''}`
+                  : lead.referrer_name ?? '\u2014'}
+              </dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-muted-foreground flex items-center gap-1.5">
@@ -184,65 +202,67 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </dl>
         </div>
 
-        {/* Offer Details */}
-        {hasOffer && (
+        {/* Offer Details — from offers table */}
+        {offer && (
           <div className="bg-white rounded-lg border p-5 md:col-span-2">
             <h2 className="text-sm font-semibold text-zinc-900 mb-4 flex items-center gap-2">
               <FileText className="h-4 w-4" />
-              Offer Details
+              Offer
             </h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {lead.offer_status && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Offer Status</p>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${OFFER_STATUS_COLORS[lead.offer_status] ?? 'bg-zinc-100'}`}>
-                    {lead.offer_status}
-                  </span>
-                </div>
-              )}
-              {lead.offer_year1_amount != null && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Year 1 Amount</p>
-                  <p className="text-sm font-semibold">
-                    {formatCurrency(lead.offer_year1_amount, lead.offer_year1_currency)}
-                  </p>
-                </div>
-              )}
-              {lead.offer_annual_amount != null && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Annual Amount</p>
-                  <p className="text-sm font-semibold">
-                    {formatCurrency(lead.offer_annual_amount, lead.offer_annual_currency)}
-                  </p>
-                </div>
-              )}
-              {lead.offer_date && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Offer Date</p>
-                  <p className="text-sm font-medium">{formatDate(lead.offer_date)}</p>
-                </div>
-              )}
-              {lead.offer_link && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Offer Link</p>
-                  <a
-                    href={lead.offer_link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
-                  >
-                    Open offer <ExternalLink className="h-3 w-3" />
-                  </a>
-                </div>
-              )}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Status</p>
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${OFFER_STATUS_COLORS[offer.status] ?? 'bg-zinc-100'}`}>
+                  {offer.status}
+                </span>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Contract Type</p>
+                <p className="text-sm font-medium capitalize">{offer.contract_type ?? '\u2014'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Offer Date</p>
+                <p className="text-sm font-medium">{formatDate(offer.offer_date ?? offer.created_at)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Views</p>
+                <p className="text-sm font-medium">{offer.view_count ?? 0} {offer.viewed_at ? `(last ${formatDate(offer.viewed_at)})` : ''}</p>
+              </div>
             </div>
 
-            {/* Services lists */}
-            {services.length > 0 && (
+            {/* Cost Summary from offer */}
+            {Array.isArray(offer.cost_summary) && offer.cost_summary.length > 0 && (
               <div className="mt-4">
-                <p className="text-xs text-muted-foreground mb-2">Services</p>
+                <p className="text-xs text-muted-foreground mb-2">Cost Summary</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {(offer.cost_summary as Array<{ label: string; total: string; total_label?: string; items?: Array<{ name: string; price: string }> }>).map((section, i) => (
+                    <div key={i} className="bg-zinc-50 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-zinc-700 mb-1">{section.label}</p>
+                      {section.items?.map((item, j) => (
+                        <div key={j} className="flex justify-between text-xs text-zinc-600">
+                          <span>{item.name}</span>
+                          <span className="font-medium">{item.price}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-sm font-semibold text-zinc-900 mt-1 pt-1 border-t border-zinc-200">
+                        <span>Total</span>
+                        <span>{section.total}</span>
+                      </div>
+                      {section.total_label && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5">{section.total_label}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Selected Services */}
+            {selectedServices.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs text-muted-foreground mb-2">Selected Services</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {services.map((s) => (
+                  {selectedServices.map((s) => (
                     <span key={s} className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 font-medium">
                       {s}
                     </span>
@@ -250,63 +270,79 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                 </div>
               </div>
             )}
-            {optionalServices.length > 0 && (
+
+            {/* Bundled Pipelines */}
+            {bundledPipelines.length > 0 && (
               <div className="mt-3">
-                <p className="text-xs text-muted-foreground mb-2">Optional Services</p>
+                <p className="text-xs text-muted-foreground mb-2">Service Pipelines</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {optionalServices.map((s) => (
-                    <span key={s} className="text-xs px-2 py-1 rounded bg-zinc-100 text-zinc-600 font-medium">
-                      {s}
+                  {bundledPipelines.map((p) => (
+                    <span key={p} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-medium">
+                      {p}
                     </span>
                   ))}
                 </div>
               </div>
             )}
 
-            {lead.offer_notes && (
+            {/* Offer link */}
+            {offer.token && (
               <div className="mt-4">
-                <p className="text-xs text-muted-foreground mb-1">Offer Notes</p>
-                <p className="text-sm text-zinc-700">{lead.offer_notes}</p>
+                <a
+                  href={`${APP_BASE_URL}/offer/${offer.token}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
+                >
+                  Open offer page <ExternalLink className="h-3 w-3" />
+                </a>
               </div>
             )}
           </div>
         )}
 
-        {/* Activation Info */}
+        {/* Payment / Activation — from pending_activations table */}
         {activation && (
           <div className="bg-white rounded-lg border p-5 md:col-span-2">
             <h2 className="text-sm font-semibold text-zinc-900 mb-4 flex items-center gap-2">
-              <Clock className="h-4 w-4" />
-              Pending Activation
+              <CreditCard className="h-4 w-4" />
+              Payment
             </h2>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Status</p>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                   activation.status === 'activated'
                     ? 'bg-emerald-100 text-emerald-700'
-                    : activation.status === 'pending_confirmation'
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-blue-100 text-blue-700'
+                    : activation.status === 'payment_confirmed'
+                      ? 'bg-blue-100 text-blue-700'
+                      : activation.status === 'pending_confirmation'
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-zinc-100 text-zinc-600'
                 }`}>
                   {activation.status}
                 </span>
               </div>
-              {activation.amount != null && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Amount Paid</p>
+                <p className="text-sm font-semibold">
+                  {formatCurrency(activation.amount, activation.currency)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Payment Method</p>
+                <p className="text-sm font-medium">{activation.payment_method ?? '\u2014'}</p>
+              </div>
+              {activation.payment_confirmed_at && (
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Amount</p>
-                  <p className="text-sm font-semibold">
-                    {formatCurrency(activation.amount, activation.currency)}
-                  </p>
-                </div>
-              )}
-              {activation.payment_method && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Payment Method</p>
-                  <p className="text-sm font-medium">{activation.payment_method}</p>
+                  <p className="text-xs text-muted-foreground mb-1">Confirmed</p>
+                  <p className="text-sm font-medium">{formatDate(activation.payment_confirmed_at)}</p>
                 </div>
               )}
             </div>
+            {activation.notes && (
+              <p className="text-xs text-muted-foreground mt-3">{activation.notes}</p>
+            )}
           </div>
         )}
 

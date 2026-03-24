@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { CreditCard, Loader2, CheckCircle2, AlertCircle, X, Copy, Check } from 'lucide-react'
+import { CreditCard, Loader2, CheckCircle2, X, Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { registerPayment } from '@/app/(dashboard)/leads/[id]/actions'
@@ -12,9 +12,21 @@ interface LeadDetailActionsProps {
   leadName: string
   hasActivation: boolean
   activationStatus: string | null
+  bundledPipelines: string[]
+  paymentAmount: number | null
+  paymentCurrency: string | null
 }
 
-export function LeadDetailActions({ leadId, leadName, hasActivation, activationStatus }: LeadDetailActionsProps) {
+function formatCurrency(amount: number | null, currency?: string | null): string {
+  if (amount == null) return ''
+  const c = currency === 'EUR' ? '\u20AC' : '$'
+  return `${c}${amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+}
+
+export function LeadDetailActions({
+  leadId, leadName, hasActivation, activationStatus,
+  bundledPipelines, paymentAmount, paymentCurrency,
+}: LeadDetailActionsProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [showConfirm, setShowConfirm] = useState(false)
@@ -90,25 +102,40 @@ export function LeadDetailActions({ leadId, leadName, hasActivation, activationS
               </button>
             </div>
 
-            <p className="text-sm text-muted-foreground mb-1">
-              This will activate services for:
-            </p>
-            <p className="text-sm font-medium mb-4">{leadName}</p>
+            <div className="mb-4">
+              <p className="text-sm font-medium">{leadName}</p>
+              {paymentAmount != null && (
+                <p className="text-lg font-semibold text-emerald-700 mt-1">
+                  {formatCurrency(paymentAmount, paymentCurrency)}
+                </p>
+              )}
+            </div>
 
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-              <div className="flex gap-2">
-                <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-                <div className="text-xs text-amber-800">
-                  <p className="font-medium">This action will:</p>
-                  <ul className="mt-1 space-y-0.5 list-disc list-inside">
-                    <li>Create a Contact from this Lead</li>
-                    <li>Create Service Deliveries (pipelines)</li>
-                    <li>Create a Portal login for the client</li>
-                    <li>Prepare QB invoice & data collection form</li>
-                    <li>Notify the team via email</li>
-                  </ul>
-                </div>
-              </div>
+            <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-3 mb-4">
+              <p className="text-xs font-medium text-zinc-700 mb-2">This will trigger:</p>
+              <ul className="text-xs text-zinc-600 space-y-1">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-500 mt-0.5">1.</span>
+                  <span>Create Contact from Lead</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-500 mt-0.5">2.</span>
+                  <span>Create Portal login</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-500 mt-0.5">3.</span>
+                  <span>
+                    Create Service Deliveries
+                    {bundledPipelines.length > 0 && (
+                      <span className="text-zinc-400"> ({bundledPipelines.join(', ')})</span>
+                    )}
+                  </span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-500 mt-0.5">4.</span>
+                  <span>Notify team via email</span>
+                </li>
+              </ul>
             </div>
 
             <div className="flex gap-3 justify-end">
@@ -124,7 +151,7 @@ export function LeadDetailActions({ leadId, leadName, hasActivation, activationS
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50"
               >
                 {isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-                Confirm Activation
+                Confirm
               </button>
             </div>
           </div>
@@ -148,7 +175,7 @@ export function LeadDetailActions({ leadId, leadName, hasActivation, activationS
             </div>
 
             <p className="text-sm text-muted-foreground mb-4">
-              Send these credentials to the client. They will be asked to change their password on first login.
+              Send these credentials to the client. Password change required on first login.
             </p>
 
             <div className="space-y-3">
