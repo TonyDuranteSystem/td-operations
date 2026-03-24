@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Save, CreditCard, ExternalLink } from 'lucide-react'
+import { Loader2, Save, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 
@@ -97,7 +97,7 @@ export function PaymentSettings({ accountId, currentGateway, currentLink }: Paym
             placeholder={selectedGateway?.placeholder ?? 'https://...'}
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <p className="text-xs text-zinc-400 mt-1">This link will appear as a "Pay Now" button on your invoices.</p>
+          <p className="text-xs text-zinc-400 mt-1">This link will appear as a &ldquo;Pay Now&rdquo; button on your invoices.</p>
         </div>
       )}
 
