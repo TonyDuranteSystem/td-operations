@@ -17,6 +17,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { getPortalAccounts } from '@/lib/portal/queries'
 import { APP_BASE_URL } from '@/lib/config'
 import { PortalOAClient } from './portal-oa-client'
 import { cookies } from 'next/headers'
@@ -42,16 +43,20 @@ export default async function PortalSignOAPage() {
     )
   }
 
-  // Get selected account from cookie
+  // Get selected account — from cookie or fallback to first account
+  const accounts = await getPortalAccounts(contactId)
   const cookieStore = cookies()
-  const selectedAccountId = (await cookieStore).get('portal_account_id')?.value
+  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
+  const selectedAccountId = accounts.length > 0
+    ? (accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0].id)
+    : ''
 
   if (!selectedAccountId) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">
-          <p className="text-zinc-500 text-lg">No company selected.</p>
-          <p className="text-zinc-400 text-sm">Select a company from the sidebar to view its Operating Agreement.</p>
+          <p className="text-zinc-500 text-lg">No company found.</p>
+          <p className="text-zinc-400 text-sm">Your Operating Agreement will appear here once your company is set up.</p>
         </div>
       </div>
     )
