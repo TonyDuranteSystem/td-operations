@@ -134,36 +134,36 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
     page.drawText("X", { x: x + 1, y: y + 1, size: CHECK_SIZE, font: boldFont, color: black })
   }
 
-  // === LINE 1: Legal name ===
-  text(75, 700, data.companyName)
+  // === LINE 1: Legal name (blank area below label) ===
+  text(75, 687, data.companyName)
 
-  // === LINE 2: Trade name (if different) ===
-  if (data.tradeName) text(75, 672, data.tradeName)
+  // === LINE 2: Trade name ===
+  if (data.tradeName) text(75, 660, data.tradeName)
 
   // === LINE 4a: Mailing address (TD office) ===
-  text(75, 650, TD_OFFICE.street)
+  text(75, 637, TD_OFFICE.street)
 
   // === LINE 4b: City, state, ZIP ===
-  text(75, 632, TD_OFFICE.cityStateZip)
+  text(75, 618, TD_OFFICE.cityStateZip)
 
   // === LINE 6: County and state ===
   const countyState = data.countyAndState || STATE_COUNTY_MAP[data.stateOfFormation] || ""
-  text(75, 607, countyState)
+  text(75, 593, countyState)
 
   // === LINE 7a: Name of responsible party ===
-  text(75, 580, data.responsiblePartyName)
+  text(75, 567, data.responsiblePartyName)
 
   // === LINE 7b: SSN, ITIN, or EIN ===
-  text(440, 580, data.responsiblePartyItin || "Foreigner")
+  text(440, 567, data.responsiblePartyItin || "Foreigner")
 
   // === LINE 8a: Is this for an LLC? = Yes ===
-  check(349, 550)
+  check(337, 543)
 
   // === LINE 8b: Number of LLC members ===
-  text(530, 553, String(data.memberCount))
+  text(530, 543, String(data.memberCount))
 
   // === LINE 8c: Was LLC organized in US? = Yes ===
-  check(487, 533)
+  check(467, 527)
 
   // === LINE 9a: Type of entity ===
   switch (data.entityType) {
@@ -188,33 +188,33 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   text(220, 390, "Any Legal Activity", SMALL_SIZE)
 
   // === LINE 11: Date business started ===
-  text(75, 330, formatDate(data.formationDate))
+  text(75, 318, formatDate(data.formationDate))
 
   // === LINE 12: Closing month ===
-  text(410, 330, "December")
+  text(410, 318, "December")
 
   // === LINE 16: Principal activity — Other (specify) ===
-  check(438, 198)
-  text(490, 200, "Any Legal Activity", SMALL_SIZE)
+  check(438, 195)
+  text(490, 197, "Any Legal Activity", SMALL_SIZE)
 
   // === LINE 18: Applied for EIN before? ===
   if (data.hasAppliedBefore) {
-    check(474, 160)
-    if (data.previousEin) text(220, 145, data.previousEin)
+    check(474, 157)
+    if (data.previousEin) text(220, 142, data.previousEin)
   } else {
-    check(519, 160)
+    check(519, 157)
   }
 
   // === THIRD PARTY DESIGNEE ===
-  text(150, 118, DESIGNEE.name)
-  text(465, 118, DESIGNEE.phone)
-  text(150, 100, DESIGNEE.address)
-  text(465, 100, DESIGNEE.fax)
+  text(150, 108, DESIGNEE.name)
+  text(465, 108, DESIGNEE.phone)
+  text(150, 90, DESIGNEE.address)
+  text(465, 90, DESIGNEE.fax)
 
   // === SIGNATURE SECTION ===
-  text(150, 68, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
-  text(465, 78, data.responsiblePartyPhone || "")
-  text(465, 50, TD_OFFICE.fax)
+  text(150, 58, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
+  text(465, 68, data.responsiblePartyPhone || "")
+  text(465, 40, TD_OFFICE.fax)
 
   return pdf.save()
 }
