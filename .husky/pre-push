@@ -38,6 +38,22 @@ if [ -n "$HARDCODED" ]; then
   exit 1
 fi
 
+echo "🔍 Running ESLint on changed files..."
+CHANGED_TS=$(git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
+if [ -n "$CHANGED_TS" ]; then
+  echo "$CHANGED_TS" | xargs npx eslint --max-warnings 0 2>&1 | tail -10
+  if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ PUSH BLOCKED — ESLint errors in changed files."
+    echo "   Run 'npm run lint:fix' to auto-fix, or fix manually."
+    echo ""
+    exit 1
+  fi
+  echo "✅ ESLint passed."
+else
+  echo "   No .ts/.tsx files changed — skipping lint."
+fi
+
 echo "🧪 Running unit tests before push..."
 npm run test:unit 2>&1 | tail -5
 

@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Load nvm to ensure correct Node version
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" 2>/dev/null
+nvm use default 2>/dev/null || true
+
+echo "🔍 Running ESLint on staged files..."
+npx lint-staged 2>&1
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ COMMIT BLOCKED — ESLint found errors in your staged files."
+  echo "   Fix the errors, then try committing again."
+  echo "   Run 'npm run lint:fix' to auto-fix what can be fixed."
+  echo ""
+  exit 1
+fi
+
+echo "✅ Lint passed."
