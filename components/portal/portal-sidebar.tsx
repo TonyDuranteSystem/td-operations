@@ -70,7 +70,7 @@ const navGroups: NavGroup[] = [
     items: [
       { key: 'nav.documents', href: '/portal/documents', icon: FileText, visibilityKey: 'documents' },
       { key: 'nav.services', href: '/portal/services', icon: Activity, visibilityKey: 'services' },
-      { key: 'nav.signDocuments', href: '/portal/sign/oa', icon: PenLine, visibilityKey: 'pendingSignatures' },
+      { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
       { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays, visibilityKey: 'deadlines' },
       { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload, visibilityKey: 'taxDocuments' },
     ],
@@ -98,7 +98,7 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices, navVisibility, portalTier }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
