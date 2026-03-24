@@ -54,14 +54,12 @@ export async function GET(
 
   // Generate the filled SS-4 (2 pages: form + instructions)
   const ss4Bytes = await fillSS4(fillData)
-
-  // Build the final PDF: SS-4 page 1 only + Articles of Organization
-  const finalPdf = await PDFDocument.create()
-
-  // Copy only page 1 of the SS-4 (skip page 2 "Do I Need an EIN?")
   const ss4Doc = await PDFDocument.load(ss4Bytes)
-  const [ss4Page1] = await finalPdf.copyPages(ss4Doc, [0])
-  finalPdf.addPage(ss4Page1)
+
+  // Remove page 2 ("Do I Need an EIN?" — not needed for IRS fax)
+  if (ss4Doc.getPageCount() > 1) {
+    ss4Doc.removePage(1)
+  }
 
   // Find and attach Articles of Organization from client's Drive folder
   if (ss4.account_id) {
@@ -90,8 +88,8 @@ export async function GET(
           if (articlesFile?.id) {
             const { buffer: articlesBuffer } = await downloadFileBinary(articlesFile.id)
             const articlesDoc = await PDFDocument.load(articlesBuffer)
-            const articlesPages = await finalPdf.copyPages(articlesDoc, articlesDoc.getPageIndices())
-            articlesPages.forEach(p => finalPdf.addPage(p))
+            const articlesPages = await ss4Doc.copyPages(articlesDoc, articlesDoc.getPageIndices())
+            articlesPages.forEach(p => ss4Doc.addPage(p))
           }
         }
       }
@@ -100,7 +98,7 @@ export async function GET(
     }
   }
 
-  const finalBytes = await finalPdf.save()
+  const finalBytes = await ss4Doc.save()
 
   return new NextResponse(Buffer.from(finalBytes), {
     headers: {
