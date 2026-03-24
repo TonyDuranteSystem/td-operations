@@ -169,13 +169,14 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'send_email',
-    description: 'Send an email from support@tonydurante.us to a client or anyone.',
+    description: 'Send an email from support@tonydurante.us. IMPORTANT: When replying to an email, ALWAYS include reply_to_message_id to keep it in the same thread. The message_id comes from the email context or gmail_read results.',
     parameters: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'Recipient email address' },
         subject: { type: 'string', description: 'Email subject line' },
         body: { type: 'string', description: 'Email body in plain text (will be formatted as HTML)' },
+        reply_to_message_id: { type: 'string', description: 'Gmail message ID to reply to (keeps email in the same thread). ALWAYS use this when replying to an existing email.' },
       },
       required: ['to', 'subject', 'body'],
     },
@@ -699,7 +700,7 @@ async function createTask(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function sendEmail(p: any) {
-  const { gmailPost } = await import('@/lib/gmail')
+  const { gmailPost, gmailGet, getHeader } = await import('@/lib/gmail')
 
   // Escape HTML in body text
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -715,15 +716,46 @@ async function sendEmail(p: any) {
     </div>
   `
 
+  // If replying, get original message headers for threading
+  let inReplyTo = ''
+  let references = ''
+  let threadId = ''
+  if (p.reply_to_message_id) {
+    try {
+      const origMsg = await gmailGet(`/messages/${p.reply_to_message_id}`, {
+        format: 'metadata',
+        metadataHeaders: 'Message-ID,References',
+      }) as { threadId: string; payload: { headers: Array<{ name: string; value: string }> } }
+
+      threadId = origMsg.threadId
+      const msgId = getHeader(origMsg.payload.headers, 'Message-ID')
+      const refs = getHeader(origMsg.payload.headers, 'References')
+      if (msgId) {
+        inReplyTo = msgId
+        references = refs ? `${refs} ${msgId}` : msgId
+      }
+    } catch {
+      // If we can't get the original, send as new email
+    }
+  }
+
   const subject = p.subject
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const boundary = `boundary_${Date.now()}`
-  const rawEmail = [
+  const headers = [
     `From: Tony Durante <support@tonydurante.us>`,
     `To: ${p.to}`,
     `Subject: ${encodedSubject}`,
+  ]
+  if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`)
+  if (references) headers.push(`References: ${references}`)
+  headers.push(
     `MIME-Version: 1.0`,
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  )
+
+  const rawEmail = [
+    ...headers,
     '',
     `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
@@ -733,8 +765,11 @@ async function sendEmail(p: any) {
     `--${boundary}--`,
   ].join('\r\n')
 
-  await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
-  return JSON.stringify({ success: true, message: `Email sent to ${p.to} with subject "${p.subject}"` })
+  const sendPayload: Record<string, string> = { raw: Buffer.from(rawEmail).toString('base64url') }
+  if (threadId) sendPayload.threadId = threadId
+
+  await gmailPost('/messages/send', sendPayload)
+  return JSON.stringify({ success: true, message: `Email sent to ${p.to} with subject "${p.subject}"${threadId ? ' (in thread)' : ''}` })
 }
 
 async function getDashboardStats() {
