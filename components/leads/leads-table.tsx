@@ -1,8 +1,9 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useState, useTransition } from 'react'
-import { Search, UserPlus, ChevronRight, ChevronLeft, Phone, Mail } from 'lucide-react'
+import { Search, ChevronRight, ChevronLeft, Phone, Mail } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 
@@ -137,9 +138,10 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
             </div>
           ) : (
             items.map(item => (
-              <div
+              <Link
                 key={item.id}
-                className="grid grid-cols-1 md:grid-cols-[1fr,160px,100px,100px,120px,100px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center"
+                href={`/leads/${item.id}`}
+                className="grid grid-cols-1 md:grid-cols-[1fr,160px,100px,100px,120px,100px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer"
               >
                 {/* Name */}
                 <div className="min-w-0">
@@ -206,7 +208,7 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
                 <div className="hidden md:flex justify-end">
                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 </div>
-              </div>
+              </Link>
             ))
           )}
         </div>
