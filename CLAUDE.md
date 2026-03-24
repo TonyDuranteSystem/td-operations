@@ -240,6 +240,43 @@ docs/
   claude-connector-system-instructions.md <- Mirror of instructions.ts
 ```
 
+## Code Quality Pipeline — ENFORCED AUTOMATICALLY
+
+### ESLint + lint-staged (added 2026-03-23)
+The codebase has an automatic quality pipeline. These tools run WITHOUT human decision:
+
+**On every `git commit`:**
+- Husky pre-commit hook runs `lint-staged`
+- lint-staged runs ESLint ONLY on staged `.ts/.tsx` files
+- **Zero warnings allowed** — if ESLint finds ANY issue in your changed files, the commit is BLOCKED
+- Fix with: `npm run lint:fix` (auto-fixes what it can) or fix manually
+
+**On every `git push`:**
+1. Remote sync check — blocks if another machine pushed
+2. Hardcoded domain check — blocks if client-facing domain found
+3. **ESLint on all changed files** vs origin/main — blocks on any error/warning
+4. Unit tests (vitest) — blocks if tests fail
+5. Full build (next build) — blocks if build fails
+
+**Available commands:**
+- `npm run lint` — Run ESLint on entire codebase
+- `npm run lint:fix` — Auto-fix what ESLint can fix
+- `npm run lint:staged` — Run lint-staged manually (same as pre-commit)
+
+**ESLint rules** (`.eslintrc.json`):
+- Extends `next/core-web-vitals` (React, import, accessibility rules from Next.js)
+- Bug prevention (ERRORS): no-debugger, no-unreachable, no-self-compare, no-constant-binary-expression, eqeqeq, no-var
+- Quality (WARNINGS): no-console (except warn/error), prefer-const, no-unused-vars, no-duplicate-imports
+
+**RULE: When you modify an existing file, fix any ESLint warnings in that file.** The lint-staged check has zero tolerance — existing warnings in files you touch WILL block your commit. This is by design: we clean the codebase incrementally, one file at a time.
+
+### Sentry Error Monitoring (production)
+- Client + server + edge monitoring via `@sentry/nextjs`
+- 20% performance sampling, 100% error replay
+- Production only — not active in dev
+- Error boundaries at 3 levels: global, portal, dashboard
+- DSN: set on Vercel as `NEXT_PUBLIC_SENTRY_DSN`
+
 ## Communication
 Always communicate in English. Be direct and efficient.
 
