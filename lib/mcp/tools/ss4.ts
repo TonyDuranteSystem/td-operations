@@ -47,7 +47,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         // ─── 1. FETCH ACCOUNT ───
         const { data: account, error: accErr } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, formation_date, ein")
+          .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number")
           .eq("id", params.account_id)
           .single()
 
@@ -105,7 +105,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
 
         const { data: contact, error: ctErr } = await supabaseAdmin
           .from("contacts")
-          .select("id, full_name, itin, phone, language")
+          .select("id, full_name, itin_number, phone, language")
           .eq("id", contactId)
           .single()
 
@@ -149,7 +149,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
             formation_date: account.formation_date || null,
             member_count: memberCount,
             responsible_party_name: contact.full_name,
-            responsible_party_itin: contact.itin || null,
+            responsible_party_itin: contact.itin_number || null,
             responsible_party_phone: contact.phone || null,
             responsible_party_title: title,
             language: contact.language === "Italian" ? "it" : "en",
