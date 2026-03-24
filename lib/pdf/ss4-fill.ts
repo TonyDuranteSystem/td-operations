@@ -111,7 +111,7 @@ async function loadTemplate(): Promise<Buffer> {
 
 const FONT_SIZE = 10
 const SMALL_SIZE = 8
-const CHECK_SIZE = 10
+const CHECK_SIZE = 8
 
 /**
  * Fill SS-4 PDF by drawing text at coordinates on the flat template.
@@ -130,8 +130,9 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
     page.drawText(value, { x, y, size, font, color: black })
   }
 
+  // Draw X centered in an 8x8 checkbox square
   const check = (x: number, y: number) => {
-    page.drawText("X", { x: x + 1, y: y + 1, size: CHECK_SIZE, font: boldFont, color: black })
+    page.drawText("X", { x: x + 1, y: y + 1.5, size: CHECK_SIZE, font: boldFont, color: black })
   }
 
   // === LINE 1: Legal name (blank area below label) ===
