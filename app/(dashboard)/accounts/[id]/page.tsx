@@ -11,6 +11,7 @@ interface DocumentRecord {
   category_name: string | null
   category: number | null
   confidence: string | null
+  drive_file_id: string | null
   drive_link: string | null
   status: string | null
   processed_at: string | null
@@ -67,7 +68,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Documents
     supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, confidence, drive_link, status, processed_at, mime_type, file_size')
+      .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size')
       .eq('account_id', params.id)
       .order('processed_at', { ascending: false }),
   ])

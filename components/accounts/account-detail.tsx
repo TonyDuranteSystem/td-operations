@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
-  AlertCircle, CheckCircle2, ExternalLink, MessageSquare,
+  AlertCircle, CheckCircle2, ExternalLink, MessageSquare, X, Eye,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -70,6 +70,7 @@ interface DocumentRecord {
   category_name: string | null
   category: number | null
   confidence: string | null
+  drive_file_id: string | null
   drive_link: string | null
   status: string | null
   processed_at: string | null
@@ -642,6 +643,8 @@ function formatFileSize(bytes: number | null): string {
 }
 
 function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
+  const [previewDoc, setPreviewDoc] = useState<DocumentRecord | null>(null)
+
   // Group by category
   const grouped = documents.reduce<Record<string, DocumentRecord[]>>((acc, doc) => {
     const cat = doc.category_name || 'Uncategorized'
@@ -658,16 +661,13 @@ function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
       <div className="text-center py-12 text-muted-foreground">
         <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
         <p>No documents processed for this account</p>
-        <p className="text-xs mt-1">Use doc_bulk_process to scan the Drive folder</p>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{documents.length} documents</p>
-      </div>
+      <p className="text-sm text-muted-foreground">{documents.length} documents</p>
 
       {sortedCategories.map(category => (
         <div key={category} className="space-y-2">
@@ -676,32 +676,22 @@ function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
           </h3>
           <div className="border rounded-lg divide-y">
             {grouped[category].map(doc => (
-              <div key={doc.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-zinc-50 transition-colors">
+              <button
+                key={doc.id}
+                onClick={() => doc.drive_file_id ? setPreviewDoc(doc) : undefined}
+                className={cn(
+                  'flex items-center justify-between px-4 py-2.5 w-full text-left transition-colors',
+                  doc.drive_file_id ? 'hover:bg-zinc-50 cursor-pointer' : 'opacity-60'
+                )}
+              >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="min-w-0">
-                    {doc.drive_link ? (
-                      <a
-                        href={doc.drive_link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm font-medium text-blue-600 hover:underline truncate block"
-                      >
-                        {doc.file_name}
-                      </a>
-                    ) : (
-                      <span className="text-sm font-medium truncate block">{doc.file_name}</span>
-                    )}
+                    <span className="text-sm font-medium truncate block">{doc.file_name}</span>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {doc.document_type_name && (
-                        <span>{doc.document_type_name}</span>
-                      )}
-                      {doc.file_size && (
-                        <span>{formatFileSize(doc.file_size)}</span>
-                      )}
-                      {doc.processed_at && (
-                        <span>{formatDate(doc.processed_at.split('T')[0])}</span>
-                      )}
+                      {doc.document_type_name && <span>{doc.document_type_name}</span>}
+                      {doc.file_size && <span>{formatFileSize(doc.file_size)}</span>}
+                      {doc.processed_at && <span>{formatDate(doc.processed_at.split('T')[0])}</span>}
                     </div>
                   </div>
                 </div>
@@ -714,26 +704,40 @@ function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
                       {doc.category_name}
                     </span>
                   )}
-                  {doc.confidence && (
-                    <span className={cn(
-                      'text-xs px-1.5 py-0.5 rounded',
-                      doc.confidence === 'high' ? 'text-green-600' :
-                      doc.confidence === 'medium' ? 'text-amber-600' : 'text-red-600'
-                    )}>
-                      {doc.confidence}
-                    </span>
-                  )}
-                  {doc.drive_link && (
-                    <a href={doc.drive_link} target="_blank" rel="noopener noreferrer" title="Open in Drive">
-                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
-                    </a>
+                  {doc.drive_file_id && (
+                    <Eye className="h-4 w-4 text-muted-foreground" />
                   )}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
       ))}
+
+      {/* Full-screen document preview modal */}
+      {previewDoc && previewDoc.drive_file_id && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex flex-col" onClick={() => setPreviewDoc(null)}>
+          <div className="flex items-center justify-between px-6 py-3 bg-zinc-900 text-white shrink-0">
+            <div className="flex items-center gap-3">
+              <FileText className="h-4 w-4" />
+              <span className="font-medium text-sm">{previewDoc.file_name}</span>
+              {previewDoc.document_type_name && (
+                <span className="text-xs text-zinc-400">{previewDoc.document_type_name}</span>
+              )}
+            </div>
+            <button onClick={() => setPreviewDoc(null)} className="p-1 hover:bg-zinc-700 rounded">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="flex-1 p-4" onClick={e => e.stopPropagation()}>
+            <iframe
+              src={`https://drive.google.com/file/d/${previewDoc.drive_file_id}/preview`}
+              className="w-full h-full rounded-lg border-0"
+              allow="autoplay"
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
