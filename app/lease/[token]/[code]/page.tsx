@@ -57,6 +57,7 @@ export default function LeasePageWithCode() {
   const searchParams = useSearchParams()
 
   const [isAdmin, setIsAdmin] = useState(false)
+  const [isPortal, setIsPortal] = useState(false)
   const [lease, setLease] = useState<LeaseAgreement | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -80,9 +81,14 @@ export default function LeasePageWithCode() {
 
     // Admin preview bypass
     const adminMode = searchParams.get('preview') === 'td'
+    const portalMode = searchParams.get('portal') === 'true'
     if (adminMode) {
       setIsAdmin(true)
       setVerified(true)
+    }
+    if (portalMode) {
+      setIsPortal(true)
+      setVerified(true) // Skip email gate when embedded in portal (already authenticated)
     }
 
     const { data, error: err } = await supabasePublic
@@ -244,6 +250,11 @@ export default function LeasePageWithCode() {
       }
 
       setSigned(true)
+
+      // Notify portal parent when embedded in iframe
+      if (isPortal && window.parent !== window) {
+        window.parent.postMessage({ type: 'lease-signed', token: lease.token }, '*')
+      }
     } catch (err) {
       console.error('Signing failed:', err)
       alert('An error occurred while signing. Please try again.')
@@ -275,9 +286,9 @@ export default function LeasePageWithCode() {
 
   if (!lease) return null
 
-  // Email gate (admin preview bypasses synchronously)
+  // Email gate (admin preview and portal mode bypass synchronously)
   const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview) {
+  if (!verified && !isAdminPreview && !isPortal) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
@@ -311,10 +322,10 @@ export default function LeasePageWithCode() {
   const tenantStateDisplay = lease.tenant_state ? `a ${lease.tenant_state}` : 'a'
 
   return (
-    <div style={{ background: '#f5f5f0', minHeight: '100vh', padding: '24px 16px', fontFamily: 'Georgia, "Times New Roman", serif' }}>
+    <div style={{ background: isPortal ? '#fff' : '#f5f5f0', minHeight: '100vh', padding: isPortal ? '8px 0' : '24px 16px', fontFamily: 'Georgia, "Times New Roman", serif' }}>
       <div
         ref={leaseBodyRef}
-        style={{ maxWidth: 800, margin: '0 auto', background: '#fff', padding: '48px 56px', boxShadow: '0 1px 12px rgba(0,0,0,0.08)', lineHeight: 1.7, fontSize: 14, color: '#222' }}
+        style={{ maxWidth: 800, margin: '0 auto', background: '#fff', padding: isPortal ? '32px 40px' : '48px 56px', boxShadow: isPortal ? 'none' : '0 1px 12px rgba(0,0,0,0.08)', lineHeight: 1.7, fontSize: 14, color: '#222' }}
       >
         {/* Admin Preview Badge */}
         {isAdmin && (

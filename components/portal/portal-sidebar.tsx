@@ -21,6 +21,7 @@ import {
   CreditCard,
   ChevronDown,
   PenSquare,
+  PenLine,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -69,6 +70,7 @@ const navGroups: NavGroup[] = [
     items: [
       { key: 'nav.documents', href: '/portal/documents', icon: FileText, visibilityKey: 'documents' },
       { key: 'nav.services', href: '/portal/services', icon: Activity, visibilityKey: 'services' },
+      { key: 'nav.signDocuments', href: '/portal/sign/oa', icon: PenLine, visibilityKey: 'pendingSignatures' },
       { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays, visibilityKey: 'deadlines' },
       { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload, visibilityKey: 'taxDocuments' },
     ],

@@ -152,6 +152,7 @@ export interface PortalNavVisibility {
   deadlines: boolean      // has any pending/overdue deadlines
   documents: boolean      // always true (every client can upload docs)
   customers: boolean      // same as invoices
+  pendingSignatures: boolean  // has unsigned OA or Lease agreements
 }
 
 export async function getPortalNavVisibility(accountId: string): Promise<PortalNavVisibility> {
@@ -163,6 +164,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     clientCustomerCount,
     deadlineCount,
     taxReturnCount,
+    unsignedDocCount,
   ] = await Promise.all([
     // Active SDs
     supabaseAdmin
@@ -213,6 +215,19 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
           .eq('company_name', acct.company_name)
         return count ?? 0
       }),
+    // Unsigned OA or Lease agreements
+    Promise.all([
+      supabaseAdmin
+        .from('oa_agreements')
+        .select('id', { count: 'exact', head: true })
+        .eq('account_id', accountId)
+        .neq('status', 'signed'),
+      supabaseAdmin
+        .from('lease_agreements')
+        .select('id', { count: 'exact', head: true })
+        .eq('account_id', accountId)
+        .neq('status', 'signed'),
+    ]).then(([oa, lease]) => (oa.count ?? 0) + (lease.count ?? 0)),
   ])
 
   // Also check if any SD is tax-related
@@ -234,6 +249,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     deadlines: deadlineCount > 0,
     documents: true, // always available
     customers: hasInvoicing,
+    pendingSignatures: unsignedDocCount > 0,
   }
 }
 
@@ -279,6 +295,7 @@ export function getContactOnlyNavVisibility(): PortalNavVisibility {
     deadlines: false,
     documents: true,
     customers: false,
+    pendingSignatures: false,
   }
 }
 
