@@ -21,6 +21,7 @@ const TABS = [
   { key: 'servizi', label: 'Services', icon: Briefcase },
   { key: 'pagamenti', label: 'Payments', icon: CreditCard },
   { key: 'tax', label: 'Tax Returns', icon: FileText },
+  { key: 'documenti', label: 'Documents', icon: FileText },
   { key: 'comunicazioni', label: 'Communications', icon: MessageSquare },
 ]
 
@@ -62,6 +63,20 @@ function formatCurrency(amount: number | null, currency?: string | null): string
   return `${c}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+interface DocumentRecord {
+  id: string
+  file_name: string
+  document_type_name: string | null
+  category_name: string | null
+  category: number | null
+  confidence: string | null
+  drive_link: string | null
+  status: string | null
+  processed_at: string | null
+  mime_type: string | null
+  file_size: number | null
+}
+
 interface AccountDetailProps {
   account: Account
   contacts: Contact[]
@@ -69,11 +84,12 @@ interface AccountDetailProps {
   payments: Payment[]
   deals: Deal[]
   taxReturns: TaxReturn[]
+  documents?: DocumentRecord[]
   today: string
   isAdmin?: boolean
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, today, isAdmin = false }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false }: AccountDetailProps) {
   const [activeTab, setActiveTab] = useState('panoramica')
 
   const activeServices = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
@@ -137,7 +153,8 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             const Icon = tab.icon
             const count = tab.key === 'servizi' ? services.length :
                          tab.key === 'pagamenti' ? payments.length :
-                         tab.key === 'tax' ? taxReturns.length : null
+                         tab.key === 'tax' ? taxReturns.length :
+                         tab.key === 'documenti' ? documents.length : null
             return (
               <button
                 key={tab.key}
@@ -174,6 +191,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       )}
       {activeTab === 'tax' && (
         <TaxTab taxReturns={taxReturns} today={today} />
+      )}
+      {activeTab === 'documenti' && (
+        <DocumentsTab documents={documents} />
       )}
       {activeTab === 'comunicazioni' && (
         <AccountCommunications accountId={account.id} />
@@ -600,6 +620,120 @@ function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string 
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/* ── Documents Tab ───────────────────────────────────── */
+
+const CATEGORY_COLORS: Record<string, string> = {
+  Company: 'bg-blue-100 text-blue-700',
+  Contacts: 'bg-purple-100 text-purple-700',
+  Tax: 'bg-amber-100 text-amber-700',
+  Banking: 'bg-green-100 text-green-700',
+  Correspondence: 'bg-zinc-100 text-zinc-700',
+}
+
+function formatFileSize(bytes: number | null): string {
+  if (!bytes) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
+  // Group by category
+  const grouped = documents.reduce<Record<string, DocumentRecord[]>>((acc, doc) => {
+    const cat = doc.category_name || 'Uncategorized'
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(doc)
+    return acc
+  }, {})
+
+  const categoryOrder = ['Company', 'Contacts', 'Tax', 'Banking', 'Correspondence', 'Uncategorized']
+  const sortedCategories = categoryOrder.filter(c => grouped[c])
+
+  if (documents.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+        <p>No documents processed for this account</p>
+        <p className="text-xs mt-1">Use doc_bulk_process to scan the Drive folder</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{documents.length} documents</p>
+      </div>
+
+      {sortedCategories.map(category => (
+        <div key={category} className="space-y-2">
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+            {category} ({grouped[category].length})
+          </h3>
+          <div className="border rounded-lg divide-y">
+            {grouped[category].map(doc => (
+              <div key={doc.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-zinc-50 transition-colors">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    {doc.drive_link ? (
+                      <a
+                        href={doc.drive_link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-medium text-blue-600 hover:underline truncate block"
+                      >
+                        {doc.file_name}
+                      </a>
+                    ) : (
+                      <span className="text-sm font-medium truncate block">{doc.file_name}</span>
+                    )}
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {doc.document_type_name && (
+                        <span>{doc.document_type_name}</span>
+                      )}
+                      {doc.file_size && (
+                        <span>{formatFileSize(doc.file_size)}</span>
+                      )}
+                      {doc.processed_at && (
+                        <span>{formatDate(doc.processed_at.split('T')[0])}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {doc.category_name && (
+                    <span className={cn(
+                      'text-xs px-2 py-0.5 rounded-full font-medium',
+                      CATEGORY_COLORS[doc.category_name] || 'bg-zinc-100 text-zinc-600'
+                    )}>
+                      {doc.category_name}
+                    </span>
+                  )}
+                  {doc.confidence && (
+                    <span className={cn(
+                      'text-xs px-1.5 py-0.5 rounded',
+                      doc.confidence === 'high' ? 'text-green-600' :
+                      doc.confidence === 'medium' ? 'text-amber-600' : 'text-red-600'
+                    )}>
+                      {doc.confidence}
+                    </span>
+                  )}
+                  {doc.drive_link && (
+                    <a href={doc.drive_link} target="_blank" rel="noopener noreferrer" title="Open in Drive">
+                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -152,9 +152,9 @@ const P = "topmostSubform[0].Page1[0]"
 // Tony Durante LLC — Third Party Designee info
 const DESIGNEE = {
   name: "Antonio Durante",
-  address: "18395 Gulf Blvd, Indian Shores FL 33785",
+  address: "10225 Ulmerton Rd 3D, Largo, FL 33771",
   phone: "727-423-4285",
-  fax: "727-513-5584",
+  fax: "+1 727 513-5584",
 }
 
 // TD LLC Office — mailing address for all client LLCs
@@ -163,7 +163,7 @@ const TD_OFFICE = {
   city: "Largo",
   state: "FL",
   zip: "33771",
-  fax: "727-513-5584",
+  fax: "+1 727 513-5584",
 }
 
 /**

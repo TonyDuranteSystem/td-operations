@@ -4,6 +4,20 @@ import { AccountDetail } from '@/components/accounts/account-detail'
 import { isAdmin } from '@/lib/auth'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
+interface DocumentRecord {
+  id: string
+  file_name: string
+  document_type_name: string | null
+  category_name: string | null
+  category: number | null
+  confidence: string | null
+  drive_link: string | null
+  status: string | null
+  processed_at: string | null
+  mime_type: string | null
+  file_size: number | null
+}
+
 export default async function AccountDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -20,7 +34,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   if (!account) notFound()
 
   // Fetch related data in parallel
-  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult] = await Promise.all([
+  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult] = await Promise.all([
     // Contacts via junction table
     supabase
       .from('account_contacts')
@@ -50,6 +64,12 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .select('id, company_name, client_name, return_type, tax_year, deadline, status, paid, data_received, sent_to_india, india_status, special_case, extension_filed, extension_deadline, notes, updated_at')
       .eq('company_name', account.company_name)
       .order('tax_year', { ascending: false }),
+    // Documents
+    supabase
+      .from('documents')
+      .select('id, file_name, document_type_name, category_name, category, confidence, drive_link, status, processed_at, mime_type, file_size')
+      .eq('account_id', params.id)
+      .order('processed_at', { ascending: false }),
   ])
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
@@ -61,6 +81,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   const payments: Payment[] = (paymentsResult.data ?? []).map(p => ({ ...p, account_id: params.id })) as Payment[]
   const deals: Deal[] = (dealsResult.data ?? []).map(d => ({ ...d, account_id: params.id })) as Deal[]
   const taxReturns: TaxReturn[] = (taxReturnsResult.data ?? []) as TaxReturn[]
+  const documents = (documentsResult.data ?? []) as DocumentRecord[]
 
   return (
     <div className="p-6 lg:p-8">
@@ -71,6 +92,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         payments={payments}
         deals={deals}
         taxReturns={taxReturns}
+        documents={documents}
         today={today}
         isAdmin={admin}
       />
