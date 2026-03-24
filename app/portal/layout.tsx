@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTier } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTier, getPortalTierByContact, getContactOnlyNavVisibility } from '@/lib/portal/queries'
 import type { PortalNavVisibility } from '@/lib/portal/queries'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
@@ -68,16 +68,18 @@ export default async function PortalLayout({
   const showOnboarding = false // Disabled until tier-specific tour is built
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
-  const [activeServices, navVisibility, portalTier] = selectedAccountId
+  // Portal tier: always from contacts table (source of truth)
+  const portalTier = contactId
+    ? await getPortalTierByContact(contactId)
+    : (user.app_metadata?.portal_tier as string) || 'lead'
+
+  // Account-level data: only if an account is selected
+  const [activeServices, navVisibility] = selectedAccountId
     ? await Promise.all([
         getPortalActiveServices(selectedAccountId),
         getPortalNavVisibility(selectedAccountId),
-        getPortalTier(selectedAccountId),
       ])
-    : [[] as string[], {
-        services: false, billing: false, invoices: false,
-        taxDocuments: false, deadlines: false, documents: true, customers: false,
-      } as PortalNavVisibility, 'lead' as string]  // No account = lead tier
+    : [[] as string[], getContactOnlyNavVisibility()]
 
   return (
     <Providers>
@@ -95,10 +97,10 @@ export default async function PortalLayout({
           />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />
-          {/* Notification bell - top right on desktop */}
-          {selectedAccountId && (
+          {/* Notification bell - top right on desktop (always shown if contactId exists) */}
+          {contactId && (
             <div className="hidden lg:flex justify-end px-8 pt-4">
-              <NotificationBell accountId={selectedAccountId} />
+              <NotificationBell accountId={selectedAccountId || undefined} contactId={contactId} />
             </div>
           )}
           {children}

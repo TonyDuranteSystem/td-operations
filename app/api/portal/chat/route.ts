@@ -8,10 +8,11 @@ import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * GET /api/portal/chat?account_id=xxx&before=timestamp&limit=50
- * Returns messages for the given account. Verifies access.
+ * GET /api/portal/chat?contact_id=xxx&before=timestamp&limit=50
+ * Returns messages for the given account or contact. Verifies access.
  *
  * POST /api/portal/chat
- * Sends a message. Body: { account_id, message }
+ * Sends a message. Body: { account_id?, contact_id?, message }
  */
 export async function GET(request: NextRequest) {
   const supabase = createClient()
@@ -20,16 +21,23 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url)
   const accountId = searchParams.get('account_id')
+  const contactIdParam = searchParams.get('contact_id')
   const before = searchParams.get('before')
   const limit = Math.min(Number(searchParams.get('limit') ?? '50'), 100)
 
-  if (!accountId) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
+  if (!accountId && !contactIdParam) {
+    return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
+  }
 
   // Verify access
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(accountId)) {
+  const authContactId = getClientContactId(user)
+  if (authContactId) {
+    if (accountId) {
+      const accountIds = await getClientAccountIds(authContactId)
+      if (!accountIds.includes(accountId)) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+    } else if (contactIdParam && contactIdParam !== authContactId) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
   }
@@ -37,9 +45,14 @@ export async function GET(request: NextRequest) {
   let query = supabaseAdmin
     .from('portal_messages')
     .select('*')
-    .eq('account_id', accountId)
     .order('created_at', { ascending: false })
     .limit(limit)
+
+  if (accountId) {
+    query = query.eq('account_id', accountId)
+  } else if (contactIdParam) {
+    query = query.eq('contact_id', contactIdParam).is('account_id', null)
+  }
 
   if (before) {
     query = query.lt('created_at', before)
@@ -61,10 +74,14 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, message, attachment_url, attachment_name } = body
+  const { account_id, contact_id: bodyContactId, message, attachment_url, attachment_name } = body
 
-  if (!account_id || (!message?.trim() && !attachment_url)) {
-    return NextResponse.json({ error: 'account_id and message (or attachment) required' }, { status: 400 })
+  if (!account_id && !bodyContactId && !getClientContactId(user)) {
+    return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
+  }
+
+  if (!message?.trim() && !attachment_url) {
+    return NextResponse.json({ error: 'message or attachment required' }, { status: 400 })
   }
 
   // Input validation: max message length
@@ -81,21 +98,29 @@ export async function POST(request: NextRequest) {
   const isClientUser = user.app_metadata?.role === 'client'
   const senderType = isClientUser ? 'client' : 'admin'
 
+  // Resolve contact_id — always set (from body, or from auth user)
+  const resolvedContactId = bodyContactId || getClientContactId(user)
+
   // Verify access for clients
   if (isClientUser) {
-    const contactId = getClientContactId(user)
-    if (contactId) {
-      const accountIds = await getClientAccountIds(contactId)
+    const authContactId = getClientContactId(user)
+    if (authContactId && account_id) {
+      const accountIds = await getClientAccountIds(authContactId)
       if (!accountIds.includes(account_id)) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 })
       }
+    }
+    // If no account_id, contact_id must match auth user's contact
+    if (!account_id && resolvedContactId && resolvedContactId !== authContactId) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
   }
 
   const { data, error } = await supabaseAdmin
     .from('portal_messages')
     .insert({
-      account_id,
+      account_id: account_id || null,
+      contact_id: resolvedContactId || null,
       sender_type: senderType,
       sender_id: user.id,
       message: (message || '').trim(),
@@ -110,24 +135,25 @@ export async function POST(request: NextRequest) {
   // Notify client when admin sends a message
   if (senderType === 'admin') {
     createPortalNotification({
-      account_id,
+      account_id: account_id || undefined,
+      contact_id: resolvedContactId || undefined,
       type: 'chat',
       title: 'New message from Tony Durante Team',
       body: (message || '').trim().slice(0, 100),
       link: '/portal/chat',
-    }).catch(() => {}) // fire-and-forget
+    }).catch(() => {})
   }
 
   // Notify admin when client sends a message
   if (senderType === 'client') {
-    notifyAdminOfClientMessage(account_id, user.email || '', (message || '').trim()).catch(() => {})
+    notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
   }
 
   // Audit log
   const { logPortalAction } = await import('@/lib/portal/audit')
   logPortalAction({
     user_id: user.id,
-    account_id: account_id,
+    account_id: account_id || undefined,
     action: 'message_sent',
     detail: `${senderType} message (${(message || '').length} chars)${attachment_url ? ' + attachment' : ''}`,
     ip: request.headers.get('x-forwarded-for') || undefined,
@@ -143,21 +169,33 @@ export async function POST(request: NextRequest) {
  */
 const recentAdminNotifications = new Map<string, number>()
 
-async function notifyAdminOfClientMessage(accountId: string, clientEmail: string, messagePreview: string) {
-  // Throttle: max 1 email per account per 5 minutes
-  const lastSent = recentAdminNotifications.get(accountId) ?? 0
+async function notifyAdminOfClientMessage(accountId: string | null, contactId: string | null, clientEmail: string, messagePreview: string) {
+  // Throttle: max 1 email per conversation per 5 minutes
+  const throttleKey = accountId || contactId || clientEmail
+  const lastSent = recentAdminNotifications.get(throttleKey) ?? 0
   if (Date.now() - lastSent < 5 * 60 * 1000) return
-  recentAdminNotifications.set(accountId, Date.now())
+  recentAdminNotifications.set(throttleKey, Date.now())
 
-  // Get company name
-  const { data: account } = await supabaseAdmin
-    .from('accounts')
-    .select('company_name')
-    .eq('id', accountId)
-    .single()
+  // Get display name: company name if account exists, else contact name
+  let displayName = 'Unknown'
+  if (accountId) {
+    const { data: account } = await supabaseAdmin
+      .from('accounts')
+      .select('company_name')
+      .eq('id', accountId)
+      .single()
+    displayName = account?.company_name || 'Unknown'
+  } else if (contactId) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name')
+      .eq('id', contactId)
+      .single()
+    displayName = contact?.full_name || 'Unknown'
+  }
 
   const escHtml = (s: string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g, '&#39;')
-  const companyName = escHtml(account?.company_name || 'Unknown')
+  const companyName = escHtml(displayName)
   const preview = escHtml(messagePreview.slice(0, 200) || '[Attachment]')
 
   try {

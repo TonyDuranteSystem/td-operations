@@ -112,7 +112,14 @@ async function createFromEmail(
   const existingUser = (existingList?.users ?? []).find(u => u.email === email)
 
   if (existingUser) {
-    // User exists — just update the tier if account exists
+    // User exists — update tier on both contact and account
+    const existingContactId = existingUser.app_metadata?.contact_id
+    if (existingContactId) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({ portal_tier: tier })
+        .eq('id', existingContactId)
+    }
     if (accountId) {
       await supabaseAdmin
         .from('accounts')
@@ -166,7 +173,15 @@ async function createFromEmail(
     return { success: false, alreadyExists: false, error: createError.message }
   }
 
-  // Update account flags
+  // Update contact tier (source of truth)
+  if (portalContactId) {
+    await supabaseAdmin
+      .from('contacts')
+      .update({ portal_tier: tier })
+      .eq('id', portalContactId)
+  }
+
+  // Update account flags (secondary)
   if (accountId) {
     await supabaseAdmin
       .from('accounts')
@@ -215,10 +230,24 @@ export async function upgradePortalTier(
     return { success: true, previousTier: account.portal_tier }
   }
 
+  // Update account tier
   await supabaseAdmin
     .from('accounts')
     .update({ portal_tier: newTier })
     .eq('id', accountId)
+
+  // Also upgrade tier on all linked contacts (source of truth)
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('contact_id')
+    .eq('account_id', accountId)
+
+  for (const link of links ?? []) {
+    await supabaseAdmin
+      .from('contacts')
+      .update({ portal_tier: newTier })
+      .eq('id', link.contact_id)
+  }
 
   return { success: true, previousTier: account.portal_tier }
 }

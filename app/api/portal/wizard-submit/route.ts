@@ -312,12 +312,20 @@ export async function POST(req: NextRequest) {
     }).catch(() => {}) // silent
 
     // 9. Advance portal_tier from "onboarding" to "active" now that wizard is complete
+    // Update BOTH contacts (source of truth) and accounts (secondary)
+    if (contact_id) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({ portal_tier: 'active' })
+        .eq('id', contact_id)
+        .eq('portal_tier', 'onboarding')
+    }
     if (account_id) {
       await supabaseAdmin
         .from('accounts')
         .update({ portal_tier: 'active' })
         .eq('id', account_id)
-        .eq('portal_tier', 'onboarding') // Only advance if currently onboarding
+        .eq('portal_tier', 'onboarding')
     }
 
     return NextResponse.json({ success: true })

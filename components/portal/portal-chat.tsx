@@ -20,8 +20,8 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'h:mm a')
 }
 
-export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: string; userId: string; locale?: string }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore } = usePortalChat(accountId)
+export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { accountId?: string; contactId: string; userId: string; locale?: string }) {
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore } = usePortalChat(accountId || null, contactId)
   const [input, setInput] = useState('')
   const [uploading, setUploading] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
@@ -102,7 +102,8 @@ export function PortalChat({ accountId, userId, locale = 'en' }: { accountId: st
     try {
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('account_id', accountId)
+      formData.append('account_id', accountId || '')
+      formData.append('contact_id', contactId)
       const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
       if (!res.ok) throw new Error('Upload failed')
       const { url, name } = await res.json()

@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { sendPushToAccount } from './web-push'
+import { sendPushToAccount, sendPushToContact } from './web-push'
 
 // Notification types that also trigger an email
 const EMAIL_TYPES = ['service', 'deadline', 'tax_document_uploaded']
@@ -8,16 +8,25 @@ const EMAIL_TYPES = ['service', 'deadline', 'tax_document_uploaded']
  * Create a portal notification for a client.
  * Called by MCP tools, API routes, and cron jobs when something happens
  * that the client should know about.
- * Also sends Web Push + email for important notification types.
+ *
+ * CONTACT-CENTRIC: Requires at least one of account_id or contact_id.
+ * - account_id: for LLC-specific notifications (services, deadlines)
+ * - contact_id: for person-level notifications (chat, ITIN, general)
+ * - both: for LLC notifications where we also know the person
  */
 export async function createPortalNotification(params: {
-  account_id: string
+  account_id?: string
   contact_id?: string
   type: string
   title: string
   body?: string
   link?: string
 }) {
+  if (!params.account_id && !params.contact_id) {
+    console.error('createPortalNotification: account_id or contact_id required')
+    return
+  }
+
   const { error } = await supabaseAdmin
     .from('portal_notifications')
     .insert(params)
@@ -27,17 +36,30 @@ export async function createPortalNotification(params: {
     return
   }
 
-  // Send Web Push (fire-and-forget)
-  sendPushToAccount(params.account_id, {
-    title: params.title,
-    body: params.body || '',
-    url: params.link || '/portal',
-    tag: params.type,
-  }).catch(() => {})
+  // Send Web Push (fire-and-forget) — prefer contact, fallback to account
+  if (params.contact_id) {
+    sendPushToContact(params.contact_id, {
+      title: params.title,
+      body: params.body || '',
+      url: params.link || '/portal',
+      tag: params.type,
+    }).catch(() => {})
+  } else if (params.account_id) {
+    sendPushToAccount(params.account_id, {
+      title: params.title,
+      body: params.body || '',
+      url: params.link || '/portal',
+      tag: params.type,
+    }).catch(() => {})
+  }
 
   // Send email for important notification types (fire-and-forget)
   if (EMAIL_TYPES.includes(params.type)) {
-    sendNotificationEmail(params.account_id, params.title, params.body || '').catch(() => {})
+    if (params.contact_id) {
+      sendNotificationEmailToContact(params.contact_id, params.title, params.body || '').catch(() => {})
+    } else if (params.account_id) {
+      sendNotificationEmail(params.account_id, params.title, params.body || '').catch(() => {})
+    }
   }
 }
 
@@ -116,14 +138,86 @@ async function sendNotificationEmail(accountId: string, title: string, body: str
 }
 
 /**
- * Get unread notification count for an account.
+ * Send email notification directly to a contact (no account lookup needed).
+ * Used for contact-only notifications (ITIN clients, pre-account contacts).
  */
-export async function getUnreadNotificationCount(accountId: string): Promise<number> {
-  const { count } = await supabaseAdmin
+async function sendNotificationEmailToContact(contactId: string, title: string, body: string) {
+  const { data: contact } = await supabaseAdmin
+    .from('contacts')
+    .select('email, full_name')
+    .eq('id', contactId)
+    .single()
+
+  if (!contact?.email) return
+
+  try {
+    const { gmailPost } = await import('@/lib/gmail')
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #2563eb; padding: 20px; border-radius: 12px 12px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 18px;">TD Portal</h1>
+        </div>
+        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+          <p>Dear ${contact.full_name || 'Client'},</p>
+          <h2 style="margin: 16px 0 8px; font-size: 16px; color: #111827;">${title}</h2>
+          ${body ? `<p style="color: #4b5563;">${body}</p>` : ''}
+          <div style="margin-top: 24px;">
+            <a href="https://portal.tonydurante.us/portal" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold;">
+              Open Portal
+            </a>
+          </div>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">
+            Tony Durante LLC
+          </p>
+        </div>
+      </div>
+    `
+
+    const encodedSubject = `=?utf-8?B?${Buffer.from(title).toString("base64")}?=`
+    const boundary = `boundary_${Date.now()}`
+    const rawEmail = [
+      `From: TD Portal <support@tonydurante.us>`,
+      `To: ${contact.email}`,
+      `Subject: ${encodedSubject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(html).toString('base64'),
+      `--${boundary}--`,
+    ].join('\r\n')
+
+    await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+  } catch (err) {
+    console.error('Notification email to contact failed:', err)
+  }
+}
+
+/**
+ * Get unread notification count.
+ * Supports both account-based and contact-based queries.
+ */
+export async function getUnreadNotificationCount(
+  accountId?: string,
+  contactId?: string
+): Promise<number> {
+  let query = supabaseAdmin
     .from('portal_notifications')
     .select('id', { count: 'exact', head: true })
-    .eq('account_id', accountId)
     .is('read_at', null)
 
+  if (accountId) {
+    query = query.eq('account_id', accountId)
+  } else if (contactId) {
+    query = query.eq('contact_id', contactId)
+  } else {
+    return 0
+  }
+
+  const { count } = await query
   return count ?? 0
 }

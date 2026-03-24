@@ -31,51 +31,82 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { account_id } = await request.json()
-  if (!account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
+  const { account_id, contact_id } = await request.json()
+  if (!account_id && !contact_id) {
+    return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
+  }
 
   try {
-    // 1. Get client account info
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('company_name, entity_type, state_of_formation, status, ein_number')
-      .eq('id', account_id)
-      .single()
+    // 1. Get client account info (if available)
+    let account = null
+    let services = null
+    let deadlines = null
+    let payments = null
 
-    // 2. Get active services for this client
-    const { data: services } = await supabaseAdmin
-      .from('services')
-      .select('service_name, service_type, status, current_step, total_steps')
-      .eq('account_id', account_id)
-      .in('status', ['Not Started', 'In Progress', 'Waiting Client', 'Waiting Third Party'])
-      .limit(10)
+    if (account_id) {
+      const { data: acct } = await supabaseAdmin
+        .from('accounts')
+        .select('company_name, entity_type, state_of_formation, status, ein_number')
+        .eq('id', account_id)
+        .single()
+      account = acct
 
-    // 3. Get upcoming deadlines
-    const today = new Date().toISOString().split('T')[0]
-    const { data: deadlines } = await supabaseAdmin
-      .from('deadlines')
-      .select('deadline_type, due_date, status')
-      .eq('account_id', account_id)
-      .in('status', ['Pending', 'Overdue'])
-      .gte('due_date', today)
-      .order('due_date')
-      .limit(5)
+      // 2. Get active services for this client
+      const { data: svc } = await supabaseAdmin
+        .from('services')
+        .select('service_name, service_type, status, current_step, total_steps')
+        .eq('account_id', account_id)
+        .in('status', ['Not Started', 'In Progress', 'Waiting Client', 'Waiting Third Party'])
+        .limit(10)
+      services = svc
 
-    // 4. Get recent payments
-    const { data: payments } = await supabaseAdmin
-      .from('payments')
-      .select('description, amount, status, due_date')
-      .eq('account_id', account_id)
-      .order('due_date', { ascending: false })
-      .limit(5)
+      // 3. Get upcoming deadlines
+      const today = new Date().toISOString().split('T')[0]
+      const { data: dl } = await supabaseAdmin
+        .from('deadlines')
+        .select('deadline_type, due_date, status')
+        .eq('account_id', account_id)
+        .in('status', ['Pending', 'Overdue'])
+        .gte('due_date', today)
+        .order('due_date')
+        .limit(5)
+      deadlines = dl
+
+      // 4. Get recent payments
+      const { data: pay } = await supabaseAdmin
+        .from('payments')
+        .select('description, amount, status, due_date')
+        .eq('account_id', account_id)
+        .order('due_date', { ascending: false })
+        .limit(5)
+      payments = pay
+    }
+
+    // If no account but we have contact, get contact info for context
+    let contactInfo = null
+    if (!account_id && contact_id) {
+      const { data: ct } = await supabaseAdmin
+        .from('contacts')
+        .select('full_name, email, language, citizenship')
+        .eq('id', contact_id)
+        .single()
+      contactInfo = ct
+    }
 
     // 5. Get this conversation (last 20 messages)
-    const { data: conversation } = await supabaseAdmin
+    let conversationQuery = supabaseAdmin
       .from('portal_messages')
       .select('sender_type, message, created_at')
-      .eq('account_id', account_id)
       .order('created_at', { ascending: false })
       .limit(20)
+
+    if (account_id) {
+      conversationQuery = conversationQuery.eq('account_id', account_id)
+    } else {
+      conversationQuery = conversationQuery.eq('contact_id', contact_id).is('account_id', null)
+    }
+
+    const { data: conversation } = await conversationQuery
 
     const conversationHistory = (conversation ?? []).reverse()
 

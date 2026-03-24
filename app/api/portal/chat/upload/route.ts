@@ -51,9 +51,14 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData()
   const file = formData.get('file') as File | null
   const accountId = formData.get('account_id') as string | null
+  const contactIdParam = formData.get('contact_id') as string | null
 
-  if (!file || !accountId) {
-    return NextResponse.json({ error: 'file and account_id required' }, { status: 400 })
+  if (!file) {
+    return NextResponse.json({ error: 'file required' }, { status: 400 })
+  }
+
+  if (!accountId && !contactIdParam) {
+    return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
   if (file.size > MAX_SIZE) {
@@ -65,10 +70,15 @@ export async function POST(request: NextRequest) {
   }
 
   // Access control for client users
-  const contactId = getClientContactId(user)
-  if (contactId) {
-    const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(accountId)) {
+  const authContactId = getClientContactId(user)
+  if (authContactId) {
+    if (accountId) {
+      const accountIds = await getClientAccountIds(authContactId)
+      if (!accountIds.includes(accountId)) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+    }
+    if (contactIdParam && contactIdParam !== authContactId) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
   }
@@ -86,7 +96,8 @@ export async function POST(request: NextRequest) {
     const rawExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '')
     const ext = SAFE_EXTENSIONS.includes(rawExt) ? rawExt : 'bin'
     // Use random filename — never user-controlled names in storage path
-    const storagePath = `chat-attachments/${accountId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+    const storageDir = accountId || contactIdParam || 'unknown'
+    const storagePath = `chat-attachments/${storageDir}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
 
     const { error: uploadError } = await supabaseAdmin.storage
       .from('assets')

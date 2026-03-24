@@ -251,6 +251,37 @@ export async function getPortalTier(accountId: string): Promise<string> {
   return data?.portal_tier || 'active'
 }
 
+/**
+ * Get portal tier from CONTACT (source of truth).
+ * contacts.portal_tier tracks the person's journey, not the company's.
+ * Falls back to 'lead' if not set.
+ */
+export async function getPortalTierByContact(contactId: string): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('contacts')
+    .select('portal_tier')
+    .eq('id', contactId)
+    .single()
+
+  return data?.portal_tier || 'lead'
+}
+
+/**
+ * Nav visibility for contacts WITHOUT any account (e.g., ITIN-only clients).
+ * Only contact-level features are visible.
+ */
+export function getContactOnlyNavVisibility(): PortalNavVisibility {
+  return {
+    services: false,
+    billing: false,
+    invoices: false,
+    taxDocuments: false,
+    deadlines: false,
+    documents: true,
+    customers: false,
+  }
+}
+
 export async function getPortalTaxReturns(accountId: string) {
   // Tax returns are matched by company_name, not account_id
   const { data: account } = await supabaseAdmin

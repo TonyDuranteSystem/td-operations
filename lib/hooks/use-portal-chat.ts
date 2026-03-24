@@ -6,9 +6,11 @@ import type { PortalMessage } from '@/lib/types'
 
 /**
  * Real-time chat hook using Supabase Realtime.
- * Subscribes to portal_messages for the given account_id.
+ * Supports both account-based and contact-based chat.
+ * - accountId: for LLC-specific conversations (most clients)
+ * - contactId: for contacts without accounts (ITIN clients, leads)
  */
-export function usePortalChat(accountId: string) {
+export function usePortalChat(accountId: string | null, contactId: string) {
   const [messages, setMessages] = useState<PortalMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -16,23 +18,28 @@ export function usePortalChat(accountId: string) {
   const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
+  // Determine which param to use for API calls
+  const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
+  const filterColumn = accountId ? 'account_id' : 'contact_id'
+  const filterValue = accountId || contactId
+
   // Load initial messages + mark as read
   useEffect(() => {
     async function load() {
       setLoading(true)
       setHasMore(true)
       try {
-        const res = await fetch(`/api/portal/chat?account_id=${accountId}&limit=50`)
+        const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
         if (res.ok) {
           const data = await res.json()
           const msgs = data.messages ?? []
           setMessages(msgs)
           setHasMore(msgs.length >= 50)
-          // Mark admin messages as read (client has seen them)
+          // Mark admin messages as read
           fetch('/api/portal/chat/read', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId }),
+            body: JSON.stringify(accountId ? { account_id: accountId } : { contact_id: contactId }),
           }).catch(() => {})
         }
       } catch {
@@ -42,7 +49,7 @@ export function usePortalChat(accountId: string) {
       }
     }
     load()
-  }, [accountId])
+  }, [accountId, contactId, queryParam])
 
   // Load older messages
   const loadMore = useCallback(async () => {
@@ -50,7 +57,7 @@ export function usePortalChat(accountId: string) {
     setLoadingMore(true)
     try {
       const oldest = messages[0]
-      const res = await fetch(`/api/portal/chat?account_id=${accountId}&limit=50&before=${oldest.created_at}`)
+      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50&before=${oldest.created_at}`)
       if (res.ok) {
         const data = await res.json()
         const older = data.messages ?? []
@@ -64,25 +71,24 @@ export function usePortalChat(accountId: string) {
     } finally {
       setLoadingMore(false)
     }
-  }, [accountId, messages, loadingMore, hasMore])
+  }, [queryParam, messages, loadingMore, hasMore])
 
   // Subscribe to realtime
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
-      .channel(`portal-chat-${accountId}`)
+      .channel(`portal-chat-${filterValue}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'portal_messages',
-          filter: `account_id=eq.${accountId}`,
+          filter: `${filterColumn}=eq.${filterValue}`,
         },
         (payload) => {
           const newMessage = payload.new as PortalMessage
           setMessages(prev => {
-            // Avoid duplicates (from optimistic insert)
             if (prev.some(m => m.id === newMessage.id)) return prev
             return [...prev, newMessage]
           })
@@ -95,7 +101,7 @@ export function usePortalChat(accountId: string) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [accountId])
+  }, [filterColumn, filterValue])
 
   // Send message
   const sendMessage = useCallback(async (message: string, attachment?: { url: string; name: string }) => {
@@ -107,7 +113,8 @@ export function usePortalChat(accountId: string) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          account_id: accountId,
+          account_id: accountId || undefined,
+          contact_id: contactId,
           message: message || (attachment ? `[Attachment: ${attachment.name}]` : ''),
           attachment_url: attachment?.url,
           attachment_name: attachment?.name,
@@ -119,7 +126,6 @@ export function usePortalChat(accountId: string) {
         throw new Error(err.error || 'Failed to send')
       }
 
-      // Add message to state immediately (don't rely solely on realtime)
       const { message: newMsg } = await res.json()
       if (newMsg) {
         setMessages(prev => {
@@ -132,7 +138,7 @@ export function usePortalChat(accountId: string) {
     } finally {
       setSending(false)
     }
-  }, [accountId, sending])
+  }, [accountId, contactId, sending])
 
   return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore }
 }

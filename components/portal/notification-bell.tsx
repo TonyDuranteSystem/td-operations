@@ -24,7 +24,7 @@ const TYPE_ICONS: Record<string, React.ElementType> = {
   invoice: Receipt,
 }
 
-export function NotificationBell({ accountId }: { accountId: string }) {
+export function NotificationBell({ accountId, contactId }: { accountId?: string; contactId: string }) {
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unread, setUnread] = useState(0)
@@ -43,7 +43,8 @@ export function NotificationBell({ accountId }: { accountId: string }) {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch(`/api/portal/notifications?account_id=${accountId}&limit=10`)
+        const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
+        const res = await fetch(`/api/portal/notifications?${queryParam}&limit=10`)
         if (res.ok) {
           const data = await res.json()
           setNotifications(data.notifications ?? [])
@@ -54,7 +55,7 @@ export function NotificationBell({ accountId }: { accountId: string }) {
     load()
     const interval = setInterval(load, 30000) // Refresh every 30s
     return () => clearInterval(interval)
-  }, [accountId])
+  }, [accountId, contactId])
 
   const markAllRead = async () => {
     const unreadIds = notifications.filter(n => !n.read_at).map(n => n.id)
