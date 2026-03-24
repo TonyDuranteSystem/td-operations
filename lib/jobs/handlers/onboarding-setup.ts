@@ -160,7 +160,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         assigned_to: "Luca",
         account_id: account_id || null,
         created_by: "Claude",
-      }).catch(() => {}) // non-blocking
+      }).then(() => {}, () => {}) // non-blocking
 
       result.summary = `OCR cross-check blocked: ${mismatchDetail}`
       return result

@@ -154,8 +154,8 @@ export async function runOCRCrossCheck(
       // Call Document AI OCR
       const { ocrRawContent } = await import("@/lib/docai")
       const ocrResult = await ocrRawContent(arrayBuffer, mimeType, cleanPath.split("/").pop() || "file")
-      if (ocrResult?.text) {
-        ocrTexts[docType] = ocrResult.text
+      if (ocrResult?.fullText) {
+        ocrTexts[docType] = ocrResult.fullText
       }
     } catch {
       // OCR failure is non-blocking — we just skip this document
