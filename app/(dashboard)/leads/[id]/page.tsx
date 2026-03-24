@@ -3,11 +3,10 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, User, Mail, Phone, Globe, MessageSquare,
-  Calendar, Tag, ExternalLink, FileText, CreditCard,
+  Calendar, Tag, ExternalLink, FileText, CreditCard, CheckCircle2,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { APP_BASE_URL } from '@/lib/config'
-import { LeadDetailActions } from '@/components/leads/lead-detail-actions'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -31,6 +30,13 @@ const OFFER_STATUS_COLORS: Record<string, string> = {
   'expired': 'bg-red-100 text-red-600',
 }
 
+const ACTIVATION_STATUS_COLORS: Record<string, string> = {
+  'awaiting_payment': 'bg-zinc-100 text-zinc-600',
+  'payment_confirmed': 'bg-blue-100 text-blue-700',
+  'pending_confirmation': 'bg-amber-100 text-amber-700',
+  'activated': 'bg-emerald-100 text-emerald-700',
+}
+
 function formatDate(d: string | null): string {
   if (!d) return '\u2014'
   try {
@@ -49,7 +55,6 @@ function formatCurrency(amount: number | null, currency?: string | null): string
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
 
-  // Fetch lead
   const { data: lead } = await supabase
     .from('leads')
     .select('*')
@@ -58,16 +63,16 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
 
   if (!lead) notFound()
 
-  // Fetch offer from offers table (source of truth)
+  // Source of truth: offers table
   const { data: offer } = await supabase
     .from('offers')
-    .select('token, status, contract_type, language, client_email, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at')
+    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at')
     .eq('lead_id', params.id)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  // Fetch pending activation (source of truth for payment)
+  // Source of truth: pending_activations table
   const { data: activation } = await supabase
     .from('pending_activations')
     .select('id, status, amount, currency, payment_method, payment_confirmed_at, signed_at, notes, created_at')
@@ -82,39 +87,23 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   return (
     <div className="p-6 lg:p-8 max-w-5xl">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div className="flex items-center gap-4">
-          <Link
-            href="/leads"
-            className="p-2 rounded-lg hover:bg-zinc-100 transition-colors"
-          >
-            <ArrowLeft className="h-5 w-5 text-zinc-600" />
-          </Link>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight">{lead.full_name}</h1>
-              {lead.status && (
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
-                  {lead.status}
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Lead created {formatDate(lead.created_at)}
-            </p>
+      <div className="flex items-center gap-4 mb-6">
+        <Link href="/leads" className="p-2 rounded-lg hover:bg-zinc-100 transition-colors">
+          <ArrowLeft className="h-5 w-5 text-zinc-600" />
+        </Link>
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">{lead.full_name}</h1>
+            {lead.status && (
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
+                {lead.status}
+              </span>
+            )}
           </div>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Lead created {formatDate(lead.created_at)}
+          </p>
         </div>
-
-        {/* Register Payment button */}
-        <LeadDetailActions
-          leadId={lead.id}
-          leadName={lead.full_name}
-          hasActivation={!!activation}
-          activationStatus={activation?.status ?? null}
-          bundledPipelines={bundledPipelines}
-          paymentAmount={activation?.amount ?? null}
-          paymentCurrency={activation?.currency ?? null}
-        />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -131,9 +120,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
               </dt>
               <dd className="font-medium">
                 {lead.email ? (
-                  <a href={`mailto:${lead.email}`} className="text-blue-600 hover:underline">
-                    {lead.email}
-                  </a>
+                  <a href={`mailto:${lead.email}`} className="text-blue-600 hover:underline">{lead.email}</a>
                 ) : '\u2014'}
               </dd>
             </div>
@@ -186,23 +173,15 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             <div className="flex justify-between">
               <dt className="text-muted-foreground">Status</dt>
               <dd>
-                {lead.status ? (
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
-                    {lead.status}
-                  </span>
-                ) : '\u2014'}
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
+                  {lead.status ?? '\u2014'}
+                </span>
               </dd>
             </div>
-            {lead.reason && (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Reason</dt>
-                <dd className="font-medium">{lead.reason}</dd>
-              </div>
-            )}
           </dl>
         </div>
 
-        {/* Offer Details — from offers table */}
+        {/* Offer — from offers table */}
         {offer && (
           <div className="bg-white rounded-lg border p-5 md:col-span-2">
             <h2 className="text-sm font-semibold text-zinc-900 mb-4 flex items-center gap-2">
@@ -226,11 +205,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
               </div>
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Views</p>
-                <p className="text-sm font-medium">{offer.view_count ?? 0} {offer.viewed_at ? `(last ${formatDate(offer.viewed_at)})` : ''}</p>
+                <p className="text-sm font-medium">{offer.view_count ?? 0}</p>
               </div>
             </div>
 
-            {/* Cost Summary from offer */}
+            {/* Cost Summary */}
             {Array.isArray(offer.cost_summary) && offer.cost_summary.length > 0 && (
               <div className="mt-4">
                 <p className="text-xs text-muted-foreground mb-2">Cost Summary</p>
@@ -263,9 +242,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                 <p className="text-xs text-muted-foreground mb-2">Selected Services</p>
                 <div className="flex flex-wrap gap-1.5">
                   {selectedServices.map((s) => (
-                    <span key={s} className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 font-medium">
-                      {s}
-                    </span>
+                    <span key={s} className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 font-medium">{s}</span>
                   ))}
                 </div>
               </div>
@@ -277,15 +254,12 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                 <p className="text-xs text-muted-foreground mb-2">Service Pipelines</p>
                 <div className="flex flex-wrap gap-1.5">
                   {bundledPipelines.map((p) => (
-                    <span key={p} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-medium">
-                      {p}
-                    </span>
+                    <span key={p} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 font-medium">{p}</span>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Offer link */}
             {offer.token && (
               <div className="mt-4">
                 <a
@@ -301,47 +275,62 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </div>
         )}
 
-        {/* Payment / Activation — from pending_activations table */}
+        {/* Lifecycle — from pending_activations */}
         {activation && (
           <div className="bg-white rounded-lg border p-5 md:col-span-2">
             <h2 className="text-sm font-semibold text-zinc-900 mb-4 flex items-center gap-2">
               <CreditCard className="h-4 w-4" />
-              Payment
+              Contract & Payment
             </h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {/* Contract signed */}
               <div>
-                <p className="text-xs text-muted-foreground mb-1">Status</p>
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                  activation.status === 'activated'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : activation.status === 'payment_confirmed'
-                      ? 'bg-blue-100 text-blue-700'
-                      : activation.status === 'pending_confirmation'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-zinc-100 text-zinc-600'
-                }`}>
+                <p className="text-xs text-muted-foreground mb-1">Contract Signed</p>
+                {activation.signed_at ? (
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    <p className="text-sm font-medium">{formatDate(activation.signed_at)}</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">\u2014</p>
+                )}
+              </div>
+
+              {/* Payment status */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Payment Status</p>
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ACTIVATION_STATUS_COLORS[activation.status] ?? 'bg-zinc-100'}`}>
                   {activation.status}
                 </span>
               </div>
+
+              {/* Amount */}
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Amount Paid</p>
-                <p className="text-sm font-semibold">
-                  {formatCurrency(activation.amount, activation.currency)}
-                </p>
+                <p className="text-sm font-semibold">{formatCurrency(activation.amount, activation.currency)}</p>
               </div>
+
+              {/* Payment confirmed */}
               <div>
-                <p className="text-xs text-muted-foreground mb-1">Payment Method</p>
-                <p className="text-sm font-medium">{activation.payment_method ?? '\u2014'}</p>
+                <p className="text-xs text-muted-foreground mb-1">Payment Confirmed</p>
+                {activation.payment_confirmed_at ? (
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    <p className="text-sm font-medium">{formatDate(activation.payment_confirmed_at)}</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">\u2014</p>
+                )}
               </div>
-              {activation.payment_confirmed_at && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Confirmed</p>
-                  <p className="text-sm font-medium">{formatDate(activation.payment_confirmed_at)}</p>
-                </div>
-              )}
             </div>
+
+            {activation.payment_method && (
+              <p className="text-xs text-muted-foreground mt-3">
+                Payment method: {activation.payment_method}
+              </p>
+            )}
             {activation.notes && (
-              <p className="text-xs text-muted-foreground mt-3">{activation.notes}</p>
+              <p className="text-xs text-muted-foreground mt-1">{activation.notes}</p>
             )}
           </div>
         )}
