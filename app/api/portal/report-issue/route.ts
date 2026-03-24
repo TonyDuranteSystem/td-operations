@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Create the issue record
-  const { data: _issue } = await supabaseAdmin
+  const { data: issue } = await supabaseAdmin
     .from('portal_issues')
     .insert({
       account_id: account_id || null,
