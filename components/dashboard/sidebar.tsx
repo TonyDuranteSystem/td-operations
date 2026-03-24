@@ -29,6 +29,8 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  UserCheck,
+  Target,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
@@ -75,6 +77,8 @@ const defaultNavigation: NavItem[] = [
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare },
   { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText },
+  { id: 'leads', name: 'Leads', href: '/leads', icon: Target },
+  { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2 },
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge },

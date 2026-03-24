@@ -175,6 +175,41 @@ export interface AccountListItem {
   payment_overdue: number
 }
 
+// ─── Lead & Contact List Types ───────────────────────────
+
+export interface LeadListItem {
+  id: string
+  full_name: string
+  email: string | null
+  phone: string | null
+  status: string | null
+  source: string | null
+  channel: string | null
+  language: string | null
+  referrer_name: string | null
+  call_date: string | null
+  offer_status: string | null
+  offer_year1_amount: number | null
+  offer_year1_currency: string | null
+  created_at: string
+}
+
+export interface ContactListItem {
+  id: string
+  full_name: string
+  email: string | null
+  phone: string | null
+  language: string | null
+  citizenship: string | null
+  portal_tier: string | null
+  status: string | null
+  itin_number: string | null
+  passport_on_file: boolean | null
+  account_count: number
+  account_names: string | null
+  created_at: string
+}
+
 // ─── Portal Types ────────────────────────────────────────
 
 export interface PortalAccount {
