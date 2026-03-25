@@ -74,6 +74,7 @@ import { registerITINFormTools } from "@/lib/mcp/tools/itin-form"
 import { registerClosureTools } from "@/lib/mcp/tools/closure"
 import { registerTaxQuoteTools } from "@/lib/mcp/tools/tax-quote"
 import { registerBankStatementTools } from "@/lib/mcp/tools/bank-statements"
+import { registerTestingTools } from "@/lib/mcp/tools/testing"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -123,6 +124,7 @@ const handler = createMcpHandler(
     registerClosureTools(server)
     registerTaxQuoteTools(server)
     registerBankStatementTools(server)
+    registerTestingTools(server)
   },
   {
     capabilities: {},

@@ -594,9 +594,9 @@ export function registerCrmTools(server: McpServer) {
           tasksRes,
           dealsRes,
         ] = await Promise.all([
-          supabaseAdmin.from("accounts").select("id, status, entity_type, state_of_formation, client_health"),
+          supabaseAdmin.from("accounts").select("id, status, entity_type, state_of_formation, client_health").or("is_test.is.null,is_test.eq.false"),
           supabaseAdmin.from("services").select("id, service_type, status, blocked_waiting_external"),
-          supabaseAdmin.from("payments").select("id, status, amount, amount_currency, year"),
+          supabaseAdmin.from("payments").select("id, status, amount, amount_currency, year").or("is_test.is.null,is_test.eq.false"),
           supabaseAdmin
             .from("documents")
             .select("id, status, category_name, account_id"),
@@ -839,6 +839,7 @@ export function registerCrmTools(server: McpServer) {
           .from("accounts")
           .select("id, company_name, entity_type, ein_number, state_of_formation, formation_date, physical_address, status")
           .eq("status", "Active")
+          .or("is_test.is.null,is_test.eq.false")
           .order("company_name")
 
         if (account_ids?.length) {

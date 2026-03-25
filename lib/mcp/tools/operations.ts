@@ -820,6 +820,7 @@ export function registerOperationsTools(server: McpServer) {
           .select("stage, status")
           .ilike("service_type", `%${service_type}%`)
           .eq("status", "active")
+          .or("is_test.is.null,is_test.eq.false")
 
         if (error) throw new Error(error.message)
         if (!data || data.length === 0) {

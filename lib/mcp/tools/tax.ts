@@ -122,14 +122,17 @@ export function registerTaxTools(server: McpServer) {
 
         let q = supabaseAdmin
           .from("tax_returns")
-          .select("*")
+          .select("*, accounts!left(is_test)")
           .eq("tax_year", year)
 
         if (return_type) q = q.eq("return_type", return_type)
 
-        const { data, error } = await q
+        const { data: rawData, error } = await q
         if (error) throw new Error(error.message)
-        if (!data || data.length === 0) {
+        // Exclude tax returns linked to test accounts
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = (rawData || []).filter((tr: any) => !tr.accounts?.is_test)
+        if (data.length === 0) {
           return { content: [{ type: "text" as const, text: `No tax returns found for ${year}.` }] }
         }
 
@@ -720,6 +723,7 @@ export function registerTaxTools(server: McpServer) {
           .from("accounts")
           .select("id, company_name, ein_number, entity_type, state_of_formation")
           .in("id", accountIds)
+          .or("is_test.is.null,is_test.eq.false")
 
         const accMap = new Map((accounts || []).map(a => [a.id, a]))
 

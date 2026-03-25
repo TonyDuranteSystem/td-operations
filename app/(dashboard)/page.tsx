@@ -9,6 +9,7 @@ import { UpcomingDeadlinesCard } from '@/components/dashboard/cards/upcoming-dea
 import { PendingFormsCard } from '@/components/dashboard/cards/pending-forms'
 import { RecentPaymentsCard } from '@/components/dashboard/cards/recent-payments'
 import { PendingActions } from '@/components/dashboard/pending-actions'
+import { DevToolsPanel } from '@/components/dashboard/dev-tools-panel'
 
 export default async function DashboardPage() {
   const supabase = createClient()
@@ -60,6 +61,9 @@ export default async function DashboardPage() {
             </Suspense>
           </CardErrorBoundary>
         )}
+
+        {/* Dev Tools (admin only) */}
+        {admin && <DevToolsPanel />}
       </div>
     </div>
   )

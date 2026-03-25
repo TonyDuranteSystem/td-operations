@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
       .select("id, company_name, entity_type, formation_date, account_type, installment_1_amount, installment_2_amount, status")
       .eq("status", "Active")
       .eq("account_type", "Client")
+      .or("is_test.is.null,is_test.eq.false")
 
     if (error) throw new Error(error.message)
     if (!accounts || accounts.length === 0) {

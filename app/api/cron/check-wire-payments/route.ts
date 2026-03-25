@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
       .from("payments")
       .select("id, account_id, invoice_number, invoice_status, total, amount, amount_currency, description, accounts:account_id(company_name)")
       .in("invoice_status", ["Sent", "Overdue"])
+      .or("is_test.is.null,is_test.eq.false")
 
     console.log(`[check-wire] ${pendingList?.length ?? 0} pending activations, ${openInvoices?.length ?? 0} open invoices`)
 

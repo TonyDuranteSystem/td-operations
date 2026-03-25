@@ -169,6 +169,7 @@ export async function syncSupabaseToAirtable(options?: {
     .from("accounts")
     .select("*")
     .not("airtable_id", "is", null)
+    .or("is_test.is.null,is_test.eq.false")
     .order("company_name")
 
   if (limit > 0) q = q.limit(limit)

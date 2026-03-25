@@ -85,6 +85,7 @@ export async function GET(req: NextRequest) {
         .eq("status", "Active")
         .ilike("state_of_formation", "%Delaware%")
         .or("entity_type.ilike.%Corp%,entity_type.ilike.%Multi%,entity_type.ilike.%MMLLC%")
+        .or("is_test.is.null,is_test.eq.false")
 
       if (deCorps?.length) {
         let created = 0
@@ -109,6 +110,7 @@ export async function GET(req: NextRequest) {
         .eq("status", "Active")
         .ilike("state_of_formation", "%Delaware%")
         .or("entity_type.ilike.%Single%,entity_type.ilike.%SMLLC%")
+        .or("is_test.is.null,is_test.eq.false")
 
       if (deLlcs?.length) {
         let created = 0
@@ -185,6 +187,7 @@ export async function GET(req: NextRequest) {
         .select("id, full_name, itin_number, itin_issue_date")
         .not("itin_number", "is", null)
         .lte("itin_issue_date", threeYearsAgo)
+        .or("is_test.is.null,is_test.eq.false")
 
       if (itinContacts?.length) {
         let created = 0
@@ -209,6 +212,7 @@ export async function GET(req: NextRequest) {
       .select("id, company_name, cmra_renewal_date")
       .eq("status", "Active")
       .not("cmra_renewal_date", "is", null)
+      .or("is_test.is.null,is_test.eq.false")
 
     if (cmraAccounts?.length) {
       let created = 0
