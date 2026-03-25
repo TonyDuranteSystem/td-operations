@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalServices } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalServices, getPortalServicesByContact } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -40,10 +40,11 @@ export default async function PortalServicesPage() {
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
-  if (!selectedAccountId) redirect('/portal')
 
   const locale = getLocale(user)
-  const services = await getPortalServices(selectedAccountId)
+  const services = selectedAccountId
+    ? await getPortalServices(selectedAccountId)
+    : await getPortalServicesByContact(contactId)
   const active = services.filter(s => s.status !== 'Completed')
   const completed = services.filter(s => s.status === 'Completed')
 

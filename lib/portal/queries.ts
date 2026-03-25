@@ -83,8 +83,30 @@ export async function getPortalServices(accountId: string): Promise<PortalServic
   })) as PortalService[]
 }
 
+export async function getPortalServicesByContact(contactId: string): Promise<PortalService[]> {
+  // For contact-only clients (ITIN, no LLC), query service_deliveries directly by contact_id
+  const { data } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name, service_type, stage, status, assigned_to, start_date, updated_at')
+    .eq('contact_id', contactId)
+    .in('status', ['active', 'completed'])
+    .order('updated_at', { ascending: false })
+
+  return (data ?? []).map(sd => ({
+    id: sd.id,
+    service_name: sd.service_name ?? sd.service_type ?? 'Service',
+    service_type: sd.service_type ?? '',
+    status: sd.status === 'active' ? 'In Progress' : 'Completed',
+    current_step: null,
+    total_steps: null,
+    blocked_waiting_external: false,
+    blocked_reason: null,
+    start_date: sd.start_date,
+    current_stage: sd.stage,
+  })) as PortalService[]
+}
+
 export async function getPortalDeadlines(accountId: string) {
-  const today = new Date().toISOString().split('T')[0]
   const sixtyDaysLater = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0]
 
   const { data } = await supabaseAdmin
@@ -293,7 +315,7 @@ export async function getPortalTierByContact(contactId: string): Promise<string>
  */
 export function getContactOnlyNavVisibility(): PortalNavVisibility {
   return {
-    services: false,
+    services: true,
     billing: false,
     invoices: false,
     taxDocuments: false,

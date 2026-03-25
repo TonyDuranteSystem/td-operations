@@ -110,3 +110,21 @@ export async function addAccountNote(
     summary: 'Note added', details: { note },
   })
 }
+
+export async function toggleDocumentPortalVisibility(
+  documentId: string,
+  visible: boolean
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('documents')
+      .update({ portal_visible: visible })
+      .eq('id', documentId)
+
+    if (error) throw new Error(error.message)
+  }, {
+    action_type: 'update', table_name: 'documents', record_id: documentId,
+    summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
+  })
+}

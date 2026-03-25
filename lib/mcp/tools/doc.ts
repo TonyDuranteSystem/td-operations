@@ -58,6 +58,7 @@ async function processFile(
   fileId: string,
   accountId?: string,
   accountName?: string,
+  contactId?: string,
 ): Promise<{
   success: boolean
   fileName: string
@@ -72,7 +73,7 @@ async function processFile(
     const meta = (await getFileMetadata(fileId)) as DriveFileMeta
 
     // 2. Extract text (OCR or direct)
-    const { pages, method, fileName } = await extractTextFromFile(fileId)
+    const { pages, fileName } = await extractTextFromFile(fileId)
 
     // 3. Classify
     let classification = pages.length > 0
@@ -108,7 +109,19 @@ async function processFile(
     // 6. Prepare OCR text (truncated)
     const ocrText = pages.join("\n---PAGE BREAK---\n").slice(0, MAX_OCR_TEXT)
 
-    // 7. Upsert document record
+    // 7. Auto-resolve contact_id for category 2 (Contacts) docs if not provided
+    let resolvedContactId = contactId || null
+    if (!resolvedContactId && accountId && classification?.category === 2) {
+      const { data: contacts } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contact_id")
+        .eq("account_id", accountId)
+      if (contacts && contacts.length === 1) {
+        resolvedContactId = contacts[0].contact_id
+      }
+    }
+
+    // 8. Upsert document record
     const status = classification ? "classified" : (pages.length > 0 ? "unclassified" : "error")
 
     const { error: dbError } = await supabaseAdmin
@@ -129,6 +142,7 @@ async function processFile(
         ocr_page_count: pages.length || null,
         account_id: accountId || null,
         account_name: accountName || null,
+        contact_id: resolvedContactId,
         processed_at: new Date().toISOString(),
         status,
         error_message: null,
@@ -213,14 +227,15 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_process_file",
-    "Process a single Google Drive file: extracts text via OCR (docai_ocr_file), classifies document type and category using AI rules (classify_document), and stores the result in Supabase documents table. Returns document type, category, confidence score, and status. Provide account_id to link the document to a CRM client. For batch processing an entire folder, use doc_process_folder or doc_bulk_process instead.",
+    "Process a single Google Drive file: extracts text via OCR (docai_ocr_file), classifies document type and category using AI rules (classify_document), and stores the result in Supabase documents table. Returns document type, category, confidence score, and status. Provide account_id to link the document to a CRM client. Provide contact_id to link to a specific person (auto-resolved for category 2 docs on single-member accounts). For batch processing an entire folder, use doc_process_folder or doc_bulk_process instead.",
     {
       file_id: z.string().describe("Google Drive file ID"),
       account_id: z.string().uuid().optional().describe("Link document to this client account (UUID)"),
+      contact_id: z.string().uuid().optional().describe("Link document to a specific contact (UUID). Auto-resolved for category 2 docs on single-member accounts."),
     },
-    async ({ file_id, account_id }) => {
+    async ({ file_id, account_id, contact_id }) => {
       try {
-        const result = await processFile(file_id, account_id)
+        const result = await processFile(file_id, account_id, undefined, contact_id)
 
         if (result.success) {
           logAction({
@@ -233,10 +248,11 @@ export function registerDocTools(server: McpServer) {
           })
 
           // Notify client via portal
-          if (account_id) {
+          if (account_id || contact_id) {
             const { createPortalNotification } = await import("@/lib/portal/notifications")
             createPortalNotification({
-              account_id,
+              ...(account_id ? { account_id } : {}),
+              ...(contact_id ? { contact_id } : {}),
               type: "document",
               title: "New document uploaded",
               body: result.fileName,

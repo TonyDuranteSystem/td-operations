@@ -34,26 +34,33 @@ export default async function PortalDocumentsPage() {
 
   const locale = getLocale(user)
 
-  // Leads without an account see empty documents
-  if (!selectedAccountId) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900 mb-1">{t('documents.title', locale)}</h1>
-        <p className="text-zinc-500 text-sm mb-6">{t('documents.subtitle', locale)}</p>
-        <div className="bg-white rounded-xl border p-12 text-center">
-          <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-4" />
-          <p className="text-zinc-500 text-sm">{locale === 'it' ? 'I documenti appariranno qui dopo la firma del contratto.' : 'Documents will appear here after you sign the contract.'}</p>
-        </div>
-      </div>
-    )
-  }
+  // Fetch documents: account-based OR contact-based, filtered by portal_visible
+  let documents: Array<{
+    id: string; file_name: string; document_type_name: string | null
+    category: number | null; drive_file_id: string | null
+    processed_at: string | null; created_at: string | null
+  }> | null = null
 
-  const { data: documents } = await supabaseAdmin
-    .from('documents')
-    .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
-    .eq('account_id', selectedAccountId)
-    .order('created_at', { ascending: false })
-    .limit(100)
+  if (selectedAccountId) {
+    const { data } = await supabaseAdmin
+      .from('documents')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+      .eq('account_id', selectedAccountId)
+      .eq('portal_visible', true)
+      .order('created_at', { ascending: false })
+      .limit(100)
+    documents = data
+  } else {
+    // Contact-only clients (ITIN, no LLC) — show their personal documents
+    const { data } = await supabaseAdmin
+      .from('documents')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+      .eq('contact_id', contactId)
+      .eq('portal_visible', true)
+      .order('created_at', { ascending: false })
+      .limit(100)
+    documents = data
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
@@ -62,7 +69,7 @@ export default async function PortalDocumentsPage() {
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('documents.title', locale)}</h1>
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('documents.subtitle', locale)}</p>
         </div>
-        <DocumentUploadButton accountId={selectedAccountId} />
+        {selectedAccountId && <DocumentUploadButton accountId={selectedAccountId} />}
       </div>
 
       {(!documents || documents.length === 0) ? (

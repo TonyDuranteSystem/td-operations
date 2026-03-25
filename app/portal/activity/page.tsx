@@ -7,7 +7,7 @@ import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { format, parseISO } from 'date-fns'
-import { FileText, Activity as ActivityIcon, CreditCard, Calendar, MessageCircle, CheckCircle2, ArrowRight, Receipt } from 'lucide-react'
+import { FileText, Activity as ActivityIcon, CreditCard, Calendar, MessageCircle, CheckCircle2, ArrowRight } from 'lucide-react'
 import Link from 'next/link'
 
 interface ActivityItem {
@@ -48,96 +48,122 @@ export default async function PortalActivityPage() {
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
-  if (!selectedAccountId) redirect('/portal')
 
   const locale = getLocale(user)
   // Aggregate activity from multiple sources
   const activities: ActivityItem[] = []
 
-  // Recent notifications
-  const { data: notifications } = await supabaseAdmin
-    .from('portal_notifications')
-    .select('id, type, title, body, created_at')
-    .eq('account_id', selectedAccountId)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  for (const n of notifications ?? []) {
-    activities.push({ id: `notif-${n.id}`, type: n.type, title: n.title, body: n.body, created_at: n.created_at })
+  // Recent notifications — by account_id OR contact_id
+  if (selectedAccountId) {
+    const { data: notifications } = await supabaseAdmin
+      .from('portal_notifications')
+      .select('id, type, title, body, created_at')
+      .eq('account_id', selectedAccountId)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    for (const n of notifications ?? []) {
+      activities.push({ id: `notif-${n.id}`, type: n.type, title: n.title, body: n.body, created_at: n.created_at })
+    }
+  } else {
+    const { data: notifications } = await supabaseAdmin
+      .from('portal_notifications')
+      .select('id, type, title, body, created_at')
+      .eq('contact_id', contactId)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    for (const n of notifications ?? []) {
+      activities.push({ id: `notif-${n.id}`, type: n.type, title: n.title, body: n.body, created_at: n.created_at })
+    }
   }
 
-  // Recent documents
-  const { data: documents } = await supabaseAdmin
-    .from('documents')
-    .select('id, file_name, document_type_name, created_at')
-    .eq('account_id', selectedAccountId)
-    .order('created_at', { ascending: false })
-    .limit(10)
-
-  for (const d of documents ?? []) {
-    activities.push({
-      id: `doc-${d.id}`,
-      type: 'document',
-      title: `${t('activity.docUploaded', locale)}: ${d.file_name}`,
-      body: d.document_type_name,
-      created_at: d.created_at,
-    })
-  }
-
-  // Recent invoices (created, sent, paid)
-  const { data: invoices } = await supabaseAdmin
-    .from('client_invoices')
-    .select('id, invoice_number, status, total, currency, created_at, updated_at')
-    .eq('account_id', selectedAccountId)
-    .order('updated_at', { ascending: false })
-    .limit(15)
-
-  for (const inv of invoices ?? []) {
-    const csym = inv.currency === 'EUR' ? '\u20AC' : '$'
-    const amount = `${csym}${(inv.total ?? 0).toFixed(2)}`
-    if (inv.status === 'Paid') {
+  // Recent documents — by account_id OR contact_id
+  if (selectedAccountId) {
+    const { data: documents } = await supabaseAdmin
+      .from('documents')
+      .select('id, file_name, document_type_name, created_at')
+      .eq('account_id', selectedAccountId)
+      .eq('portal_visible', true)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    for (const d of documents ?? []) {
       activities.push({
-        id: `inv-paid-${inv.id}`,
-        type: 'payment',
-        title: `${t('invoices.title', locale)} ${inv.invoice_number} — ${t('invoices.paid', locale)}`,
-        body: amount,
-        created_at: inv.updated_at ?? inv.created_at,
+        id: `doc-${d.id}`, type: 'document',
+        title: `${t('activity.docUploaded', locale)}: ${d.file_name}`,
+        body: d.document_type_name, created_at: d.created_at,
       })
-    } else {
+    }
+  } else {
+    const { data: documents } = await supabaseAdmin
+      .from('documents')
+      .select('id, file_name, document_type_name, created_at')
+      .eq('contact_id', contactId)
+      .eq('portal_visible', true)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    for (const d of documents ?? []) {
       activities.push({
-        id: `inv-${inv.id}`,
-        type: 'notification',
-        title: `${t('invoices.title', locale)} ${inv.invoice_number} — ${inv.status}`,
-        body: amount,
-        created_at: inv.created_at,
+        id: `doc-${d.id}`, type: 'document',
+        title: `${t('activity.docUploaded', locale)}: ${d.file_name}`,
+        body: d.document_type_name, created_at: d.created_at,
       })
     }
   }
 
-  // Recent service delivery updates
-  const { data: deliveries } = await supabaseAdmin
-    .from('service_delivery')
-    .select('id, stage, status, updated_at, service_id')
-    .eq('account_id', selectedAccountId)
-    .order('updated_at', { ascending: false })
-    .limit(10)
+  // Recent invoices (only for account-based clients)
+  if (selectedAccountId) {
+    const { data: invoices } = await supabaseAdmin
+      .from('client_invoices')
+      .select('id, invoice_number, status, total, currency, created_at, updated_at')
+      .eq('account_id', selectedAccountId)
+      .order('updated_at', { ascending: false })
+      .limit(15)
 
-  if (deliveries && deliveries.length > 0) {
-    const serviceIds = Array.from(new Set(deliveries.map(d => d.service_id)))
-    const { data: services } = await supabaseAdmin
-      .from('services')
-      .select('id, service_name')
-      .in('id', serviceIds)
-    const serviceMap: Record<string, string> = {}
-    for (const s of services ?? []) serviceMap[s.id] = s.service_name
+    for (const inv of invoices ?? []) {
+      const csym = inv.currency === 'EUR' ? '\u20AC' : '$'
+      const amount = `${csym}${(inv.total ?? 0).toFixed(2)}`
+      if (inv.status === 'Paid') {
+        activities.push({
+          id: `inv-paid-${inv.id}`, type: 'payment',
+          title: `${t('invoices.title', locale)} ${inv.invoice_number} — ${t('invoices.paid', locale)}`,
+          body: amount, created_at: inv.updated_at ?? inv.created_at,
+        })
+      } else {
+        activities.push({
+          id: `inv-${inv.id}`, type: 'notification',
+          title: `${t('invoices.title', locale)} ${inv.invoice_number} — ${inv.status}`,
+          body: amount, created_at: inv.created_at,
+        })
+      }
+    }
+  }
 
-    for (const d of deliveries) {
+  // Recent service delivery updates — by account_id OR contact_id
+  if (selectedAccountId) {
+    const { data: deliveries } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, service_name, stage, status, updated_at')
+      .eq('account_id', selectedAccountId)
+      .order('updated_at', { ascending: false })
+      .limit(10)
+    for (const d of deliveries ?? []) {
       activities.push({
-        id: `svc-${d.id}`,
-        type: 'service',
-        title: `${serviceMap[d.service_id] ?? t('services.title', locale)}: ${d.stage}`,
-        body: d.status,
-        created_at: d.updated_at,
+        id: `svc-${d.id}`, type: 'service',
+        title: `${d.service_name ?? t('services.title', locale)}: ${d.stage}`,
+        body: d.status, created_at: d.updated_at,
+      })
+    }
+  } else {
+    const { data: deliveries } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, service_name, stage, status, updated_at')
+      .eq('contact_id', contactId)
+      .order('updated_at', { ascending: false })
+      .limit(10)
+    for (const d of deliveries ?? []) {
+      activities.push({
+        id: `svc-${d.id}`, type: 'service',
+        title: `${d.service_name ?? t('services.title', locale)}: ${d.stage}`,
+        body: d.status, created_at: d.updated_at,
       })
     }
   }

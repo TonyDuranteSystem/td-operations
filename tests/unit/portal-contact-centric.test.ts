@@ -9,10 +9,10 @@ import { describe, it, expect } from 'vitest'
 import { getContactOnlyNavVisibility } from '../../lib/portal/queries'
 
 describe('getContactOnlyNavVisibility', () => {
-  it('returns documents: true and all account-specific features false', () => {
+  it('returns documents + services: true and account-specific features false', () => {
     const nav = getContactOnlyNavVisibility()
     expect(nav.documents).toBe(true)
-    expect(nav.services).toBe(false)
+    expect(nav.services).toBe(true)
     expect(nav.billing).toBe(false)
     expect(nav.invoices).toBe(false)
     expect(nav.taxDocuments).toBe(false)
@@ -22,7 +22,7 @@ describe('getContactOnlyNavVisibility', () => {
 
   it('returns exactly 7 keys', () => {
     const nav = getContactOnlyNavVisibility()
-    expect(Object.keys(nav).length).toBe(7)
+    expect(Object.keys(nav).length).toBe(8)
   })
 })
 
@@ -66,7 +66,9 @@ describe('Contact-centric architecture rules', () => {
     const isValid = hasAccountId || hasContactId
     expect(isValid).toBe(true)
 
-    const neitherValid = false || false
+    const noAccount = false
+    const noContact = false
+    const neitherValid = noAccount || noContact
     expect(neitherValid).toBe(false)
   })
 })

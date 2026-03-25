@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
-  AlertCircle, CheckCircle2, ExternalLink, MessageSquare, X, Eye,
+  AlertCircle, CheckCircle2, ExternalLink, MessageSquare, X, Eye, EyeOff, Loader2,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -17,7 +17,7 @@ import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/ge
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -81,6 +81,7 @@ interface DocumentRecord {
   processed_at: string | null
   mime_type: string | null
   file_size: number | null
+  portal_visible: boolean
 }
 
 interface AccountDetailProps {
@@ -265,7 +266,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <TaxTab taxReturns={taxReturns} today={today} />
       )}
       {activeTab === 'documenti' && (
-        <DocumentsTab documents={documents} />
+        <DocumentsTab documents={documents} isAdmin={isAdmin} />
       )}
       {activeTab === 'comunicazioni' && (
         <AccountCommunications accountId={account.id} />
@@ -715,8 +716,24 @@ function formatFileSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
+function DocumentsTab({ documents, isAdmin }: { documents: DocumentRecord[]; isAdmin?: boolean }) {
   const [previewDoc, setPreviewDoc] = useState<DocumentRecord | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [visibilityMap, setVisibilityMap] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(documents.map(d => [d.id, d.portal_visible]))
+  )
+
+  const handleToggleVisibility = async (docId: string, currentVisible: boolean) => {
+    setTogglingId(docId)
+    const result = await toggleDocumentPortalVisibility(docId, !currentVisible)
+    if (result.success) {
+      setVisibilityMap(prev => ({ ...prev, [docId]: !currentVisible }))
+      toast.success(`Portal visibility ${!currentVisible ? 'enabled' : 'disabled'}`)
+    } else {
+      toast.error(result.error ?? 'Failed')
+    }
+    setTogglingId(null)
+  }
 
   // Group by category
   const grouped = documents.reduce<Record<string, DocumentRecord[]>>((acc, doc) => {
@@ -748,41 +765,67 @@ function DocumentsTab({ documents }: { documents: DocumentRecord[] }) {
             {category} ({grouped[category].length})
           </h3>
           <div className="border rounded-lg divide-y">
-            {grouped[category].map(doc => (
-              <button
-                key={doc.id}
-                onClick={() => doc.drive_file_id ? setPreviewDoc(doc) : undefined}
-                className={cn(
-                  'flex items-center justify-between px-4 py-2.5 w-full text-left transition-colors',
-                  doc.drive_file_id ? 'hover:bg-zinc-50 cursor-pointer' : 'opacity-60'
-                )}
-              >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="min-w-0">
-                    <span className="text-sm font-medium truncate block">{doc.file_name}</span>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {doc.document_type_name && <span>{doc.document_type_name}</span>}
-                      {doc.file_size && <span>{formatFileSize(doc.file_size)}</span>}
-                      {doc.processed_at && <span>{formatDate(doc.processed_at.split('T')[0])}</span>}
+            {grouped[category].map(doc => {
+              const isVisible = visibilityMap[doc.id] ?? false
+              return (
+                <div
+                  key={doc.id}
+                  className="flex items-center justify-between px-4 py-2.5 hover:bg-zinc-50 transition-colors"
+                >
+                  <button
+                    onClick={() => doc.drive_file_id ? setPreviewDoc(doc) : undefined}
+                    className={cn(
+                      'flex items-center gap-3 min-w-0 flex-1 text-left',
+                      !doc.drive_file_id && 'opacity-60'
+                    )}
+                  >
+                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <span className="text-sm font-medium truncate block">{doc.file_name}</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {doc.document_type_name && <span>{doc.document_type_name}</span>}
+                        {doc.file_size && <span>{formatFileSize(doc.file_size)}</span>}
+                        {doc.processed_at && <span>{formatDate(doc.processed_at.split('T')[0])}</span>}
+                      </div>
                     </div>
+                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {doc.category_name && (
+                      <span className={cn(
+                        'text-xs px-2 py-0.5 rounded-full font-medium',
+                        CATEGORY_COLORS[doc.category_name] || 'bg-zinc-100 text-zinc-600'
+                      )}>
+                        {doc.category_name}
+                      </span>
+                    )}
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleToggleVisibility(doc.id, isVisible)}
+                        disabled={togglingId === doc.id}
+                        title={isVisible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}
+                        className={cn(
+                          'p-1 rounded transition-colors',
+                          isVisible
+                            ? 'text-blue-600 hover:bg-blue-50'
+                            : 'text-zinc-300 hover:bg-zinc-100 hover:text-zinc-500'
+                        )}
+                      >
+                        {togglingId === doc.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : isVisible ? (
+                          <Eye className="h-4 w-4" />
+                        ) : (
+                          <EyeOff className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
+                    {!isAdmin && doc.drive_file_id && (
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {doc.category_name && (
-                    <span className={cn(
-                      'text-xs px-2 py-0.5 rounded-full font-medium',
-                      CATEGORY_COLORS[doc.category_name] || 'bg-zinc-100 text-zinc-600'
-                    )}>
-                      {doc.category_name}
-                    </span>
-                  )}
-                  {doc.drive_file_id && (
-                    <Eye className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-              </button>
-            ))}
+              )
+            })}
           </div>
         </div>
       ))}

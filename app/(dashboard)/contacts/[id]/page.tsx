@@ -21,7 +21,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   if (!contact) notFound()
 
   // Fetch related data in parallel
-  const [accountsResult, sdsResult, conversationsResult, leadResult] = await Promise.all([
+  const [accountsResult, sdsResult, conversationsResult, leadResult, docsResult] = await Promise.all([
     // Linked accounts via junction
     supabase
       .from('account_contacts')
@@ -47,6 +47,13 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       .eq('email', contact.email ?? '__no_match__')
       .limit(1)
       .maybeSingle(),
+    // Documents linked to this contact
+    supabase
+      .from('documents')
+      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id')
+      .eq('contact_id', params.id)
+      .order('category', { ascending: true })
+      .order('file_name', { ascending: true }),
   ])
 
   // Map linked accounts
@@ -85,6 +92,14 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   }
   const serviceDeliveries = Array.from(allSdsMap.values())
 
+  // Documents: direct contact docs are already fetched. No need to merge account docs — they show on account detail page.
+  const contactDocuments = (docsResult.data ?? []) as Array<{
+    id: string; file_name: string; document_type_name: string | null; category_name: string | null
+    category: number | null; drive_file_id: string | null; drive_link: string | null
+    status: string | null; processed_at: string | null; mime_type: string | null
+    file_size: number | null; account_id: string | null
+  }>
+
   const conversations = (conversationsResult.data ?? []) as ConversationEntry[]
 
   // Portal auth status
@@ -114,6 +129,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         accounts={accounts}
         serviceDeliveries={serviceDeliveries}
         conversations={conversations}
+        documents={contactDocuments}
         lead={leadResult.data}
         portalAuth={portalAuth}
         today={today}

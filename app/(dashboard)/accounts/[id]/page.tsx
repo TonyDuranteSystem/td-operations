@@ -17,6 +17,7 @@ interface DocumentRecord {
   processed_at: string | null
   mime_type: string | null
   file_size: number | null
+  portal_visible: boolean
 }
 
 export default async function AccountDetailPage({ params }: { params: { id: string } }) {
@@ -68,7 +69,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Documents
     supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size')
+      .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size, portal_visible')
       .eq('account_id', params.id)
       .order('processed_at', { ascending: false }),
   ])

@@ -6,7 +6,7 @@ import {
   ArrowLeft, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
-  Loader2, ChevronRight,
+  Loader2, ChevronRight, Eye, X, FolderOpen,
 } from 'lucide-react'
 import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,7 @@ import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/ty
 const TABS = [
   { key: 'overview', label: 'Overview', icon: User },
   { key: 'services', label: 'Services', icon: Briefcase },
+  { key: 'documents', label: 'Documents', icon: FolderOpen },
   { key: 'portal', label: 'Portal', icon: KeyRound },
   { key: 'activity', label: 'Activity', icon: MessageSquare },
 ]
@@ -118,11 +119,27 @@ interface PortalAuth {
   createdAt: string | null
 }
 
+interface ContactDocumentRecord {
+  id: string
+  file_name: string
+  document_type_name: string | null
+  category_name: string | null
+  category: number | null
+  drive_file_id: string | null
+  drive_link: string | null
+  status: string | null
+  processed_at: string | null
+  mime_type: string | null
+  file_size: number | null
+  account_id: string | null
+}
+
 interface ContactDetailProps {
   contact: ContactRecord
   accounts: LinkedAccount[]
   serviceDeliveries: ServiceDelivery[]
   conversations: ConversationEntry[]
+  documents: ContactDocumentRecord[]
   lead: LeadOrigin | null
   portalAuth: PortalAuth
   today: string
@@ -136,6 +153,7 @@ export function ContactDetail({
   accounts,
   serviceDeliveries,
   conversations,
+  documents = [],
   lead,
   portalAuth,
   isAdmin = false,
@@ -189,6 +207,7 @@ export function ContactDetail({
             const Icon = tab.icon
             let count = 0
             if (tab.key === 'services') count = activeSds.length
+            if (tab.key === 'documents') count = documents.length
             if (tab.key === 'activity') count = conversations.length
 
             return (
@@ -227,6 +246,9 @@ export function ContactDetail({
       )}
       {activeTab === 'services' && (
         <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} />
+      )}
+      {activeTab === 'documents' && (
+        <ContactDocumentsTab documents={documents} accounts={accounts} />
       )}
       {activeTab === 'portal' && (
         <PortalTab contact={contact} portalAuth={portalAuth} isAdmin={isAdmin} />
@@ -633,6 +655,132 @@ function PortalTab({
               </button>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Documents Tab ───
+
+const CATEGORY_COLORS: Record<string, string> = {
+  Company: 'bg-blue-100 text-blue-700',
+  Contacts: 'bg-purple-100 text-purple-700',
+  Tax: 'bg-amber-100 text-amber-700',
+  Banking: 'bg-emerald-100 text-emerald-700',
+  Correspondence: 'bg-zinc-100 text-zinc-600',
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function ContactDocumentsTab({
+  documents,
+  accounts,
+}: {
+  documents: ContactDocumentRecord[]
+  accounts: LinkedAccount[]
+}) {
+  const [previewDoc, setPreviewDoc] = useState<ContactDocumentRecord | null>(null)
+  const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
+
+  // Group by category
+  const grouped = documents.reduce<Record<string, ContactDocumentRecord[]>>((acc, doc) => {
+    const cat = doc.category_name || 'Uncategorized'
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(doc)
+    return acc
+  }, {})
+
+  const categoryOrder = ['Contacts', 'Company', 'Tax', 'Banking', 'Correspondence', 'Uncategorized']
+  const sortedCategories = categoryOrder.filter(c => grouped[c])
+
+  if (documents.length === 0) {
+    return (
+      <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
+        <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
+        <p>No documents linked to this contact</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">{documents.length} documents</p>
+
+      {sortedCategories.map(category => (
+        <div key={category} className="space-y-2">
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+            {category} ({grouped[category].length})
+          </h3>
+          <div className="border rounded-lg divide-y">
+            {grouped[category].map(doc => (
+              <button
+                key={doc.id}
+                onClick={() => doc.drive_file_id ? setPreviewDoc(doc) : undefined}
+                className={cn(
+                  'flex items-center justify-between px-4 py-2.5 w-full text-left transition-colors',
+                  doc.drive_file_id ? 'hover:bg-zinc-50 cursor-pointer' : 'opacity-60'
+                )}
+              >
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium truncate block">{doc.file_name}</span>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {doc.document_type_name && <span>{doc.document_type_name}</span>}
+                      {doc.file_size && <span>{formatFileSize(doc.file_size)}</span>}
+                      {doc.processed_at && <span>{formatDate(doc.processed_at.split('T')[0])}</span>}
+                      {doc.account_id && accountMap.get(doc.account_id) && (
+                        <span className="text-blue-600">via {accountMap.get(doc.account_id)}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {doc.category_name && (
+                    <span className={cn(
+                      'text-xs px-2 py-0.5 rounded-full font-medium',
+                      CATEGORY_COLORS[doc.category_name] || 'bg-zinc-100 text-zinc-600'
+                    )}>
+                      {doc.category_name}
+                    </span>
+                  )}
+                  {doc.drive_file_id && (
+                    <Eye className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Preview modal */}
+      {previewDoc && previewDoc.drive_file_id && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex flex-col" onClick={() => setPreviewDoc(null)}>
+          <div className="flex items-center justify-between px-6 py-3 bg-zinc-900 text-white shrink-0">
+            <div className="flex items-center gap-3">
+              <FileText className="h-4 w-4" />
+              <span className="font-medium text-sm">{previewDoc.file_name}</span>
+              {previewDoc.document_type_name && (
+                <span className="text-xs text-zinc-400">{previewDoc.document_type_name}</span>
+              )}
+            </div>
+            <button onClick={() => setPreviewDoc(null)} className="p-1 hover:bg-zinc-700 rounded">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="flex-1 p-4" onClick={e => e.stopPropagation()}>
+            <iframe
+              src={`/api/documents/${previewDoc.id}/preview`}
+              className="w-full h-full rounded-lg bg-white"
+              title={previewDoc.file_name}
+            />
+          </div>
         </div>
       )}
     </div>
