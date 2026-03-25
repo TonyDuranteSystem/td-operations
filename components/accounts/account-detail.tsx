@@ -22,12 +22,12 @@ import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 const TABS = [
-  { key: 'panoramica', label: 'Overview', icon: Building2 },
-  { key: 'servizi', label: 'Services', icon: Briefcase },
-  { key: 'pagamenti', label: 'Payments', icon: CreditCard },
-  { key: 'tax', label: 'Tax Returns', icon: FileText },
-  { key: 'documenti', label: 'Documents', icon: FileText },
-  { key: 'comunicazioni', label: 'Communications', icon: MessageSquare },
+  { key: 'panoramica', label: 'Overview', icon: Building2, adminOnly: false },
+  { key: 'servizi', label: 'Services', icon: Briefcase, adminOnly: false },
+  { key: 'pagamenti', label: 'Payments', icon: CreditCard, adminOnly: true },
+  { key: 'tax', label: 'Tax Returns', icon: FileText, adminOnly: false },
+  { key: 'documenti', label: 'Documents', icon: FileText, adminOnly: false },
+  { key: 'comunicazioni', label: 'Communications', icon: MessageSquare, adminOnly: false },
 ]
 
 const SERVICE_STATUS_COLORS: Record<string, string> = {
@@ -222,7 +222,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       {/* Tabs */}
       <div className="border-b">
         <div className="flex gap-1 -mb-px overflow-x-auto">
-          {TABS.map(tab => {
+          {TABS.filter(tab => !tab.adminOnly || isAdmin).map(tab => {
             const Icon = tab.icon
             const count = tab.key === 'servizi' ? services.length :
                          tab.key === 'pagamenti' ? payments.length :
@@ -408,8 +408,8 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
         )}
       </div>
 
-      {/* Deals */}
-      {deals.length > 0 && (
+      {/* Deals — admin only (shows financial amounts) */}
+      {isAdmin && deals.length > 0 && (
         <div className="bg-white rounded-lg border p-5 space-y-4 lg:col-span-2">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
             Deals ({deals.length})
