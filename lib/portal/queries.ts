@@ -345,3 +345,163 @@ export async function getPortalTaxReturns(accountId: string) {
 
   return data ?? []
 }
+
+// ─── Action Items ──────────────────────────────────────
+
+export interface ActionItem {
+  type: 'form' | 'invoice' | 'signature' | 'wizard'
+  title: string
+  titleIt: string
+  description: string
+  descriptionIt: string
+  href: string
+  priority: 'red' | 'orange' | 'blue'
+  createdAt: string
+}
+
+export interface ActionItemsResult {
+  items: ActionItem[]
+  counts: { red: number; orange: number; blue: number; total: number }
+}
+
+function daysSince(dateStr: string): number {
+  return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
+}
+
+function daysUntil(dateStr: string): number {
+  return Math.ceil((new Date(dateStr).getTime() - Date.now()) / 86400000)
+}
+
+/**
+ * Get all pending action items for a client.
+ * Aggregates: unfilled wizard forms, unpaid invoices, unsigned documents.
+ */
+export async function getPortalActionItems(
+  accountId: string,
+  contactId?: string
+): Promise<ActionItemsResult> {
+  const today = new Date().toISOString().split('T')[0]
+
+  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res] = await Promise.all([
+    // 1. In-progress wizard forms
+    supabaseAdmin
+      .from('wizard_progress')
+      .select('id, wizard_type, created_at, updated_at')
+      .eq('status', 'in_progress')
+      .or(
+        accountId
+          ? `account_id.eq.${accountId}${contactId ? `,contact_id.eq.${contactId}` : ''}`
+          : contactId ? `contact_id.eq.${contactId}` : 'id.is.null'
+      )
+      .limit(10),
+
+    // 2. Unpaid invoices (Sent or Overdue)
+    supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, total, amount_currency, due_date, invoice_status, created_at')
+      .eq('account_id', accountId)
+      .in('invoice_status', ['Sent', 'Overdue'])
+      .order('due_date', { ascending: true })
+      .limit(10),
+
+    // 3. Unsigned OA
+    supabaseAdmin
+      .from('oa_agreements')
+      .select('id, token, status, created_at')
+      .eq('account_id', accountId)
+      .in('status', ['sent', 'viewed', 'awaiting_signature'])
+      .limit(5),
+
+    // 4. Unsigned Lease
+    supabaseAdmin
+      .from('lease_agreements')
+      .select('id, token, status, created_at')
+      .eq('account_id', accountId)
+      .in('status', ['sent', 'viewed', 'awaiting_signature'])
+      .limit(5),
+
+    // 5. Unsigned SS-4
+    supabaseAdmin
+      .from('ss4_applications')
+      .select('id, token, status, created_at')
+      .eq('account_id', accountId)
+      .in('status', ['sent', 'viewed', 'awaiting_signature'])
+      .limit(5),
+  ])
+
+  const items: ActionItem[] = []
+
+  // ── Wizard forms ──
+  for (const w of wizardRes.data ?? []) {
+    const age = daysSince(w.created_at)
+    const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
+    const typeLabel = w.wizard_type === 'formation' ? 'Formation' : w.wizard_type === 'onboarding' ? 'Onboarding' : w.wizard_type
+    items.push({
+      type: 'form',
+      title: `Complete ${typeLabel} Form`,
+      titleIt: `Completa il modulo di ${typeLabel === 'Formation' ? 'Costituzione' : typeLabel === 'Onboarding' ? 'Onboarding' : typeLabel}`,
+      description: 'Your data collection form is in progress. Please complete it.',
+      descriptionIt: 'Il tuo modulo di raccolta dati è in corso. Completalo.',
+      href: '/portal/wizard',
+      priority,
+      createdAt: w.created_at,
+    })
+  }
+
+  // ── Unpaid invoices ──
+  for (const inv of invoiceRes.data ?? []) {
+    const isOverdue = inv.invoice_status === 'Overdue' || (inv.due_date && inv.due_date < today)
+    const dueSoon = inv.due_date ? daysUntil(inv.due_date) <= 7 : false
+    const priority: ActionItem['priority'] = isOverdue ? 'red' : dueSoon ? 'orange' : 'blue'
+    const amount = `${inv.amount_currency || 'USD'} ${Number(inv.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+    items.push({
+      type: 'invoice',
+      title: `Pay Invoice ${inv.invoice_number || ''}`,
+      titleIt: `Paga Fattura ${inv.invoice_number || ''}`,
+      description: `${amount} — ${isOverdue ? 'Overdue' : inv.due_date ? `Due ${inv.due_date}` : 'Payment pending'}`,
+      descriptionIt: `${amount} — ${isOverdue ? 'Scaduta' : inv.due_date ? `Scadenza ${inv.due_date}` : 'Pagamento in sospeso'}`,
+      href: '/portal/billing',
+      priority,
+      createdAt: inv.created_at,
+    })
+  }
+
+  // ── Unsigned documents ──
+  const signDocs = [
+    ...(oaRes.data ?? []).map(d => ({ ...d, docType: 'Operating Agreement', docTypeIt: 'Accordo Operativo' })),
+    ...(leaseRes.data ?? []).map(d => ({ ...d, docType: 'Lease Agreement', docTypeIt: 'Contratto di Locazione' })),
+    ...(ss4Res.data ?? []).map(d => ({ ...d, docType: 'SS-4 (EIN Application)', docTypeIt: 'SS-4 (Richiesta EIN)' })),
+  ]
+
+  for (const doc of signDocs) {
+    const age = daysSince(doc.created_at)
+    const priority: ActionItem['priority'] = age > 14 ? 'red' : age > 7 ? 'orange' : 'blue'
+    items.push({
+      type: 'signature',
+      title: `Sign ${doc.docType}`,
+      titleIt: `Firma ${doc.docTypeIt}`,
+      description: 'Document awaiting your signature.',
+      descriptionIt: 'Documento in attesa della tua firma.',
+      href: '/portal/sign',
+      priority,
+      createdAt: doc.created_at,
+    })
+  }
+
+  // Sort: red → orange → blue, then by date (oldest first)
+  const priorityOrder = { red: 0, orange: 1, blue: 2 }
+  items.sort((a, b) => {
+    const po = priorityOrder[a.priority] - priorityOrder[b.priority]
+    if (po !== 0) return po
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  })
+
+  const counts = {
+    red: items.filter(i => i.priority === 'red').length,
+    orange: items.filter(i => i.priority === 'orange').length,
+    blue: items.filter(i => i.priority === 'blue').length,
+    total: items.length,
+  }
+
+  return { items, counts }
+}

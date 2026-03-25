@@ -3,8 +3,9 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier } from '@/lib/portal/queries'
-import { Building2, Shield, MapPin, Calendar, FileText, Clock, AlertCircle, CheckCircle2, CreditCard, Users, Mail, Phone, User } from 'lucide-react'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems } from '@/lib/portal/queries'
+import { ActionItems } from '@/components/portal/action-items'
+import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, CreditCard, Mail, Phone, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
@@ -189,13 +190,14 @@ export default async function PortalDashboardPage() {
   }
 
   // Fetch all data in parallel
-  const [account, services, deadlines, payments, taxReturns, members] = await Promise.all([
+  const [account, services, deadlines, payments, taxReturns, members, actionItems] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
     getPortalPayments(selectedAccountId),
     getPortalTaxReturns(selectedAccountId),
     getPortalMembers(selectedAccountId),
+    getPortalActionItems(selectedAccountId, contactId || undefined),
   ])
 
   if (!account) {
@@ -207,7 +209,7 @@ export default async function PortalDashboardPage() {
   }
   const today = new Date().toISOString().split('T')[0]
   const activeServices = services.filter(s => s.status !== 'Completed')
-  const completedServices = services.filter(s => s.status === 'Completed')
+  const _completedServices = services.filter(s => s.status === 'Completed')
   const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
 
   return (
@@ -220,6 +222,9 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Action Items Widget */}
+      <ActionItems data={actionItems} locale={locale} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Company Info Card */}
