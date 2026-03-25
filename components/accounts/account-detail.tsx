@@ -362,7 +362,9 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
                   <div className="w-7 h-7 rounded-full bg-zinc-100 flex items-center justify-center shrink-0">
                     <User className="h-3.5 w-3.5 text-zinc-500" />
                   </div>
-                  <span className="font-medium text-sm">{c.full_name}</span>
+                  <Link href={`/contacts/${c.id}`} className="font-medium text-sm text-blue-600 hover:underline">
+                    {c.full_name}
+                  </Link>
                   {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
                 </div>
                 <div className="pl-9 grid gap-1.5">
