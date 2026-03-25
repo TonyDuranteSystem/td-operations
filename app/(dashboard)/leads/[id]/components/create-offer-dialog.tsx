@@ -31,8 +31,9 @@ interface SelectedService {
 }
 
 const PAYMENT_TYPES = [
-  { value: 'bank_transfer', label: 'Bank Transfer' },
-  { value: 'checkout', label: 'Whop Checkout (Card +5%)' },
+  { value: 'both', label: 'Let client decide (Recommended)' },
+  { value: 'bank_transfer', label: 'Bank Transfer only' },
+  { value: 'checkout', label: 'Card only (Whop +5%)' },
   { value: 'none', label: 'No payment link' },
 ]
 
@@ -63,7 +64,7 @@ export function CreateOfferDialog({
   const [language, setLanguage] = useState(
     leadLanguage === 'Italian' || leadLanguage === 'it' ? 'it' : 'en'
   )
-  const [paymentType, setPaymentType] = useState('bank_transfer')
+  const [paymentType, setPaymentType] = useState('both')
   const [currency, setCurrency] = useState('EUR')
 
   // Selected services with prices
@@ -184,7 +185,7 @@ export function CreateOfferDialog({
             client_email: leadEmail,
             language,
             contract_type: derivedContractType,
-            payment_type: paymentType,
+            payment_type: paymentType === 'both' ? 'checkout' : paymentType,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -385,8 +386,12 @@ export function CreateOfferDialog({
               <p className="text-xs text-blue-800">
                 Pipelines: <span className="font-medium">{derivedPipelines.join(', ') || 'none'}</span>
               </p>
-              {paymentType === 'checkout' && (
-                <p className="text-xs text-blue-800">Whop checkout link will be auto-created (+5% card fee)</p>
+              {(paymentType === 'checkout' || paymentType === 'both') && (
+                <p className="text-xs text-blue-800">
+                  {paymentType === 'both'
+                    ? 'Client will see both options: bank transfer + card (+5%)'
+                    : 'Whop checkout link will be auto-created (+5% card fee)'}
+                </p>
               )}
             </div>
           )}
