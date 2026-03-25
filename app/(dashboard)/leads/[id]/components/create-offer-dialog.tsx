@@ -1,39 +1,40 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Loader2, X, Plus, Trash2 } from 'lucide-react'
+import { FileText, Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
-const CONTRACT_TYPES = [
-  { value: 'formation', label: 'LLC Formation' },
-  { value: 'onboarding', label: 'Client Onboarding' },
-  { value: 'tax_return', label: 'Tax Return' },
-  { value: 'itin', label: 'ITIN Application' },
-]
+// ── Service catalog: each service maps to a pipeline + contract type ──
+const SERVICE_CATALOG = [
+  // Annual management services (formation/onboarding contract)
+  { id: 'company_formation', name: 'Company Formation', pipeline: 'Company Formation', contractType: 'formation', hasAnnual: true, category: 'primary' },
+  { id: 'client_onboarding', name: 'Client Onboarding', pipeline: 'Client Onboarding', contractType: 'onboarding', hasAnnual: true, category: 'primary' },
+  // Standalone services (lightweight contracts)
+  { id: 'tax_return', name: 'Tax Return', pipeline: 'Tax Return', contractType: 'tax_return', hasAnnual: false, category: 'standalone' },
+  { id: 'itin', name: 'ITIN Application', pipeline: 'ITIN', contractType: 'itin', hasAnnual: false, category: 'standalone' },
+  // Add-on services (bundled with primary)
+  { id: 'ein', name: 'EIN Application', pipeline: 'EIN', contractType: null, hasAnnual: false, category: 'addon' },
+  { id: 'banking', name: 'Banking (Fintech)', pipeline: 'Banking Fintech', contractType: null, hasAnnual: false, category: 'addon' },
+  { id: 'cmra', name: 'CMRA Mailing Address', pipeline: 'CMRA Mailing Address', contractType: null, hasAnnual: false, category: 'addon' },
+  { id: 'annual_renewal', name: 'Annual Renewal', pipeline: 'Annual Renewal', contractType: null, hasAnnual: false, category: 'addon' },
+  { id: 'closure', name: 'Company Closure', pipeline: 'Company Closure', contractType: null, hasAnnual: false, category: 'standalone' },
+  { id: 'public_notary', name: 'Public Notary', pipeline: null, contractType: null, hasAnnual: false, category: 'addon' },
+  { id: 'shipping', name: 'Shipping', pipeline: null, contractType: null, hasAnnual: false, category: 'addon' },
+] as const
 
-const PIPELINE_OPTIONS = [
-  'Company Formation',
-  'ITIN',
-  'Tax Return',
-  'EIN',
-  'Banking Fintech',
-  'Annual Renewal',
-  'CMRA Mailing Address',
-  'Company Closure',
-]
+type ServiceId = typeof SERVICE_CATALOG[number]['id']
+
+interface SelectedService {
+  id: ServiceId
+  price: string
+}
 
 const PAYMENT_TYPES = [
   { value: 'bank_transfer', label: 'Bank Transfer' },
   { value: 'checkout', label: 'Whop Checkout (Card +5%)' },
   { value: 'none', label: 'No payment link' },
 ]
-
-interface ServiceItem {
-  name: string
-  price: string
-  description?: string
-}
 
 interface CreateOfferDialogProps {
   open: boolean
@@ -59,78 +60,97 @@ export function CreateOfferDialog({
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
-  const [contractType, setContractType] = useState('formation')
   const [language, setLanguage] = useState(
     leadLanguage === 'Italian' || leadLanguage === 'it' ? 'it' : 'en'
   )
   const [paymentType, setPaymentType] = useState('bank_transfer')
   const [currency, setCurrency] = useState('EUR')
 
-  // Services
-  const [services, setServices] = useState<ServiceItem[]>([
-    { name: 'Company Formation', price: '' },
-  ])
-
-  // Bundled pipelines
-  const [pipelines, setPipelines] = useState<string[]>(['Company Formation'])
+  // Selected services with prices
+  const [selected, setSelected] = useState<SelectedService[]>([])
 
   // Recurring costs (year 2+)
   const [installment1, setInstallment1] = useState('')
   const [installment2, setInstallment2] = useState('')
 
-  const addService = () => {
-    setServices([...services, { name: '', price: '' }])
-  }
+  const currencySymbol = currency === 'EUR' ? '€' : '$'
 
-  const removeService = (idx: number) => {
-    setServices(services.filter((_, i) => i !== idx))
-  }
+  // ── Derived values ──
 
-  const updateService = (idx: number, field: keyof ServiceItem, value: string) => {
-    const updated = [...services]
-    updated[idx] = { ...updated[idx], [field]: value }
-    setServices(updated)
-  }
+  // Contract type: from the PRIMARY service selected, fallback to first standalone
+  const derivedContractType = useMemo(() => {
+    for (const s of selected) {
+      const catalog = SERVICE_CATALOG.find(c => c.id === s.id)
+      if (catalog?.contractType) return catalog.contractType
+    }
+    return 'formation' // fallback
+  }, [selected])
 
-  const togglePipeline = (p: string) => {
-    setPipelines(prev =>
-      prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
-    )
-  }
+  // Bundled pipelines: auto-derived from selected services
+  const derivedPipelines = useMemo(() => {
+    return selected
+      .map(s => SERVICE_CATALOG.find(c => c.id === s.id)?.pipeline)
+      .filter((p): p is string => !!p)
+  }, [selected])
 
-  const totalAmount = services.reduce((sum, s) => {
+  // Show annual rates only for formation/onboarding
+  const showAnnual = useMemo(() => {
+    return selected.some(s => {
+      const catalog = SERVICE_CATALOG.find(c => c.id === s.id)
+      return catalog?.hasAnnual
+    })
+  }, [selected])
+
+  // Total amount
+  const totalAmount = selected.reduce((sum, s) => {
     const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
     return sum + (isNaN(n) ? 0 : n)
   }, 0)
 
-  const currencySymbol = currency === 'EUR' ? '€' : '$'
+  // ── Toggle service ──
+  const toggleService = (id: ServiceId) => {
+    setSelected(prev => {
+      const exists = prev.find(s => s.id === id)
+      if (exists) return prev.filter(s => s.id !== id)
+      return [...prev, { id, price: '' }]
+    })
+  }
 
+  const updatePrice = (id: ServiceId, price: string) => {
+    setSelected(prev =>
+      prev.map(s => s.id === id ? { ...s, price } : s)
+    )
+  }
+
+  const isSelected = (id: ServiceId) => selected.some(s => s.id === id)
+
+  // ── Submit ──
   const handleSubmit = () => {
-    // Validate
-    const validServices = services.filter(s => s.name.trim() && s.price.trim())
-    if (validServices.length === 0) {
-      toast.error('Add at least one service with name and price')
+    if (selected.length === 0) {
+      toast.error('Select at least one service')
       return
     }
 
-    if (pipelines.length === 0) {
-      toast.error('Select at least one bundled pipeline')
+    const withPrices = selected.filter(s => s.price.trim())
+    if (withPrices.length === 0) {
+      toast.error('Enter a price for at least one service')
       return
     }
 
     startTransition(async () => {
       try {
         // Build services JSONB
-        const servicesJson = validServices.map(s => ({
-          name: s.name,
-          price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
-          description: s.description || undefined,
-        }))
+        const servicesJson = selected
+          .filter(s => s.price.trim())
+          .map(s => ({
+            name: SERVICE_CATALOG.find(c => c.id === s.id)!.name,
+            price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
+          }))
 
         // Build cost_summary JSONB
-        const costItems = validServices.map(s => ({
+        const costItems = servicesJson.map(s => ({
           name: s.name,
-          price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
+          price: s.price,
         }))
 
         const costSummary = [{
@@ -141,7 +161,7 @@ export function CreateOfferDialog({
 
         // Build recurring costs if provided
         let recurringCosts = null
-        if (installment1 || installment2) {
+        if (showAnnual && (installment1 || installment2)) {
           recurringCosts = []
           if (installment1) {
             recurringCosts.push({ label: '1st Installment (January)', price: `${currencySymbol}${installment1}` })
@@ -163,12 +183,12 @@ export function CreateOfferDialog({
             client_name: leadName,
             client_email: leadEmail,
             language,
-            contract_type: contractType,
+            contract_type: derivedContractType,
             payment_type: paymentType,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
-            bundled_pipelines: pipelines,
+            bundled_pipelines: derivedPipelines,
             referrer_name: leadReferrer || null,
             referrer_type: leadReferrerType || null,
           }),
@@ -192,7 +212,9 @@ export function CreateOfferDialog({
 
   if (!open) return null
 
-  const showRecurring = contractType === 'formation' || contractType === 'onboarding'
+  const primaryServices = SERVICE_CATALOG.filter(s => s.category === 'primary')
+  const standaloneServices = SERVICE_CATALOG.filter(s => s.category === 'standalone')
+  const addonServices = SERVICE_CATALOG.filter(s => s.category === 'addon')
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -219,22 +241,71 @@ export function CreateOfferDialog({
             )}
           </div>
 
-          {/* Contract Type + Language */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Contract Type</label>
-              <select
-                value={contractType}
-                onChange={e => setContractType(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {CONTRACT_TYPES.map(t => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
+          {/* Services — grouped by category */}
+          <div>
+            <label className="block text-sm font-semibold mb-3">What is the client buying?</label>
+
+            {/* Primary services */}
+            <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2">Annual Management</p>
+            <div className="space-y-2 mb-4">
+              {primaryServices.map(svc => (
+                <ServiceRow
+                  key={svc.id}
+                  service={svc}
+                  isSelected={isSelected(svc.id)}
+                  price={selected.find(s => s.id === svc.id)?.price || ''}
+                  currencySymbol={currencySymbol}
+                  onToggle={() => toggleService(svc.id)}
+                  onPriceChange={(p) => updatePrice(svc.id, p)}
+                />
+              ))}
             </div>
+
+            {/* Standalone services */}
+            <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2">Standalone Services</p>
+            <div className="space-y-2 mb-4">
+              {standaloneServices.map(svc => (
+                <ServiceRow
+                  key={svc.id}
+                  service={svc}
+                  isSelected={isSelected(svc.id)}
+                  price={selected.find(s => s.id === svc.id)?.price || ''}
+                  currencySymbol={currencySymbol}
+                  onToggle={() => toggleService(svc.id)}
+                  onPriceChange={(p) => updatePrice(svc.id, p)}
+                />
+              ))}
+            </div>
+
+            {/* Add-on services */}
+            <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2">Add-ons</p>
+            <div className="space-y-2">
+              {addonServices.map(svc => (
+                <ServiceRow
+                  key={svc.id}
+                  service={svc}
+                  isSelected={isSelected(svc.id)}
+                  price={selected.find(s => s.id === svc.id)?.price || ''}
+                  currencySymbol={currencySymbol}
+                  onToggle={() => toggleService(svc.id)}
+                  onPriceChange={(p) => updatePrice(svc.id, p)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Total */}
+          {totalAmount > 0 && (
+            <div className="flex justify-between items-center bg-zinc-50 rounded-lg p-3">
+              <span className="text-sm font-medium">Total</span>
+              <span className="text-lg font-bold">{currencySymbol}{totalAmount.toLocaleString('en-US')}</span>
+            </div>
+          )}
+
+          {/* Language + Currency + Payment */}
+          <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium mb-1">Language</label>
+              <label className="block text-xs font-medium mb-1">Language</label>
               <select
                 value={language}
                 onChange={e => setLanguage(e.target.value)}
@@ -244,23 +315,19 @@ export function CreateOfferDialog({
                 <option value="it">Italian</option>
               </select>
             </div>
-          </div>
-
-          {/* Currency + Payment */}
-          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Currency</label>
+              <label className="block text-xs font-medium mb-1">Currency</label>
               <select
                 value={currency}
                 onChange={e => setCurrency(e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="EUR">EUR (€)</option>
-                <option value="USD">USD ($)</option>
+                <option value="EUR">EUR</option>
+                <option value="USD">USD</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Payment Method</label>
+              <label className="block text-xs font-medium mb-1">Payment</label>
               <select
                 value={paymentType}
                 onChange={e => setPaymentType(e.target.value)}
@@ -273,78 +340,8 @@ export function CreateOfferDialog({
             </div>
           </div>
 
-          {/* Services */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-sm font-medium">Services</label>
-              <button
-                onClick={addService}
-                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
-              >
-                <Plus className="h-3 w-3" /> Add service
-              </button>
-            </div>
-            <div className="space-y-2">
-              {services.map((s, idx) => (
-                <div key={idx} className="flex gap-2 items-start">
-                  <input
-                    type="text"
-                    value={s.name}
-                    onChange={e => updateService(idx, 'name', e.target.value)}
-                    placeholder="Service name"
-                    className="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <div className="relative">
-                    <span className="absolute left-3 top-2 text-sm text-zinc-400">{currencySymbol}</span>
-                    <input
-                      type="text"
-                      value={s.price}
-                      onChange={e => updateService(idx, 'price', e.target.value)}
-                      placeholder="0"
-                      className="w-28 pl-7 pr-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  {services.length > 1 && (
-                    <button
-                      onClick={() => removeService(idx)}
-                      className="p-2 text-zinc-400 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-            {totalAmount > 0 && (
-              <p className="text-sm font-semibold text-right mt-2">
-                Total: {currencySymbol}{totalAmount.toLocaleString('en-US')}
-              </p>
-            )}
-          </div>
-
-          {/* Bundled Pipelines */}
-          <div>
-            <label className="block text-sm font-medium mb-2">Bundled Pipelines (service deliveries to create)</label>
-            <div className="flex flex-wrap gap-2">
-              {PIPELINE_OPTIONS.map(p => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => togglePipeline(p)}
-                  className={`text-xs px-2.5 py-1.5 rounded-full border transition-colors ${
-                    pipelines.includes(p)
-                      ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
-                      : 'bg-white text-zinc-500 border-zinc-200 hover:border-zinc-400'
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Recurring Costs */}
-          {showRecurring && (
+          {/* Annual Rates */}
+          {showAnnual && (
             <div>
               <label className="block text-sm font-medium mb-2">Annual Rates (Year 2+)</label>
               <div className="grid grid-cols-2 gap-3">
@@ -378,17 +375,21 @@ export function CreateOfferDialog({
             </div>
           )}
 
-          {/* Summary */}
-          <div className="bg-blue-50 rounded-lg p-3 text-sm">
-            <p className="font-medium text-blue-900 mb-1">This will create:</p>
-            <ul className="text-blue-800 space-y-0.5 text-xs">
-              <li>- Offer linked to lead ({leadName})</li>
-              <li>- Contract type: {CONTRACT_TYPES.find(t => t.value === contractType)?.label}</li>
-              <li>- {pipelines.length} pipeline(s): {pipelines.join(', ') || 'none'}</li>
-              {paymentType === 'checkout' && <li>- Whop checkout link auto-created (+5% card fee)</li>}
-              {totalAmount > 0 && <li>- Total: {currencySymbol}{totalAmount.toLocaleString('en-US')}</li>}
-            </ul>
-          </div>
+          {/* Auto-derived summary */}
+          {selected.length > 0 && (
+            <div className="bg-blue-50 rounded-lg p-3 text-sm space-y-1">
+              <p className="font-medium text-blue-900">Auto-derived:</p>
+              <p className="text-xs text-blue-800">
+                Contract: <span className="font-medium">{derivedContractType}</span>
+              </p>
+              <p className="text-xs text-blue-800">
+                Pipelines: <span className="font-medium">{derivedPipelines.join(', ') || 'none'}</span>
+              </p>
+              {paymentType === 'checkout' && (
+                <p className="text-xs text-blue-800">Whop checkout link will be auto-created (+5% card fee)</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -401,7 +402,7 @@ export function CreateOfferDialog({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={isPending}
+            disabled={isPending || selected.length === 0}
             className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
@@ -409,6 +410,58 @@ export function CreateOfferDialog({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Service row component ──
+function ServiceRow({
+  service,
+  isSelected,
+  price,
+  currencySymbol,
+  onToggle,
+  onPriceChange,
+}: {
+  service: typeof SERVICE_CATALOG[number]
+  isSelected: boolean
+  price: string
+  currencySymbol: string
+  onToggle: () => void
+  onPriceChange: (price: string) => void
+}) {
+  return (
+    <div
+      className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors cursor-pointer ${
+        isSelected
+          ? 'bg-blue-50 border-blue-300'
+          : 'bg-white border-zinc-200 hover:border-zinc-300'
+      }`}
+      onClick={() => { if (!isSelected) onToggle() }}
+    >
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onChange={onToggle}
+        onClick={e => e.stopPropagation()}
+        className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
+      />
+      <span className={`flex-1 text-sm ${isSelected ? 'font-medium text-zinc-900' : 'text-zinc-600'}`}>
+        {service.name}
+      </span>
+      {isSelected && (
+        <div className="relative" onClick={e => e.stopPropagation()}>
+          <span className="absolute left-2.5 top-1.5 text-sm text-zinc-400">{currencySymbol}</span>
+          <input
+            type="text"
+            value={price}
+            onChange={e => onPriceChange(e.target.value)}
+            placeholder="0"
+            autoFocus
+            className="w-28 pl-6 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+      )}
     </div>
   )
 }
