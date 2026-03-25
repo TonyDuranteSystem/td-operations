@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { APP_BASE_URL } from '@/lib/config'
+import { isAdmin } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -55,6 +56,8 @@ function formatCurrency(amount: number | null, currency?: string | null): string
 
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const admin = user ? isAdmin(user) : false
 
   const { data: lead } = await supabase
     .from('leads')
@@ -128,6 +131,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             id: activation.id,
             status: activation.status,
           } : null}
+          isAdmin={admin}
         />
       </div>
 

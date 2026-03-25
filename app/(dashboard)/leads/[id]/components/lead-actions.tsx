@@ -35,6 +35,7 @@ interface LeadActionsProps {
   leadReferrerType?: string | null
   offer: OfferData | null
   activation: ActivationData | null
+  isAdmin?: boolean
 }
 
 export function LeadActions({
@@ -47,6 +48,7 @@ export function LeadActions({
   leadReferrerType,
   offer,
   activation,
+  isAdmin = false,
 }: LeadActionsProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -109,6 +111,17 @@ export function LeadActions({
       <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
         <p className="text-sm font-medium text-emerald-800">
           This lead has been converted and activated. Check the Contact and Account pages for details.
+        </p>
+      </div>
+    )
+  }
+
+  // Team members can see lead details but not perform admin actions
+  if (!isAdmin) {
+    return (
+      <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4">
+        <p className="text-sm text-zinc-600">
+          Lead actions are admin-only. Contact Antonio to manage this lead.
         </p>
       </div>
     )

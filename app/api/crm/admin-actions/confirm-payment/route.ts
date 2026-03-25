@@ -17,7 +17,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isAdmin } from "@/lib/auth"
+import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 
 interface ConfirmPaymentBody {
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  if (!isAdmin(user)) {
+  if (!canPerform(user, "confirm_payment")) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
 

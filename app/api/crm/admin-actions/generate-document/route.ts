@@ -14,6 +14,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+import { createClient } from "@/lib/supabase/server"
+import { canPerform } from "@/lib/permissions"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -450,6 +452,13 @@ async function fetchDocumentStatuses(accountId: string) {
 
 export async function POST(request: Request) {
   try {
+    // Permission check — all document generation is admin-only
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!canPerform(user, "generate_oa")) {
+      return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+    }
+
     const body = await request.json()
     const { action, account_id, ...params } = body
 

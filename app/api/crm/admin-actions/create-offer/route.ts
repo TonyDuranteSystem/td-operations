@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { APP_BASE_URL } from '@/lib/config'
+import { createClient } from '@/lib/supabase/server'
+import { canPerform } from '@/lib/permissions'
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!canPerform(user, 'create_offer')) {
+      return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+    }
+
     const body = await req.json()
     const {
       lead_id,

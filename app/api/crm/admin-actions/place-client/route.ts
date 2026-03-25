@@ -19,6 +19,8 @@ import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { createFolder } from "@/lib/google-drive"
+import { createClient } from "@/lib/supabase/server"
+import { canPerform } from "@/lib/permissions"
 
 // ─── Types ───
 
@@ -540,6 +542,13 @@ async function setPortalTier(
 
 export async function POST(request: Request) {
   try {
+    // Permission check — place client is admin-only
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!canPerform(user, "place_client")) {
+      return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+    }
+
     const body = (await request.json()) as PlaceClientRequest
     const { account_id, stage, actions, suite_number, reason } = body
 
@@ -694,6 +703,13 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   try {
+    // Permission check — detect is also admin-only
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!canPerform(user, "place_client")) {
+      return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+    }
+
     const { searchParams } = new URL(request.url)
     const accountId = searchParams.get("account_id")
 
