@@ -10,6 +10,10 @@ import {
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
 import { PortalUserButton } from './portal-user-button'
+import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/documents-panel'
+import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/generate-oa-dialog'
+import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
+import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
@@ -92,6 +96,11 @@ interface AccountDetailProps {
 
 export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false }: AccountDetailProps) {
   const [activeTab, setActiveTab] = useState('panoramica')
+  const [showOADialog, setShowOADialog] = useState(false)
+  const [showLeaseDialog, setShowLeaseDialog] = useState(false)
+  const [showSS4Dialog, setShowSS4Dialog] = useState(false)
+
+  const primaryContact = contacts[0] || null
 
   const activeServices = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
   const overduePayments = payments.filter(p =>
@@ -146,6 +155,46 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
           </span>
         </div>
       )}
+
+      {/* Documents to Sign Panel (admin only) */}
+      {isAdmin && (
+        <DocumentsPanel
+          accountId={account.id}
+          isAdmin={isAdmin}
+          onGenerateOA={() => setShowOADialog(true)}
+          onGenerateLease={() => setShowLeaseDialog(true)}
+          onGenerateSS4={() => setShowSS4Dialog(true)}
+        />
+      )}
+
+      {/* Generate Document Dialogs */}
+      <GenerateOADialog
+        open={showOADialog}
+        onClose={() => setShowOADialog(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+        state={account.state_of_formation}
+        entityType={account.entity_type}
+        contactName={primaryContact?.full_name || ''}
+        formationDate={account.formation_date}
+        ein={account.ein_number}
+      />
+      <GenerateLeaseDialog
+        open={showLeaseDialog}
+        onClose={() => setShowLeaseDialog(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+      />
+      <GenerateSS4Dialog
+        open={showSS4Dialog}
+        onClose={() => setShowSS4Dialog(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+        state={account.state_of_formation}
+        entityType={account.entity_type}
+        contactName={primaryContact?.full_name || ''}
+        formationDate={account.formation_date}
+      />
 
       {/* Tabs */}
       <div className="border-b">
@@ -244,7 +293,7 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
     { label: 'Partnership', value: 'Partnership' },
   ]
 
-  const STATUS_OPTIONS = [
+  const _STATUS_OPTIONS = [
     { label: 'Active', value: 'Active' },
     { label: 'Inactive', value: 'Inactive' },
     { label: 'Closed', value: 'Closed' },
@@ -362,7 +411,7 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
   )
 }
 
-function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) {
+function _InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string }) {
   return (
     <div className="flex items-center gap-2">
       <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
