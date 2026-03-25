@@ -4,11 +4,13 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
-  Loader2,
+  Loader2, FileText, Rocket,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
+import { CreateOfferDialog } from './create-offer-dialog'
+import { ActivateLeadDialog } from './activate-lead-dialog'
 
 interface OfferData {
   token: string
@@ -28,6 +30,9 @@ interface LeadActionsProps {
   leadName: string
   leadEmail?: string | null
   leadStatus: string
+  leadLanguage?: string | null
+  leadReferrer?: string | null
+  leadReferrerType?: string | null
   offer: OfferData | null
   activation: ActivationData | null
 }
@@ -35,12 +40,18 @@ interface LeadActionsProps {
 export function LeadActions({
   leadId,
   leadName,
+  leadEmail,
   leadStatus,
+  leadLanguage,
+  leadReferrer,
+  leadReferrerType,
   offer,
   activation,
 }: LeadActionsProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  const [showCreateOffer, setShowCreateOffer] = useState(false)
+  const [showActivateLead, setShowActivateLead] = useState(false)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
   const [showConvert, setShowConvert] = useState(false)
   const [showLostReason, setShowLostReason] = useState(false)
@@ -49,6 +60,13 @@ export function LeadActions({
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
   const isActivated = activation?.status === 'activated'
+  const hasOffer = !!offer
+  const hasEmail = !!leadEmail
+  const isOfferSentOrBeyond = ['Offer Sent', 'Negotiating', 'Converted'].includes(leadStatus)
+
+  // Sequential unlock logic
+  const canCreateOffer = !hasOffer && !isConverted && !isLost
+  const canActivateLead = hasOffer && hasEmail && !isOfferSentOrBeyond && !isConverted && !isLost
   const canConfirmPayment = !isConverted && !isActivated
   const canConvert = !isConverted
   const canMarkLost = !isConverted && !isLost
@@ -61,9 +79,6 @@ export function LeadActions({
 
     startTransition(async () => {
       try {
-        // Use test-setup's pattern — call an endpoint that updates the lead
-        // For now we can use a simple approach via the convert-lead endpoint variant
-        // But since we don't have a mark-lost endpoint, let's create inline fetch
         const res = await fetch('/api/crm/admin-actions/mark-lost', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -105,7 +120,42 @@ export function LeadActions({
         <h2 className="text-sm font-semibold text-zinc-900 mb-4">Admin Actions</h2>
 
         <div className="flex flex-wrap gap-2">
-          {/* Confirm Payment */}
+          {/* Step 1: Create Offer */}
+          {canCreateOffer && (
+            <button
+              onClick={() => {
+                if (!hasEmail) {
+                  toast.error('Lead needs an email before creating an offer')
+                  return
+                }
+                setShowCreateOffer(true)
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+            >
+              <FileText className="h-4 w-4" />
+              Create Offer
+            </button>
+          )}
+
+          {/* Step 2: Activate Lead (enabled only after offer exists) */}
+          {canActivateLead && (
+            <button
+              onClick={() => setShowActivateLead(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+            >
+              <Rocket className="h-4 w-4" />
+              Activate Lead
+            </button>
+          )}
+
+          {/* Disabled state hints */}
+          {hasOffer && !hasEmail && !isConverted && !isLost && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-2 text-xs text-amber-700 bg-amber-50 rounded-md border border-amber-200">
+              Lead needs an email to activate
+            </span>
+          )}
+
+          {/* Step 3: Confirm Payment */}
           {canConfirmPayment && (
             <button
               onClick={() => setShowConfirmPayment(true)}
@@ -138,6 +188,17 @@ export function LeadActions({
             </button>
           )}
         </div>
+
+        {/* Offer exists hint */}
+        {hasOffer && !isConverted && (
+          <p className="text-xs text-zinc-500 mt-3">
+            Offer: <span className="font-medium text-blue-600">{offer.token}</span>
+            {' '}&middot;{' '}
+            <span className={offer.status === 'signed' ? 'text-emerald-600 font-medium' : ''}>
+              {offer.status}
+            </span>
+          </p>
+        )}
 
         {/* Inline lost reason */}
         {showLostReason && (
@@ -172,6 +233,26 @@ export function LeadActions({
       </div>
 
       {/* Dialogs */}
+      <CreateOfferDialog
+        open={showCreateOffer}
+        onClose={() => setShowCreateOffer(false)}
+        leadId={leadId}
+        leadName={leadName}
+        leadEmail={leadEmail || ''}
+        leadLanguage={leadLanguage}
+        leadReferrer={leadReferrer}
+        leadReferrerType={leadReferrerType}
+      />
+
+      <ActivateLeadDialog
+        open={showActivateLead}
+        onClose={() => setShowActivateLead(false)}
+        leadId={leadId}
+        leadName={leadName}
+        leadEmail={leadEmail || ''}
+        offerToken={offer?.token || null}
+      />
+
       <ConfirmPaymentDialog
         open={showConfirmPayment}
         onClose={() => setShowConfirmPayment(false)}

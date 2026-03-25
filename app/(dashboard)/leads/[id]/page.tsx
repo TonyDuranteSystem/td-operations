@@ -114,6 +114,9 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           leadName={lead.full_name}
           leadEmail={lead.email}
           leadStatus={lead.status}
+          leadLanguage={lead.language}
+          leadReferrer={offer?.referrer_name || lead.referrer_name}
+          leadReferrerType={offer?.referrer_type || null}
           offer={offer ? {
             token: offer.token,
             status: offer.status,
