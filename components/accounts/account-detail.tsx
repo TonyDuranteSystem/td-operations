@@ -14,6 +14,7 @@ import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/docum
 import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/generate-oa-dialog'
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
+import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
@@ -99,6 +100,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
+  const [showPlaceClient, setShowPlaceClient] = useState(false)
 
   const primaryContact = contacts[0] || null
 
@@ -136,6 +138,15 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             </span>
             {isAdmin && (
               <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => setShowPlaceClient(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
+              >
+                <Building2 className="h-3.5 w-3.5" />
+                Place Client
+              </button>
             )}
           </div>
           <p className="text-muted-foreground text-sm mt-1">
@@ -193,6 +204,17 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         state={account.state_of_formation}
         entityType={account.entity_type}
         contactName={primaryContact?.full_name || ''}
+        formationDate={account.formation_date}
+      />
+      <PlaceClientWizard
+        open={showPlaceClient}
+        onClose={() => setShowPlaceClient(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+        state={account.state_of_formation}
+        entityType={account.entity_type}
+        contactName={primaryContact?.full_name || ''}
+        ein={account.ein_number}
         formationDate={account.formation_date}
       />
 
