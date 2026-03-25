@@ -125,7 +125,9 @@ export interface Service {
 
 export interface Payment {
   id: string
-  account_id: string
+  account_id: string | null
+  contact_id: string | null
+  deal_id: string | null
   description: string | null
   amount: number
   amount_currency: string | null
@@ -140,7 +142,42 @@ export interface Payment {
   amount_paid: number | null
   amount_due: number | null
   followup_stage: string | null
+  delay_approved_until: string | null
   notes: string | null
+  // Invoice fields
+  invoice_status: string | null
+  issue_date: string | null
+  subtotal: number | null
+  discount: number | null
+  total: number | null
+  message: string | null
+  sent_at: string | null
+  sent_to: string | null
+  reminder_count: number | null
+  last_reminder_at: string | null
+  // QB sync
+  qb_invoice_id: string | null
+  qb_sync_status: string | null
+  qb_sync_error: string | null
+  // Billing / credit
+  billing_entity_id: string | null
+  credit_for_payment_id: string | null
+  referral_partner_id: string | null
+  // External IDs
+  whop_payment_id: string | null
+  // Legacy follow-up fields
+  reminder_1_sent: string | null
+  reminder_2_sent: string | null
+  warning_sent: string | null
+  restricted_date: string | null
+  late_fee_amount: number | null
+  penalty_disclaimer_signed: boolean | null
+  invoice_date: string | null
+  evidence_type: string | null
+  payment_record: string | null
+  // Metadata
+  is_test: boolean | null
+  created_at: string
   updated_at: string
 }
 
