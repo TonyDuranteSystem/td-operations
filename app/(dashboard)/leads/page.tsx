@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { LeadsTable } from '@/components/leads/leads-table'
 import { LeadsKanban } from './components/leads-kanban'
 import { LeadsViewToggle } from './components/leads-view-toggle'
+import { CreateLeadButton } from './components/create-lead-button'
 import type { LeadListItem } from '@/lib/types'
 
 const PAGE_SIZE = 50
@@ -81,7 +82,10 @@ export default async function LeadsPage({
             {stats.total} leads — {stats.new} New, {stats.contacted} Contacted, {stats.qualified} Qualified, {stats.converted} Converted
           </p>
         </div>
-        <LeadsViewToggle currentView={viewMode} />
+        <div className="flex items-center gap-3">
+          <CreateLeadButton />
+          <LeadsViewToggle currentView={viewMode} />
+        </div>
       </div>
 
       {isKanban ? (
