@@ -45,6 +45,10 @@
       "schedule": "0 8 * * *"
     },
     {
+      "path": "/api/cron/wizard-reminders",
+      "schedule": "17 9 * * *"
+    },
+    {
       "path": "/api/cron/invoice-overdue",
       "schedule": "0 9 * * *"
     }

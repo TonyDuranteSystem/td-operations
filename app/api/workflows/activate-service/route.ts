@@ -23,6 +23,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
 import { generateInvoiceNumber } from "@/lib/invoice-number"
 import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
+import { createPortalNotification } from "@/lib/portal/notifications"
 
 const AUTO_THRESHOLD = 5
 
@@ -345,6 +346,18 @@ export async function POST(req: NextRequest) {
         steps.push({ step: "portal_user", status: "existing", detail: `Portal user already exists: ${portalResult.email}` })
       } else if (!portalResult.success) {
         steps.push({ step: "portal_user", status: "error", detail: portalResult.error })
+      }
+
+      // Push notification: new service ready
+      if (autoAccountId && pipelines.length > 0) {
+        createPortalNotification({
+          account_id: autoAccountId,
+          contact_id: contactId || undefined,
+          type: "service",
+          title: "Welcome! Your service is being set up",
+          body: `We're preparing your ${pipelines[0]} service. Check the portal for next steps.`,
+          link: "/portal",
+        }).catch(() => {})
       }
     } else {
       steps.push({ step: "portal_user", status: "skipped", detail: "No contact_id available" })
