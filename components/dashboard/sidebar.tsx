@@ -31,6 +31,7 @@ import {
   EyeOff,
   UserCheck,
   Target,
+  Wrench,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
@@ -89,6 +90,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, adminOnly: true },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true },
+  { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true },
 ]
 
 function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
