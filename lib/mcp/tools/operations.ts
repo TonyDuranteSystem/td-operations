@@ -311,7 +311,7 @@ export function registerOperationsTools(server: McpServer) {
         let resolvedAccountType = account_type || "Client"
         let inst1Amount: number | null = null
         let inst2Amount: number | null = null
-        let instCurrency = "USD"
+        const instCurrency = "USD"
         if (lead_id) {
           // Find signed contract via offer linked to this lead
           const { data: offerForLead } = await supabaseAdmin
@@ -1524,7 +1524,7 @@ export function registerOperationsTools(server: McpServer) {
       try {
         const since = new Date(Date.now() - hours_back * 60 * 60 * 1000).toISOString()
         const issues: string[] = []
-        const ok: string[] = []
+        const _ok: string[] = []
 
         // 1. Get recent checkpoints
         const { data: checkpoints } = await supabaseAdmin

@@ -48,7 +48,7 @@ export default async function TrackerDetailPage({ params }: Props) {
 
   // Get task counts per delivery
   const deliveryIds = rawDeliveries.map(d => d.id)
-  let taskCountMap: Record<string, { total: number; open: number }> = {}
+  const taskCountMap: Record<string, { total: number; open: number }> = {}
   if (deliveryIds.length > 0) {
     const { data: tasks } = await supabase
       .from('tasks')

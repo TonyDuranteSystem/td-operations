@@ -44,7 +44,7 @@ export async function GET(
       )
 
       // Collect all Gmail messages — start with this thread's messages
-      let allGmailMessages: GmailAPIMessage[] = [...thread.messages]
+      const allGmailMessages: GmailAPIMessage[] = [...thread.messages]
       const seenMessageIds = new Set(thread.messages.map(m => m.id))
 
       // Find related threads: same subject, different thread ID

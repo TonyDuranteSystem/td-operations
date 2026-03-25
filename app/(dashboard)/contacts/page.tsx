@@ -34,7 +34,7 @@ export default async function ContactsPage({
 
   // Get account links for each contact
   const contactIds = (contacts ?? []).map(c => c.id)
-  let accountMap: Record<string, { count: number; names: string }> = {}
+  const accountMap: Record<string, { count: number; names: string }> = {}
   if (contactIds.length > 0) {
     const { data: links } = await supabase
       .from('account_contacts')

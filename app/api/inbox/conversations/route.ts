@@ -134,7 +134,7 @@ export async function GET(req: NextRequest) {
           : 'support@tonydurante.us'
 
         // Fetch multiple pages of threads to get enough results
-        let allThreadIds: Array<{ id: string; snippet: string }> = []
+        const allThreadIds: Array<{ id: string; snippet: string }> = []
         let currentPageToken = pageToken || undefined
 
         for (let page = 0; page < 2 && allThreadIds.length < targetGmailThreads; page++) {

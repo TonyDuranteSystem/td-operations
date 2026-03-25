@@ -38,7 +38,7 @@ export default async function AccountsPage({
 
   // Get primary contact for each account
   const accountIds = (accounts ?? []).map(a => a.id)
-  let contactMap: Record<string, { name: string; email: string | null }> = {}
+  const contactMap: Record<string, { name: string; email: string | null }> = {}
   if (accountIds.length > 0) {
     const { data: contacts } = await supabase
       .from('account_contacts')
@@ -57,7 +57,7 @@ export default async function AccountsPage({
 
   // Get overdue payment counts
   const today = new Date().toISOString().split('T')[0]
-  let overdueMap: Record<string, number> = {}
+  const overdueMap: Record<string, number> = {}
   if (accountIds.length > 0) {
     const { data: overdue } = await supabase
       .from('payments')
@@ -74,7 +74,7 @@ export default async function AccountsPage({
   }
 
   // Get service counts
-  let serviceMap: Record<string, number> = {}
+  const serviceMap: Record<string, number> = {}
   if (accountIds.length > 0) {
     const { data: services } = await supabase
       .from('services')

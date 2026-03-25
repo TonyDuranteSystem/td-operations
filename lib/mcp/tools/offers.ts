@@ -125,7 +125,7 @@ function validateOfferJsonb(params: Record<string, unknown>): string | null {
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
 
-function buildOfferEmail(
+function _buildOfferEmail(
   clientEmail: string,
   clientName: string,
   token: string,
@@ -420,7 +420,7 @@ export function registerOfferTools(server: McpServer) {
 
         // Auto-lookup referrer from lead if lead_id provided and no referrer_name set
         let refName = params.referrer_name || null
-        let refEmail = params.referrer_email || null
+        const refEmail = params.referrer_email || null
         let refType = params.referrer_type || null
         let refAccountId = params.referrer_account_id || null
         let refCommissionType = params.referrer_commission_type || null

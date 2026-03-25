@@ -123,7 +123,11 @@ export function ContactsTable({ items, query, statusFilter, stats, currentPage, 
             items.map(item => (
               <div
                 key={item.id}
-                className="grid grid-cols-1 md:grid-cols-[1fr,180px,100px,80px,1fr,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center"
+                onClick={() => router.push(`/contacts/${item.id}`)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => e.key === 'Enter' && router.push(`/contacts/${item.id}`)}
+                className="grid grid-cols-1 md:grid-cols-[1fr,180px,100px,80px,1fr,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer"
               >
                 {/* Name */}
                 <div className="flex items-center gap-2 min-w-0">

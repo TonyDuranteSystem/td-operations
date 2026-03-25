@@ -210,6 +210,45 @@ export interface ContactListItem {
   created_at: string
 }
 
+// ─── Contact Detail Types ────────────────────────────────
+
+export interface LinkedAccount {
+  id: string
+  company_name: string
+  entity_type: string | null
+  status: string | null
+  state_of_formation: string | null
+  ein: string | null
+  role: string | null
+  ownership_pct: number | null
+}
+
+export interface ServiceDelivery {
+  id: string
+  service_name: string | null
+  service_type: string | null
+  pipeline: string | null
+  stage: string | null
+  status: string | null
+  assigned_to: string | null
+  account_id: string | null
+  contact_id: string | null
+  start_date: string | null
+  updated_at: string
+}
+
+export interface ConversationEntry {
+  id: string
+  topic: string | null
+  channel: string | null
+  direction: string | null
+  client_message: string | null
+  response_sent: string | null
+  category: string | null
+  handled_by: string | null
+  created_at: string
+}
+
 // ─── Portal Types ────────────────────────────────────────
 
 export interface PortalAccount {

@@ -160,7 +160,7 @@ export function registerCrmTools(server: McpServer) {
       if (entity_type) q = q.eq('entity_type', entity_type)
       if (client_health) q = q.eq('client_health', client_health)
 
-      const { data, error, count } = await q
+      const { data, error } = await q
 
       if (error) {
         return { content: [{ type: "text" as const, text: `Error searching accounts: ${error.message}` }] }
@@ -617,7 +617,7 @@ export function registerCrmTools(server: McpServer) {
         const accByState: Record<string, number> = {}
         const accByHealth: Record<string, number> = {}
         let noEntityType = 0
-        let noDriveFolder = 0
+        // noDriveFolder tracking removed — not used in output
 
         for (const a of accounts) {
           accByStatus[a.status || "unknown"] = (accByStatus[a.status || "unknown"] || 0) + 1
