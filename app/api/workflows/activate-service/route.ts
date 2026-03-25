@@ -5,10 +5,13 @@
  * Handles ALL contract types: formation, onboarding, tax_return, itin.
  *
  * Steps:
- *   1. Lead → Contact (AUTO)
- *   2. Create service deliveries from bundled_pipelines (AUTO)
- *   3. QB invoice (SUPERVISED — prepared, awaits confirmation)
- *   4. Send appropriate data collection form based on contract_type (SUPERVISED)
+ *   1.   Lead → Contact (AUTO)
+ *   1.5  Ensure minimal account for formation/onboarding (AUTO)
+ *   2.   Create service deliveries from bundled_pipelines (AUTO)
+ *   2b.  Portal tier upgrade: lead → onboarding (AUTO)
+ *   2c.  Auto-create portal user + welcome email (AUTO)
+ *   3.   CRM Invoice + QB sync (AUTO — replaces old direct QB creation)
+ *   4.   Send appropriate data collection form based on contract_type (SUPERVISED)
  *
  * Supervised steps saved in prepared_steps JSONB.
  * Claude confirms via MCP before execution.
@@ -17,6 +20,9 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
+import { generateInvoiceNumber } from "@/lib/invoice-number"
+import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 
 const AUTO_THRESHOLD = 5
 
@@ -192,6 +198,33 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ─── STEP 1.5: Ensure Minimal Account (AUTO, formation/onboarding) ──
+    let autoAccountId: string | null = offer?.account_id || null
+
+    if (!autoAccountId && contactId && (contractType === "formation" || contractType === "onboarding")) {
+      const accountResult = await ensureMinimalAccount({
+        contactId,
+        clientName: activation.client_name,
+        contractType,
+        offerToken: activation.offer_token,
+        leadId: leadId || undefined,
+      })
+      if (accountResult.accountId) {
+        autoAccountId = accountResult.accountId
+        steps.push({
+          step: "ensure_account",
+          status: accountResult.created ? "created" : "existing",
+          detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created" : "already linked"})`,
+        })
+      } else {
+        steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
+      }
+    } else if (!autoAccountId && leadId) {
+      // For other contract types, try to resolve from lead
+      const { data: lead } = await supabase.from("leads").select("account_id").eq("id", leadId).maybeSingle()
+      autoAccountId = lead?.account_id || null
+    }
+
     // ─── STEP 2: Service Deliveries from bundled_pipelines (AUTO) ─────
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
     const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
@@ -211,12 +244,8 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Resolve account_id
-      let accountId = offer?.account_id || null
-      if (!accountId && leadId) {
-        const { data: lead } = await supabase.from("leads").select("account_id").eq("id", leadId).maybeSingle()
-        accountId = lead?.account_id || null
-      }
+      // Use autoAccountId (may have been created in Step 1.5)
+      const accountId = autoAccountId
 
       for (const pipeline of pipelines) {
         try {
@@ -272,45 +301,127 @@ export async function POST(req: NextRequest) {
 
     // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
     // Upgrade portal tier from lead → onboarding after payment
-    {
-      let portalAccountId = offer?.account_id || null
-      if (!portalAccountId && contactId) {
-        const { data: ac } = await supabase
-          .from("account_contacts")
-          .select("account_id")
-          .eq("contact_id", contactId)
-          .limit(1)
-        if (ac?.length) portalAccountId = ac[0].account_id
-      }
-      if (portalAccountId) {
-        await supabase
-          .from("accounts")
-          .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
-          .eq("id", portalAccountId)
-          .in("portal_tier", ["lead"])
-        steps.push({ step: "portal_tier_upgrade", status: "done", detail: `lead → onboarding` })
-      } else {
-        steps.push({ step: "portal_tier_upgrade", status: "skipped", detail: "No account linked" })
-      }
+    if (autoAccountId) {
+      await supabase
+        .from("accounts")
+        .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
+        .eq("id", autoAccountId)
+        .in("portal_tier", ["lead"])
+      steps.push({ step: "portal_tier_upgrade", status: "done", detail: `lead → onboarding` })
+    } else {
+      steps.push({ step: "portal_tier_upgrade", status: "skipped", detail: "No account linked" })
     }
 
-    // ─── STEP 3: QB Invoice (SUPERVISED) ────────────────────
-    preparedSteps.push({
-      step: "qb_invoice",
-      action: "qb_create_invoice",
-      description: `Create QB invoice for ${activation.client_name}: ${activation.amount} ${activation.currency} (${activation.payment_method}). Mark as paid and send to ${activation.client_email}.`,
-      params: {
-        client_name: activation.client_name,
-        client_email: activation.client_email,
-        amount: activation.amount,
-        currency: activation.currency,
-        payment_method: activation.payment_method,
-        offer_token: activation.offer_token,
-        mark_as_paid: true,
-        send_to_client: true,
-      },
-      status: "pending",
-    })
+    // ─── STEP 2c: Auto-create portal user + welcome email (AUTO) ──────
+    if (contactId) {
+      const portalResult = await autoCreatePortalUser({
+        contactId,
+        accountId: autoAccountId || undefined,
+        tier: "onboarding",
+      })
+
+      if (portalResult.success && !portalResult.alreadyExists && portalResult.tempPassword && portalResult.email) {
+        // New user created — send welcome email
+        const { data: contact } = await supabase
+          .from("contacts")
+          .select("language")
+          .eq("id", contactId)
+          .single()
+
+        const lang = contact?.language === "Italian" || contact?.language === "it" ? "it" : "en"
+        const emailResult = await sendPortalWelcomeEmail({
+          email: portalResult.email,
+          fullName: activation.client_name,
+          tempPassword: portalResult.tempPassword,
+          language: lang,
+        })
+
+        steps.push({
+          step: "portal_user",
+          status: "created",
+          detail: `Auth user created for ${portalResult.email}. Welcome email: ${emailResult.success ? "sent" : emailResult.error}`,
+        })
+      } else if (portalResult.alreadyExists) {
+        steps.push({ step: "portal_user", status: "existing", detail: `Portal user already exists: ${portalResult.email}` })
+      } else if (!portalResult.success) {
+        steps.push({ step: "portal_user", status: "error", detail: portalResult.error })
+      }
+    } else {
+      steps.push({ step: "portal_user", status: "skipped", detail: "No contact_id available" })
+    }
+
+    // ─── STEP 3: CRM Invoice + QB Sync (AUTO) ──────────────
+    // Create invoice in CRM (SOT), mark as paid, sync to QB
+    if (autoAccountId && activation.amount) {
+      try {
+        const invoiceNumber = await generateInvoiceNumber()
+        const today = new Date().toISOString().split("T")[0]
+        const amount = Number(activation.amount)
+
+        // Create CRM invoice (directly via supabase, not server action which needs browser session)
+        const { data: invoice, error: invErr } = await supabase
+          .from("payments")
+          .insert({
+            account_id: autoAccountId,
+            description: `${contractType === "formation" ? "LLC Formation" : contractType === "onboarding" ? "LLC Onboarding" : contractType === "tax_return" ? "Tax Return" : contractType === "itin" ? "ITIN Application" : "Service"} - ${activation.client_name}`,
+            amount,
+            amount_currency: activation.currency || "USD",
+            status: "Paid",
+            invoice_number: invoiceNumber,
+            invoice_status: "Paid",
+            issue_date: today,
+            paid_date: today,
+            subtotal: amount,
+            discount: 0,
+            total: amount,
+            payment_method: activation.payment_method || "Whop",
+            whop_payment_id: activation.whop_payment_id || null,
+            qb_sync_status: "pending",
+            message: `Payment received via ${activation.payment_method || "card"}`,
+          })
+          .select("id")
+          .single()
+
+        if (invErr || !invoice) {
+          steps.push({ step: "crm_invoice", status: "error", detail: invErr?.message || "Failed to create" })
+        } else {
+          // Add line item
+          await supabase.from("payment_items").insert({
+            payment_id: invoice.id,
+            description: `${contractType === "formation" ? "LLC Formation" : contractType === "onboarding" ? "LLC Onboarding" : contractType === "tax_return" ? "Tax Return" : "Service"} Package`,
+            quantity: 1,
+            unit_price: amount,
+            amount,
+            sort_order: 0,
+          })
+
+          steps.push({
+            step: "crm_invoice",
+            status: "created",
+            detail: `${invoiceNumber} — ${activation.currency} ${amount} (Paid)`,
+          })
+
+          // QB sync (best-effort, non-blocking)
+          syncInvoiceToQB(invoice.id)
+            .then((r) => {
+              if (r.success && r.qb_invoice_id) {
+                // Invoice synced — now record payment in QB too
+                syncPaymentToQB(invoice.id, {
+                  paymentDate: today,
+                  paymentMethod: activation.payment_method || "Whop",
+                }).catch(() => {})
+              }
+            })
+            .catch(() => {})
+        }
+      } catch (e) {
+        steps.push({ step: "crm_invoice", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    } else if (!autoAccountId) {
+      steps.push({ step: "crm_invoice", status: "skipped", detail: "No account to link invoice to" })
+    } else {
+      steps.push({ step: "crm_invoice", status: "skipped", detail: "No amount on activation" })
+    }
 
     // ─── STEP 4: Data Collection Form (SUPERVISED) ──────────
     const formConfig = FORM_CONFIG[contractType]
@@ -460,6 +571,7 @@ ${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
       },
     })
 
+    // eslint-disable-next-line no-console -- API route log for observability
     console.log(`[activate-service] ${contractType.toUpperCase()} | ${isAutoMode ? "AUTO" : "SUPERVISED"} | ${activation.client_name} | ${pipelines.length} pipelines`)
 
     return NextResponse.json({

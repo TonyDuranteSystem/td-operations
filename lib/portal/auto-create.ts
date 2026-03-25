@@ -3,13 +3,14 @@
  *
  * Reusable function called from:
  * - offer_send (MCP tool) → creates portal with 'lead' tier
- * - activation flow (payment confirmed) → upgrades to 'onboarding' tier
+ * - activate-service (payment confirmed) → auto-creates with 'onboarding' tier
  * - portal_create_user (MCP tool) → manual creation with 'full' tier
  *
  * Idempotent: if user already exists, just updates the tier.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { PORTAL_BASE_URL } from '@/lib/config'
 import type { PortalTier } from './tier-config'
 
 interface AutoCreateResult {
@@ -31,7 +32,7 @@ interface AutoCreateParams {
 }
 
 export async function autoCreatePortalUser(params: AutoCreateParams): Promise<AutoCreateResult> {
-  const { accountId, contactId, leadId, tier, skipIfExists = true } = params
+  const { accountId, contactId, leadId, tier, skipIfExists: _skipIfExists = true } = params
 
   try {
     // 1. Resolve contact
@@ -202,6 +203,192 @@ async function createFromEmail(
     userId: newUser.user.id,
   }
 }
+
+// ─── Ensure Minimal Account ────────────────────────────
+
+interface EnsureAccountResult {
+  accountId: string
+  created: boolean
+  error?: string
+}
+
+/**
+ * Ensure a minimal CRM account exists for formation/onboarding clients.
+ *
+ * Formation clients don't have an account until their form is reviewed.
+ * This creates a "Pending Formation - {name}" placeholder so that:
+ * - Service deliveries can be linked to an account
+ * - Portal sidebar shows correctly
+ * - Portal tier can be set on the account
+ *
+ * Idempotent: if the contact is already linked to an account, returns that.
+ */
+export async function ensureMinimalAccount(params: {
+  contactId: string
+  clientName: string
+  contractType: string
+  offerToken?: string
+  leadId?: string
+}): Promise<EnsureAccountResult> {
+  const { contactId, clientName, contractType, offerToken, leadId } = params
+
+  // Check if contact is already linked to an account
+  const { data: existingLink } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id')
+    .eq('contact_id', contactId)
+    .limit(1)
+    .maybeSingle()
+
+  if (existingLink?.account_id) {
+    return { accountId: existingLink.account_id, created: false }
+  }
+
+  // Also check if lead has an account_id
+  if (leadId) {
+    const { data: lead } = await supabaseAdmin
+      .from('leads')
+      .select('account_id')
+      .eq('id', leadId)
+      .maybeSingle()
+    if (lead?.account_id) {
+      // Link contact to existing account
+      await supabaseAdmin.from('account_contacts').upsert({
+        account_id: lead.account_id,
+        contact_id: contactId,
+        role: 'Owner',
+      }, { onConflict: 'account_id,contact_id' })
+      return { accountId: lead.account_id, created: false }
+    }
+  }
+
+  // Create minimal account
+  const statusLabel = contractType === 'formation' ? 'Pending Formation' : 'Pending Onboarding'
+  const companyName = `${statusLabel} - ${clientName}`
+
+  const { data: account, error: accErr } = await supabaseAdmin
+    .from('accounts')
+    .insert({
+      company_name: companyName,
+      status: 'Pending',
+      account_type: 'Client',
+      entity_type: contractType === 'formation' ? 'Single Member LLC' : null,
+      portal_account: true,
+      portal_auto_created: true,
+      portal_tier: 'onboarding',
+      portal_created_date: new Date().toISOString().split('T')[0],
+      notes: `Auto-created on payment. Offer: ${offerToken || 'N/A'}. Will be updated when data form is reviewed.`,
+    })
+    .select('id')
+    .single()
+
+  if (accErr || !account) {
+    return { accountId: '', created: false, error: accErr?.message || 'Failed to create account' }
+  }
+
+  // Link contact to account
+  await supabaseAdmin.from('account_contacts').insert({
+    account_id: account.id,
+    contact_id: contactId,
+    role: 'Owner',
+  })
+
+  // Update lead.account_id if lead exists
+  if (leadId) {
+    await supabaseAdmin
+      .from('leads')
+      .update({ account_id: account.id })
+      .eq('id', leadId)
+  }
+
+  return { accountId: account.id, created: true }
+}
+
+// ─── Welcome Email ─────────────────────────────────────
+
+/**
+ * Send portal welcome email with temporary password.
+ * Bilingual: Italian + English.
+ * Called after autoCreatePortalUser() when a new user is created.
+ */
+export async function sendPortalWelcomeEmail(params: {
+  email: string
+  fullName: string
+  tempPassword: string
+  language?: string
+}): Promise<{ success: boolean; error?: string }> {
+  const { email, fullName, tempPassword, language } = params
+  const isIt = language === 'it' || language === 'Italian'
+  const loginUrl = `${PORTAL_BASE_URL}/portal/login`
+
+  try {
+    const { gmailPost } = await import('@/lib/gmail')
+
+    const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+  <div style="background:#18181b;padding:20px;border-radius:12px 12px 0 0">
+    <h1 style="color:white;margin:0;font-size:18px">
+      ${isIt ? 'Benvenuto nel Portale Tony Durante' : 'Welcome to Tony Durante Portal'}
+    </h1>
+  </div>
+  <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px">
+    <p>${isIt ? `Ciao ${fullName || ''},` : `Hi ${fullName || 'there'},`}</p>
+    <p>${isIt
+      ? 'Il tuo account sul portale clienti è stato creato. Ecco le tue credenziali di accesso:'
+      : 'Your client portal account has been created. Here are your login credentials:'}</p>
+    <div style="background:#f4f4f5;padding:16px;border-radius:8px;margin:16px 0">
+      <p style="margin:0 0 8px"><strong>Email:</strong> ${email}</p>
+      <p style="margin:0"><strong>${isIt ? 'Password temporanea' : 'Temporary Password'}:</strong> ${tempPassword}</p>
+    </div>
+    <p>${isIt
+      ? 'Al primo accesso ti verrà chiesto di cambiare la password.'
+      : 'You will be asked to change your password on first login.'}</p>
+    <a href="${loginUrl}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:white;text-decoration:none;border-radius:8px;font-weight:bold;margin-top:8px">
+      ${isIt ? 'Accedi al Portale' : 'Login to Portal'}
+    </a>
+    ${!isIt ? '' : `
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+    <p style="color:#6b7280;font-size:13px">
+      Hi ${fullName || 'there'}, your client portal account has been created.<br>
+      <strong>Email:</strong> ${email}<br>
+      <strong>Temporary Password:</strong> ${tempPassword}<br>
+      You will be asked to change your password on first login.
+    </p>
+    <a href="${loginUrl}" style="display:inline-block;padding:8px 16px;background:#2563eb;color:white;text-decoration:none;border-radius:6px;font-size:13px">
+      Login to Portal
+    </a>`}
+  </div>
+</div>`
+
+    const subject = isIt
+      ? 'Il tuo accesso al Portale Tony Durante'
+      : 'Your Tony Durante Portal Account'
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+    const boundary = `boundary_${Date.now()}`
+    const rawEmail = [
+      'From: Tony Durante <support@tonydurante.us>',
+      `To: ${email}`,
+      `Subject: ${encodedSubject}`,
+      'MIME-Version: 1.0',
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(html).toString('base64'),
+      `--${boundary}--`,
+    ].join('\r\n')
+
+    await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+    return { success: true }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.error('[auto-portal] Welcome email failed:', error)
+    return { success: false, error }
+  }
+}
+
+// ─── Portal Tier Upgrade ───────────────────────────────
 
 /**
  * Upgrade a portal user's tier.
