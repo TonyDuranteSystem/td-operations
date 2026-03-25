@@ -1,0 +1,191 @@
+'use client'
+
+import { useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
+import {
+  CreditCard, UserPlus, XCircle,
+  Loader2,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { ConfirmPaymentDialog } from './confirm-payment-dialog'
+import { ConvertLeadDialog } from './convert-lead-dialog'
+
+interface OfferData {
+  token: string
+  status: string
+  contract_type: string | null
+  bundled_pipelines: string[] | null
+  cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+}
+
+interface ActivationData {
+  id: string
+  status: string
+}
+
+interface LeadActionsProps {
+  leadId: string
+  leadName: string
+  leadEmail?: string | null
+  leadStatus: string
+  offer: OfferData | null
+  activation: ActivationData | null
+}
+
+export function LeadActions({
+  leadId,
+  leadName,
+  leadStatus,
+  offer,
+  activation,
+}: LeadActionsProps) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+  const [showConfirmPayment, setShowConfirmPayment] = useState(false)
+  const [showConvert, setShowConvert] = useState(false)
+  const [showLostReason, setShowLostReason] = useState(false)
+  const [lostReason, setLostReason] = useState('')
+
+  const isConverted = leadStatus === 'Converted'
+  const isLost = leadStatus === 'Lost'
+  const isActivated = activation?.status === 'activated'
+  const canConfirmPayment = !isConverted && !isActivated
+  const canConvert = !isConverted
+  const canMarkLost = !isConverted && !isLost
+
+  const doMarkLost = () => {
+    if (!lostReason.trim()) {
+      toast.error('Reason is required')
+      return
+    }
+
+    startTransition(async () => {
+      try {
+        // Use test-setup's pattern — call an endpoint that updates the lead
+        // For now we can use a simple approach via the convert-lead endpoint variant
+        // But since we don't have a mark-lost endpoint, let's create inline fetch
+        const res = await fetch('/api/crm/admin-actions/mark-lost', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lead_id: leadId,
+            reason: lostReason.trim(),
+          }),
+        })
+
+        if (!res.ok) {
+          const data = await res.json()
+          toast.error(data.error || 'Failed to mark as lost')
+          return
+        }
+
+        toast.success(`${leadName} marked as Lost`)
+        setShowLostReason(false)
+        setLostReason('')
+        router.refresh()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'An error occurred')
+      }
+    })
+  }
+
+  if (isConverted && isActivated) {
+    return (
+      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+        <p className="text-sm font-medium text-emerald-800">
+          This lead has been converted and activated. Check the Contact and Account pages for details.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="bg-white rounded-lg border p-5">
+        <h2 className="text-sm font-semibold text-zinc-900 mb-4">Admin Actions</h2>
+
+        <div className="flex flex-wrap gap-2">
+          {/* Confirm Payment */}
+          {canConfirmPayment && (
+            <button
+              onClick={() => setShowConfirmPayment(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+            >
+              <CreditCard className="h-4 w-4" />
+              Confirm Payment
+            </button>
+          )}
+
+          {/* Convert to Contact */}
+          {canConvert && (
+            <button
+              onClick={() => setShowConvert(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-zinc-900 text-white hover:bg-zinc-800 transition-colors"
+            >
+              <UserPlus className="h-4 w-4" />
+              Convert to Contact
+            </button>
+          )}
+
+          {/* Mark as Lost */}
+          {canMarkLost && !showLostReason && (
+            <button
+              onClick={() => setShowLostReason(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 transition-colors"
+            >
+              <XCircle className="h-4 w-4" />
+              Mark as Lost
+            </button>
+          )}
+        </div>
+
+        {/* Inline lost reason */}
+        {showLostReason && (
+          <div className="mt-3 p-3 bg-zinc-50 rounded-lg space-y-2">
+            <label className="block text-sm font-medium">Why is this lead lost?</label>
+            <textarea
+              value={lostReason}
+              onChange={e => setLostReason(e.target.value)}
+              rows={2}
+              autoFocus
+              placeholder="e.g. Not interested, went with competitor, no response..."
+              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={doMarkLost}
+                disabled={isPending || !lostReason.trim()}
+                className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+                Confirm Lost
+              </button>
+              <button
+                onClick={() => { setShowLostReason(false); setLostReason('') }}
+                className="px-3 py-1.5 text-sm border rounded-md hover:bg-zinc-100"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Dialogs */}
+      <ConfirmPaymentDialog
+        open={showConfirmPayment}
+        onClose={() => setShowConfirmPayment(false)}
+        leadId={leadId}
+        leadName={leadName}
+        offer={offer}
+      />
+
+      <ConvertLeadDialog
+        open={showConvert}
+        onClose={() => setShowConvert(false)}
+        leadId={leadId}
+        leadName={leadName}
+      />
+    </>
+  )
+}

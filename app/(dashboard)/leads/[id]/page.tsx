@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { APP_BASE_URL } from '@/lib/config'
+import { LeadActions } from './components/lead-actions'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -104,6 +105,27 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             Lead created {formatDate(lead.created_at)}
           </p>
         </div>
+      </div>
+
+      {/* Admin Actions */}
+      <div className="mb-6">
+        <LeadActions
+          leadId={lead.id}
+          leadName={lead.full_name}
+          leadEmail={lead.email}
+          leadStatus={lead.status}
+          offer={offer ? {
+            token: offer.token,
+            status: offer.status,
+            contract_type: offer.contract_type,
+            bundled_pipelines: bundledPipelines,
+            cost_summary: offer.cost_summary as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
+          } : null}
+          activation={activation ? {
+            id: activation.id,
+            status: activation.status,
+          } : null}
+        />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
