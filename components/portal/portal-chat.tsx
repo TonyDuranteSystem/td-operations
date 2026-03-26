@@ -195,7 +195,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                   {isOwn && (
                     <button
                       onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-all shrink-0"
+                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
                       title="Reply"
                     >
                       <Reply className="h-3.5 w-3.5" />
@@ -259,7 +259,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                   {!isOwn && (
                     <button
                       onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-all shrink-0"
+                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
                       title="Reply"
                     >
                       <Reply className="h-3.5 w-3.5" />
