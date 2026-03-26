@@ -300,7 +300,17 @@ function RenewalLegalSections({ contractYear }: { contractYear: number }) {
       <div className="contract-section"><h3>2. Scope of Services</h3>
         <p>The Service Provider shall provide the following annual management services during the Contract Year:</p>
         <ul>
-          <li><strong>Dedicated Client Portal</strong> &mdash; A secure, personal online platform where the Client can sign documents electronically, view and download all company documents (Articles of Organization, EIN Letter, Operating Agreement, Lease, Tax Returns), track active services and their progress, manage invoices and payments, and communicate directly with the team;</li>
+          <li><strong>Dedicated Client Portal</strong> (<strong>portal.tonydurante.us</strong>) &mdash; A secure, personal online platform providing 24/7 access to all aspects of the Client&apos;s LLC management:
+            <ul style={{ marginTop: 6, marginBottom: 6 }}>
+              <li>Electronic document signing (Annual Agreement, Operating Agreement, Office Lease, SS-4);</li>
+              <li>Complete document archive (Articles of Organization, EIN Letter, Passport, Tax Returns, signed contracts);</li>
+              <li>Real-time service tracking with progress indicators for each active service;</li>
+              <li>Invoice management and payment history;</li>
+              <li>Integrated messaging to communicate directly with the Tony Durante team;</li>
+              <li>Multi-company dashboard for clients managing multiple LLCs;</li>
+              <li>Secure authentication with password protection and session management.</li>
+            </ul>
+          </li>
           <li><strong>Registered Agent</strong> &mdash; Official representation in the state of formation, maintaining a registered office address for service of process and state correspondence;</li>
           <li><strong>State Annual Report &amp; Compliance</strong> &mdash; Preparation and filing of all required state annual reports, monitoring of compliance deadlines, and proactive notification of upcoming obligations;</li>
           <li><strong>U.S. Business Address &amp; Mail Handling (CMRA)</strong> &mdash; A U.S. commercial mail receiving address for the LLC, with mail scanning and forwarding services;</li>
@@ -345,7 +355,12 @@ function RenewalLegalSections({ contractYear }: { contractYear: number }) {
 
       <div className="contract-section"><h3>8. Confidentiality</h3><p>Each Party agrees to maintain confidentiality of all proprietary, financial, and personal information disclosed during the course of this Agreement. This obligation survives termination for three (3) years.</p></div>
 
-      <div className="contract-section"><h3>9. Data Protection &amp; Privacy</h3><p>Personal data shall be processed solely for the purpose of performing the Services under this Agreement. For EU/EEA residents, processing is based on Article 6(1)(b) GDPR (performance of a contract).</p></div>
+      <div className="contract-section"><h3>9. Data Protection &amp; Privacy</h3>
+        <div className="contract-subsection"><h4>9.1 Data Processing</h4><p>Personal data shall be processed solely for the purpose of performing the Services under this Agreement. The Service Provider collects and processes only the data necessary for LLC management, compliance, and communication. For EU/EEA residents, processing is based on Article 6(1)(b) GDPR (performance of a contract).</p></div>
+        <div className="contract-subsection"><h4>9.2 Privacy Policy</h4><p>The Service Provider&apos;s complete Privacy Policy is available at <strong>www.iubenda.com/privacy-policy/51522422</strong>. This policy describes in detail what data is collected, how it is used, stored, and protected, and the Client&apos;s rights regarding their personal data. By signing this Agreement, the Client acknowledges having read and accepted the Privacy Policy.</p></div>
+        <div className="contract-subsection"><h4>9.3 Cookie Policy</h4><p>The Service Provider&apos;s Cookie Policy is available at <strong>www.iubenda.com/privacy-policy/51522422/cookie-policy</strong>. The Client Portal uses cookies strictly necessary for authentication and session management.</p></div>
+        <div className="contract-subsection"><h4>9.4 Data Security</h4><p>The Service Provider implements industry-standard security measures including encrypted data transmission (TLS/SSL), secure authentication, role-based access control, and encrypted storage for sensitive documents. The Client Portal uses Supabase Auth for secure user management with email-based authentication.</p></div>
+        <div className="contract-subsection"><h4>9.5 Data Retention</h4><p>Client data is retained for the duration of the business relationship and for a period of seven (7) years thereafter, as required by U.S. tax regulations. Upon termination, the Client may request a copy of all their data before it is archived.</p></div></div>
 
       <div className="contract-section"><h3>10. Tax Return Preparation</h3><p>The Service Provider shall arrange for preparation and filing of the LLC&apos;s annual U.S. tax return through a qualified third-party professional. The Client is solely responsible for providing accurate financial records and information necessary for the tax return. The Service Provider does not provide tax advice.</p></div>
 
@@ -378,7 +393,7 @@ function RenewalLegalSections({ contractYear }: { contractYear: number }) {
 
       <div className="contract-section"><h3>21. Electronic Signatures</h3><p>Electronic signatures on this Agreement are valid and binding under the <strong>ESIGN Act</strong> (15 U.S.C. &sect; 7001) and <strong>UETA</strong> (Fla. Stat. &sect; 668.50).</p></div>
 
-      <div className="contract-section"><h3>22. Entire Agreement</h3><p>This Agreement constitutes the entire agreement between the Parties with respect to the {contractYear} Contract Year and supersedes all prior negotiations, understandings, and agreements. No amendment or modification shall be effective unless in writing and signed by both Parties.</p></div>
+      <div className="contract-section"><h3>22. Entire Agreement</h3><p>This Agreement, together with the Service Provider&apos;s Privacy Policy (<strong>www.iubenda.com/privacy-policy/51522422</strong>) and Terms and Conditions (<strong>www.iubenda.com/terms-and-conditions/51522422</strong>), constitutes the entire agreement between the Parties with respect to the {contractYear} Contract Year and supersedes all prior negotiations, understandings, and agreements. No amendment or modification shall be effective unless in writing and signed by both Parties.</p></div>
 
       <div className="contract-section"><h3>23. Notices</h3><p>Formal notices shall be sent via email (with delivery confirmation) or certified mail. <strong>WhatsApp and Telegram messages do not constitute formal notice.</strong></p>
         <table className="contract-key-terms" style={{ marginTop: 12 }}>
