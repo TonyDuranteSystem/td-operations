@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 import StandaloneServiceAgreement from './standalone-service-agreement'
+import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 
@@ -657,6 +658,16 @@ export default function ContractPage() {
       <>
         <ContractStyles />
         <CheckoutPreview offer={offer} cl={cl} hasCard={!!hasCard} hasBank={hasBank} token={token} />
+      </>
+    )
+  }
+
+  // Annual Renewal agreement — installment-based contract for existing clients
+  if ((offer as any).contract_type === 'renewal') {
+    return (
+      <>
+        <ContractStyles />
+        <RenewalAgreement offer={offer} token={token} />
       </>
     )
   }

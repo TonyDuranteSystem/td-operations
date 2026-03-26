@@ -21,6 +21,11 @@ const DOC_INFO: Record<string, { en: { title: string; desc: string }; it: { titl
     it: { title: 'SS-4 (Richiesta EIN)', desc: 'Domanda per il tuo Employer Identification Number dall\'IRS.' },
     icon: FileText,
   },
+  msa: {
+    en: { title: 'Annual Service Agreement', desc: 'Your annual management services contract — confirms the service period and payment schedule.' },
+    it: { title: 'Contratto di Servizio Annuale', desc: 'Il contratto annuale di gestione — conferma il periodo di servizio e il piano di pagamento.' },
+    icon: FileText,
+  },
 }
 
 const STATUS_LABELS: Record<string, { en: string; it: string }> = {

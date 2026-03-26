@@ -16,12 +16,13 @@ import { cookies } from 'next/headers'
 import { SignDocumentsClient } from './sign-documents-client'
 
 export interface SignableDocument {
-  type: 'oa' | 'lease' | 'ss4'
+  type: 'oa' | 'lease' | 'ss4' | 'msa'
   status: 'pending' | 'awaiting' | 'signed'
   href: string
   companyName?: string
   suiteNumber?: string
   signedAt?: string
+  contractYear?: number
 }
 
 export default async function PortalSignPage() {
@@ -63,8 +64,8 @@ export default async function PortalSignPage() {
     )
   }
 
-  // Query OA, Lease, and SS-4 in parallel
-  const [oaResult, leaseResult, ss4Result] = await Promise.all([
+  // Query OA, Lease, SS-4, and renewal MSA in parallel
+  const [oaResult, leaseResult, ss4Result, msaResult] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
       .select('token, status, company_name, signed_at')
@@ -86,9 +87,33 @@ export default async function PortalSignPage() {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Annual renewal MSA — offers with contract_type='renewal' linked to this account
+    supabaseAdmin
+      .from('offers')
+      .select('token, status, client_name, effective_date')
+      .eq('account_id', selectedAccountId)
+      .eq('contract_type', 'renewal')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   const documents: SignableDocument[] = []
+
+  // MSA first — most important annual document
+  if (msaResult.data) {
+    const msa = msaResult.data
+    const isSigned = msa.status === 'signed' || msa.status === 'completed'
+    const year = msa.effective_date ? new Date(msa.effective_date).getFullYear() : new Date().getFullYear()
+    documents.push({
+      type: 'msa',
+      status: isSigned ? 'signed' : 'awaiting',
+      href: '/portal/sign/msa',
+      companyName: msa.client_name,
+      contractYear: year,
+      signedAt: isSigned ? msa.effective_date : undefined,
+    })
+  }
 
   if (oaResult.data) {
     const oa = oaResult.data

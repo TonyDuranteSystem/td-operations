@@ -125,7 +125,7 @@ export interface Offer {
   // Link protection
   access_code?: string
   // Contract type
-  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin'
+  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | 'renewal'
   // Pipelines to create when client pays (automation)
   bundled_pipelines?: string[]
   // Client selections (set when client signs, based on optional services chosen)

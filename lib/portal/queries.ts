@@ -382,7 +382,7 @@ export async function getPortalActionItems(
 ): Promise<ActionItemsResult> {
   const today = new Date().toISOString().split('T')[0]
 
-  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res] = await Promise.all([
+  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes] = await Promise.all([
     // 1. In-progress wizard forms
     supabaseAdmin
       .from('wizard_progress')
@@ -427,6 +427,15 @@ export async function getPortalActionItems(
       .eq('account_id', accountId)
       .in('status', ['sent', 'viewed', 'awaiting_signature'])
       .limit(5),
+
+    // 6. Unsigned Annual MSA (renewal offers not yet signed)
+    supabaseAdmin
+      .from('offers')
+      .select('id, token, status, created_at')
+      .eq('account_id', accountId)
+      .eq('contract_type', 'renewal')
+      .in('status', ['draft', 'sent', 'viewed'])
+      .limit(5),
   ])
 
   const items: ActionItem[] = []
@@ -468,6 +477,7 @@ export async function getPortalActionItems(
 
   // ── Unsigned documents ──
   const signDocs = [
+    ...(msaRes.data ?? []).map(d => ({ ...d, docType: 'Annual Service Agreement', docTypeIt: 'Contratto di Servizio Annuale' })),
     ...(oaRes.data ?? []).map(d => ({ ...d, docType: 'Operating Agreement', docTypeIt: 'Accordo Operativo' })),
     ...(leaseRes.data ?? []).map(d => ({ ...d, docType: 'Lease Agreement', docTypeIt: 'Contratto di Locazione' })),
     ...(ss4Res.data ?? []).map(d => ({ ...d, docType: 'SS-4 (EIN Application)', docTypeIt: 'SS-4 (Richiesta EIN)' })),
