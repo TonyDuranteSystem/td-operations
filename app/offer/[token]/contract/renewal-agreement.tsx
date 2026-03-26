@@ -299,26 +299,40 @@ function RenewalLegalSections({ contractYear }: { contractYear: number }) {
 
       <div className="contract-section"><h3>2. Scope of Services</h3>
         <p>The Service Provider shall provide the following annual management services during the Contract Year:</p>
+
+        <div className="contract-subsection"><h4>2.1 Client Portal</h4>
+        <p>The Client receives access to a <strong>Dedicated Client Portal</strong> (<strong>portal.tonydurante.us</strong>), a secure online platform available 24/7 that serves as the central hub for managing the Client&apos;s LLC. The Portal includes:</p>
+        <p><strong>Business Tools for the Client&apos;s operations:</strong></p>
         <ul>
-          <li><strong>Dedicated Client Portal</strong> (<strong>portal.tonydurante.us</strong>) &mdash; A secure, personal online platform providing 24/7 access to all aspects of the Client&apos;s LLC management:
-            <ul style={{ marginTop: 6, marginBottom: 6 }}>
-              <li>Electronic document signing (Annual Agreement, Operating Agreement, Office Lease, SS-4);</li>
-              <li>Complete document archive (Articles of Organization, EIN Letter, Passport, Tax Returns, signed contracts);</li>
-              <li>Real-time service tracking with progress indicators for each active service;</li>
-              <li>Invoice management and payment history;</li>
-              <li>Integrated messaging to communicate directly with the Tony Durante team;</li>
-              <li>Multi-company dashboard for clients managing multiple LLCs;</li>
-              <li>Secure authentication with password protection and session management.</li>
-            </ul>
-          </li>
+          <li><strong>Invoicing System</strong> &mdash; Create, send, and track professional invoices to the Client&apos;s own customers. Manage invoice status (draft, sent, paid, overdue), view total invoiced and collected amounts, and customize invoices with the company logo;</li>
+          <li><strong>Customer Management</strong> &mdash; Build and manage a customer database. Add customer details (name, email, company), view invoice history per customer, and maintain a centralized contact list for the Client&apos;s business;</li>
+          <li><strong>Company Profile &amp; Branding</strong> &mdash; Upload a company logo for use on invoices, manage bank account details and payment gateway links for receiving payments from customers.</li>
+        </ul>
+        <p><strong>LLC Management &amp; Compliance:</strong></p>
+        <ul>
+          <li><strong>Electronic Document Signing</strong> &mdash; Sign contracts digitally (Annual Agreement, Operating Agreement, Office Lease, EIN Application) with legally binding electronic signatures;</li>
+          <li><strong>Document Archive</strong> &mdash; View and download all company documents (Articles of Organization, EIN Letter, Passport copy, Tax Returns, signed contracts) from a secure, organized repository;</li>
+          <li><strong>Service Tracking</strong> &mdash; Monitor the status and progress of all active services (Tax Return, Registered Agent renewal, Annual Report filing) with real-time updates and stage indicators;</li>
+          <li><strong>Compliance Deadlines</strong> &mdash; Visual calendar showing all upcoming compliance deadlines (annual reports, tax filings, RA renewals) with color-coded alerts;</li>
+          <li><strong>Billing &amp; Payments</strong> &mdash; View invoices from Tony Durante LLC, track payment history, and monitor outstanding balances;</li>
+          <li><strong>Direct Messaging</strong> &mdash; Communicate with the Tony Durante team in real-time through integrated chat, with full conversation history;</li>
+          <li><strong>Tax Document Upload</strong> &mdash; Upload financial records and tax documents directly through the portal for tax return preparation;</li>
+          <li><strong>Activity Feed</strong> &mdash; Timeline of all account activity including document uploads, service updates, notifications, and communications;</li>
+          <li><strong>Multi-Company Dashboard</strong> &mdash; Clients managing multiple LLCs can switch between companies from a single login;</li>
+          <li><strong>Service Guide &amp; Requests</strong> &mdash; Browse available services, read guides, and request additional services directly from the portal.</li>
+        </ul></div>
+
+        <div className="contract-subsection"><h4>2.2 LLC Compliance &amp; Administration</h4>
+        <ul>
           <li><strong>Registered Agent</strong> &mdash; Official representation in the state of formation, maintaining a registered office address for service of process and state correspondence;</li>
           <li><strong>State Annual Report &amp; Compliance</strong> &mdash; Preparation and filing of all required state annual reports, monitoring of compliance deadlines, and proactive notification of upcoming obligations;</li>
-          <li><strong>U.S. Business Address &amp; Mail Handling (CMRA)</strong> &mdash; A U.S. commercial mail receiving address for the LLC, with mail scanning and forwarding services;</li>
+          <li><strong>U.S. Business Address &amp; Mail Handling (CMRA)</strong> &mdash; A U.S. commercial mail receiving address for the LLC, with mail scanning, digital delivery, and physical forwarding services;</li>
           <li><strong>Federal Tax Return</strong> &mdash; Preparation and filing of the LLC&apos;s annual U.S. federal tax return (Form 5472/1120 for SMLLCs, Form 1065 for MMLLCs) through a qualified third-party tax professional;</li>
           <li><strong>EIN Maintenance</strong> &mdash; Ongoing management of the Employer Identification Number, including IRS correspondence handling and address updates;</li>
-          <li><strong>Document Management</strong> &mdash; Secure storage and organization of all company documents on Google Drive, with digital copies accessible through the Client Portal at any time;</li>
+          <li><strong>Document Management</strong> &mdash; Secure cloud storage and organization of all company documents, accessible through the Client Portal at any time;</li>
           <li><strong>Ongoing Administrative Support</strong> &mdash; Dedicated assistance for any questions, requests, or issues related to the Client&apos;s LLC operations.</li>
-        </ul>
+        </ul></div>
+
         <p>Any services not explicitly listed above are outside the scope of this Agreement and may be subject to additional fees.</p></div>
 
       <div className="contract-section"><h3>3. Client Responsibilities</h3>
