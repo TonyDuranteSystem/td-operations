@@ -37,19 +37,14 @@ import { readFile } from "fs/promises"
 import { join } from "path"
 import { existsSync } from "fs"
 
-// Tony Durante LLC — Third Party Designee info (address + contact only, no personal name)
-const DESIGNEE = {
-  address: "10225 Ulmerton Rd 3D, Largo, FL 33771",
-  phone: "727-423-4285",
-  fax: "+1 727 513-5584",
-}
-
 // TD LLC Office — mailing address for all client LLCs
 const TD_OFFICE = {
   street: "10225 Ulmerton Rd 3D",
   cityStateZip: "Largo FL 33771",
-  fax: "+1 727 513-5584",
 }
+
+// Applicant phone — always the same
+const APPLICANT_PHONE = "7274234285"
 
 /**
  * County and state mapping for Line 6.
@@ -205,16 +200,11 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
     check(399, 158)
   }
 
-  // === THIRD PARTY DESIGNEE (company info only, no personal name) ===
-  text(150, 108, "Tony Durante LLC")
-  text(465, 108, DESIGNEE.phone)
-  text(150, 90, DESIGNEE.address)
-  text(465, 90, DESIGNEE.fax)
+  // === THIRD PARTY DESIGNEE — intentionally left blank ===
 
   // === SIGNATURE SECTION ===
   text(150, 58, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
-  text(465, 68, data.responsiblePartyPhone || "")
-  text(465, 40, TD_OFFICE.fax)
+  text(465, 68, APPLICANT_PHONE)
 
   return pdf.save()
 }
