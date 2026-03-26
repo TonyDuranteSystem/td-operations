@@ -526,7 +526,7 @@ export function registerOfferTools(server: McpServer) {
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
       // Contract type
-      contract_type: z.enum(["formation", "onboarding", "tax_return", "itin"]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement)."),
+      contract_type: z.enum(["formation", "onboarding", "tax_return", "itin", "renewal"]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement), 'renewal' (annual renewal — simple installment-based contract for existing annual clients)."),
       // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
       lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
       account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
