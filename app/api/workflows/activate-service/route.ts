@@ -231,17 +231,25 @@ export async function POST(req: NextRequest) {
     const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
     if (pipelines.length > 0) {
-      // Get first pipeline stage for each type
+      // Get first pipeline stage for each type (including auto_tasks for task creation)
       const { data: allStages } = await supabase
         .from("pipeline_stages")
-        .select("service_type, stage_name, stage_order")
+        .select("service_type, stage_name, stage_order, auto_tasks")
         .in("service_type", pipelines)
         .order("stage_order", { ascending: true })
 
       const firstStage = new Map<string, string>()
+      const firstStageData = new Map<string, { stage_name: string; stage_order: number; auto_tasks: Array<{ title: string; assigned_to: string; category: string; priority?: string }> }>()
       if (allStages) {
         for (const s of allStages) {
-          if (!firstStage.has(s.service_type)) firstStage.set(s.service_type, s.stage_name)
+          if (!firstStage.has(s.service_type)) {
+            firstStage.set(s.service_type, s.stage_name)
+            firstStageData.set(s.service_type, {
+              stage_name: s.stage_name,
+              stage_order: s.stage_order,
+              auto_tasks: Array.isArray(s.auto_tasks) ? s.auto_tasks : [],
+            })
+          }
         }
       }
 
@@ -283,6 +291,25 @@ export async function POST(req: NextRequest) {
             sdResults.push({ pipeline, status: "error", id: sdErr.message })
           } else {
             sdResults.push({ pipeline, status: "created", id: sd?.id })
+
+            // Auto-create tasks from pipeline_stages.auto_tasks (mirrors sd_create logic)
+            const stageData = firstStageData.get(pipeline)
+            if (sd?.id && stageData?.auto_tasks?.length) {
+              const serviceName = `${pipeline} - ${activation.client_name}`
+              for (const taskDef of stageData.auto_tasks) {
+                await supabase.from("tasks").insert({
+                  task_title: `[${serviceName}] ${taskDef.title}`,
+                  assigned_to: taskDef.assigned_to || "Luca",
+                  category: taskDef.category || "Internal",
+                  priority: taskDef.priority || "Normal",
+                  description: "Auto-created on service delivery creation",
+                  status: "To Do",
+                  account_id: accountId,
+                  delivery_id: sd.id,
+                  stage_order: stageData.stage_order,
+                })
+              }
+            }
           }
         } catch (e) {
           sdResults.push({ pipeline, status: "error", id: e instanceof Error ? e.message : String(e) })
@@ -298,6 +325,40 @@ export async function POST(req: NextRequest) {
       })
     } else {
       steps.push({ step: "service_deliveries", status: "skipped", detail: "No bundled_pipelines on offer" })
+    }
+
+    // ─── STEP 2a: Mark included Tax Return as paid (AUTO) ─────
+    // If Tax Return SD was created and the offer has Tax Return with price "Inclusa"/"Included",
+    // update the tax_returns record to paid=true so Stage 1 task knows to skip invoicing.
+    const taxReturnSd = sdResults.find(r => r.pipeline === "Tax Return" && r.status === "created")
+    if (taxReturnSd?.id && offer?.services && autoAccountId) {
+      const services = Array.isArray(offer.services) ? offer.services : []
+      const includedTaxReturn = services.find((s: { pipeline_type?: string; price?: string }) =>
+        s.pipeline_type === "Tax Return" &&
+        s.price &&
+        /inclus[ao]|included|€?\s*0/i.test(s.price)
+      )
+      if (includedTaxReturn) {
+        const today = new Date().toISOString().split("T")[0]
+        // Check if tax_returns record exists for this account + current year
+        const currentYear = new Date().getFullYear()
+        const { data: existingTr } = await supabase
+          .from("tax_returns")
+          .select("id")
+          .eq("account_id", autoAccountId)
+          .eq("tax_year", currentYear - 1) // Tax return is for previous year (e.g., 2025 return filed in 2026)
+          .limit(1)
+
+        if (existingTr && existingTr.length > 0) {
+          await supabase
+            .from("tax_returns")
+            .update({ paid: true, paid_date: today })
+            .eq("id", existingTr[0].id)
+          steps.push({ step: "tax_return_paid", status: "updated", detail: `tax_returns ${existingTr[0].id.slice(0, 8)} marked paid (included in deal)` })
+        } else {
+          steps.push({ step: "tax_return_paid", status: "skipped", detail: `No tax_returns record found for ${currentYear - 1}` })
+        }
+      }
     }
 
     // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
