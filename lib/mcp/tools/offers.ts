@@ -346,10 +346,18 @@ export function buildTransitionWelcomeEmail(
 
     <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">Un regalo per te</h3>
-      <p style="margin: 0; font-size: 14px; color: #166534;">Il portale &egrave; stato creato per offrirti un servizio migliore e pi&ugrave; trasparente. &Egrave; incluso nel tuo abbonamento annuale senza costi aggiuntivi. Tutti i tuoi documenti, servizi, fatture e comunicazioni saranno centralizzati qui &mdash; disponibili 24/7 da qualsiasi dispositivo.</p>
+      <p style="margin: 0; font-size: 14px; color: #166534;">Il portale &egrave; stato creato per offrirti un servizio migliore e pi&ugrave; trasparente. &Egrave; incluso nel tuo abbonamento annuale senza costi aggiuntivi. Non cambia nulla nel modo in cui lavoriamo insieme &mdash; il portale rende semplicemente tutto pi&ugrave; facile e accessibile.</p>
     </div>
 
-    <p style="font-size: 14px;">Per qualsiasi domanda, rispondi a questa email o contattaci su WhatsApp.</p>
+    <div style="background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; padding: 16px; margin: 20px 0;">
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #6b21a8;">Funziona anche sul telefono</h3>
+      <p style="margin: 0 0 12px; font-size: 14px; color: #6b21a8;">Il portale &egrave; ottimizzato per smartphone e tablet. Riceverai notifiche push quando ci sono aggiornamenti importanti (documenti da firmare, risposte dal team, scadenze in arrivo).</p>
+      <p style="margin: 0 0 4px; font-size: 13px; color: #6b21a8;"><strong>Per aggiungerlo come app sul tuo iPhone:</strong><br/>Apri Safari &rarr; vai su portal.tonydurante.us &rarr; tocca il pulsante Condividi (quadrato con freccia in su) &rarr; scorri e tocca &ldquo;Aggiungi alla schermata Home&rdquo;</p>
+      <p style="margin: 0; font-size: 13px; color: #6b21a8;"><strong>Per aggiungerlo come app su Android:</strong><br/>Apri Chrome &rarr; vai su portal.tonydurante.us &rarr; tocca il menu (tre puntini in alto a destra) &rarr; tocca &ldquo;Aggiungi alla schermata Home&rdquo;</p>
+    </div>
+
+    <p style="font-size: 14px;">Il portale &egrave; stato progettato per essere semplice e intuitivo. Se hai bisogno di funzionalit&agrave; specifiche per la tua attivit&agrave;, siamo pronti a svilupparle per te &mdash; basta chiedere.</p>
+    <p style="font-size: 14px;">Per qualsiasi domanda, rispondi a questa email o contattaci su WhatsApp. Siamo qui per aiutarti.</p>
 
     <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Tony Durante LLC</strong></p>
 
@@ -419,10 +427,18 @@ export function buildTransitionWelcomeEmail(
 
     <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">A gift for you</h3>
-      <p style="margin: 0; font-size: 14px; color: #166534;">The portal was created to provide you with a better, more transparent service. It is included in your annual subscription at no additional cost. All your documents, services, invoices, and communications will be centralized here &mdash; available 24/7 from any device.</p>
+      <p style="margin: 0; font-size: 14px; color: #166534;">The portal was created to provide you with a better, more transparent service. It is included in your annual subscription at no additional cost. Nothing changes in how we work together &mdash; the portal simply makes everything easier and more accessible.</p>
     </div>
 
-    <p style="font-size: 14px;">For any questions, reply to this email or reach out via WhatsApp.</p>
+    <div style="background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; padding: 16px; margin: 20px 0;">
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #6b21a8;">Works on your phone too</h3>
+      <p style="margin: 0 0 12px; font-size: 14px; color: #6b21a8;">The portal is fully optimized for smartphones and tablets. You will receive push notifications for important updates (documents to sign, team replies, upcoming deadlines).</p>
+      <p style="margin: 0 0 4px; font-size: 13px; color: #6b21a8;"><strong>To add it as an app on iPhone:</strong><br/>Open Safari &rarr; go to portal.tonydurante.us &rarr; tap the Share button (square with arrow pointing up) &rarr; scroll down and tap &ldquo;Add to Home Screen&rdquo;</p>
+      <p style="margin: 0; font-size: 13px; color: #6b21a8;"><strong>To add it as an app on Android:</strong><br/>Open Chrome &rarr; go to portal.tonydurante.us &rarr; tap the menu (three dots, top right) &rarr; tap &ldquo;Add to Home Screen&rdquo;</p>
+    </div>
+
+    <p style="font-size: 14px;">The portal is designed to be simple and user-friendly. If you need specific features for your business, we are ready to build them for you &mdash; just ask.</p>
+    <p style="font-size: 14px;">For any questions, reply to this email or reach out via WhatsApp. We are here to help.</p>
 
     <p style="margin-top: 20px;">Best regards,<br/><strong>Tony Durante LLC</strong></p>
 
