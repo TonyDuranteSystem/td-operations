@@ -291,58 +291,66 @@ export function buildTransitionWelcomeEmail(
   if (lang === "it") {
     return `<div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #333; line-height: 1.7;">
   <div style="background: #1e3a5f; padding: 28px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 24px;">Il tuo Portale Clienti è pronto</h1>
-    <p style="color: #93c5fd; margin: 6px 0 0; font-size: 14px;">Tony Durante LLC — ${companyName}</p>
+    <h1 style="color: white; margin: 0; font-size: 24px;">Il tuo Portale Clienti &egrave; pronto</h1>
+    <p style="color: #93c5fd; margin: 6px 0 0; font-size: 14px;">Tony Durante LLC &mdash; ${companyName}</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 28px; border-radius: 0 0 12px 12px;">
     <p>Ciao ${firstName},</p>
-    <p>Siamo entusiasti di presentarti il <strong>Portale Clienti Tony Durante</strong> — un'area riservata dove puoi gestire tutti gli aspetti della tua LLC in un unico posto.</p>
+    <p>Siamo entusiasti di presentarti il <strong>Portale Clienti Tony Durante</strong> &mdash; un'area riservata dove puoi gestire tutti gli aspetti della tua LLC in un unico posto.</p>
 
     <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 10px; font-size: 15px; color: #1e3a5f;">Cosa puoi fare nel Portale:</h3>
-      <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
-        <li><strong>Firmare i documenti</strong> — Contratto annuale, Operating Agreement, Lease</li>
-        <li><strong>Consultare i tuoi documenti</strong> — Articles, EIN, Passaporto, Tax Return</li>
-        <li><strong>Monitorare i servizi attivi</strong> — Tax Return, Registered Agent, Annual Report</li>
-        <li><strong>Gestire fatture e pagamenti</strong></li>
-        <li><strong>Comunicare con il team</strong> tramite la chat integrata</li>
+      <h3 style="margin: 0 0 12px; font-size: 15px; color: #1e3a5f;">Cosa puoi fare nel Portale:</h3>
+      <ul style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 2;">
+        <li><strong>Fatturare i tuoi clienti</strong> &mdash; Crea, invia e traccia fatture professionali per la tua attivit&agrave;</li>
+        <li><strong>Gestire i tuoi clienti</strong> &mdash; Database clienti con storico fatture</li>
+        <li><strong>Firmare i documenti</strong> &mdash; Contratto annuale, Operating Agreement, Lease</li>
+        <li><strong>Consultare tutti i documenti</strong> &mdash; Articles, EIN, Passaporto, Tax Return</li>
+        <li><strong>Monitorare i servizi attivi</strong> &mdash; Tax Return, Registered Agent, Annual Report con stato in tempo reale</li>
+        <li><strong>Scadenze e compliance</strong> &mdash; Calendario visivo con tutte le scadenze importanti</li>
+        <li><strong>Gestire fatture e pagamenti</strong> &mdash; Storico pagamenti e fatture in sospeso</li>
+        <li><strong>Comunicare con il team</strong> &mdash; Chat integrata per assistenza diretta</li>
+        <li><strong>Caricare documenti fiscali</strong> &mdash; Carica i documenti per la dichiarazione dei redditi</li>
       </ul>
     </div>
 
     <h3 style="font-size: 15px; color: #1e3a5f; margin-top: 24px;">Le tue credenziali di accesso:</h3>
     <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 12px 0;">
       <table style="width: 100%; border-collapse: collapse;">
-        <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px;">Portale</td><td style="padding: 6px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
+        <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px; width: 80px;">Portale</td><td style="padding: 6px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
         <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px;">Email</td><td style="padding: 6px 8px; font-weight: bold;">${email}</td></tr>
         <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px;">Password</td><td style="padding: 6px 8px; font-weight: bold; font-family: monospace; letter-spacing: 1px;">${tempPassword}</td></tr>
       </table>
     </div>
-    <p style="color: #6b7280; font-size: 13px;">Al primo accesso ti verrà chiesto di cambiare la password.</p>
+    <p style="color: #6b7280; font-size: 13px;">Al primo accesso ti verr&agrave; chiesto di cambiare la password.</p>
 
     <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <h3 style="margin: 0 0 8px; font-size: 14px; color: #92400e;">Cosa devi fare ora:</h3>
       <p style="margin: 0; font-size: 14px; color: #92400e;">Nel portale troverai <strong>3 documenti da firmare</strong> per il 2026:</p>
-      <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: #92400e;">
-        <li>Contratto di Servizio Annuale (MSA)</li>
-        <li>Operating Agreement</li>
-        <li>Contratto di Locazione Ufficio (Lease)</li>
+      <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: #92400e; line-height: 1.8;">
+        <li><strong>Contratto di Servizio Annuale</strong> &mdash; conferma i servizi e il piano di pagamento per il 2026</li>
+        <li><strong>Operating Agreement</strong> &mdash; il documento costitutivo aggiornato della tua LLC</li>
+        <li><strong>Contratto di Locazione Ufficio</strong> &mdash; il contratto per l'indirizzo commerciale registrato</li>
       </ol>
     </div>
 
-    <p style="margin: 24px 0; text-align: center;">
+    <p style="margin: 28px 0; text-align: center;">
       <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
         Accedi al Portale
       </a>
     </p>
 
-    <p style="font-size: 14px;">Il portale è stato creato per offrirti un servizio migliore e più trasparente. Tutti i tuoi documenti, servizi e comunicazioni saranno centralizzati qui.</p>
+    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">Un regalo per te</h3>
+      <p style="margin: 0; font-size: 14px; color: #166534;">Il portale &egrave; stato creato per offrirti un servizio migliore e pi&ugrave; trasparente. &Egrave; incluso nel tuo abbonamento annuale senza costi aggiuntivi. Tutti i tuoi documenti, servizi, fatture e comunicazioni saranno centralizzati qui &mdash; disponibili 24/7 da qualsiasi dispositivo.</p>
+    </div>
+
     <p style="font-size: 14px;">Per qualsiasi domanda, rispondi a questa email o contattaci su WhatsApp.</p>
 
     <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Tony Durante LLC</strong></p>
 
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af; text-align: center;">
-      Tony Durante LLC · 10225 Ulmerton Road, Suite 3D · Largo, FL 33771<br/>
-      support@tonydurante.us · www.tonydurante.us
+      Tony Durante LLC &middot; 10225 Ulmerton Road, Suite 3D &middot; Largo, FL 33771<br/>
+      support@tonydurante.us &middot; www.tonydurante.us
     </div>
   </div>
 </div>`
@@ -352,27 +360,31 @@ export function buildTransitionWelcomeEmail(
   return `<div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #333; line-height: 1.7;">
   <div style="background: #1e3a5f; padding: 28px; border-radius: 12px 12px 0 0; text-align: center;">
     <h1 style="color: white; margin: 0; font-size: 24px;">Your Client Portal is Ready</h1>
-    <p style="color: #93c5fd; margin: 6px 0 0; font-size: 14px;">Tony Durante LLC — ${companyName}</p>
+    <p style="color: #93c5fd; margin: 6px 0 0; font-size: 14px;">Tony Durante LLC &mdash; ${companyName}</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 28px; border-radius: 0 0 12px 12px;">
     <p>Hi ${firstName},</p>
-    <p>We're excited to introduce the <strong>Tony Durante Client Portal</strong> — a dedicated area where you can manage everything about your LLC in one place.</p>
+    <p>We're excited to introduce the <strong>Tony Durante Client Portal</strong> &mdash; a dedicated area where you can manage everything about your LLC in one place.</p>
 
     <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 10px; font-size: 15px; color: #1e3a5f;">What you can do in the Portal:</h3>
-      <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
-        <li><strong>Sign documents</strong> — Annual Agreement, Operating Agreement, Lease</li>
-        <li><strong>View your documents</strong> — Articles, EIN, Passport, Tax Returns</li>
-        <li><strong>Track active services</strong> — Tax Return, Registered Agent, Annual Report</li>
-        <li><strong>Manage invoices and payments</strong></li>
-        <li><strong>Communicate with the team</strong> via integrated chat</li>
+      <h3 style="margin: 0 0 12px; font-size: 15px; color: #1e3a5f;">What you can do in the Portal:</h3>
+      <ul style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 2;">
+        <li><strong>Invoice your clients</strong> &mdash; Create, send, and track professional invoices for your business</li>
+        <li><strong>Manage your customers</strong> &mdash; Customer database with invoice history</li>
+        <li><strong>Sign documents</strong> &mdash; Annual Agreement, Operating Agreement, Lease</li>
+        <li><strong>View all documents</strong> &mdash; Articles, EIN, Passport, Tax Returns</li>
+        <li><strong>Track active services</strong> &mdash; Tax Return, Registered Agent, Annual Report with real-time status</li>
+        <li><strong>Deadlines &amp; compliance</strong> &mdash; Visual calendar with all important deadlines</li>
+        <li><strong>Manage invoices &amp; payments</strong> &mdash; Payment history and outstanding invoices</li>
+        <li><strong>Communicate with the team</strong> &mdash; Integrated chat for direct support</li>
+        <li><strong>Upload tax documents</strong> &mdash; Upload documents for tax return preparation</li>
       </ul>
     </div>
 
     <h3 style="font-size: 15px; color: #1e3a5f; margin-top: 24px;">Your login credentials:</h3>
     <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 12px 0;">
       <table style="width: 100%; border-collapse: collapse;">
-        <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px;">Portal</td><td style="padding: 6px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
+        <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px; width: 80px;">Portal</td><td style="padding: 6px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
         <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px;">Email</td><td style="padding: 6px 8px; font-weight: bold;">${email}</td></tr>
         <tr><td style="padding: 6px 8px; color: #6b7280; font-size: 13px;">Password</td><td style="padding: 6px 8px; font-weight: bold; font-family: monospace; letter-spacing: 1px;">${tempPassword}</td></tr>
       </table>
@@ -382,27 +394,31 @@ export function buildTransitionWelcomeEmail(
     <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <h3 style="margin: 0 0 8px; font-size: 14px; color: #92400e;">What you need to do now:</h3>
       <p style="margin: 0; font-size: 14px; color: #92400e;">In the portal, you will find <strong>3 documents to sign</strong> for 2026:</p>
-      <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: #92400e;">
-        <li>Annual Service Agreement (MSA)</li>
-        <li>Operating Agreement</li>
-        <li>Office Lease Agreement</li>
+      <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: #92400e; line-height: 1.8;">
+        <li><strong>Annual Service Agreement</strong> &mdash; confirms the services and payment schedule for 2026</li>
+        <li><strong>Operating Agreement</strong> &mdash; the updated governing document for your LLC</li>
+        <li><strong>Office Lease Agreement</strong> &mdash; the lease for your registered business address</li>
       </ol>
     </div>
 
-    <p style="margin: 24px 0; text-align: center;">
+    <p style="margin: 28px 0; text-align: center;">
       <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
         Log in to Portal
       </a>
     </p>
 
-    <p style="font-size: 14px;">The portal was created to provide you with a better, more transparent service. All your documents, services, and communications will be centralized here.</p>
+    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">A gift for you</h3>
+      <p style="margin: 0; font-size: 14px; color: #166534;">The portal was created to provide you with a better, more transparent service. It is included in your annual subscription at no additional cost. All your documents, services, invoices, and communications will be centralized here &mdash; available 24/7 from any device.</p>
+    </div>
+
     <p style="font-size: 14px;">For any questions, reply to this email or reach out via WhatsApp.</p>
 
     <p style="margin-top: 20px;">Best regards,<br/><strong>Tony Durante LLC</strong></p>
 
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af; text-align: center;">
-      Tony Durante LLC · 10225 Ulmerton Road, Suite 3D · Largo, FL 33771<br/>
-      support@tonydurante.us · www.tonydurante.us
+      Tony Durante LLC &middot; 10225 Ulmerton Road, Suite 3D &middot; Largo, FL 33771<br/>
+      support@tonydurante.us &middot; www.tonydurante.us
     </div>
   </div>
 </div>`
