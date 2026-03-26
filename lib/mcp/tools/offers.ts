@@ -313,7 +313,7 @@ export function buildTransitionWelcomeEmail(
         <li><strong>Monitorare i servizi attivi</strong> &mdash; Tax Return, Registered Agent, Annual Report con stato in tempo reale</li>
         <li><strong>Scadenze e compliance</strong> &mdash; Calendario visivo con tutte le scadenze importanti</li>
         <li><strong>Pagamenti a Tony Durante</strong> &mdash; Storico pagamenti, fatture in sospeso e scadute</li>
-        <li><strong>Comunicare con il team</strong> &mdash; Chat integrata per assistenza diretta</li>
+        <li><strong>Comunicare con il team</strong> &mdash; Chat integrata per assistenza diretta. Puoi anche usare il microfono per dettare i messaggi vocalmente &mdash; il sistema trascrive automaticamente la tua voce in testo, senza bisogno di digitare</li>
         <li><strong>Caricare documenti fiscali</strong> &mdash; Carica i documenti per la dichiarazione dei redditi</li>
       </ul>
     </div>
@@ -394,7 +394,7 @@ export function buildTransitionWelcomeEmail(
         <li><strong>Track active services</strong> &mdash; Tax Return, Registered Agent, Annual Report with real-time status</li>
         <li><strong>Deadlines &amp; compliance</strong> &mdash; Visual calendar with all important deadlines</li>
         <li><strong>Payments to Tony Durante</strong> &mdash; Payment history, outstanding and overdue invoices</li>
-        <li><strong>Communicate with the team</strong> &mdash; Integrated chat for direct support</li>
+        <li><strong>Communicate with the team</strong> &mdash; Integrated chat for direct support. You can also use the microphone to dictate your messages by voice &mdash; the system automatically transcribes your voice to text, no typing needed</li>
         <li><strong>Upload tax documents</strong> &mdash; Upload documents for tax return preparation</li>
       </ul>
     </div>
