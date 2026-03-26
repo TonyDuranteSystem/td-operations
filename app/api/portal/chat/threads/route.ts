@@ -30,11 +30,19 @@ export async function GET() {
 
     const result = []
     for (const accountId of uniqueAccountIds.slice(0, 50)) {
-      // Get account name
+      // Get account name + contact name
       const { data: account } = await supabaseAdmin
         .from('accounts')
         .select('company_name')
         .eq('id', accountId)
+        .single()
+
+      // Get primary contact name for this account
+      const { data: contactLink } = await supabaseAdmin
+        .from('account_contacts')
+        .select('contacts(full_name)')
+        .eq('account_id', accountId)
+        .limit(1)
         .single()
 
       // Get last message
@@ -54,9 +62,13 @@ export async function GET() {
         .eq('sender_type', 'client')
         .is('read_at', null)
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contactName = (contactLink?.contacts as any)?.full_name ?? null
+
       result.push({
         account_id: accountId,
         company_name: account?.company_name ?? 'Unknown',
+        contact_name: contactName,
         last_message: lastMsg?.message ?? '',
         last_message_at: lastMsg?.created_at ?? '',
         unread_count: count ?? 0,

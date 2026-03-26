@@ -11,6 +11,7 @@ import { format, parseISO } from 'date-fns'
 interface ChatThread {
   account_id: string
   company_name: string
+  contact_name: string | null
   last_message: string
   last_message_at: string
   unread_count: number
@@ -278,10 +279,15 @@ export default function PortalChatsPage() {
               <p className="text-sm text-zinc-400">No portal conversations yet</p>
             </div>
           ) : (
-            threads.filter(t => !chatSearch.trim() || t.company_name.toLowerCase().includes(chatSearch.toLowerCase())).map(thread => (
+            threads.filter(t => {
+              if (!chatSearch.trim()) return true
+              const q = chatSearch.toLowerCase()
+              return t.company_name.toLowerCase().includes(q) || (t.contact_name?.toLowerCase().includes(q) ?? false)
+            }).map(thread => (
               <button
                 key={thread.account_id}
                 onClick={() => setSelectedAccountId(thread.account_id)}
+                title={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name}
                 className={cn(
                   'w-full px-4 py-3 text-left border-b hover:bg-zinc-50 transition-colors',
                   selectedAccountId === thread.account_id && 'bg-blue-50 border-l-2 border-l-blue-600'
@@ -290,7 +296,12 @@ export default function PortalChatsPage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 min-w-0">
                     <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
-                    <span className="text-sm font-medium text-zinc-900 truncate">{thread.company_name}</span>
+                    <div className="min-w-0">
+                      <span className="text-sm font-medium text-zinc-900 truncate block">{thread.company_name}</span>
+                      {thread.contact_name && (
+                        <span className="text-[11px] text-zinc-400 truncate block">{thread.contact_name}</span>
+                      )}
+                    </div>
                   </div>
                   {thread.unread_count > 0 && (
                     <span className="ml-2 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white">
@@ -330,9 +341,19 @@ export default function PortalChatsPage() {
               >
                 &larr; Back
               </button>
-              <p className="text-sm font-semibold text-zinc-900">
-                {threads?.find(t => t.account_id === selectedAccountId)?.company_name ?? 'Chat'}
-              </p>
+              {(() => {
+                const selectedThread = threads?.find(t => t.account_id === selectedAccountId)
+                return (
+                  <div>
+                    <p className="text-sm font-semibold text-zinc-900">
+                      {selectedThread?.company_name ?? 'Chat'}
+                    </p>
+                    {selectedThread?.contact_name && (
+                      <p className="text-xs text-zinc-500">{selectedThread.contact_name}</p>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
 
             {/* Messages */}
