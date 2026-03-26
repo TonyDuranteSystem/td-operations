@@ -39,7 +39,8 @@ import {
   DndContext,
   closestCenter,
   KeyboardSensor,
-  PointerSensor,
+  TouchSensor,
+  MouseSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -107,7 +108,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
     isDragging,
   } = useSortable({ id: item.id, disabled: !editMode })
 
-  const style = {
+  const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
   }
@@ -116,8 +117,9 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
     <div
       ref={setNodeRef}
       style={style}
+      draggable={false}
       className={cn(
-        'flex items-center rounded-md transition-colors',
+        'flex items-center rounded-md transition-colors select-none',
         isDragging && 'opacity-50 z-50 bg-sidebar-accent shadow-lg'
       )}
     >
@@ -125,7 +127,9 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         <button
           {...attributes}
           {...listeners}
+          onDragStart={e => e.preventDefault()}
           className="p-1 cursor-grab active:cursor-grabbing text-sidebar-foreground/30 hover:text-sidebar-foreground/60 shrink-0"
+          style={{ touchAction: 'none' }}
           title="Drag to reorder"
         >
           <GripVertical className="h-3.5 w-3.5" />
@@ -203,7 +207,8 @@ export function Sidebar({
     })
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 100, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
