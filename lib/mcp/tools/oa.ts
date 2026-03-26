@@ -120,7 +120,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
 
         const { data: contact, error: contactErr } = await supabaseAdmin
           .from("contacts")
-          .select("id, full_name, email, phone, address, language")
+          .select("id, full_name, email, phone, residency, language")
           .eq("id", contactLinks[0].contact_id)
           .single()
 
@@ -179,7 +179,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             entity_type: entityType,
             manager_name: managerName,
             member_name: contact.full_name,
-            member_address: contact.address || null,
+            member_address: contact.residency || null,
             member_email: contact.email || null,
             members: membersJson,
             effective_date: effectiveDate,
