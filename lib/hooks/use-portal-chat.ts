@@ -104,7 +104,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   }, [filterColumn, filterValue])
 
   // Send message
-  const sendMessage = useCallback(async (message: string, attachment?: { url: string; name: string }) => {
+  const sendMessage = useCallback(async (message: string, attachment?: { url: string; name: string }, replyToId?: string) => {
     if ((!message.trim() && !attachment) || sending) return
 
     setSending(true)
@@ -118,6 +118,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
           message: message || (attachment ? `[Attachment: ${attachment.name}]` : ''),
           attachment_url: attachment?.url,
           attachment_name: attachment?.name,
+          reply_to_id: replyToId || undefined,
         }),
       })
 

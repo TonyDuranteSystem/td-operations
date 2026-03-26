@@ -311,6 +311,27 @@ export function getContactOnlyNavVisibility(): PortalNavVisibility {
   }
 }
 
+/**
+ * Count unread admin messages for a client.
+ * Used for the chat badge in the sidebar.
+ */
+export async function getUnreadChatCount(accountId: string | null, contactId: string): Promise<number> {
+  let query = supabaseAdmin
+    .from('portal_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('sender_type', 'admin')
+    .is('read_at', null)
+
+  if (accountId) {
+    query = query.eq('account_id', accountId)
+  } else {
+    query = query.eq('contact_id', contactId).is('account_id', null)
+  }
+
+  const { count } = await query
+  return count ?? 0
+}
+
 export async function getPortalTaxReturns(accountId: string) {
   // Tax returns are matched by company_name, not account_id
   const { data: account } = await supabaseAdmin

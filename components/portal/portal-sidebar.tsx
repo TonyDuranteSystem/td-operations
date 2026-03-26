@@ -38,6 +38,7 @@ interface PortalSidebarProps {
   activeServices?: string[]
   navVisibility?: PortalNavVisibility
   portalTier?: string
+  unreadChatCount?: number
 }
 
 // Nav items organized into collapsible groups
@@ -98,7 +99,7 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0 }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -126,23 +127,31 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   const displayName = user.email?.split('@')[0] ?? 'User'
 
-  const renderNavItem = (item: NavItem) => (
-    <Link
-      key={item.href}
-      href={item.href}
-      onClick={() => setMobileOpen(false)}
-      aria-current={isActive(item.href) ? 'page' : undefined}
-      className={cn(
-        'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-        isActive(item.href)
-          ? 'bg-blue-50 text-blue-700'
-          : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
-      )}
-    >
-      <item.icon className="h-4 w-4 shrink-0" />
-      {t(item.key)}
-    </Link>
-  )
+  const renderNavItem = (item: NavItem) => {
+    const badge = item.href === '/portal/chat' && unreadChatCount > 0 ? unreadChatCount : 0
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        onClick={() => setMobileOpen(false)}
+        aria-current={isActive(item.href) ? 'page' : undefined}
+        className={cn(
+          'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+          isActive(item.href)
+            ? 'bg-blue-50 text-blue-700'
+            : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+        )}
+      >
+        <item.icon className="h-4 w-4 shrink-0" />
+        <span className="flex-1">{t(item.key)}</span>
+        {badge > 0 && (
+          <span className="min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </Link>
+    )
+  }
 
   return (
     <>

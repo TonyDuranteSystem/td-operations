@@ -2,8 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTier, getPortalTierByContact, getContactOnlyNavVisibility } from '@/lib/portal/queries'
-import type { PortalNavVisibility } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getContactOnlyNavVisibility, getUnreadChatCount } from '@/lib/portal/queries'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { LocaleProvider } from '@/components/portal/locale-provider'
@@ -74,12 +73,13 @@ export default async function PortalLayout({
     : (user.app_metadata?.portal_tier as string) || 'lead'
 
   // Account-level data: only if an account is selected
-  const [activeServices, navVisibility] = selectedAccountId
+  const [activeServices, navVisibility, unreadChatCount] = selectedAccountId
     ? await Promise.all([
         getPortalActiveServices(selectedAccountId),
         getPortalNavVisibility(selectedAccountId),
+        getUnreadChatCount(selectedAccountId, contactId || ''),
       ])
-    : [[] as string[], getContactOnlyNavVisibility()]
+    : [[] as string[], getContactOnlyNavVisibility(), contactId ? await getUnreadChatCount(null, contactId) : 0]
 
   return (
     <Providers>
@@ -94,6 +94,7 @@ export default async function PortalLayout({
             activeServices={activeServices}
             navVisibility={navVisibility}
             portalTier={portalTier}
+            unreadChatCount={unreadChatCount}
           />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />

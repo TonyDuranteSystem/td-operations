@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Shield } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -25,6 +25,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const [input, setInput] = useState('')
   const [uploading, setUploading] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
+  const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -58,7 +59,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
     if (!el) return
     // Collapse to 0 first to get true scrollHeight
     el.style.height = '0px'
-    const newHeight = Math.max(44, Math.min(el.scrollHeight, 150))
+    const newHeight = Math.max(44, Math.min(el.scrollHeight, 300))
     el.style.height = newHeight + 'px'
   }, [input])
 
@@ -74,11 +75,13 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
     // Stop recording if active
     if (isRecording) stopRecording()
     const msg = input
+    const replyId = replyTo?.id
     setInput('')
+    setReplyTo(null)
     // Reset textarea height
     if (inputRef.current) inputRef.current.style.height = 'auto'
     try {
-      await sendMessage(msg)
+      await sendMessage(msg, undefined, replyId)
     } catch {
       toast.error('Failed to send message')
       setInput(msg) // Restore on error
@@ -176,9 +179,10 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
             const showDateHeader = messageDate !== lastDate
             lastDate = messageDate
             const isOwn = msg.sender_id === userId
+            const replyMsg = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
 
             return (
-              <div key={msg.id}>
+              <div key={msg.id} className="group">
                 {showDateHeader && (
                   <div className="flex items-center justify-center my-4">
                     <span className="text-[10px] text-zinc-400 bg-zinc-100 px-3 py-1 rounded-full">
@@ -186,7 +190,17 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                     </span>
                   </div>
                 )}
-                <div className={cn('flex mb-1', isOwn ? 'justify-end' : 'justify-start')}>
+                <div className={cn('flex mb-1 items-end gap-1', isOwn ? 'justify-end' : 'justify-start')}>
+                  {/* Reply button — left side for own messages */}
+                  {isOwn && (
+                    <button
+                      onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-all shrink-0"
+                      title="Reply"
+                    >
+                      <Reply className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <div className={cn(
                     'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
                     isOwn
@@ -197,6 +211,20 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                       <p className="text-[10px] font-medium text-zinc-500 mb-0.5">
                         {msg.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
                       </p>
+                    )}
+                    {/* Quoted reply */}
+                    {replyMsg && (
+                      <div className={cn(
+                        'px-2.5 py-1.5 rounded-lg text-xs mb-1.5 border-l-2',
+                        isOwn
+                          ? 'bg-blue-500/30 border-blue-300 text-blue-100'
+                          : 'bg-zinc-200 border-zinc-400 text-zinc-600'
+                      )}>
+                        <p className="font-medium text-[10px] mb-0.5">
+                          {replyMsg.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
+                        </p>
+                        <p className="line-clamp-2">{replyMsg.message || '[Attachment]'}</p>
+                      </div>
                     )}
                     {msg.attachment_url && (
                       <a
@@ -227,6 +255,16 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                       )}
                     </p>
                   </div>
+                  {/* Reply button — right side for other's messages */}
+                  {!isOwn && (
+                    <button
+                      onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-all shrink-0"
+                      title="Reply"
+                    >
+                      <Reply className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -257,8 +295,27 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
         </div>
       )}
 
+      {/* Reply preview */}
+      {replyTo && (
+        <div className="px-4 py-2 bg-blue-50 border-t border-blue-100 flex items-center gap-2">
+          <Reply className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] font-medium text-blue-600">
+              {replyTo.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
+            </p>
+            <p className="text-xs text-blue-700 truncate">{replyTo.message || '[Attachment]'}</p>
+          </div>
+          <button
+            onClick={() => setReplyTo(null)}
+            className="p-1 rounded-full hover:bg-blue-100 text-blue-400 hover:text-blue-600 shrink-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Input */}
-      <div className="border-t p-3">
+      <div className={cn('border-t p-3', replyTo && 'border-t-0')}>
         <div className="flex items-end gap-2">
           <button
             onClick={() => fileRef.current?.click()}

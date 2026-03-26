@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, message, attachment_url, attachment_name } = body
+  const { account_id, contact_id: bodyContactId, message, attachment_url, attachment_name, reply_to_id } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -126,6 +126,7 @@ export async function POST(request: NextRequest) {
       message: (message || '').trim(),
       attachment_url: attachment_url || null,
       attachment_name: attachment_name || null,
+      reply_to_id: reply_to_id || null,
     })
     .select()
     .single()

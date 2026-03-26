@@ -379,6 +379,7 @@ export interface PortalMessage {
   attachment_url: string | null
   attachment_name: string | null
   read_at: string | null
+  reply_to_id: string | null
   created_at: string
 }
 
