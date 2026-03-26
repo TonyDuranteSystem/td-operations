@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
@@ -24,6 +24,7 @@ interface ChatMessage {
   attachment_url?: string
   attachment_name?: string
   read_at?: string | null
+  reply_to_id?: string | null
 }
 
 export default function PortalChatsPage() {
@@ -34,6 +35,7 @@ export default function PortalChatsPage() {
   const [aiLoading, setAiLoading] = useState(false)
   const [polishing, setPolishing] = useState(false)
   const [chatSearch, setChatSearch] = useState('')
+  const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const prevTotalUnreadRef = useRef(0)
@@ -87,6 +89,7 @@ export default function PortalChatsPage() {
   useEffect(() => {
     if (!selectedAccountId) return
     setAiSuggestion('')
+    setReplyToMsg(null)
     lastSuggestedMsgRef.current = null
     fetch('/api/portal/chat/read', {
       method: 'POST',
@@ -166,17 +169,18 @@ export default function PortalChatsPage() {
 
   // Send reply
   const sendMutation = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async ({ message, reply_to_id }: { message: string; reply_to_id?: string }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: selectedAccountId, message }),
+        body: JSON.stringify({ account_id: selectedAccountId, message, reply_to_id }),
       })
       if (!res.ok) throw new Error('Failed to send')
       return res.json()
     },
     onSuccess: () => {
       setReplyText('')
+      setReplyToMsg(null)
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
@@ -192,13 +196,13 @@ export default function PortalChatsPage() {
     const el = inputRef.current
     if (!el) return
     el.style.height = '0px'
-    el.style.height = Math.max(44, Math.min(el.scrollHeight, 150)) + 'px'
+    el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
   }, [replyText])
 
   const handleSend = () => {
     if (!replyText.trim() || !selectedAccountId) return
     if (isRecording) stopRecording()
-    sendMutation.mutate(replyText.trim())
+    sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id })
     if (inputRef.current) inputRef.current.style.height = 'auto'
   }
 
@@ -351,44 +355,83 @@ export default function PortalChatsPage() {
                     </button>
                   </div>
                 )}
-                {messages?.map(msg => (
-                  <div
-                    key={msg.id}
-                    className={cn(
-                      'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden',
-                      msg.sender_type === 'admin'
-                        ? 'ml-auto bg-blue-600 text-white'
-                        : 'bg-zinc-100 text-zinc-900'
-                    )}
-                  >
-                    {msg.attachment_url && (
-                      <a
-                        href={msg.attachment_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                {messages?.map(msg => {
+                  const isAdmin = msg.sender_type === 'admin'
+                  const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
+                  return (
+                    <div key={msg.id} className={cn('group flex items-end gap-1', isAdmin ? 'justify-end' : 'justify-start')}>
+                      {/* Reply button — left for admin messages */}
+                      {isAdmin && (
+                        <button
+                          onClick={() => setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-all shrink-0"
+                          title="Reply"
+                        >
+                          <Reply className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      <div
                         className={cn(
-                          'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
-                          msg.sender_type === 'admin' ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                          'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden',
+                          isAdmin
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-zinc-100 text-zinc-900'
                         )}
                       >
-                        <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
-                      </a>
-                    )}
-                    <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
-                    <p className={cn(
-                      'text-xs mt-1 flex items-center gap-1',
-                      msg.sender_type === 'admin' ? 'text-blue-200 justify-end' : 'text-zinc-400'
-                    )}>
-                      {format(parseISO(msg.created_at), 'h:mm a')}
-                      {msg.sender_type === 'admin' && (
-                        <CheckCheck className={cn(
-                          'h-3 w-3',
-                          msg.read_at ? 'text-blue-300' : 'text-blue-200/50'
-                        )} />
+                        {/* Quoted reply */}
+                        {replyRef && (
+                          <div className={cn(
+                            'px-2.5 py-1.5 rounded-lg text-xs mb-1.5 border-l-2',
+                            isAdmin
+                              ? 'bg-blue-500/30 border-blue-300 text-blue-100'
+                              : 'bg-zinc-200 border-zinc-400 text-zinc-600'
+                          )}>
+                            <p className="font-medium text-[10px] mb-0.5">
+                              {replyRef.sender_type === 'admin' ? 'You' : 'Client'}
+                            </p>
+                            <p className="line-clamp-2">{replyRef.message || '[Attachment]'}</p>
+                          </div>
+                        )}
+                        {msg.attachment_url && (
+                          <a
+                            href={msg.attachment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={cn(
+                              'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
+                              isAdmin ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                            )}
+                          >
+                            <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
+                          </a>
+                        )}
+                        <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
+                        <p className={cn(
+                          'text-xs mt-1 flex items-center gap-1',
+                          isAdmin ? 'text-blue-200 justify-end' : 'text-zinc-400'
+                        )}>
+                          {format(parseISO(msg.created_at), 'h:mm a')}
+                          {isAdmin && (
+                            <CheckCheck className={cn(
+                              'h-3 w-3',
+                              msg.read_at ? 'text-blue-300' : 'text-blue-200/50'
+                            )} />
+                          )}
+                        </p>
+                      </div>
+                      {/* Reply button — right for client messages */}
+                      {!isAdmin && (
+                        <button
+                          onClick={() => setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-all shrink-0"
+                          title="Reply"
+                        >
+                          <Reply className="h-3.5 w-3.5" />
+                        </button>
                       )}
-                    </p>
-                  </div>
-                ))}
+                    </div>
+                  )
+                })}
                 </>
               )}
               <div ref={messagesEndRef} />
@@ -463,8 +506,27 @@ export default function PortalChatsPage() {
               </div>
             )}
 
+            {/* Reply-to preview */}
+            {replyToMsg && (
+              <div className="px-4 py-2 bg-blue-50 border-t border-blue-100 flex items-center gap-2 shrink-0">
+                <Reply className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] font-medium text-blue-600">
+                    {replyToMsg.sender_type === 'admin' ? 'You' : 'Client'}
+                  </p>
+                  <p className="text-xs text-blue-700 truncate">{replyToMsg.message || '[Attachment]'}</p>
+                </div>
+                <button
+                  onClick={() => setReplyToMsg(null)}
+                  className="p-1 rounded-full hover:bg-blue-100 text-blue-400 hover:text-blue-600 shrink-0"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Reply input */}
-            <div className="p-4 border-t bg-white shrink-0">
+            <div className={cn('p-4 border-t bg-white shrink-0', replyToMsg && 'border-t-0')}>
               <div className="flex gap-2 items-end">
                 <textarea
                   ref={inputRef}

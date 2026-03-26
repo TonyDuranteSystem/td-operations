@@ -10,7 +10,6 @@ import {
   FileText,
   Building2,
   TrendingUp,
-  Cog,
   CreditCard,
   Settings,
   Calendar,
