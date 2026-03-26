@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
 import { format, parseISO } from 'date-fns'
+import { toast } from 'sonner'
 
 interface ChatThread {
   account_id: string
@@ -37,6 +38,8 @@ export default function PortalChatsPage() {
   const [polishing, setPolishing] = useState(false)
   const [chatSearch, setChatSearch] = useState('')
   const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string } | null>(null)
+  const [actionMenuMsg, setActionMenuMsg] = useState<string | null>(null) // message id
+  const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const prevTotalUnreadRef = useRef(0)
@@ -222,6 +225,23 @@ export default function PortalChatsPage() {
     finally { setPolishing(false) }
   }
 
+  const markAsUnread = async (accountId: string) => {
+    await fetch('/api/portal/chat/unread', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId }),
+    })
+    queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+  }
+
+  // Close action menu on click outside
+  useEffect(() => {
+    if (!actionMenuMsg) return
+    const handler = () => setActionMenuMsg(null)
+    document.addEventListener('click', handler)
+    return () => document.removeEventListener('click', handler)
+  }, [actionMenuMsg])
+
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
 
   return (
@@ -309,7 +329,18 @@ export default function PortalChatsPage() {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-zinc-500 mt-1 truncate">{thread.last_message}</p>
+                <div className="flex items-center justify-between mt-1">
+                  <p className="text-xs text-zinc-500 truncate flex-1">{thread.last_message}</p>
+                  {thread.unread_count === 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); markAsUnread(thread.account_id) }}
+                      className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1"
+                      title="Mark as unread"
+                    >
+                      <MailOpen className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
                 </p>
@@ -379,18 +410,57 @@ export default function PortalChatsPage() {
                 {messages?.map(msg => {
                   const isAdmin = msg.sender_type === 'admin'
                   const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
-                  return (
-                    <div key={msg.id} className={cn('group flex items-end gap-1', isAdmin ? 'justify-end' : 'justify-start')}>
-                      {/* Reply button — left for admin messages */}
-                      {isAdmin && (
-                        <button
-                          onClick={() => setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                          className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                          title="Reply"
+                  const menuOpen = actionMenuMsg === msg.id
+
+                  const actionButton = (
+                    <div className="relative shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setActionMenuMsg(menuOpen ? null : msg.id) }}
+                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                        title="Actions"
+                      >
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </button>
+                      {menuOpen && (
+                        <div
+                          className={cn(
+                            'absolute z-20 w-48 py-1 bg-white rounded-lg shadow-lg border text-sm',
+                            isAdmin ? 'right-0' : 'left-0'
+                          )}
+                          onClick={e => e.stopPropagation()}
                         >
-                          <Reply className="h-3.5 w-3.5" />
-                        </button>
+                          <button
+                            onClick={() => { setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type }); setActionMenuMsg(null); inputRef.current?.focus() }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <Reply className="h-3.5 w-3.5 text-zinc-400" /> Reply
+                          </button>
+                          <button
+                            onClick={() => { setQuickCreate({ type: 'task', messageText: msg.message }); setActionMenuMsg(null) }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Create Task
+                          </button>
+                          <button
+                            onClick={() => { setQuickCreate({ type: 'sd', messageText: msg.message }); setActionMenuMsg(null) }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <Truck className="h-3.5 w-3.5 text-zinc-400" /> Create Service Delivery
+                          </button>
+                          <button
+                            onClick={() => { setQuickCreate({ type: 'invoice', messageText: msg.message }); setActionMenuMsg(null) }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Create Invoice
+                          </button>
+                        </div>
                       )}
+                    </div>
+                  )
+
+                  return (
+                    <div key={msg.id} className={cn('flex items-end gap-1', isAdmin ? 'justify-end' : 'justify-start')}>
+                      {isAdmin && actionButton}
                       <div
                         className={cn(
                           'max-w-[75%] rounded-xl px-4 py-2.5 overflow-hidden',
@@ -440,16 +510,7 @@ export default function PortalChatsPage() {
                           )}
                         </p>
                       </div>
-                      {/* Reply button — right for client messages */}
-                      {!isAdmin && (
-                        <button
-                          onClick={() => setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
-                          className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-                          title="Reply"
-                        >
-                          <Reply className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                      {!isAdmin && actionButton}
                     </div>
                   )
                 })}
@@ -616,6 +677,236 @@ export default function PortalChatsPage() {
           </>
         )}
       </div>
+
+      {/* Quick-create modal */}
+      {quickCreate && selectedAccountId && (
+        <QuickCreateModal
+          type={quickCreate.type}
+          messageText={quickCreate.messageText}
+          accountId={selectedAccountId}
+          companyName={threads?.find(t => t.account_id === selectedAccountId)?.company_name ?? ''}
+          onClose={() => setQuickCreate(null)}
+        />
+      )}
     </div>
+  )
+}
+
+// ─── Quick Create Modal ────────────────────────────────────────────
+
+const SERVICE_TYPES = [
+  'Company Formation', 'Tax Return', 'EIN', 'ITIN',
+  'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address',
+]
+
+const TASK_CATEGORIES = [
+  'Client Response', 'Document', 'Filing', 'Follow-up',
+  'Payment', 'CRM Update', 'Internal', 'KYC',
+  'Shipping', 'Notarization', 'Client Communication',
+]
+
+function QuickCreateModal({ type, messageText, accountId, companyName, onClose }: {
+  type: 'task' | 'sd' | 'invoice'
+  messageText: string
+  accountId: string
+  companyName: string
+  onClose: () => void
+}) {
+  const [loading, setLoading] = useState(false)
+  // Task fields
+  const [taskTitle, setTaskTitle] = useState(messageText.slice(0, 200))
+  const [taskDescription, setTaskDescription] = useState(messageText.length > 200 ? messageText : '')
+  const [taskPriority, setTaskPriority] = useState('Normal')
+  const [taskCategory, setTaskCategory] = useState('Client Communication')
+  const [taskAssignedTo, setTaskAssignedTo] = useState('Luca')
+  const [taskDueDate, setTaskDueDate] = useState('')
+  // SD fields
+  const [sdServiceType, setSdServiceType] = useState('Company Formation')
+  const [sdNotes, setSdNotes] = useState(messageText.slice(0, 500))
+  const [sdAssignedTo, setSdAssignedTo] = useState('Luca')
+  // Invoice fields
+  const [invDescription, setInvDescription] = useState(messageText.slice(0, 200))
+  const [invAmount, setInvAmount] = useState('')
+  const [invMemo, setInvMemo] = useState('')
+
+  const handleSubmit = async () => {
+    setLoading(true)
+    try {
+      if (type === 'task') {
+        const res = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_title: taskTitle,
+            description: taskDescription || undefined,
+            priority: taskPriority,
+            category: taskCategory,
+            assigned_to: taskAssignedTo,
+            due_date: taskDueDate || undefined,
+            account_id: accountId,
+            status: 'To Do',
+          }),
+        })
+        if (!res.ok) throw new Error('Failed to create task')
+        toast.success('Task created')
+      } else if (type === 'sd') {
+        const res = await fetch('/api/service-deliveries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            service_type: sdServiceType,
+            account_id: accountId,
+            assigned_to: sdAssignedTo,
+            notes: sdNotes || undefined,
+          }),
+        })
+        if (!res.ok) throw new Error('Failed to create service delivery')
+        toast.success('Service delivery created')
+      } else if (type === 'invoice') {
+        const res = await fetch('/api/qb/create-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customer_name: companyName,
+            line_items: [{ description: invDescription, amount: Number(invAmount) || 0, quantity: 1 }],
+            memo: invMemo || undefined,
+          }),
+        })
+        if (!res.ok) throw new Error('Failed to create invoice')
+        toast.success('Invoice created')
+      }
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Creation failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const titles = { task: 'Create Task', sd: 'Create Service Delivery', invoice: 'Create Invoice' }
+  const icons = { task: ClipboardList, sd: Truck, invoice: Receipt }
+  const Icon = icons[type]
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b">
+            <div className="flex items-center gap-2.5">
+              <Icon className="h-5 w-5 text-blue-600" />
+              <h2 className="text-base font-semibold">{titles[type]}</h2>
+            </div>
+            <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+          </div>
+
+          {/* Context */}
+          <div className="px-5 py-3 bg-zinc-50 border-b">
+            <p className="text-xs text-zinc-500">From chat with <span className="font-medium text-zinc-700">{companyName}</span></p>
+            <p className="text-xs text-zinc-400 mt-1 line-clamp-2">&ldquo;{messageText.slice(0, 150)}{messageText.length > 150 ? '...' : ''}&rdquo;</p>
+          </div>
+
+          {/* Form */}
+          <div className="px-5 py-4 space-y-3">
+            {type === 'task' && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Title *</label>
+                  <input value={taskTitle} onChange={e => setTaskTitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Description</label>
+                  <textarea value={taskDescription} onChange={e => setTaskDescription(e.target.value)} rows={3} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-600 mb-1">Priority</label>
+                    <select value={taskPriority} onChange={e => setTaskPriority(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      {['Urgent', 'High', 'Normal', 'Low'].map(p => <option key={p}>{p}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-600 mb-1">Assigned to</label>
+                    <select value={taskAssignedTo} onChange={e => setTaskAssignedTo(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option>Luca</option>
+                      <option>Antonio</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-600 mb-1">Category</label>
+                    <select value={taskCategory} onChange={e => setTaskCategory(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      {TASK_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-600 mb-1">Due date</label>
+                    <input type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {type === 'sd' && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Service Type *</label>
+                  <select value={sdServiceType} onChange={e => setSdServiceType(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {SERVICE_TYPES.map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Assigned to</label>
+                  <select value={sdAssignedTo} onChange={e => setSdAssignedTo(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option>Luca</option>
+                    <option>Antonio</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Notes</label>
+                  <textarea value={sdNotes} onChange={e => setSdNotes(e.target.value)} rows={3} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+                </div>
+              </>
+            )}
+
+            {type === 'invoice' && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Customer</label>
+                  <input value={companyName} disabled className="w-full px-3 py-2 text-sm border rounded-lg bg-zinc-50 text-zinc-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Description *</label>
+                  <input value={invDescription} onChange={e => setInvDescription(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Amount ($) *</label>
+                  <input type="number" value={invAmount} onChange={e => setInvAmount(e.target.value)} placeholder="0.00" step="0.01" className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-600 mb-1">Memo</label>
+                  <input value={invMemo} onChange={e => setInvMemo(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="flex justify-end gap-2 px-5 py-4 border-t">
+            <button onClick={onClose} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+            <button
+              onClick={handleSubmit}
+              disabled={loading || (type === 'task' && !taskTitle.trim()) || (type === 'invoice' && (!invDescription.trim() || !invAmount))}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              Create
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
