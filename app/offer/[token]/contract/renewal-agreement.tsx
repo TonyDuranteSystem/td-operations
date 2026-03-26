@@ -51,8 +51,9 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
   const companyName = (offer.services as Array<{ name?: string }> | undefined)?.[0]?.name || offer.client_name || '[Company Name]'
 
   // Contract year — derive from effective_date or current year
+  // Use string split to avoid timezone issues (new Date('2026-01-01') in EST = Dec 31 2025)
   const contractYear = offer.effective_date
-    ? new Date(offer.effective_date).getFullYear()
+    ? parseInt(offer.effective_date.split('-')[0], 10)
     : new Date().getFullYear()
 
   // Init signature pad
