@@ -48,12 +48,14 @@ const GOVERNING_LAW: Record<string, string> = {
   NM: "This Agreement shall be governed by and construed in accordance with the New Mexico Limited Liability Company Act, NMSA 1978, Sections 53-19-1 through 53-19-74.",
   WY: "This Agreement shall be governed by and construed in accordance with the Wyoming Limited Liability Company Act, W.S. 17-29-101 through 17-29-1104.",
   FL: "This Agreement shall be governed by and construed in accordance with the Florida Revised Limited Liability Company Act, FL Stat Chapter 605.",
+  DE: "This Agreement shall be governed by and construed in accordance with the Delaware Limited Liability Company Act, 6 Del. C. Chapter 18.",
 }
 
 const STATE_FULL_NAME: Record<string, string> = {
   NM: "New Mexico",
   WY: "Wyoming",
   FL: "Florida",
+  DE: "Delaware",
 }
 
 // ─── State-specific additional clauses ───────────────────────
@@ -106,6 +108,25 @@ function getStateSpecificClauses(state: string, isMM: boolean): OASection[] {
           title: "State Tax Treatment",
           content:
             `The Company is formed in the State of Florida, which imposes no personal income tax on individuals. Each ${memberRef}'s distributive share of Company income shall be subject to federal income tax only, unless the Company operates in other states that impose income tax obligations.`,
+        },
+      ]
+
+    case "DE":
+      return [
+        {
+          title: "Limited Liability Protection",
+          content:
+            `Pursuant to 6 Del. C. Section 18-303, no ${memberRef} shall be obligated personally for any debt, obligation, or liability of the Company solely by reason of being a ${memberRef}. The Company's debts, obligations, and liabilities, whether arising in contract, tort, or otherwise, shall be solely the debts, obligations, and liabilities of the Company.`,
+        },
+        {
+          title: "Freedom of Contract",
+          content:
+            `Delaware's LLC Act (6 Del. C. Section 18-1101) gives maximum effect to the principle of freedom of contract and to the enforceability of this Agreement. It is the policy of the State of Delaware to give maximum effect to the terms of this Agreement. To the extent permitted by Delaware law, the provisions of this Agreement shall supersede any contrary provisions of the Delaware LLC Act.`,
+        },
+        {
+          title: "Annual Tax",
+          content:
+            "The Company shall pay the annual franchise tax of $300 to the State of Delaware on or before June 1 of each year, as required by 6 Del. C. Section 18-1107. Failure to pay may result in penalties and administrative dissolution.",
         },
       ]
 
@@ -399,6 +420,6 @@ export function generateOASections(data: OAData): OASection[] {
 
 // ─── Supported states ────────────────────────────────────────
 
-export const OA_SUPPORTED_STATES = ["NM", "WY", "FL"] as const
+export const OA_SUPPORTED_STATES = ["NM", "WY", "FL", "DE"] as const
 export type OASupportedState = (typeof OA_SUPPORTED_STATES)[number]
 export type OAEntityType = "SMLLC" | "MMLLC"
