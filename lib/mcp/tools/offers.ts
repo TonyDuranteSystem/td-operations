@@ -299,15 +299,20 @@ export function buildTransitionWelcomeEmail(
     <p>Siamo entusiasti di presentarti il <strong>Portale Clienti Tony Durante</strong> &mdash; un'area riservata dove puoi gestire tutti gli aspetti della tua LLC in un unico posto.</p>
 
     <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 12px; font-size: 15px; color: #1e3a5f;">Cosa puoi fare nel Portale:</h3>
+      <h3 style="margin: 0 0 8px; font-size: 15px; color: #1e3a5f;">Strumenti per il tuo Business:</h3>
+      <ul style="margin: 0 0 16px; padding-left: 20px; font-size: 14px; line-height: 2;">
+        <li><strong>Fatturare i tuoi clienti</strong> &mdash; Crea fatture professionali con il logo della tua LLC, inviale via email ai tuoi clienti e monitora lo stato di ogni pagamento (bozza, inviata, pagata, scaduta). Visualizza il totale fatturato e incassato in tempo reale</li>
+        <li><strong>Gestire i tuoi clienti</strong> &mdash; Costruisci il tuo database clienti con tutti i dettagli (nome, email, azienda). Per ogni cliente puoi vedere lo storico completo delle fatture emesse</li>
+        <li><strong>Conti bancari e Payment Gateway</strong> &mdash; Configura i dati bancari della tua LLC (IBAN, numero di conto) e i link del tuo payment gateway (Stripe, PayPal, ecc.). Questi dati vengono inseriti automaticamente nelle fatture che crei, cos&igrave; i tuoi clienti sanno esattamente come pagarti</li>
+        <li><strong>Logo aziendale</strong> &mdash; Carica il logo della tua LLC per personalizzare le fatture che invii ai tuoi clienti</li>
+      </ul>
+      <h3 style="margin: 0 0 8px; font-size: 15px; color: #1e3a5f;">Gestione LLC e Compliance:</h3>
       <ul style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 2;">
-        <li><strong>Fatturare i tuoi clienti</strong> &mdash; Crea, invia e traccia fatture professionali per la tua attivit&agrave;</li>
-        <li><strong>Gestire i tuoi clienti</strong> &mdash; Database clienti con storico fatture</li>
-        <li><strong>Firmare i documenti</strong> &mdash; Contratto annuale, Operating Agreement, Lease</li>
-        <li><strong>Consultare tutti i documenti</strong> &mdash; Articles, EIN, Passaporto, Tax Return</li>
+        <li><strong>Firmare i documenti</strong> &mdash; Contratto annuale, Operating Agreement, Lease con firma elettronica</li>
+        <li><strong>Consultare tutti i documenti</strong> &mdash; Articles, EIN, Passaporto, Tax Return sempre disponibili</li>
         <li><strong>Monitorare i servizi attivi</strong> &mdash; Tax Return, Registered Agent, Annual Report con stato in tempo reale</li>
         <li><strong>Scadenze e compliance</strong> &mdash; Calendario visivo con tutte le scadenze importanti</li>
-        <li><strong>Gestire fatture e pagamenti</strong> &mdash; Storico pagamenti e fatture in sospeso</li>
+        <li><strong>Pagamenti a Tony Durante</strong> &mdash; Storico pagamenti, fatture in sospeso e scadute</li>
         <li><strong>Comunicare con il team</strong> &mdash; Chat integrata per assistenza diretta</li>
         <li><strong>Caricare documenti fiscali</strong> &mdash; Carica i documenti per la dichiarazione dei redditi</li>
       </ul>
@@ -367,15 +372,20 @@ export function buildTransitionWelcomeEmail(
     <p>We're excited to introduce the <strong>Tony Durante Client Portal</strong> &mdash; a dedicated area where you can manage everything about your LLC in one place.</p>
 
     <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 12px; font-size: 15px; color: #1e3a5f;">What you can do in the Portal:</h3>
+      <h3 style="margin: 0 0 8px; font-size: 15px; color: #1e3a5f;">Business Tools for Your Operations:</h3>
+      <ul style="margin: 0 0 16px; padding-left: 20px; font-size: 14px; line-height: 2;">
+        <li><strong>Invoice your clients</strong> &mdash; Create professional invoices with your LLC logo, send them via email, and track every payment status (draft, sent, paid, overdue). View your total invoiced and collected amounts in real-time</li>
+        <li><strong>Manage your customers</strong> &mdash; Build your customer database with all their details (name, email, company). For each customer, you can view the complete history of invoices you have issued</li>
+        <li><strong>Bank accounts &amp; Payment Gateway</strong> &mdash; Set up your LLC bank details (IBAN, account number) and payment gateway links (Stripe, PayPal, etc.). These details are automatically included on every invoice you create, so your clients know exactly how to pay you</li>
+        <li><strong>Company logo</strong> &mdash; Upload your LLC logo to personalize the invoices you send to your clients</li>
+      </ul>
+      <h3 style="margin: 0 0 8px; font-size: 15px; color: #1e3a5f;">LLC Management &amp; Compliance:</h3>
       <ul style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 2;">
-        <li><strong>Invoice your clients</strong> &mdash; Create, send, and track professional invoices for your business</li>
-        <li><strong>Manage your customers</strong> &mdash; Customer database with invoice history</li>
-        <li><strong>Sign documents</strong> &mdash; Annual Agreement, Operating Agreement, Lease</li>
-        <li><strong>View all documents</strong> &mdash; Articles, EIN, Passport, Tax Returns</li>
+        <li><strong>Sign documents</strong> &mdash; Annual Agreement, Operating Agreement, Lease with electronic signature</li>
+        <li><strong>View all documents</strong> &mdash; Articles, EIN, Passport, Tax Returns always available</li>
         <li><strong>Track active services</strong> &mdash; Tax Return, Registered Agent, Annual Report with real-time status</li>
         <li><strong>Deadlines &amp; compliance</strong> &mdash; Visual calendar with all important deadlines</li>
-        <li><strong>Manage invoices &amp; payments</strong> &mdash; Payment history and outstanding invoices</li>
+        <li><strong>Payments to Tony Durante</strong> &mdash; Payment history, outstanding and overdue invoices</li>
         <li><strong>Communicate with the team</strong> &mdash; Integrated chat for direct support</li>
         <li><strong>Upload tax documents</strong> &mdash; Upload documents for tax return preparation</li>
       </ul>
