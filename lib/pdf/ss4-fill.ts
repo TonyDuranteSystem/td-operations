@@ -43,8 +43,9 @@ const TD_OFFICE = {
   cityStateZip: "Largo FL 33771",
 }
 
-// Applicant phone — always the same
+// Applicant phone and fax — always the same
 const APPLICANT_PHONE = "7274234285"
+const APPLICANT_FAX = "7275135584"
 
 /**
  * County and state mapping for Line 6.
@@ -205,6 +206,7 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   // === SIGNATURE SECTION ===
   text(150, 58, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
   text(465, 68, APPLICANT_PHONE)
+  text(465, 40, APPLICANT_FAX)
 
   return pdf.save()
 }
