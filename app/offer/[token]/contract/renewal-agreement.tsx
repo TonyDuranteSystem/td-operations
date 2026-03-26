@@ -298,8 +298,17 @@ function RenewalLegalSections({ contractYear }: { contractYear: number }) {
         <p>This Agreement governs the general terms and conditions of the annual service relationship between the Parties for the {contractYear} Contract Year. It replaces and supersedes any prior annual service agreement for the same period.</p></div>
 
       <div className="contract-section"><h3>2. Scope of Services</h3>
-        <p>The Service Provider shall provide the following annual management services:</p>
-        <ul><li>Registered Agent representation in the state of formation</li><li>State annual report filing and compliance monitoring</li><li>U.S. business address and mail handling (CMRA service)</li><li>Federal tax return preparation and filing</li><li>EIN maintenance and IRS correspondence handling</li><li>Ongoing administrative and operational support</li></ul>
+        <p>The Service Provider shall provide the following annual management services during the Contract Year:</p>
+        <ul>
+          <li><strong>Dedicated Client Portal</strong> &mdash; A secure, personal online platform where the Client can sign documents electronically, view and download all company documents (Articles of Organization, EIN Letter, Operating Agreement, Lease, Tax Returns), track active services and their progress, manage invoices and payments, and communicate directly with the team;</li>
+          <li><strong>Registered Agent</strong> &mdash; Official representation in the state of formation, maintaining a registered office address for service of process and state correspondence;</li>
+          <li><strong>State Annual Report &amp; Compliance</strong> &mdash; Preparation and filing of all required state annual reports, monitoring of compliance deadlines, and proactive notification of upcoming obligations;</li>
+          <li><strong>U.S. Business Address &amp; Mail Handling (CMRA)</strong> &mdash; A U.S. commercial mail receiving address for the LLC, with mail scanning and forwarding services;</li>
+          <li><strong>Federal Tax Return</strong> &mdash; Preparation and filing of the LLC&apos;s annual U.S. federal tax return (Form 5472/1120 for SMLLCs, Form 1065 for MMLLCs) through a qualified third-party tax professional;</li>
+          <li><strong>EIN Maintenance</strong> &mdash; Ongoing management of the Employer Identification Number, including IRS correspondence handling and address updates;</li>
+          <li><strong>Document Management</strong> &mdash; Secure storage and organization of all company documents on Google Drive, with digital copies accessible through the Client Portal at any time;</li>
+          <li><strong>Ongoing Administrative Support</strong> &mdash; Dedicated assistance for any questions, requests, or issues related to the Client&apos;s LLC operations.</li>
+        </ul>
         <p>Any services not explicitly listed above are outside the scope of this Agreement and may be subject to additional fees.</p></div>
 
       <div className="contract-section"><h3>3. Client Responsibilities</h3>
@@ -309,8 +318,18 @@ function RenewalLegalSections({ contractYear }: { contractYear: number }) {
 
       <div className="contract-section"><h3>4. Communication &amp; Business Hours</h3>
         <div className="contract-subsection"><h4>4.1 Business Hours</h4><p>The Service Provider operates <strong>Monday through Friday, 8:00 AM to 3:00 PM Eastern Time (ET)</strong>, excluding U.S. federal holidays. Communications received outside of Business Hours will be addressed on the next business day.</p></div>
-        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>WhatsApp / Telegram:</strong> For quick operational questions and updates</li><li><strong>Client Portal:</strong> For document signing, service tracking, and account management</li></ul><p>The Service Provider shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
-        <div className="contract-subsection"><h4>4.3 Scheduled Calls</h4><p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong>. A fee of <strong>$197.00 per call</strong> may apply for non-essential calls.</p></div></div>
+        <div className="contract-subsection"><h4>4.2 Client Portal</h4><p>The Client Portal (<strong>portal.tonydurante.us</strong>) is the Client&apos;s primary hub for managing their LLC. Through the portal, the Client can:</p>
+          <ul>
+            <li>Sign documents electronically (Annual Agreement, Operating Agreement, Lease, SS-4);</li>
+            <li>View and download all company documents (Articles, EIN Letter, Passport, Tax Returns);</li>
+            <li>Track the status and progress of all active services;</li>
+            <li>View invoices and payment history;</li>
+            <li>Communicate with the team via integrated messaging;</li>
+            <li>Update account settings and preferences.</li>
+          </ul>
+          <p>The Client receives login credentials via email. Access is secured with email-based authentication and password protection.</p></div>
+        <div className="contract-subsection"><h4>4.3 Communication Channels</h4><p>Official communications shall be conducted via:</p><ul><li><strong>Client Portal:</strong> Primary channel for document signing, service tracking, and account management</li><li><strong>Email:</strong> For business correspondence and formal notifications</li><li><strong>WhatsApp / Telegram:</strong> For quick operational questions and updates</li></ul><p>The Service Provider shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
+        <div className="contract-subsection"><h4>4.4 Scheduled Calls</h4><p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong>. A fee of <strong>$197.00 per call</strong> may apply for non-essential calls.</p></div></div>
 
       <div className="contract-section"><h3>5. Fees &amp; Payment</h3>
         <div className="contract-subsection"><h4>5.1 Annual Service Fee</h4><p>The Client shall pay the Annual Service Fee as specified in the Service Period &amp; Payment Schedule above.</p></div>
