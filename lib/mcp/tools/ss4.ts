@@ -152,7 +152,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
             responsible_party_itin: contact.itin_number || null,
             responsible_party_phone: contact.phone || null,
             responsible_party_title: title,
-            language: contact.language === "Italian" ? "it" : "en",
+            language: "en", // SS-4 is always English (IRS form)
             status: "draft",
           })
           .select("id, token, access_code, status")

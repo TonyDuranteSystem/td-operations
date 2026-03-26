@@ -37,9 +37,8 @@ import { readFile } from "fs/promises"
 import { join } from "path"
 import { existsSync } from "fs"
 
-// Tony Durante LLC — Third Party Designee info
+// Tony Durante LLC — Third Party Designee info (address + contact only, no personal name)
 const DESIGNEE = {
-  name: "Antonio Durante",
   address: "10225 Ulmerton Rd 3D, Largo, FL 33771",
   phone: "727-423-4285",
   fax: "+1 727 513-5584",
@@ -206,8 +205,8 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
     check(399, 158)
   }
 
-  // === THIRD PARTY DESIGNEE ===
-  text(150, 108, DESIGNEE.name)
+  // === THIRD PARTY DESIGNEE (company info only, no personal name) ===
+  text(150, 108, "Tony Durante LLC")
   text(465, 108, DESIGNEE.phone)
   text(150, 90, DESIGNEE.address)
   text(465, 90, DESIGNEE.fax)
