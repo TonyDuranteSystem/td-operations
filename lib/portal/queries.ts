@@ -182,8 +182,6 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
   const [
     serviceDeliveries,
     billingCount,
-    clientInvoiceCount,
-    clientCustomerCount,
     deadlineCount,
     taxReturnCount,
     unsignedDocCount,
@@ -203,18 +201,6 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
       .not('invoice_status', 'is', null)
-      .then(r => r.count ?? 0),
-    // Client's own invoices
-    supabaseAdmin
-      .from('client_invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('account_id', accountId)
-      .then(r => r.count ?? 0),
-    // Client's customers
-    supabaseAdmin
-      .from('client_customers')
-      .select('id', { count: 'exact', head: true })
-      .eq('account_id', accountId)
       .then(r => r.count ?? 0),
     // Pending deadlines
     supabaseAdmin
@@ -266,16 +252,15 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     .limit(1)
 
   const hasTaxSD = (taxSDs ?? []).length > 0
-  const hasInvoicing = clientInvoiceCount > 0 || clientCustomerCount > 0
 
   return {
     services: serviceDeliveries.count > 0,
     billing: billingCount > 0,
-    invoices: hasInvoicing,
+    invoices: true,       // always visible — tier-config gates access (active/full only)
     taxDocuments: hasTaxSD || taxReturnCount > 0,
     deadlines: deadlineCount > 0,
-    documents: true, // always available
-    customers: hasInvoicing,
+    documents: true,      // always available
+    customers: true,      // always visible — tier-config gates access (active/full only)
     pendingSignatures: unsignedDocCount > 0,
   }
 }
