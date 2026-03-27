@@ -243,6 +243,25 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 5. EMAIL NOTIFICATION WITH ATTACHMENT (sent LAST so we can attach merged PDF) ───
+    // If merge didn't produce bytes, fall back to the signed SS-4 alone
+    let attachmentBytes = mergedPdfBytes
+    let attachmentName = mergedFileName
+    if (!attachmentBytes) {
+      try {
+        const { data: ss4Files } = await supabaseAdmin.storage
+          .from("signed-ss4")
+          .list(ss4.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+        const ss4File = ss4Files?.[0]
+        if (ss4File) {
+          const { data: blob } = await supabaseAdmin.storage.from("signed-ss4").download(`${ss4.token}/${ss4File.name}`)
+          if (blob) {
+            attachmentBytes = new Uint8Array(await blob.arrayBuffer())
+            attachmentName = `Form SS-4 - ${ss4.company_name} - Signed.pdf`
+          }
+        }
+      } catch { /* continue without attachment */ }
+    }
+
     try {
       const { gmailPost } = await import("@/lib/gmail")
 
@@ -257,8 +276,8 @@ export async function POST(req: NextRequest) {
         ``,
         `IRS Fax Number: (855) 641-6935`,
         ``,
-        mergedPdfBytes
-          ? `The signed SS-4 + Articles of Organization are attached as a single PDF. Print and fax to the IRS.`
+        attachmentBytes
+          ? `The signed SS-4 is attached. Print and fax to the IRS.`
           : `ACTION REQUIRED: Download the signed SS-4 PDF from the client's Drive folder and fax it to the IRS.`,
         ``,
         `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}?preview=td`,
@@ -269,7 +288,7 @@ export async function POST(req: NextRequest) {
 
       let rawEmail: string
 
-      if (mergedPdfBytes) {
+      if (attachmentBytes) {
         // Email with PDF attachment
         const mimeHeaders = [
           `From: Tony Durante LLC <support@tonydurante.us>`,
@@ -287,11 +306,11 @@ export async function POST(req: NextRequest) {
           Buffer.from(emailBody).toString("base64"),
         ].join("\r\n")
 
-        const pdfBase64 = Buffer.from(mergedPdfBytes).toString("base64")
+        const pdfBase64 = Buffer.from(attachmentBytes).toString("base64")
         const attachmentPart = [
           `--${boundary}`,
-          `Content-Type: application/pdf; name="${mergedFileName}"`,
-          `Content-Disposition: attachment; filename="${mergedFileName}"`,
+          `Content-Type: application/pdf; name="${attachmentName}"`,
+          `Content-Disposition: attachment; filename="${attachmentName}"`,
           "Content-Transfer-Encoding: base64",
           "",
           pdfBase64,
@@ -317,7 +336,7 @@ export async function POST(req: NextRequest) {
       results.push({
         step: "email_notification",
         status: "ok",
-        detail: mergedPdfBytes ? "Email sent with IRS package PDF attached" : "Email sent (no attachment — merge unavailable)",
+        detail: attachmentBytes ? `Email sent with ${attachmentName} attached` : "Email sent (no attachment)",
       })
     } catch (e) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
