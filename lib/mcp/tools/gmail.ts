@@ -798,7 +798,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
         }
 
         // ── DUPLICATE DETECTION ──
-        // Check if a similar email was already sent to the same recipient in the last 48h.
+        // Check if a similar email was already sent to the same recipient in the last 7 days.
         // Prevents accidental duplicate sends across multiple sessions/machines.
         if (!reply_to_message_id) {
           // Only check for new emails, not replies (replies to the same thread are expected)
@@ -807,7 +807,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
           )
-          const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+          const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
           const { data: existing } = await dupCheck
             .from("email_tracking")
             .select("id, created_at, gmail_message_id")
