@@ -21,14 +21,17 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { supabasePublic } from "@/lib/supabase/public-client"
-import { PDFDocument } from "pdf-lib"
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 
 // Signature position on SS-4 form (PDF coordinates, bottom-up origin)
-// Measured from form layout: signature line is near bottom of page 1
-const SIG_X = 55
-const SIG_Y = 42 // from bottom
+// The "Signature" label ends at ~x=110, so signature starts after it.
+// The "Date" field is at ~x=380, same line.
+const SIG_X = 115
+const SIG_Y = 32 // on the signature line, below the "Signature" label
 const SIG_W = 200
-const SIG_H = 28
+const SIG_H = 22
+const DATE_X = 380
+const DATE_Y = 38
 
 export default function SS4SignPage() {
   const params = useParams()
@@ -169,6 +172,18 @@ export default function SS4SignPage() {
         y: SIG_Y,
         width: SIG_W,
         height: SIG_H,
+      })
+
+      // Draw signing date next to the signature
+      const dateFont = await pdf.embedFont(StandardFonts.Helvetica)
+      const today = new Date()
+      const dateStr = `${String(today.getMonth() + 1).padStart(2, "0")}/${String(today.getDate()).padStart(2, "0")}/${today.getFullYear()}`
+      page.drawText(dateStr, {
+        x: DATE_X,
+        y: DATE_Y,
+        size: 10,
+        font: dateFont,
+        color: rgb(0, 0, 0),
       })
 
       const signedPdfBytes = await pdf.save()
