@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useParams, useSearchParams } from "next/navigation"
-import { createClient } from "@/lib/supabase/client"
+import { supabasePublic } from "@/lib/supabase/public-client"
 import { PDFDocument } from "pdf-lib"
 
 // Signature position on SS-4 form (PDF coordinates, bottom-up origin)
@@ -55,7 +55,7 @@ export default function SS4SignPage() {
   useEffect(() => {
     async function load() {
       try {
-        const supabase = createClient()
+        const supabase = supabasePublic
         const { data, error: err } = await supabase
           .from("ss4_applications")
           .select("*")
@@ -144,7 +144,7 @@ export default function SS4SignPage() {
     setSigning(true)
 
     try {
-      const supabase = createClient()
+      const supabase = supabasePublic
       const sigDataUrl = sigPadRef.current.toDataURL("image/png")
 
       // 1. Fetch the filled (unsigned) PDF bytes from our API
