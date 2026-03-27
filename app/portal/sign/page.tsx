@@ -16,7 +16,7 @@ import { cookies } from 'next/headers'
 import { SignDocumentsClient } from './sign-documents-client'
 
 export interface SignableDocument {
-  type: 'oa' | 'lease' | 'ss4' | 'msa'
+  type: 'oa' | 'lease' | 'ss4' | 'msa' | '8832'
   status: 'pending' | 'awaiting' | 'signed'
   href: string
   companyName?: string
@@ -64,8 +64,8 @@ export default async function PortalSignPage() {
     )
   }
 
-  // Query OA, Lease, SS-4, and renewal MSA in parallel
-  const [oaResult, leaseResult, ss4Result, msaResult] = await Promise.all([
+  // Query OA, Lease, SS-4, Form 8832, and renewal MSA in parallel
+  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
       .select('token, status, company_name, signed_at')
@@ -93,6 +93,14 @@ export default async function PortalSignPage() {
       .select('token, status, client_name, effective_date')
       .eq('account_id', selectedAccountId)
       .eq('contract_type', 'renewal')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // Form 8832 — C-Corp election
+    supabaseAdmin
+      .from('form_8832_applications')
+      .select('token, status, company_name, signed_at')
+      .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -146,6 +154,17 @@ export default async function PortalSignPage() {
       href: '/portal/sign/ss4',
       companyName: ss4.company_name,
       signedAt: ss4.signed_at,
+    })
+  }
+
+  if (form8832Result.data) {
+    const f8832 = form8832Result.data
+    documents.push({
+      type: '8832',
+      status: f8832.status === 'signed' ? 'signed' : 'awaiting',
+      href: '/portal/sign/8832',
+      companyName: f8832.company_name,
+      signedAt: f8832.signed_at,
     })
   }
 

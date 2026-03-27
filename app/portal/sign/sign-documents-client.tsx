@@ -26,6 +26,11 @@ const DOC_INFO: Record<string, { en: { title: string; desc: string }; it: { titl
     it: { title: 'Contratto di Servizio Annuale', desc: 'Il contratto annuale di gestione — conferma il periodo di servizio e il piano di pagamento.' },
     icon: FileText,
   },
+  '8832': {
+    en: { title: 'Form 8832 (C-Corp Election)', desc: 'Entity Classification Election — elects your LLC to be taxed as a Corporation.' },
+    it: { title: 'Form 8832 (Elezione C-Corp)', desc: 'Elezione di Classificazione dell\'Entità — elegge la tua LLC a essere tassata come Corporation.' },
+    icon: FileText,
+  },
 }
 
 const STATUS_LABELS: Record<string, { en: string; it: string }> = {
