@@ -188,16 +188,19 @@ export default function SS4SignPage() {
 
       const signedPdfBytes = await pdf.save()
 
-      // 3. Upload signed PDF to Supabase Storage
-      const fileName = `${token}/Form-SS4-${(ss4.company_name as string).replace(/[^a-zA-Z0-9]/g, "-")}-Signed.pdf`
-      const { error: uploadErr } = await supabase.storage
-        .from("signed-ss4")
-        .upload(fileName, new Blob([new Uint8Array(signedPdfBytes)], { type: "application/pdf" }), {
-          upsert: true,
-        })
+      // 3. Upload signed PDF via API (uses service_role for storage)
+      const uploadForm = new FormData()
+      uploadForm.append("pdf", new Blob([new Uint8Array(signedPdfBytes)], { type: "application/pdf" }), "signed.pdf")
+      uploadForm.append("code", code || "")
+      if (isAdmin) uploadForm.append("preview", "td")
 
-      if (uploadErr) {
-        console.error("Storage upload error:", uploadErr)
+      const uploadRes = await fetch(`/api/ss4/${token}/upload-signed`, {
+        method: "POST",
+        body: uploadForm,
+      })
+
+      if (!uploadRes.ok) {
+        console.error("Storage upload error:", await uploadRes.text())
         // Continue even if storage fails — we still want to mark as signed
       }
 
