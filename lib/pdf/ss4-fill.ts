@@ -204,9 +204,14 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   // === THIRD PARTY DESIGNEE — intentionally left blank ===
 
   // === SIGNATURE SECTION ===
-  text(150, 58, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
+  text(150, 70, `${data.responsiblePartyName} - ${data.responsiblePartyTitle}`)
   text(465, 68, APPLICANT_PHONE)
   text(465, 40, APPLICANT_FAX)
+
+  // Remove page 2 (informational "Do I Need an EIN?" — not needed for IRS)
+  if (pdf.getPageCount() > 1) {
+    pdf.removePage(1)
+  }
 
   return pdf.save()
 }

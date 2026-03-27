@@ -2,9 +2,11 @@
  * POST /api/ss4-signed
  *
  * Called by the SS-4 frontend after the client signs.
- * 1. Sends email notification to support@ (Luca faxes to IRS)
- * 2. Updates service delivery stage_history (if applicable)
- * 3. Auto-uploads signed PDF from Supabase Storage to Google Drive
+ * 1. Creates task for Luca
+ * 2. Updates service delivery stage_history
+ * 3. Uploads signed PDF to Google Drive
+ * 4. Merges signed SS-4 + Articles of Organization into IRS package
+ * 5. Sends email to support@ with merged PDF attached
  *
  * Body: { ss4_id: string, token: string }
  * No auth required (public endpoint — only triggers internal notifications)
@@ -43,44 +45,11 @@ export async function POST(req: NextRequest) {
 
     const results: { step: string; status: string; detail?: string }[] = []
 
-    // ─── 1. EMAIL NOTIFICATION TO SUPPORT (Luca needs to fax to IRS) ───
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
+    // Track the merged PDF bytes for email attachment
+    let mergedPdfBytes: Uint8Array | null = null
+    let mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
 
-      const subject = `SS-4 Signed — Ready to Fax: ${ss4.company_name}`
-      const emailBody = [
-        `The SS-4 (EIN Application) for ${ss4.company_name} has been signed and is READY TO FAX to the IRS.`,
-        ``,
-        `Company: ${ss4.company_name}`,
-        `Entity Type: ${ss4.entity_type || "SMLLC"}`,
-        `State: ${ss4.state_of_formation}`,
-        `Responsible Party: ${ss4.responsible_party_name}`,
-        ``,
-        `ACTION REQUIRED: Download the signed SS-4 PDF from the client's Drive folder and fax it to the IRS.`,
-        `IRS Fax Number: (855) 641-6935`,
-        ``,
-        `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}?preview=td`,
-      ].join("\n")
-
-      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-      const mimeHeaders = [
-        `From: Tony Durante LLC <support@tonydurante.us>`,
-        `To: support@tonydurante.us`,
-        `Subject: ${encodedSubject}`,
-        "MIME-Version: 1.0",
-        `Content-Type: text/plain; charset=utf-8`,
-        "Content-Transfer-Encoding: base64",
-      ]
-      const rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
-      const encodedRaw = Buffer.from(rawEmail).toString("base64url")
-
-      await gmailPost("/messages/send", { raw: encodedRaw })
-      results.push({ step: "email_notification", status: "ok", detail: "Notified support@ — SS-4 ready to fax" })
-    } catch (e) {
-      results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
-    }
-
-    // ─── 2. CREATE TASK FOR LUCA ───
+    // ─── 1. CREATE TASK FOR LUCA ───
     if (ss4.account_id) {
       try {
         await supabaseAdmin.from("tasks").insert({
@@ -98,7 +67,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 3. UPDATE SERVICE DELIVERY STAGE HISTORY ───
+    // ─── 2. UPDATE SERVICE DELIVERY STAGE HISTORY ───
     if (ss4.account_id) {
       try {
         const { data: sd } = await supabaseAdmin
@@ -132,7 +101,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 4. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
+    // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
     if (ss4.account_id) {
       try {
         const { data: acct } = await supabaseAdmin
@@ -197,7 +166,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 5. COMBINE SIGNED SS-4 + ARTICLES OF ORGANIZATION (IRS Package) ───
+    // ─── 4. COMBINE SIGNED SS-4 + ARTICLES OF ORGANIZATION (IRS Package) ───
     if (ss4.account_id) {
       try {
         const { data: acct } = await supabaseAdmin
@@ -241,23 +210,24 @@ export async function POST(req: NextRequest) {
             if (ss4Blob && articlesBuffer) {
               const ss4Bytes = new Uint8Array(await ss4Blob.arrayBuffer())
 
-              // Merge: signed SS-4 + Articles into one PDF
+              // Merge: signed SS-4 (page 1 only) + Articles into one PDF
               const mergedPdf = await PDFDocument.create()
 
               const ss4Doc = await PDFDocument.load(ss4Bytes)
-              const ss4Pages = await mergedPdf.copyPages(ss4Doc, [0]) // Only page 1 of SS-4
+              // Only copy page 1 (SS-4 form) — page 2 is info only
+              const ss4Pages = await mergedPdf.copyPages(ss4Doc, [0])
               ss4Pages.forEach(p => mergedPdf.addPage(p))
 
               const articlesDoc = await PDFDocument.load(articlesBuffer)
               const articlesPages = await mergedPdf.copyPages(articlesDoc, articlesDoc.getPageIndices())
               articlesPages.forEach(p => mergedPdf.addPage(p))
 
-              const mergedBytes = await mergedPdf.save()
+              mergedPdfBytes = await mergedPdf.save()
 
               // Upload combined PDF to Drive
               const targetFolderId = companyFolder?.id || acct.drive_folder_id
-              const irsFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
-              const driveResult = await uploadBinaryToDrive(irsFileName, Buffer.from(mergedBytes), "application/pdf", targetFolderId) as { id: string }
+              mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
+              const driveResult = await uploadBinaryToDrive(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
 
               results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles uploaded: ${driveResult.id} (${ss4Pages.length + articlesPages.length} pages)` })
             } else {
@@ -270,6 +240,87 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         results.push({ step: "irs_package", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
+    }
+
+    // ─── 5. EMAIL NOTIFICATION WITH ATTACHMENT (sent LAST so we can attach merged PDF) ───
+    try {
+      const { gmailPost } = await import("@/lib/gmail")
+
+      const subject = `SS-4 Signed — Ready to Fax: ${ss4.company_name}`
+      const emailBody = [
+        `The SS-4 (EIN Application) for ${ss4.company_name} has been signed and is READY TO FAX to the IRS.`,
+        ``,
+        `Company: ${ss4.company_name}`,
+        `Entity Type: ${ss4.entity_type || "SMLLC"}`,
+        `State: ${ss4.state_of_formation}`,
+        `Responsible Party: ${ss4.responsible_party_name}`,
+        ``,
+        `IRS Fax Number: (855) 641-6935`,
+        ``,
+        mergedPdfBytes
+          ? `The signed SS-4 + Articles of Organization are attached as a single PDF. Print and fax to the IRS.`
+          : `ACTION REQUIRED: Download the signed SS-4 PDF from the client's Drive folder and fax it to the IRS.`,
+        ``,
+        `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}?preview=td`,
+      ].join("\n")
+
+      const boundary = `boundary_${Date.now()}`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+
+      let rawEmail: string
+
+      if (mergedPdfBytes) {
+        // Email with PDF attachment
+        const mimeHeaders = [
+          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `To: support@tonydurante.us`,
+          `Subject: ${encodedSubject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        ]
+
+        const textPart = [
+          `--${boundary}`,
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(emailBody).toString("base64"),
+        ].join("\r\n")
+
+        const pdfBase64 = Buffer.from(mergedPdfBytes).toString("base64")
+        const attachmentPart = [
+          `--${boundary}`,
+          `Content-Type: application/pdf; name="${mergedFileName}"`,
+          `Content-Disposition: attachment; filename="${mergedFileName}"`,
+          "Content-Transfer-Encoding: base64",
+          "",
+          pdfBase64,
+          `--${boundary}--`,
+        ].join("\r\n")
+
+        rawEmail = [...mimeHeaders, "", textPart, attachmentPart].join("\r\n")
+      } else {
+        // Plain text email (no attachment available)
+        const mimeHeaders = [
+          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `To: support@tonydurante.us`,
+          `Subject: ${encodedSubject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: text/plain; charset=utf-8`,
+          "Content-Transfer-Encoding: base64",
+        ]
+        rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
+      }
+
+      const encodedRaw = Buffer.from(rawEmail).toString("base64url")
+      await gmailPost("/messages/send", { raw: encodedRaw })
+      results.push({
+        step: "email_notification",
+        status: "ok",
+        detail: mergedPdfBytes ? "Email sent with IRS package PDF attached" : "Email sent (no attachment — merge unavailable)",
+      })
+    } catch (e) {
+      results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     return NextResponse.json({ ok: true, results })

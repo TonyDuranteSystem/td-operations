@@ -25,13 +25,13 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 
 // Signature position on SS-4 form (PDF coordinates, bottom-up origin)
 // The "Signature" label ends at ~x=110, so signature starts after it.
-// The "Date" field is at ~x=380, same line.
+// The "Date" field is at ~x=400, same line.
 const SIG_X = 115
-const SIG_Y = 32 // on the signature line, below the "Signature" label
-const SIG_W = 200
+const SIG_Y = 45 // on the signature line
+const SIG_W = 220
 const SIG_H = 22
-const DATE_X = 380
-const DATE_Y = 38
+const DATE_X = 400
+const DATE_Y = 48
 
 export default function SS4SignPage() {
   const params = useParams()
