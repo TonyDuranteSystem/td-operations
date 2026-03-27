@@ -204,6 +204,14 @@ Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summa
 ### Claude.ai equivalent
 For Claude.ai (MCP), the same system exists as middleware in `lib/mcp/reminder.ts` — it injects reminders directly into tool responses after 5/10/15 calls. The `session_checkpoint` MCP tool saves to `session_checkpoints` and resets the counter.
 
+## Check Before Acting — MANDATORY
+Before proposing or executing ANY client-facing action (sending emails, creating documents, advancing pipelines):
+1. **Check CRM tasks** for the client — see what's already done vs pending
+2. **Check Gmail sent** — search for recent emails to the same recipient
+3. **Check session_checkpoints** — see if another session already completed the action
+NEVER assume a task is pending just because it's on your todo list. Another session/machine may have already done it.
+The `gmail_send` tool has built-in duplicate detection (7-day window on same recipient+subject), but you must ALSO check before even proposing the action.
+
 ## CRM Update Rule — MANDATORY
 Every client-facing action MUST be followed by an IMMEDIATE CRM update in the SAME operation. Never wait to be asked.
 Client-facing actions include: sending emails, creating/uploading documents, generating forms, changing statuses, making calls.
