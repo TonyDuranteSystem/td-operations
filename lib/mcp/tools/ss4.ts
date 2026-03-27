@@ -27,7 +27,8 @@ Prerequisites:
 
 Entity type rules (auto-detected from account):
 - SMLLC: Line 9a = "Other: Foreign owned disregarded entity", title = "Owner"
-- MMLLC: Line 9a = "Partnership", title = "Member"
+- MMLLC: Line 9a = "Partnership", title = "Member". IMPORTANT: For MMLLC with multiple members, you MUST provide contact_id to specify which member signs. If omitted, the tool will list all members and ask you to choose.
+- Corporation: Line 9a = "Corporation" + "1120", title = "President". After EIN is received, Form 8832 must be filed for C-Corp election.
 
 The SS-4 is created as 'draft'. Client signs it in the portal (Sign Documents page).
 After signing, Luca receives a notification to fax it to the IRS.
@@ -93,13 +94,30 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         if (!contactId) {
           const { data: links } = await supabaseAdmin
             .from("account_contacts")
-            .select("contact_id")
+            .select("contact_id, contacts(id, full_name, email, role)")
             .eq("account_id", params.account_id)
-            .limit(1)
 
           if (!links?.length) {
             return { content: [{ type: "text" as const, text: `Error: No contacts linked to account "${account.company_name}". Link a contact first.` }] }
           }
+
+          // For MMLLC with multiple members: require explicit contact_id selection
+          if (entityType === "MMLLC" && links.length > 1) {
+            const memberList = links.map((l, i) => {
+              const c = l.contacts as unknown as { id: string; full_name: string; email: string; role: string } | null
+              return `  ${i + 1}. ${c?.full_name || "Unknown"} (${c?.role || "Member"}) — contact_id: ${l.contact_id}`
+            }).join("\n")
+
+            return { content: [{ type: "text" as const, text: [
+              `This is a Multi-Member LLC with ${links.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
+              ``,
+              `Members:`,
+              memberList,
+              ``,
+              `Re-run ss4_create with the contact_id of the chosen member.`,
+            ].join("\n") }] }
+          }
+
           contactId = links[0].contact_id
         }
 
