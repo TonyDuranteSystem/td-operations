@@ -74,7 +74,7 @@ export function registerPortalTools(server: McpServer) {
           resolvedContactId = links?.[0]?.contact_id || undefined
         }
 
-        // Create auth user
+        // Create auth user — contact_id is the center, portal finds accounts via junction table
         const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
           email: userEmail,
           password: tempPassword,
@@ -93,10 +93,10 @@ export function registerPortalTools(server: McpServer) {
           return { content: [{ type: "text" as const, text: `❌ ${createError.message}` }] }
         }
 
-        // Update account portal flags (if account exists)
+        // Determine portal tier based on client state
+        let portalTier = "lead"
         if (account_id) {
-          // Check if offer is completed (paid) — if so, set tier to "active"
-          let portalTier = "lead"
+          // Check offers first
           const { data: offers } = await supabaseAdmin
             .from("offers")
             .select("status")
@@ -104,11 +104,27 @@ export function registerPortalTools(server: McpServer) {
             .in("status", ["completed", "signed"])
             .limit(1)
           if (offers?.length) {
-            // Paid client → "onboarding" (needs to complete wizard first)
-            // After wizard is submitted, wizard-submit will advance to "active"
-            portalTier = offers[0].status === "completed" ? "onboarding" : "onboarding"
+            portalTier = "onboarding"
           }
 
+          // Check if legacy client with existing services/SS-4 (no offer in system)
+          if (portalTier === "lead") {
+            const { data: sds } = await supabaseAdmin
+              .from("service_deliveries")
+              .select("id")
+              .eq("account_id", account_id)
+              .limit(1)
+            const { data: ss4s } = await supabaseAdmin
+              .from("ss4_applications")
+              .select("id")
+              .eq("account_id", account_id)
+              .limit(1)
+            if (sds?.length || ss4s?.length) {
+              portalTier = "active"
+            }
+          }
+
+          // Update ACCOUNT portal flags
           await supabaseAdmin
             .from("accounts")
             .update({
@@ -117,6 +133,14 @@ export function registerPortalTools(server: McpServer) {
               portal_created_date: new Date().toISOString().split("T")[0],
             })
             .eq("id", account_id)
+        }
+
+        // Update CONTACT portal_tier (source of truth for portal nav visibility)
+        if (resolvedContactId) {
+          await supabaseAdmin
+            .from("contacts")
+            .update({ portal_tier: portalTier })
+            .eq("id", resolvedContactId)
         }
 
         logAction({
