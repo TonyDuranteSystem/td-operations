@@ -27,11 +27,11 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 // The "Signature" label ends at ~x=110, so signature starts after it.
 // The "Date" field is at ~x=400, same line.
 const SIG_X = 115
-const SIG_Y = 45 // on the signature line
-const SIG_W = 220
-const SIG_H = 22
-const DATE_X = 400
-const DATE_Y = 48
+const SIG_Y = 35 // on the signature line
+const SIG_W = 200
+const SIG_H = 20
+const DATE_X = 360
+const DATE_Y = 38
 
 export default function SS4SignPage() {
   const params = useParams()
