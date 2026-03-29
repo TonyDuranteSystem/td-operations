@@ -510,7 +510,8 @@ export interface SearchPreview {
   state?: string | null
   entity_type?: string | null
   status?: string | null
-  contacts?: { name: string; email?: string | null }[]
+  formation_date?: string | null
+  contacts?: { name: string; email?: string | null; phone?: string | null; role?: string | null }[]
   // Contacts
   email?: string | null
   phone?: string | null

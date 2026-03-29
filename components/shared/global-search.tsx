@@ -372,6 +372,7 @@ function AccountPreview({ p }: { p: EnhancedSearchResult['preview'] }) {
       <Field icon={Hash} label="EIN" value={p.ein} />
       <Field icon={MapPin} label="State" value={p.state} />
       <Field icon={Briefcase} label="Type" value={p.entity_type} />
+      <Field icon={CalendarDays} label="Formed" value={p.formation_date} />
       {p.status && (
         <div className="flex items-center gap-2 text-xs">
           <Tag className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
@@ -379,13 +380,27 @@ function AccountPreview({ p }: { p: EnhancedSearchResult['preview'] }) {
         </div>
       )}
       {p.contacts && p.contacts.length > 0 && (
-        <div className="pt-1">
-          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">Contacts</p>
+        <div className="pt-2">
+          <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Contacts</p>
           {p.contacts.map((c, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-xs text-zinc-600 py-0.5">
-              <User className="h-3 w-3 text-zinc-400" />
-              <span>{c.name}</span>
-              {c.email && <span className="text-zinc-400 truncate">({c.email})</span>}
+            <div key={i} className="py-1 border-b border-zinc-100 last:border-0">
+              <div className="flex items-center gap-1.5 text-xs text-zinc-700 font-medium">
+                <User className="h-3 w-3 text-zinc-400" />
+                <span>{c.name}</span>
+                {c.role && <span className="text-zinc-400 text-[10px]">({c.role})</span>}
+              </div>
+              {c.email && (
+                <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 ml-[18px]">
+                  <Mail className="h-2.5 w-2.5" />
+                  <span className="truncate">{c.email}</span>
+                </div>
+              )}
+              {c.phone && (
+                <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 ml-[18px]">
+                  <Phone className="h-2.5 w-2.5" />
+                  <span>{c.phone}</span>
+                </div>
+              )}
             </div>
           ))}
         </div>
