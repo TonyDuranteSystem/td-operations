@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Filter, Bot } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -11,6 +11,7 @@ import { ConversationList } from './conversation-list'
 import { MessageThread } from './message-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
+import { NewWhatsAppDialog } from './new-whatsapp-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
@@ -38,6 +39,8 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
   const [selected, setSelected] = useState<InboxConversation | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
+  const [whatsappOpen, setWhatsappOpen] = useState(false)
+  const [composeMenuOpen, setComposeMenuOpen] = useState(false)
   const [forwardData, setForwardData] = useState<{ subject: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
@@ -272,17 +275,42 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             setSearchQuery('')
           }}
         />
-        <div className="pr-4">
+        <div className="pr-4 relative">
           <button
-            onClick={() => {
-              setForwardData(null)
-              setComposeOpen(true)
-            }}
+            onClick={() => setComposeMenuOpen(!composeMenuOpen)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors"
           >
             <PenSquare className="h-3.5 w-3.5" />
             Compose
           </button>
+          {composeMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setComposeMenuOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg shadow-xl border border-zinc-200 py-1 w-48">
+                <button
+                  onClick={() => {
+                    setComposeMenuOpen(false)
+                    setForwardData(null)
+                    setComposeOpen(true)
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+                >
+                  <Mail className="h-4 w-4 text-blue-500" />
+                  New Email
+                </button>
+                <button
+                  onClick={() => {
+                    setComposeMenuOpen(false)
+                    setWhatsappOpen(true)
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+                >
+                  <MessageSquare className="h-4 w-4 text-green-500" />
+                  New WhatsApp
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -593,6 +621,15 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
         open={composeOpen}
         onClose={() => { setComposeOpen(false); setForwardData(null) }}
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
+      />
+
+      <NewWhatsAppDialog
+        open={whatsappOpen}
+        onClose={() => setWhatsappOpen(false)}
+        onConversationCreated={(conv) => {
+          setSelected(conv)
+          setActiveChannel('whatsapp')
+        }}
       />
 
       {createDialog && (
