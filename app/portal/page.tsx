@@ -11,6 +11,7 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { WelcomeDashboard } from './welcome-dashboard'
+import { TaxBanner } from '@/components/portal/tax-banner'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
 function formatEin(ein: string | null): string {
@@ -222,6 +223,16 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Tax Banner — shown when client has a pending tax return (data not yet collected) */}
+      {taxReturns.filter(tr => tr.data_received === false).slice(0, 1).map(tr => (
+        <TaxBanner
+          key={tr.id}
+          taxYear={tr.tax_year}
+          returnType={tr.return_type}
+          locale={locale}
+        />
+      ))}
 
       {/* Action Items Widget */}
       <ActionItems data={actionItems} locale={locale} />

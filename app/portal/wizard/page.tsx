@@ -170,7 +170,7 @@ export default async function WizardPage() {
   if (contact.email) prefillData.owner_email = contact.email
   if (contact.phone) prefillData.owner_phone = contact.phone
   if (contact.date_of_birth) prefillData.owner_dob = contact.date_of_birth
-  if (contact.citizenship) prefillData.owner_nationality = contact.citizenship
+  if (contact.citizenship) { prefillData.owner_nationality = contact.citizenship; prefillData.owner_tax_residency = contact.citizenship }
   if (contact.address_line1) prefillData.owner_street = contact.address_line1
   if (contact.address_city) prefillData.owner_city = contact.address_city
   if (contact.address_state) prefillData.owner_state_province = contact.address_state
@@ -185,10 +185,9 @@ export default async function WizardPage() {
   if (contact.phone) { prefillData.phone = contact.phone; prefillData.personal_phone = contact.phone }
   if (contact.citizenship) prefillData.personal_country = contact.citizenship
   if (account.company_name) { prefillData.business_name = account.company_name; prefillData.company_name = account.company_name; prefillData.llc_name = account.company_name }
-  if (account.ein) { prefillData.ein = account.ein; prefillData.llc_ein = account.ein }
-  if (account.state_of_formation) prefillData.state_of_formation = account.state_of_formation
-  if (account.formation_date) prefillData.formation_date = account.formation_date
-  if (account.ein) prefillData.ein = account.ein
+  if (account.ein) { prefillData.ein = account.ein; prefillData.llc_ein = account.ein; prefillData.ein_number = account.ein }
+  if (account.state_of_formation) { prefillData.state_of_formation = account.state_of_formation; prefillData.state_of_incorporation = account.state_of_formation }
+  if (account.formation_date) { prefillData.formation_date = account.formation_date; prefillData.date_of_incorporation = account.formation_date }
   if (account.filing_id) prefillData.filing_id = account.filing_id
 
   // ITIN Renewal: pre-fill previous ITIN from contact
