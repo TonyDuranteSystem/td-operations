@@ -35,7 +35,6 @@ import {
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { GlobalSearch } from '@/components/shared/global-search'
 import {
   DndContext,
   closestCenter,
@@ -335,7 +334,6 @@ export function Sidebar({
 
         {/* Search + AI Agent + Edit buttons */}
         <div className="px-3 py-2 border-t border-sidebar-border space-y-1">
-          <GlobalSearch searchEndpoint="/api/search" mode="crm" placeholder="Search..." />
           <button
             onClick={() => document.dispatchEvent(new CustomEvent('open-ai-agent'))}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-violet-400 hover:bg-violet-500/10 hover:text-violet-300 transition-colors"

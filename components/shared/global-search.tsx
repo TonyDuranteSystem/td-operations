@@ -195,13 +195,13 @@ export function GlobalSearch({ searchEndpoint, mode, accountId, placeholder = 'S
           onFocus={() => { if (query.length >= 2) setOpen(true) }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="w-full pl-8 pr-8 py-2 rounded-md text-sm bg-sidebar-accent/50 border border-sidebar-border text-sidebar-foreground placeholder:text-sidebar-foreground/40 outline-none focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 transition-colors"
+          className="w-full pl-8 pr-8 py-2 rounded-md text-sm border outline-none focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 transition-colors bg-zinc-100 border-zinc-200 text-zinc-900 placeholder:text-zinc-400"
         />
         {loading && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         {!loading && query.length > 0 && (
           <button
             onClick={() => { setQuery(''); setResults([]); setOpen(false) }}
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-sidebar-accent"
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-zinc-200"
           >
             <X className="h-3 w-3 text-muted-foreground" />
           </button>
@@ -217,11 +217,11 @@ export function GlobalSearch({ searchEndpoint, mode, accountId, placeholder = 'S
           <div
             ref={dropdownRef}
             style={getDropdownStyle()}
-            className="w-[min(620px,95vw)] bg-white rounded-xl shadow-2xl border border-zinc-200 overflow-hidden"
+            className="w-[min(780px,95vw)] bg-white rounded-xl shadow-2xl border border-zinc-200 overflow-hidden"
           >
             <div className="flex">
               {/* Left: Result list */}
-              <div className="w-full lg:w-[300px] max-h-[400px] overflow-y-auto border-r border-zinc-100">
+              <div className="w-full lg:w-[380px] max-h-[520px] overflow-y-auto border-r border-zinc-100">
                 {!loading && results.length === 0 && (
                   <p className="px-4 py-8 text-sm text-center text-zinc-400">
                     No results for &ldquo;{query}&rdquo;
@@ -263,7 +263,7 @@ export function GlobalSearch({ searchEndpoint, mode, accountId, placeholder = 'S
               </div>
 
               {/* Right: Preview panel (desktop only) */}
-              <div className="hidden lg:block w-[320px] max-h-[400px] overflow-y-auto bg-zinc-50/50 p-4">
+              <div className="hidden lg:block w-[400px] max-h-[520px] overflow-y-auto bg-zinc-50/50 p-5">
                 {selectedResult ? (
                   <PreviewCard result={selectedResult} mode={mode} />
                 ) : (

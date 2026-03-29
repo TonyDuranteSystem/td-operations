@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { CommandPalette } from '@/components/dashboard/command-palette'
+import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { isAdmin } from '@/lib/auth'
@@ -61,6 +62,7 @@ export default async function DashboardLayout({
           badgeCounts={badgeCounts}
         />
         <main className="flex-1 overflow-y-auto bg-zinc-50">
+          <DashboardHeader />
           <div className="h-14 lg:hidden" />
           {children}
         </main>
