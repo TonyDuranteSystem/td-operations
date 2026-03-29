@@ -38,6 +38,7 @@ function getSubmissionTable(wizardType: string): string | null {
   const map: Record<string, string> = {
     formation: 'formation_submissions',
     onboarding: 'onboarding_submissions',
+    tax: 'tax_return_submissions',
     tax_return: 'tax_return_submissions',
   }
   return map[wizardType] || null
@@ -48,6 +49,7 @@ function getJobType(wizardType: string): string | null {
   const map: Record<string, string> = {
     formation: 'formation_setup',
     onboarding: 'onboarding_setup',
+    tax: 'tax_form_setup',
     tax_return: 'tax_form_setup',
   }
   return map[wizardType] || null
@@ -180,7 +182,7 @@ export async function POST(req: NextRequest) {
       }
 
       // For tax wizard, add tax-specific fields
-      if (wizard_type === 'tax_return') {
+      if (wizard_type === 'tax' || wizard_type === 'tax_return') {
         payload.tax_return_id = null // Handler will look up from account
         payload.changed_fields = null // Portal wizard doesn't track diffs
       }

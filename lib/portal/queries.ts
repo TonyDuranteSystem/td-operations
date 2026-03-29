@@ -344,7 +344,7 @@ export async function getPortalTaxReturns(accountId: string) {
 
   const { data } = await supabaseAdmin
     .from('tax_returns')
-    .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline')
+    .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, data_received')
     .eq('company_name', account.company_name)
     .order('tax_year', { ascending: false })
     .limit(5)
@@ -388,7 +388,14 @@ export async function getPortalActionItems(
 ): Promise<ActionItemsResult> {
   const today = new Date().toISOString().split('T')[0]
 
-  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes] = await Promise.all([
+  // Look up company_name for tax_returns query (matched by name, not account_id)
+  const { data: acctForTax } = await supabaseAdmin
+    .from('accounts')
+    .select('company_name')
+    .eq('id', accountId)
+    .single()
+
+  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes, taxRes] = await Promise.all([
     // 1. In-progress wizard forms
     supabaseAdmin
       .from('wizard_progress')
@@ -442,6 +449,16 @@ export async function getPortalActionItems(
       .eq('contract_type', 'renewal')
       .in('status', ['draft', 'sent', 'viewed'])
       .limit(5),
+
+    // 7. Pending tax returns (data not yet collected from client)
+    acctForTax?.company_name
+      ? supabaseAdmin
+          .from('tax_returns')
+          .select('id, tax_year, return_type, created_at')
+          .eq('company_name', acctForTax.company_name)
+          .eq('data_received', false)
+          .limit(5)
+      : Promise.resolve({ data: [] }),
   ])
 
   const items: ActionItem[] = []
@@ -460,6 +477,28 @@ export async function getPortalActionItems(
       href: '/portal/wizard',
       priority,
       createdAt: w.created_at,
+    })
+  }
+
+  // ── Pending tax returns (assigned but client hasn't submitted data yet) ──
+  for (const tr of (taxRes as { data: Array<{ id: string; tax_year: number; return_type: string; created_at: string }> | null }).data ?? []) {
+    // Check if there's already a wizard_progress for tax (avoids duplicate with wizard item above)
+    const alreadyHasWizard = (wizardRes.data ?? []).some(
+      w => w.wizard_type === 'tax' || w.wizard_type === 'tax_return'
+    )
+    if (alreadyHasWizard) continue
+
+    const age = daysSince(tr.created_at)
+    const priority: ActionItem['priority'] = age > 14 ? 'red' : age > 7 ? 'orange' : 'blue'
+    items.push({
+      type: 'wizard',
+      title: `Complete Tax Information — ${tr.tax_year}`,
+      titleIt: `Completa le Informazioni Fiscali — ${tr.tax_year}`,
+      description: `Your ${tr.return_type || 'tax'} return for ${tr.tax_year} requires your financial data. Please complete the tax wizard.`,
+      descriptionIt: `La tua dichiarazione ${tr.return_type || 'fiscale'} per il ${tr.tax_year} richiede i tuoi dati finanziari. Completa il wizard fiscale.`,
+      href: '/portal/wizard',
+      priority,
+      createdAt: tr.created_at,
     })
   }
 
