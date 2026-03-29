@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { qbApiCall, createInvoice, getActiveToken } from "@/lib/quickbooks"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { getGreeting } from "@/lib/greeting"
 import { getGmailToken } from "@/lib/gmail"
 
 export function registerQbTools(server: McpServer) {
@@ -532,8 +533,20 @@ export function registerQbTools(server: McpServer) {
             ? "Banca: Banking Circle (via Wise)\nIBAN: DK8989000023658198\nBIC/SWIFT: SXPYDKKK\nBeneficiario: Tony Durante LLC"
             : "Bank: Relay Financial\nAccount Name: TONY DURANTE L.L.C.\nAddress: 10225 Ulmerton Rd, Suite 3D, Largo, FL 33771\nAccount Number: 200000306770\nRouting Number: 064209588\nBeneficiary: Tony Durante LLC"
 
-        // 4. Build email content
+        // 4. Build email content (with gender-aware greeting)
         const customerName = (inv.CustomerRef?.name as string) || "Customer"
+        // Look up contact gender by email
+        const { data: invContact } = await supabaseAdmin
+          .from("contacts")
+          .select("gender, last_name, language")
+          .eq("email", email_to)
+          .single()
+        const invoiceGreeting = getGreeting({
+          firstName: customerName,
+          lastName: invContact?.last_name,
+          gender: invContact?.gender,
+          language,
+        })
         const docNumber = inv.DocNumber || inv.Id
         const total = inv.TotalAmt
         const dueDate = inv.DueDate
@@ -551,7 +564,7 @@ export function registerQbTools(server: McpServer) {
 
         const htmlBody =
           language === "it"
-            ? `<p>Gentile ${customerName},</p>
+            ? `<p>${invoiceGreeting},</p>
 <p>In allegato trova la fattura <strong>#${docNumber}</strong> per un importo di <strong>${currency} ${total}</strong>.</p>
 <p><strong>Scadenza:</strong> ${dueDate}</p>
 <p><strong>Modalità di pagamento — Bonifico bancario:</strong></p>
@@ -559,7 +572,7 @@ export function registerQbTools(server: McpServer) {
 <p>Causale: Invoice #${docNumber}</p>
 <p>Per qualsiasi domanda, non esiti a contattarci.</p>
 <p>Cordiali saluti,<br><strong>Tony Durante LLC</strong><br>support@tonydurante.us</p>`
-            : `<p>Dear ${customerName},</p>
+            : `<p>${invoiceGreeting},</p>
 <p>Please find attached invoice <strong>#${docNumber}</strong> for <strong>${currency} ${total}</strong>.</p>
 <p><strong>Due date:</strong> ${dueDate}</p>
 <p><strong>Payment method — Wire Transfer:</strong></p>

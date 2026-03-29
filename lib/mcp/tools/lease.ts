@@ -11,6 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { getGreeting } from "@/lib/greeting"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { APP_BASE_URL } from "@/lib/config"
 
@@ -387,6 +388,19 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
         const url = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
 
+        // Look up contact gender
+        const { data: contactRow } = await supabaseAdmin
+          .from("contacts")
+          .select("gender, last_name, language")
+          .eq("email", lease.tenant_email)
+          .single()
+        const greeting = getGreeting({
+          firstName: lease.tenant_contact_name,
+          lastName: contactRow?.last_name,
+          gender: contactRow?.gender,
+          language: contactRow?.language,
+        })
+
         const subject = `Office Lease Agreement — ${lease.tenant_company}`
         const fromEmail = "support@tonydurante.us"
 
@@ -397,7 +411,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
         // HTML email body
         const htmlBody = `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <p>Dear ${lease.tenant_contact_name},</p>
+  <p>${greeting},</p>
 
   <p>Please find your Office Lease Agreement for <strong>${lease.tenant_company}</strong> at the link below.</p>
 
@@ -422,7 +436,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
 </div>
 <img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
 
-        const plainText = `Dear ${lease.tenant_contact_name},
+        const plainText = `${greeting},
 
 Please find your Office Lease Agreement for ${lease.tenant_company} at the link below.
 

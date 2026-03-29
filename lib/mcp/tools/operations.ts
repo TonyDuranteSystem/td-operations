@@ -453,10 +453,11 @@ export function registerOperationsTools(server: McpServer) {
       phone: z.string().optional().describe("Phone number"),
       citizenship: z.string().optional().describe("Citizenship/nationality"),
       language: z.string().optional().describe("Preferred language"),
+      gender: z.enum(["M", "F"]).optional().describe("Gender: M (male) or F (female) — used for email greetings (Caro/Cara, Mr./Ms.)"),
       account_id: z.string().uuid().optional().describe("Auto-link to this account after creation"),
       role: z.string().optional().describe("Role in the company (e.g., Owner, Member, Manager)"),
     },
-    async ({ full_name, email, phone, citizenship, language, account_id, role }) => {
+    async ({ full_name, email, phone, citizenship, language, gender, account_id, role }) => {
       try {
         // Check for duplicates
         if (email) {
@@ -480,6 +481,7 @@ export function registerOperationsTools(server: McpServer) {
           phone: phone || null,
           citizenship: citizenship || null,
           language: language || null,
+          gender: gender || null,
         }
 
         const { data, error } = await supabaseAdmin

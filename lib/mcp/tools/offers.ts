@@ -13,6 +13,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
+import { getGreeting } from "@/lib/greeting"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
@@ -132,8 +133,11 @@ function _buildOfferEmail(
   accessCode: string,
   language: string,
   trackingPixelUrl?: string,
+  gender?: string | null,
+  lastName?: string | null,
 ) {
   const offerUrl = `${APP_BASE_URL}/offer/${encodeURIComponent(token)}/${accessCode}`
+  const greeting = getGreeting({ firstName: clientName, lastName, gender, language })
 
   const subject = language === "en"
     ? `Your Proposal from Tony Durante LLC`
@@ -141,7 +145,7 @@ function _buildOfferEmail(
 
   const htmlBody = language === "en"
     ? `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <p>Dear ${clientName},</p>
+  <p>${greeting},</p>
   <p>Thank you for your time during our consultation.</p>
   <p>Please find your personalized proposal at the following link:</p>
   <p style="margin: 24px 0;">
@@ -154,7 +158,7 @@ function _buildOfferEmail(
   <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
 </div>${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}`
     : `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <p>Gentile ${clientName},</p>
+  <p>${greeting},</p>
   <p>Grazie per il tempo dedicato durante la nostra consulenza.</p>
   <p>Puoi consultare la tua proposta personalizzata al seguente link:</p>
   <p style="margin: 24px 0;">
@@ -168,8 +172,8 @@ function _buildOfferEmail(
 </div>${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}`
 
   const plainText = language === "en"
-    ? `Dear ${clientName},\n\nThank you for your time during our consultation.\n\nPlease find your personalized proposal at the following link:\n${offerUrl}\n\nTo view the proposal, you will be asked to verify your email address.\n\nIf you have any questions, please don't hesitate to reach out.\n\nBest regards,\nTony Durante LLC\nsupport@tonydurante.us`
-    : `Gentile ${clientName},\n\nGrazie per il tempo dedicato durante la nostra consulenza.\n\nPuoi consultare la tua proposta personalizzata al seguente link:\n${offerUrl}\n\nPer visualizzare la proposta, ti verrà chiesto di verificare il tuo indirizzo email.\n\nPer qualsiasi domanda, non esitare a contattarci.\n\nCordiali saluti,\nTony Durante LLC\nsupport@tonydurante.us`
+    ? `${greeting},\n\nThank you for your time during our consultation.\n\nPlease find your personalized proposal at the following link:\n${offerUrl}\n\nTo view the proposal, you will be asked to verify your email address.\n\nIf you have any questions, please don't hesitate to reach out.\n\nBest regards,\nTony Durante LLC\nsupport@tonydurante.us`
+    : `${greeting},\n\nGrazie per il tempo dedicato durante la nostra consulenza.\n\nPuoi consultare la tua proposta personalizzata al seguente link:\n${offerUrl}\n\nPer visualizzare la proposta, ti verrà chiesto di verificare il tuo indirizzo email.\n\nPer qualsiasi domanda, non esitare a contattarci.\n\nCordiali saluti,\nTony Durante LLC\nsupport@tonydurante.us`
 
   return { subject, htmlBody, plainText }
 }

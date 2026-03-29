@@ -15,6 +15,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { logAction } from "@/lib/mcp/action-log"
+import { getGreeting } from "@/lib/greeting"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
 
@@ -77,7 +78,7 @@ Prerequisites:
 
         const { data: contact } = await supabaseAdmin
           .from("contacts")
-          .select("id, full_name, first_name, last_name, email, phone, citizenship, residency, language")
+          .select("id, full_name, first_name, last_name, email, phone, citizenship, residency, language, gender")
           .eq("id", contactLinks[0].contact_id)
           .single()
 
@@ -393,6 +394,8 @@ Prerequisites:
           link_relay: relayUrl,
           link_payset: paysetUrl,
           lang,
+          gender: contact.gender ?? null,
+          lastName: contact.last_name ?? null,
         })
 
         // ─── 9. UPDATE WELCOME PACKAGE STATUS ON ACCOUNT ───
@@ -473,6 +476,8 @@ function generateWelcomeEmail(vars: {
   link_relay: string
   link_payset: string
   lang: "it" | "en"
+  gender?: string | null
+  lastName?: string | null
 }): string {
   const linkStyle = 'style="color:#2563eb;text-decoration:underline"'
   const hrStyle = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
@@ -483,9 +488,11 @@ function generateWelcomeEmail(vars: {
     return `<p><a href="${url}" ${linkStyle}>${label}</a></p>`
   }
 
+  const greeting = getGreeting({ firstName: vars.nome || vars.name, lastName: vars.lastName, gender: vars.gender, language: vars.lang })
+
   if (vars.lang === "it") {
     return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a">
-<p>Ciao ${vars.nome},</p>
+<p>${greeting},</p>
 
 <p>Siamo lieti di informarti che la tua società <strong>${vars.company_name}</strong> è ufficialmente pronta ad operare.</p>
 
@@ -539,7 +546,7 @@ ${hrStyle}
   }
 
   return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a">
-<p>Hi ${vars.name},</p>
+<p>${greeting},</p>
 
 <p>We are pleased to inform you that your company <strong>${vars.company_name}</strong> is officially ready to operate.</p>
 

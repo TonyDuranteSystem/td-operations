@@ -295,6 +295,13 @@ Quick reference for the most common mistakes:
 - \`knowledge_articles.content\` NOT "response_text"
 - Enum values are CASE-SENSITIVE: \`'Active'\` not \`'active'\`, \`'State RA Renewal'\` not \`'RA Renewal'\`
 
+## Email Greeting Rule — Gender-Based Salutation
+
+All client emails MUST use the correct greeting based on \`contacts.gender\` (M/F) + language:
+- **F + Italian** → "Cara {firstName}" | **M + Italian** → "Caro {firstName}" | **NULL + Italian** → "Gentile {firstName}"
+- **F + English** → "Dear Ms. {lastName}" | **M + English** → "Dear Mr. {lastName}" | **NULL + English** → "Dear {firstName}"
+Always check \`contacts.gender\` before composing any client email. The \`getGreeting()\` helper in \`lib/greeting.ts\` handles this automatically for all MCP email tools.
+
 ## Error Handling
 
 - If a tool errors, explain what happened and suggest alternatives.

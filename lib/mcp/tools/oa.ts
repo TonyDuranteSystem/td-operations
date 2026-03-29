@@ -11,6 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { getGreeting } from "@/lib/greeting"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
@@ -348,6 +349,19 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         const url = `${OA_BASE_URL}/${oa.token}/${oa.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
 
+        // Look up contact gender
+        const { data: contactRow } = await supabaseAdmin
+          .from("contacts")
+          .select("gender, last_name, language")
+          .eq("email", oa.member_email)
+          .single()
+        const greeting = getGreeting({
+          firstName: oa.member_name,
+          lastName: contactRow?.last_name,
+          gender: contactRow?.gender,
+          language: contactRow?.language,
+        })
+
         const entityLabel = (oa.entity_type || "SMLLC") === "MMLLC" ? "Multi-Member" : "Single Member"
         const subject = `Operating Agreement — ${oa.company_name}`
         const fromEmail = "support@tonydurante.us"
@@ -359,7 +373,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         // HTML email body
         const htmlBody = `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <p>Dear ${oa.member_name},</p>
+  <p>${greeting},</p>
 
   <p>Your Operating Agreement for <strong>${oa.company_name}</strong> is ready for your review and signature.</p>
 
@@ -385,7 +399,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
 </div>
 <img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
 
-        const plainText = `Dear ${oa.member_name},
+        const plainText = `${greeting},
 
 Your Operating Agreement for ${oa.company_name} is ready for your review and signature.
 
@@ -541,7 +555,3 @@ support@tonydurante.us`
 
 } // end registerOaTools
 
-// Helper
-function fmtDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
-}
