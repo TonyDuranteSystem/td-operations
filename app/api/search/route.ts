@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
 
     // Add accounts found via contact name
     for (const c of (byContact ?? [])) {
-      for (const ac of (c.account_contacts ?? [])) {
+      for (const ac of ((c as any).account_contacts ?? [])) {
         const acct = (ac as any).accounts
         if (!acct || seenIds.has(acct.id)) continue
         seenIds.add(acct.id)
@@ -237,7 +237,7 @@ export async function GET(request: NextRequest) {
     const hasChat = new Set((chatAccounts ?? []).map((m: any) => m.account_id))
 
     const results: EnhancedSearchResult[] = []
-    for (const [id, info] of accountMap) {
+    accountMap.forEach((info, id) => {
       // Show all matching accounts — those with chats get "Open chat", others get "Start chat"
       results.push({
         id,
@@ -250,7 +250,7 @@ export async function GET(request: NextRequest) {
           companies: [{ name: info.company_name, id }],
         },
       })
-    }
+    })
 
     return results.slice(0, limit)
   }
