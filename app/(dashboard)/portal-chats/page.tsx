@@ -43,6 +43,8 @@ export default function PortalChatsPage() {
   const [newChatSearch, setNewChatSearch] = useState('')
   const [newChatResults, setNewChatResults] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [newChatSearching, setNewChatSearching] = useState(false)
+  // Extra accounts found by search that aren't in existing threads
+  const [searchExtraAccounts, setSearchExtraAccounts] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -246,6 +248,27 @@ export default function PortalChatsPage() {
     return () => document.removeEventListener('click', handler)
   }, [actionMenuMsg])
 
+  // Chat search bar: also find accounts without existing threads
+  useEffect(() => {
+    if (chatSearch.length < 2) {
+      setSearchExtraAccounts([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/portal/chat/search-accounts?q=${encodeURIComponent(chatSearch)}`)
+        if (res.ok) {
+          const data = await res.json()
+          // Filter out accounts that already have threads
+          const threadIds = new Set((threads ?? []).map(t => t.account_id))
+          const extras = (data.accounts ?? []).filter((a: { id: string }) => !threadIds.has(a.id))
+          setSearchExtraAccounts(extras)
+        }
+      } catch { /* ignore */ }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [chatSearch, threads])
+
   // New chat: search accounts
   useEffect(() => {
     if (!newChatOpen || newChatSearch.length < 2) {
@@ -381,6 +404,34 @@ export default function PortalChatsPage() {
                 </p>
               </button>
             ))
+          )}
+          {/* Extra accounts from search (no existing thread) */}
+          {chatSearch.length >= 2 && searchExtraAccounts.length > 0 && (
+            <>
+              <div className="px-4 py-1.5 bg-zinc-50 border-y">
+                <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Other Clients</p>
+              </div>
+              {searchExtraAccounts.map(acct => (
+                <button
+                  key={acct.id}
+                  onClick={() => { setSelectedAccountId(acct.id); setChatSearch('') }}
+                  className="w-full px-4 py-3 text-left border-b hover:bg-blue-50 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="p-1 rounded-full bg-blue-50">
+                      <Plus className="h-3 w-3 text-blue-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-sm font-medium text-zinc-900 truncate block">{acct.company_name}</span>
+                      {acct.contact_name && (
+                        <span className="text-[11px] text-zinc-400 truncate block">{acct.contact_name}</span>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-blue-500 mt-1 ml-7">Start new conversation</p>
+                </button>
+              ))}
+            </>
           )}
         </div>
       </div>
