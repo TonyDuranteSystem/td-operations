@@ -27,6 +27,7 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
+import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility } from '@/lib/portal/queries'
 import { isTierFeatureVisible } from '@/lib/portal/tier-config'
@@ -210,6 +211,16 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             />
           </div>
         )}
+
+        {/* Search */}
+        <div className="px-3 py-2 border-b">
+          <GlobalSearch
+            searchEndpoint="/api/portal/search"
+            mode="portal"
+            accountId={selectedAccountId}
+            placeholder={t('nav.search') !== 'nav.search' ? t('nav.search') : 'Search...'}
+          />
+        </div>
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">

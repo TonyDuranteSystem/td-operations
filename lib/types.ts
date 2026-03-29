@@ -501,3 +501,49 @@ export interface TrackerColumn {
   stage: PipelineStage
   deliveries: ServiceDelivery[]
 }
+
+// ─── Global Search Types ────────────────────────────────
+
+export interface SearchPreview {
+  // Accounts
+  ein?: string | null
+  state?: string | null
+  entity_type?: string | null
+  status?: string | null
+  contacts?: { name: string; email?: string | null }[]
+  // Contacts
+  email?: string | null
+  phone?: string | null
+  companies?: { name: string; id: string }[]
+  // Tasks
+  priority?: string | null
+  assigned_to?: string | null
+  description?: string | null
+  // Leads
+  source?: string | null
+  reason?: string | null
+  channel?: string | null
+  // Portal — Documents
+  document_type?: string | null
+  category?: string | null
+  // Portal — Services
+  service_type?: string | null
+  stage?: string | null
+  // Portal — Invoices/Deadlines
+  amount?: number | null
+  currency?: string | null
+  due_date?: string | null
+}
+
+export type SearchResultType =
+  | 'account' | 'task' | 'lead' | 'contact'
+  | 'document' | 'service' | 'invoice' | 'deadline'
+
+export interface EnhancedSearchResult {
+  id: string
+  title: string
+  subtitle?: string
+  type: SearchResultType
+  href: string
+  preview: SearchPreview
+}
