@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import {
   Search, Building2, ClipboardList, Users, User, Loader2,
-  FileText, Activity, Receipt, CalendarDays, X,
+  FileText, Activity, Receipt, CalendarDays, X, MessageSquare,
   Mail, Phone, Briefcase, Hash, MapPin, Tag,
 } from 'lucide-react'
 import type { EnhancedSearchResult } from '@/lib/types'
@@ -21,6 +21,7 @@ const TYPE_ICONS: Record<string, typeof Building2> = {
   service: Activity,
   invoice: Receipt,
   deadline: CalendarDays,
+  chat: MessageSquare,
 }
 
 const CRM_TYPE_LABELS: Record<string, string> = {
@@ -28,6 +29,7 @@ const CRM_TYPE_LABELS: Record<string, string> = {
   task: 'Tasks',
   lead: 'Leads',
   contact: 'Contacts',
+  chat: 'Portal Chats',
 }
 
 const PORTAL_TYPE_LABELS: Record<string, string> = {

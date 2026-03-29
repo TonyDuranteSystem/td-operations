@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -30,7 +31,8 @@ interface ChatMessage {
 }
 
 export default function PortalChatsPage() {
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
+  const urlParams = useSearchParams()
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')

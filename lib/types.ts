@@ -537,7 +537,7 @@ export interface SearchPreview {
 }
 
 export type SearchResultType =
-  | 'account' | 'task' | 'lead' | 'contact'
+  | 'account' | 'task' | 'lead' | 'contact' | 'chat'
   | 'document' | 'service' | 'invoice' | 'deadline'
 
 export interface EnhancedSearchResult {
