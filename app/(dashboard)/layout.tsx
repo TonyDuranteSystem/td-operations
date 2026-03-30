@@ -7,6 +7,11 @@ import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { isAdmin } from '@/lib/auth'
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  manifest: '/manifest.webmanifest',
+}
 
 async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
   try {
