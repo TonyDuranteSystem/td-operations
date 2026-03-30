@@ -50,7 +50,7 @@ export default async function WizardPage({
   if (contactId) {
     const { data: c } = await supabaseAdmin
       .from('contacts')
-      .select('full_name, first_name, last_name, email, phone, citizenship, date_of_birth, address_line1, address_city, address_state, address_zip, address_country, itin, itin_issue_date')
+      .select('full_name, first_name, last_name, email, phone, citizenship, date_of_birth, itin_number, itin_issue_date')
       .eq('id', contactId)
       .single()
     if (c) contact = c as unknown as Record<string, string>
@@ -73,7 +73,7 @@ export default async function WizardPage({
 
       const { data: a } = await supabaseAdmin
         .from('accounts')
-        .select('company_name, state_of_formation, formation_date, ein, filing_id, entity_type, portal_tier')
+        .select('company_name, state_of_formation, formation_date, ein_number, filing_id, entity_type, portal_tier')
         .eq('id', targetId)
         .single()
       if (a) account = a as unknown as Record<string, string>
@@ -186,12 +186,7 @@ export default async function WizardPage({
   if (contact.phone) prefillData.owner_phone = contact.phone
   if (contact.date_of_birth) prefillData.owner_dob = contact.date_of_birth
   if (contact.citizenship) { prefillData.owner_nationality = contact.citizenship; prefillData.owner_tax_residency = contact.citizenship }
-  if (contact.address_line1) prefillData.owner_street = contact.address_line1
-  if (contact.address_city) prefillData.owner_city = contact.address_city
-  if (contact.address_state) prefillData.owner_state_province = contact.address_state
-  if (contact.address_zip) prefillData.owner_zip = contact.address_zip
-  if (contact.address_country) prefillData.owner_country = contact.address_country
-  if (contact.itin) prefillData.owner_itin = contact.itin
+  if (contact.itin_number) prefillData.owner_itin = contact.itin_number
   if (contact.itin_issue_date) prefillData.owner_itin_issue_date = contact.itin_issue_date
   // Banking-specific prefills
   if (contact.first_name) prefillData.first_name = contact.first_name
@@ -200,15 +195,15 @@ export default async function WizardPage({
   if (contact.phone) { prefillData.phone = contact.phone; prefillData.personal_phone = contact.phone }
   if (contact.citizenship) prefillData.personal_country = contact.citizenship
   if (account.company_name) { prefillData.business_name = account.company_name; prefillData.company_name = account.company_name; prefillData.llc_name = account.company_name }
-  if (account.ein) { prefillData.ein = account.ein; prefillData.llc_ein = account.ein; prefillData.ein_number = account.ein }
+  if (account.ein_number) { prefillData.ein = account.ein_number; prefillData.llc_ein = account.ein_number; prefillData.ein_number = account.ein_number }
   if (account.state_of_formation) { prefillData.state_of_formation = account.state_of_formation; prefillData.state_of_incorporation = account.state_of_formation }
   if (account.formation_date) { prefillData.formation_date = account.formation_date; prefillData.date_of_incorporation = account.formation_date }
   if (account.filing_id) prefillData.filing_id = account.filing_id
 
   // ITIN Renewal: pre-fill previous ITIN from contact
-  if (isItinRenewal && contact.itin) {
+  if (isItinRenewal && contact.itin_number) {
     prefillData.has_previous_itin = 'Yes'
-    prefillData.previous_itin = contact.itin
+    prefillData.previous_itin = contact.itin_number
   }
 
   // Normalize entity type
