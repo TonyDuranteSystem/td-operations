@@ -1,30 +1,53 @@
-import { AlertTriangle, ArrowRight, CheckCircle, Pencil } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCircle, Clock, Pencil } from 'lucide-react'
 
 interface TaxBannerProps {
   taxYear: number
   returnType: string | null
   locale: 'en' | 'it'
-  /**
-   * Status of the client's wizard_progress for this tax year:
-   * - 'pending' (default): client has not yet submitted → show "Complete form" CTA
-   * - 'submitted': client submitted but Antonio hasn't reviewed yet → show "Under review" + Edit
-   */
-  wizardStatus?: 'pending' | 'submitted'
+  /** Whether the client's data has been received (wizard submitted + job processed) */
+  dataReceived?: boolean
+  /** Whether the return has been sent to India for processing (editing locked) */
+  sentToIndia?: boolean
 }
 
 /**
- * Non-dismissible banner shown on the portal dashboard when a client
- * has a pending tax return (data_received = false).
+ * Non-dismissible banner shown on the portal dashboard for active tax returns.
  *
- * Two variants:
- * - Action required (default): client needs to complete the form
- * - Under review: client submitted, Antonio is reviewing — edit still allowed
+ * Three variants:
+ * - State 1 (amber): data_received=false — client needs to complete the form
+ * - State 2 (blue + Edit): data_received=true, sent_to_india=false — under review, edits still allowed
+ * - State 3 (blue, no Edit): sent_to_india=true — processing in progress, edits locked
  */
-export function TaxBanner({ taxYear, returnType, locale, wizardStatus = 'pending' }: TaxBannerProps) {
+export function TaxBanner({ taxYear, returnType, locale, dataReceived = false, sentToIndia = false }: TaxBannerProps) {
   const returnLabel = returnType || 'Tax Return'
-  const isUnderReview = wizardStatus === 'submitted'
 
-  if (isUnderReview) {
+  // State 3: sent to India — in progress, no edit
+  if (sentToIndia) {
+    const title = locale === 'it'
+      ? `In elaborazione: ${returnLabel} ${taxYear}`
+      : `In progress: ${returnLabel} ${taxYear}`
+
+    const description = locale === 'it'
+      ? `I tuoi dati per la ${returnLabel} ${taxYear} sono in fase di elaborazione. Ti contatteremo se avremo bisogno di ulteriori informazioni.`
+      : `Your data for ${returnLabel} ${taxYear} is being processed. We'll reach out if we need any additional information.`
+
+    return (
+      <div className="block w-full rounded-xl border-2 border-blue-300 bg-blue-50 px-5 py-4 mb-6">
+        <div className="flex items-start gap-4">
+          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 border border-blue-300">
+            <Clock className="h-5 w-5 text-blue-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-blue-900 text-sm sm:text-base">{title}</p>
+            <p className="text-blue-700 text-xs sm:text-sm mt-1">{description}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // State 2: data received, under review — edit still allowed
+  if (dataReceived) {
     const title = locale === 'it'
       ? `Informazioni fiscali inviate — in revisione (${taxYear})`
       : `Tax information submitted — under review (${taxYear})`
@@ -57,7 +80,7 @@ export function TaxBanner({ taxYear, returnType, locale, wizardStatus = 'pending
     )
   }
 
-  // Default: action required — client needs to complete the form
+  // State 1: action required — client needs to complete the form
   const title = locale === 'it'
     ? `Azione richiesta: Completa le informazioni fiscali per il ${taxYear}`
     : `Action required: Complete your tax information for ${taxYear}`

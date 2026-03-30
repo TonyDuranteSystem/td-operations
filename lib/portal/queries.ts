@@ -344,7 +344,7 @@ export async function getPortalTaxReturns(accountId: string) {
 
   const { data } = await supabaseAdmin
     .from('tax_returns')
-    .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, data_received')
+    .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, data_received, sent_to_india')
     .eq('company_name', account.company_name)
     .order('tax_year', { ascending: false })
     .limit(5)

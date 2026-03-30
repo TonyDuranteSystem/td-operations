@@ -190,8 +190,8 @@ export default async function PortalDashboardPage() {
     )
   }
 
-  // Fetch all data in parallel (including wizard progress for tax banner status)
-  const [account, services, deadlines, payments, taxReturns, members, actionItems, taxWizardProgressResult] = await Promise.all([
+  // Fetch all data in parallel
+  const [account, services, deadlines, payments, taxReturns, members, actionItems] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
@@ -199,20 +199,7 @@ export default async function PortalDashboardPage() {
     getPortalTaxReturns(selectedAccountId),
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
-    supabaseAdmin
-      .from('wizard_progress')
-      .select('status')
-      .eq('account_id', selectedAccountId)
-      .eq('wizard_type', 'tax')
-      .in('status', ['in_progress', 'submitted'])
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
   ])
-
-  // Determine banner status: 'submitted' if client submitted but not yet reviewed
-  const taxWizardStatus: 'pending' | 'submitted' =
-    taxWizardProgressResult.data?.status === 'submitted' ? 'submitted' : 'pending'
 
   if (!account) {
     return (
@@ -237,14 +224,15 @@ export default async function PortalDashboardPage() {
         </p>
       </div>
 
-      {/* Tax Banner — shown when client has a pending tax return (data not yet received) */}
-      {taxReturns.filter(tr => tr.data_received === false).slice(0, 1).map(tr => (
+      {/* Tax Banner — shown for active tax returns (all states until filed) */}
+      {taxReturns.filter(tr => tr.status !== 'Filed' && tr.status !== 'Completed' && tr.status !== 'Cancelled').slice(0, 1).map(tr => (
         <TaxBanner
           key={tr.id}
           taxYear={tr.tax_year}
           returnType={tr.return_type}
           locale={locale}
-          wizardStatus={taxWizardStatus}
+          dataReceived={tr.data_received ?? false}
+          sentToIndia={tr.sent_to_india ?? false}
         />
       ))}
 
