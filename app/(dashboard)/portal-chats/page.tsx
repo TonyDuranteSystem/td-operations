@@ -99,7 +99,7 @@ export default function PortalChatsPage() {
     try {
       if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
 
-      const registration = await navigator.serviceWorker.register('/admin-sw.js')
+      const registration = await navigator.serviceWorker.register('/dashboard-sw.js')
       await navigator.serviceWorker.ready
 
       // Fetch VAPID public key
