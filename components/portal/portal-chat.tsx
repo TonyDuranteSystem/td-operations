@@ -1,13 +1,18 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
+
+function isImageUrl(url: string): boolean {
+  const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+  return ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
+}
 
 function formatMessageDate(dateStr: string): string {
   const date = parseISO(dateStr)
@@ -26,6 +31,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const [uploading, setUploading] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -227,19 +233,37 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                       </div>
                     )}
                     {msg.attachment_url && (
-                      <a
-                        href={msg.attachment_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className={cn(
-                          'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
-                          isOwn ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
-                        )}
-                      >
-                        <FileText className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
-                        <ExternalLink className="h-3 w-3 shrink-0" />
-                      </a>
+                      isImageUrl(msg.attachment_url) ? (
+                        <button
+                          onClick={() => setLightboxUrl(msg.attachment_url!)}
+                          className="relative group rounded-lg overflow-hidden mb-1 block"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={msg.attachment_url}
+                            alt={msg.attachment_name || 'Image'}
+                            className="max-w-[240px] rounded-lg"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                            <ZoomIn className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </div>
+                        </button>
+                      ) : (
+                        <a
+                          href={msg.attachment_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={cn(
+                            'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
+                            isOwn ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                          )}
+                        >
+                          <FileText className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
+                          <ExternalLink className="h-3 w-3 shrink-0" />
+                        </a>
+                      )
                     )}
                     {msg.message && <p className="whitespace-pre-wrap break-words">{msg.message}</p>}
                     <p className={cn(
@@ -382,6 +406,28 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
           </button>
         </div>
       </div>
+
+      {/* Image lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button
+            onClick={() => setLightboxUrl(null)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
+          >
+            <X className="h-6 w-6" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            className="max-h-[90vh] max-w-full rounded-lg object-contain"
+            onClick={e => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   )
 }

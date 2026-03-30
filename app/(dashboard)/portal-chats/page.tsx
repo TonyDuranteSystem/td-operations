@@ -30,6 +30,18 @@ interface ChatMessage {
   reply_to_id?: string | null
 }
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = atob(base64)
+  const buffer = new ArrayBuffer(rawData.length)
+  const outputArray = new Uint8Array(buffer)
+  for (let i = 0; i < rawData.length; i++) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray
+}
+
 export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
@@ -69,7 +81,7 @@ export default function PortalChatsPage() {
     isSupported: micSupported,
   } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript })
 
-  // Request browser notification permission
+  // Request browser notification permission + register service worker for push
   useEffect(() => {
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       setNotificationsEnabled(true)
@@ -79,7 +91,37 @@ export default function PortalChatsPage() {
   const enableNotifications = async () => {
     if (typeof Notification === 'undefined') return
     const permission = await Notification.requestPermission()
-    setNotificationsEnabled(permission === 'granted')
+    if (permission !== 'granted') return
+
+    setNotificationsEnabled(true)
+
+    // Try to register service worker + subscribe to push
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+
+      const registration = await navigator.serviceWorker.register('/admin-sw.js')
+      await navigator.serviceWorker.ready
+
+      // Fetch VAPID public key
+      const vapidRes = await fetch('/api/admin/push')
+      if (!vapidRes.ok) return // VAPID not configured, fall back to basic notifications
+      const { publicKey } = await vapidRes.json()
+      if (!publicKey) return
+
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      })
+
+      // Save subscription to server
+      await fetch('/api/admin/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      })
+    } catch {
+      // Push registration failed — basic Notification API still works
+    }
   }
 
   // Fetch all portal chat threads

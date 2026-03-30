@@ -148,6 +148,7 @@ export async function POST(request: NextRequest) {
   // Notify admin when client sends a message
   if (senderType === 'client') {
     notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
+    pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {})
   }
 
   // Audit log
@@ -242,4 +243,34 @@ async function notifyAdminOfClientMessage(accountId: string | null, contactId: s
   } catch (err) {
     console.error('Admin chat notification email failed:', err)
   }
+}
+
+/**
+ * Send push notification to all admin devices when a client sends a message.
+ */
+async function pushNotifyAdmin(accountId: string | null, contactId: string | null, messagePreview: string) {
+  let displayName = 'Unknown'
+  if (accountId) {
+    const { data: account } = await supabaseAdmin
+      .from('accounts')
+      .select('company_name')
+      .eq('id', accountId)
+      .single()
+    displayName = account?.company_name || 'Unknown'
+  } else if (contactId) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name')
+      .eq('id', contactId)
+      .single()
+    displayName = contact?.full_name || 'Unknown'
+  }
+
+  const { sendPushToAdmin } = await import('@/lib/portal/web-push')
+  await sendPushToAdmin({
+    title: `Chat: ${displayName}`,
+    body: messagePreview.slice(0, 200) || '[Attachment]',
+    url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
+    tag: `admin-chat-${accountId || contactId || 'unknown'}`,
+  })
 }
