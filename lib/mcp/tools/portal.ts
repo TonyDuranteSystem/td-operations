@@ -53,7 +53,7 @@ After running this tool, review the output and fix any gaps before creating the 
         // 1. Get account with all relevant fields
         const { data: account } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier")
+          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle")
           .eq("id", account_id)
           .single()
 
@@ -383,26 +383,69 @@ After running this tool, review the output and fix any gaps before creating the 
           issues.push("No SS-4 and no EIN -- create SS-4 with ss4_create")
         }
 
-        // --- SERVICES ---
+        // --- SERVICES (auto-create missing SDs) ---
         checksTotal++
+        const existingTypes = new Set(sds.map(s => s.service_type))
+        const createdSDs: string[] = []
+        const bundle = (account as Record<string, unknown>).services_bundle as string[] | null
+
+        // Auto-create Company Formation SD (completed) if formation_date exists
+        if (account.formation_date && !existingTypes.has("Company Formation")) {
+          const { data: newSD } = await supabaseAdmin.from("service_deliveries").insert({
+            account_id: account.id, service_type: "Company Formation", pipeline: "Company Formation",
+            service_name: `Company Formation -- ${account.company_name}`,
+            stage: "Closing", stage_order: 6, status: "completed",
+            start_date: account.formation_date, assigned_to: "Luca",
+            notes: "Legacy onboard - formation already completed",
+            stage_history: [{ to_stage: "Closing", to_order: 6, notes: "Legacy - already formed", advanced_at: new Date().toISOString() }],
+          }).select("id").single()
+          if (newSD) { createdSDs.push("Company Formation (completed)"); existingTypes.add("Company Formation") }
+        }
+
+        // Auto-create EIN SD (completed) if ein_number exists
+        if (account.ein_number && !existingTypes.has("EIN")) {
+          const { data: newSD } = await supabaseAdmin.from("service_deliveries").insert({
+            account_id: account.id, service_type: "EIN", pipeline: "EIN",
+            service_name: `EIN -- ${account.company_name}`,
+            stage: "EIN Received", stage_order: 4, status: "completed",
+            start_date: account.formation_date || new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+            notes: `Legacy onboard - EIN ${account.ein_number} already obtained`,
+            stage_history: [{ to_stage: "EIN Received", to_order: 4, notes: "Legacy - EIN already obtained", advanced_at: new Date().toISOString() }],
+          }).select("id").single()
+          if (newSD) { createdSDs.push("EIN (completed)"); existingTypes.add("EIN") }
+        }
+
+        // Auto-create Annual Renewal SD (active) if services_bundle includes State Renewal
+        if (bundle?.some(s => s.toLowerCase().includes("renewal") || s.toLowerCase().includes("state")) && !existingTypes.has("Annual Renewal")) {
+          const { data: newSD } = await supabaseAdmin.from("service_deliveries").insert({
+            account_id: account.id, service_type: "Annual Renewal",
+            service_name: `Annual Renewal -- ${account.company_name}`,
+            status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+            notes: "Legacy onboard - annual renewal service",
+          }).select("id").single()
+          if (newSD) { createdSDs.push("Annual Renewal (active)"); existingTypes.add("Annual Renewal") }
+        }
+
+        // Re-query SDs after creation
+        const { data: finalSDs } = await supabaseAdmin.from("service_deliveries")
+          .select("id, service_name, service_type, stage, status")
+          .eq("account_id", account_id).in("status", ["active", "completed"])
+
         lines.push("")
         lines.push("--- SERVICES ---")
-        if (sds.length > 0) {
+        if (createdSDs.length > 0) {
+          lines.push(`Auto-created: ${createdSDs.join(", ")}`)
+        }
+        const allSDs = finalSDs ?? []
+        if (allSDs.length > 0) {
           checksPassed++
-          lines.push(`Service deliveries: ${sds.length}`)
-          for (const sd of sds) {
-            lines.push(`  ${sd.service_name ?? sd.service_type} -- ${sd.stage} (${sd.status})`)
+          lines.push(`Service deliveries: ${allSDs.length}`)
+          for (const sd of allSDs) {
+            lines.push(`  ${sd.service_name ?? sd.service_type} -- ${sd.stage ?? "no stage"} (${sd.status})`)
           }
-        } else if (legacyServices.length > 0) {
-          checksPassed++
-          lines.push(`No service_deliveries, but ${legacyServices.length} legacy services found`)
-          for (const s of legacyServices) {
-            lines.push(`  ${s.service_name ?? s.service_type} (${s.status})`)
-          }
-          lines.push("Note: Portal Services page uses service_deliveries first, falls back to services")
         } else {
           lines.push("No services -- portal Services page will be EMPTY")
-          issues.push("No service deliveries or legacy services")
+          issues.push("No service deliveries")
         }
 
         // --- TAX RETURNS ---
@@ -416,23 +459,74 @@ After running this tool, review the output and fix any gaps before creating the 
           }
         } else {
           lines.push("None tracked")
-          issues.push("No tax returns in system")
+          // Not a blocker for portal access — just informational
         }
 
-        // --- DEADLINES ---
+        // --- DEADLINES (auto-create if missing) ---
         checksTotal++
+        const createdDeadlines: string[] = []
+        const existingDeadlineTypes = new Set(deadlines.map(d => d.deadline_type))
+
+        if (account.formation_date && account.state_of_formation) {
+          const formDate = new Date(account.formation_date)
+          const formMonth = formDate.getMonth() // 0-indexed
+          const formDay = formDate.getDate()
+          const nextYear = new Date().getFullYear() + 1
+          const state = account.state_of_formation
+          const llcType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+
+          // Annual Report deadline
+          if (!existingDeadlineTypes.has("Annual Report")) {
+            // Wyoming: 1st day of anniversary month. Florida: May 1. NM: no report.
+            let arDue: string | null = null
+            if (state === "Wyoming") arDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-01`
+            else if (state === "Florida") arDue = `${nextYear}-05-01`
+
+            if (arDue) {
+              await supabaseAdmin.from("deadlines").insert({
+                account_id: account.id, deadline_type: "Annual Report", due_date: arDue,
+                status: "Pending", state, year: nextYear, llc_type: llcType, assigned_to: "Luca",
+                deadline_record: `${account.company_name} - Annual Report ${nextYear}`,
+                notes: "Legacy onboard",
+              })
+              createdDeadlines.push(`Annual Report ${arDue}`)
+            }
+          }
+
+          // RA Renewal deadline
+          if (!existingDeadlineTypes.has("RA Renewal")) {
+            const raDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-${String(formDay).padStart(2, "0")}`
+            await supabaseAdmin.from("deadlines").insert({
+              account_id: account.id, deadline_type: "RA Renewal", due_date: raDue,
+              status: "Pending", state, year: nextYear, llc_type: llcType, assigned_to: "Luca",
+              deadline_record: `${account.company_name} - RA Renewal ${nextYear}`,
+              notes: "Legacy onboard",
+            })
+            createdDeadlines.push(`RA Renewal ${raDue}`)
+          }
+        }
+
+        // Re-query deadlines
+        const { data: finalDeadlines } = await supabaseAdmin.from("deadlines")
+          .select("id, deadline_type, due_date, status")
+          .eq("account_id", account_id)
+
         lines.push("")
         lines.push("--- DEADLINES ---")
-        const pendingDeadlines = deadlines.filter(d => d.status === "Pending")
-        const overdueDeadlines = deadlines.filter(d => d.status === "Overdue")
-        if (deadlines.length > 0) {
+        if (createdDeadlines.length > 0) {
+          lines.push(`Auto-created: ${createdDeadlines.join(", ")}`)
+        }
+        const allDeadlines = finalDeadlines ?? []
+        const pendingDeadlines = allDeadlines.filter(d => d.status === "Pending")
+        const overdueDeadlines = allDeadlines.filter(d => d.status === "Overdue")
+        if (allDeadlines.length > 0) {
           checksPassed++
           lines.push(`${pendingDeadlines.length} pending, ${overdueDeadlines.length} overdue`)
           for (const d of [...overdueDeadlines, ...pendingDeadlines].slice(0, 5)) {
             lines.push(`  ${d.deadline_type}: ${d.due_date} (${d.status})`)
           }
         } else {
-          lines.push("None -- consider creating Annual Report / RA Renewal deadlines")
+          lines.push("None")
           issues.push("No deadlines")
         }
 
