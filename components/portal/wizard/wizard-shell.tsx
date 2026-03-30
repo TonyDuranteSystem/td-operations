@@ -23,6 +23,8 @@ interface WizardShellProps {
   isSaving?: boolean
   locale: 'en' | 'it'
   children: React.ReactNode
+  /** Override the submit button label (e.g. "Re-submit" for edit mode) */
+  submitLabel?: string
 }
 
 export function WizardShell({
@@ -36,6 +38,7 @@ export function WizardShell({
   isSaving,
   locale,
   children,
+  submitLabel,
 }: WizardShellProps) {
   const isLastStep = currentStep === steps.length - 1
   const isFirstStep = currentStep === 0
@@ -137,7 +140,7 @@ export function WizardShell({
             className="flex items-center gap-1 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {isSubmitting ? t.submitting : t.submit}
+            {isSubmitting ? t.submitting : (submitLabel ?? t.submit)}
           </button>
         ) : (
           <button

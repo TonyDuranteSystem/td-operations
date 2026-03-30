@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
 import { WizardField } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
-import { CheckCircle, Plus, Trash2 } from 'lucide-react'
+import { CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 interface WizardClientProps {
   wizardType: string
@@ -17,6 +17,10 @@ interface WizardClientProps {
   accountId: string
   contactId: string
   locale: 'en' | 'it'
+  /** Status of a previous submission (if any) */
+  initialSubmitStatus?: 'in_progress' | 'submitted' | null
+  /** Locked when Antonio has reviewed — no more editing allowed */
+  isLocked?: boolean
 }
 
 export function WizardClient({
@@ -29,6 +33,8 @@ export function WizardClient({
   accountId,
   contactId,
   locale,
+  initialSubmitStatus,
+  isLocked,
 }: WizardClientProps) {
   const { steps, fields } = getWizardConfig(wizardType, entityType)
 
@@ -39,7 +45,9 @@ export function WizardClient({
   )
   const initialData = { ...prefillData, ...filteredSaved }
 
-  const [currentStep, setCurrentStep] = useState(savedStep)
+  const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
+
+  const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | boolean | number>>(initialData)
   const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
   // Track row counts for inline repeater fields (e.g., related_party_transactions)
@@ -153,6 +161,7 @@ export function WizardClient({
           account_id: accountId || null,
           contact_id: contactId || null,
           progress_id: currentProgressId,
+          allow_resubmit: isResubmitMode || undefined,
         }),
       })
 
@@ -195,7 +204,32 @@ export function WizardClient({
     }
   }, [wizardType, formData, accountId, contactId, currentProgressId])
 
-  // Success screen
+  // Locked screen — Antonio has reviewed the data, no more editing
+  if (isLocked) {
+    return (
+      <div className="max-w-lg mx-auto text-center py-16">
+        <div className="h-16 w-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+          <Lock className="h-8 w-8 text-blue-600" />
+        </div>
+        <h2 className="text-2xl font-bold mb-2">
+          {locale === 'it' ? 'Informazioni fiscali in elaborazione' : 'Tax information reviewed'}
+        </h2>
+        <p className="text-zinc-500 mb-6">
+          {locale === 'it'
+            ? 'Le tue informazioni fiscali sono state esaminate e sono in fase di elaborazione. Non sono necessarie ulteriori azioni da parte tua.'
+            : 'Your tax information has been reviewed and is being processed. No further action is required from you.'}
+        </p>
+        <a
+          href="/portal"
+          className="inline-flex items-center px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+        </a>
+      </div>
+    )
+  }
+
+  // Success screen (shown after successful submit or re-submit)
   if (isSubmitted) {
     return (
       <div className="max-w-lg mx-auto text-center py-16">
@@ -236,7 +270,25 @@ export function WizardClient({
       isSubmitting={isSubmitting}
       isSaving={isSaving}
       locale={locale}
+      submitLabel={isResubmitMode ? (locale === 'it' ? 'Aggiorna invio' : 'Re-submit') : undefined}
     >
+      {/* Re-submit mode banner */}
+      {isResubmitMode && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+          <Pencil className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-amber-900">
+              {locale === 'it' ? 'Dati già inviati — puoi modificare' : 'Already submitted — you can edit'}
+            </p>
+            <p className="text-amber-700 mt-0.5">
+              {locale === 'it'
+                ? 'I tuoi dati sono stati inviati ma non ancora esaminati. Puoi aggiornare le risposte fino all\'inizio della revisione.'
+                : "Your data has been submitted but not yet reviewed. You can update your answers until we begin the review."}
+            </p>
+          </div>
+        </div>
+      )}
+
       {isMembersStep ? (
         /* Members repeater — add/remove members */
         <div className="space-y-6">

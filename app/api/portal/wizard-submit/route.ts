@@ -11,12 +11,14 @@
  */
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
-import { enqueueJob } from '@/lib/jobs/queue'
+import { enqueueJob, completeJob, failJob } from '@/lib/jobs/queue'
+import type { Job } from '@/lib/jobs/queue'
 
 /** Extract file upload paths from wizard data */
 function extractUploadPaths(data: Record<string, unknown>): string[] {
@@ -63,7 +65,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, entity_type, data, account_id, contact_id, progress_id } = body
+  const { wizard_type, entity_type, data, account_id, contact_id, progress_id, allow_resubmit } = body
 
   if (!wizard_type || !data) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
@@ -71,7 +73,8 @@ export async function POST(req: NextRequest) {
 
   try {
     // ─── 1. DEDUPLICATION ───
-    if (progress_id) {
+    // Skip dedup check when allow_resubmit=true (client editing a previous submission)
+    if (progress_id && !allow_resubmit) {
       const { data: existing } = await supabaseAdmin
         .from('wizard_progress')
         .select('status')
@@ -223,6 +226,38 @@ export async function POST(req: NextRequest) {
 
       jobId = job.id
       console.warn(`[wizard-submit] Enqueued ${jobType} job ${jobId} for ${clientName}`)
+    }
+
+    // ─── 6. DIRECT HANDLER EXECUTION (for tax jobs) ───
+    // Claim and run the handler inline — more reliable than fire-and-forget HTTP.
+    // For tax_form_setup: blocks the response until processing completes (~10-30s).
+    // If claim fails (worker already picked it up), skip — it will be handled.
+    // Cron at /api/cron/process-jobs acts as safety net for anything missed.
+    if (jobType === 'tax_form_setup' && jobId) {
+      const claimNow = new Date().toISOString()
+      const { data: claimedJob } = await supabaseAdmin
+        .from('job_queue')
+        .update({ status: 'processing', started_at: claimNow, attempts: 1 })
+        .eq('id', jobId)
+        .eq('status', 'pending')
+        .select('*')
+        .single()
+
+      if (claimedJob) {
+        try {
+          const { handleTaxFormSetup } = await import('@/lib/jobs/handlers/tax-form-setup')
+          const result = await handleTaxFormSetup(claimedJob as unknown as Job)
+          await completeJob(jobId, result)
+          console.warn(`[wizard-submit] Job ${jobId} completed inline: ${result.summary}`)
+        } catch (handlerErr) {
+          const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
+          await failJob(jobId, errMsg)
+          console.error(`[wizard-submit] Job ${jobId} failed inline:`, errMsg)
+          // Still return success — data was saved, cron will retry
+        }
+      } else {
+        console.warn(`[wizard-submit] Job ${jobId} already claimed by worker — skipping inline execution`)
+      }
     }
 
     return NextResponse.json({

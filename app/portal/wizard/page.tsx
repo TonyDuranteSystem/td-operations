@@ -158,24 +158,41 @@ export default async function WizardPage({
     }
   }
 
-  // Load saved progress
+  // Load saved progress — include 'submitted' so clients can edit before review
   let savedData: Record<string, unknown> = {}
   let savedStep = 0
   let progressId: string | null = null
+  let wizardSubmitStatus: 'in_progress' | 'submitted' | null = null
 
   const progressQuery = accountId
-    ? supabaseAdmin.from('wizard_progress').select('*').eq('account_id', accountId).eq('wizard_type', wizardType).eq('status', 'in_progress').limit(1).maybeSingle()
+    ? supabaseAdmin.from('wizard_progress').select('*').eq('account_id', accountId).eq('wizard_type', wizardType).in('status', ['in_progress', 'submitted']).order('updated_at', { ascending: false }).limit(1).maybeSingle()
     : contactId
-      ? supabaseAdmin.from('wizard_progress').select('*').eq('contact_id', contactId).eq('wizard_type', wizardType).eq('status', 'in_progress').limit(1).maybeSingle()
+      ? supabaseAdmin.from('wizard_progress').select('*').eq('contact_id', contactId).eq('wizard_type', wizardType).in('status', ['in_progress', 'submitted']).order('updated_at', { ascending: false }).limit(1).maybeSingle()
       : null
 
   if (progressQuery) {
     const { data: progress } = await progressQuery
     if (progress) {
       savedData = (progress.data as Record<string, unknown>) || {}
-      savedStep = progress.current_step || 0
+      // Cap current_step (submitted records may have step=99)
+      savedStep = Math.min(progress.current_step || 0, 20)
       progressId = progress.id
+      wizardSubmitStatus = progress.status as 'in_progress' | 'submitted'
     }
+  }
+
+  // For submitted tax wizards: check if Antonio has reviewed (data_received=true → locked)
+  let isLocked = false
+  if (wizardSubmitStatus === 'submitted' && wizardType === 'tax' && accountId) {
+    const { data: pendingTr } = await supabaseAdmin
+      .from('tax_returns')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('data_received', false)
+      .limit(1)
+      .maybeSingle()
+    // If no pending tax return found, data_received=true → locked
+    isLocked = !pendingTr
   }
 
   // Build prefill data from contact + account
@@ -222,6 +239,8 @@ export default async function WizardPage({
         accountId={accountId}
         contactId={contactId || ''}
         locale={locale}
+        initialSubmitStatus={wizardSubmitStatus}
+        isLocked={isLocked}
       />
     </div>
   )
