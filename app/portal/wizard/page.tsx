@@ -181,18 +181,17 @@ export default async function WizardPage({
     }
   }
 
-  // For submitted tax wizards: check if Antonio has reviewed (data_received=true → locked)
+  // For submitted tax wizards: lock only when sent_to_india=true (processing started)
   let isLocked = false
   if (wizardSubmitStatus === 'submitted' && wizardType === 'tax' && accountId) {
-    const { data: pendingTr } = await supabaseAdmin
+    const { data: sentTr } = await supabaseAdmin
       .from('tax_returns')
       .select('id')
       .eq('account_id', accountId)
-      .eq('data_received', false)
+      .eq('sent_to_india', true)
       .limit(1)
       .maybeSingle()
-    // If no pending tax return found, data_received=true → locked
-    isLocked = !pendingTr
+    isLocked = !!sentTr
   }
 
   // Build prefill data from contact + account
