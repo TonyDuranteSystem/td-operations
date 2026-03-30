@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useLocale } from '@/lib/portal/use-locale'
-import { FileText, PenLine, CheckCircle2, Clock, ChevronRight, ExternalLink, PartyPopper, FileSignature } from 'lucide-react'
+import { FileText, PenLine, CheckCircle2, Clock, ChevronRight, PartyPopper, FileSignature } from 'lucide-react'
 import type { SignableDocument } from './page'
 
 const DOC_INFO: Record<string, { en: { title: string; desc: string }; it: { title: string; desc: string }; icon: typeof FileText }> = {
@@ -106,11 +106,13 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
         {documents.map((doc) => {
           const info = DOC_INFO[doc.type]
           const isSigned = doc.status === 'signed'
-          const isLegacyDriveDoc = isSigned && !!doc.driveLink
+          // Legacy docs from documents table: show as signed but non-interactive
+          // (clients view the actual file in the Documents tab, not here)
+          const isLegacyDoc = isSigned && !!doc.driveLink
 
-          const cardClass = `block rounded-xl border transition-all ${
+          const cardClass = `rounded-xl border transition-all ${
             isSigned
-              ? 'border-green-200 bg-green-50/50 hover:bg-green-50'
+              ? 'border-green-200 bg-green-50/50' + (isLegacyDoc ? '' : ' hover:bg-green-50')
               : 'border-zinc-200 bg-white hover:border-blue-300 hover:shadow-md'
           }`
 
@@ -163,20 +165,19 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
                 </div>
               </div>
 
-              {/* Arrow / external icon */}
-              {isLegacyDriveDoc
-                ? <ExternalLink className="h-4 w-4 flex-shrink-0 text-green-400" />
-                : <ChevronRight className={`h-5 w-5 flex-shrink-0 ${isSigned ? 'text-green-400' : 'text-zinc-300'}`} />
-              }
+              {/* Arrow — hidden for legacy docs (non-navigable) */}
+              {!isLegacyDoc && (
+                <ChevronRight className={`h-5 w-5 flex-shrink-0 ${isSigned ? 'text-green-400' : 'text-zinc-300'}`} />
+              )}
             </div>
           )
 
-          return isLegacyDriveDoc ? (
-            <a key={doc.type} href={doc.driveLink} target="_blank" rel="noopener noreferrer" className={cardClass}>
+          return isLegacyDoc ? (
+            <div key={doc.type} className={cardClass}>
               {cardContent}
-            </a>
+            </div>
           ) : (
-            <Link key={doc.type} href={doc.href} className={cardClass}>
+            <Link key={doc.type} href={doc.href} className={`block ${cardClass}`}>
               {cardContent}
             </Link>
           )
