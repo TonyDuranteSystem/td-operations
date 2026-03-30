@@ -42,11 +42,12 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .from('account_contacts')
       .select('role, contact:contacts(*)')
       .eq('account_id', params.id),
-    // Services
+    // Services (from service_deliveries — source of truth)
     supabase
-      .from('services')
-      .select('id, service_name, service_type, status, start_date, end_date, billing_type, amount, amount_currency, current_step, total_steps, blocked_waiting_external, blocked_reason, sla_due_date, notes, updated_at')
+      .from('service_deliveries')
+      .select('id, service_name, service_type, stage, status, start_date, end_date, notes, updated_at, account_id')
       .eq('account_id', params.id)
+      .neq('status', 'Cancelled')
       .order('updated_at', { ascending: false }),
     // Payments
     supabase
@@ -79,7 +80,25 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     return { ...contact, role: c.role }
   })
 
-  const services: Service[] = (servicesResult.data ?? []) as Service[]
+  const services: Service[] = (servicesResult.data ?? []).map(sd => ({
+    id: sd.id,
+    service_name: sd.service_name ?? sd.service_type ?? 'Service',
+    service_type: sd.service_type ?? '',
+    account_id: sd.account_id,
+    status: sd.status === 'active' ? 'In Progress' : sd.status === 'completed' ? 'Completed' : sd.status,
+    start_date: sd.start_date ?? null,
+    end_date: sd.end_date ?? null,
+    billing_type: null,
+    amount: null,
+    amount_currency: null,
+    current_step: null,
+    total_steps: null,
+    blocked_waiting_external: null,
+    blocked_reason: null,
+    sla_due_date: null,
+    notes: sd.notes ?? null,
+    updated_at: sd.updated_at,
+  })) as Service[]
   const payments: Payment[] = (paymentsResult.data ?? []).map(p => ({ ...p, account_id: params.id })) as Payment[]
   const deals: Deal[] = (dealsResult.data ?? []).map(d => ({ ...d, account_id: params.id })) as Deal[]
   const taxReturns: TaxReturn[] = (taxReturnsResult.data ?? []) as TaxReturn[]

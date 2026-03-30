@@ -287,15 +287,21 @@ export function registerCrmTools(server: McpServer) {
     },
     async ({ service_type, status, account_id, blocked, limit }) => {
       let q = supabaseAdmin
-        .from('services')
-        .select('*, accounts(company_name)')
+        .from('service_deliveries')
+        .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, account_id, accounts(company_name)')
         .order('updated_at', { ascending: false })
         .limit(Math.min(limit || 50, 200))
 
       if (service_type) q = q.ilike('service_type', `%${service_type}%`)
-      if (status) q = q.eq('status', status)
+      // Map legacy status values to service_deliveries status
+      if (status) {
+        const sdStatus = status === 'In Progress' || status === 'Not Started' || status === 'Waiting Client' || status === 'Waiting Third Party' ? 'active'
+          : status === 'Completed' ? 'completed'
+          : status
+        q = q.eq('status', sdStatus)
+      }
       if (account_id) q = q.eq('account_id', account_id)
-      if (blocked === true) q = q.eq('blocked_waiting_external', true)
+      if (blocked === true) q = q.eq('status', 'active') // blocked concept replaced by stage in SD
 
       const { data, error } = await q
 
@@ -503,10 +509,11 @@ export function registerCrmTools(server: McpServer) {
           .select('*, contacts(*)')
           .eq('account_id', id),
         supabaseAdmin
-          .from('services')
-          .select('*')
+          .from('service_deliveries')
+          .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, account_id')
           .eq('account_id', id)
-          .order('start_date', { ascending: false }),
+          .neq('status', 'Cancelled')
+          .order('updated_at', { ascending: false }),
         supabaseAdmin
           .from('payments')
           .select('*')
@@ -546,7 +553,7 @@ export function registerCrmTools(server: McpServer) {
         })) || [],
         services: {
           total: services.data?.length || 0,
-          active: services.data?.filter((s: Record<string, unknown>) => s.status === 'active' || s.status === 'in_progress').length || 0,
+          active: services.data?.filter((s: Record<string, unknown>) => s.status === 'active').length || 0,
           items: services.data || [],
         },
         payments: {

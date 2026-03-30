@@ -1549,7 +1549,7 @@ export function registerOperationsTools(server: McpServer) {
                    s.notes as service_notes, s.updated_at as service_updated
             FROM tasks t
             JOIN accounts a ON a.id = t.account_id
-            JOIN services s ON s.account_id = t.account_id
+            JOIN service_deliveries s ON s.account_id = t.account_id
             WHERE t.status IN ('To Do', 'In Progress', 'Waiting')
               AND s.updated_at >= '${since}'
               AND t.created_at < s.updated_at
