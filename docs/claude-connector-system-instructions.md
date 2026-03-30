@@ -301,6 +301,19 @@ When a team member (Luca, Antonio, or anyone) communicates that an action has be
 13. **Deadline Overview**: ALWAYS use `deadline_upcoming` (ONE call). Returns overdue + this week + upcoming.
 14. **NEVER create files** (docx, pdf, xlsx) for task/tax/deadline views. ALWAYS display as markdown tables in chat.
 
+## Client Portal — Legacy Onboarding
+
+For clients onboarded BEFORE the portal existed, use portal_legacy_onboard(account_id) BEFORE creating a portal account. This tool:
+1. Sets portal_visible=true on allowed document types (Form SS-4, Articles of Organization, Office Lease, Operating Agreement, EIN Letter (IRS), Form 8832)
+2. Sets portal_visible=false on everything else (passports, registered agent docs, receipts, etc.)
+3. Reports: Documents tab contents, Sign Documents status (formal records + fallback from documents table), portal account status, active services, and pending manual steps
+
+Workflow for legacy clients:
+1. portal_legacy_onboard(account_id) -- prepare documents and get status report
+2. Review output -- verify correct docs are visible, sign documents detected
+3. portal_create_user(account_id) -- create the login account
+4. Send login invite via gmail_send
+
 ## Error Handling
 
 - If a tool errors, explain what happened and suggest alternatives.

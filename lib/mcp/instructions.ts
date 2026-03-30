@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 151 tools, data source priority,
+ * This guides Claude on how to use the 175 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -301,6 +301,19 @@ All client emails MUST use the correct greeting based on \`contacts.gender\` (M/
 - **F + Italian** → "Cara {firstName}" | **M + Italian** → "Caro {firstName}" | **NULL + Italian** → "Gentile {firstName}"
 - **F + English** → "Dear Ms. {lastName}" | **M + English** → "Dear Mr. {lastName}" | **NULL + English** → "Dear {firstName}"
 Always check \`contacts.gender\` before composing any client email. The \`getGreeting()\` helper in \`lib/greeting.ts\` handles this automatically for all MCP email tools.
+
+## Client Portal — Legacy Onboarding
+
+For clients onboarded BEFORE the portal existed, use portal_legacy_onboard(account_id) BEFORE creating a portal account. This tool:
+1. Sets portal_visible=true on allowed document types (Form SS-4, Articles of Organization, Office Lease, Operating Agreement, EIN Letter (IRS), Form 8832)
+2. Sets portal_visible=false on everything else (passports, registered agent docs, receipts, etc.)
+3. Reports: Documents tab contents, Sign Documents status (formal records + fallback from documents table), portal account status, active services, and pending manual steps
+
+Workflow for legacy clients:
+1. portal_legacy_onboard(account_id) -- prepare documents and get status report
+2. Review output -- verify correct docs are visible, sign documents detected
+3. portal_create_user(account_id) -- create the login account
+4. Send login invite via gmail_send
 
 ## Error Handling
 
