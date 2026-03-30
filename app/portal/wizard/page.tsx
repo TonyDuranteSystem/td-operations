@@ -15,7 +15,18 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 
-export default async function WizardPage() {
+const VALID_WIZARD_TYPES = ['onboarding', 'formation', 'banking', 'closure', 'itin', 'tax'] as const
+type WizardType = typeof VALID_WIZARD_TYPES[number]
+
+function isValidWizardType(type: string | undefined): type is WizardType {
+  return VALID_WIZARD_TYPES.includes(type as WizardType)
+}
+
+export default async function WizardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ type?: string }>
+}) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -69,13 +80,17 @@ export default async function WizardPage() {
     }
   }
 
+  // Allow explicit type override via ?type= query param (e.g. from tax banner)
+  const { type: typeParam } = await searchParams
+  const forcedType = isValidWizardType(typeParam) ? typeParam : null
+
   // Determine wizard type from offer or service deliveries
-  let wizardType = 'onboarding' // default
+  let wizardType: WizardType = forcedType || 'onboarding'
   let entityType = account.entity_type || 'SMLLC'
   let isItinRenewal = false
 
-  // Check if there's a pending formation SD
-  if (accountId) {
+  // Check if there's a pending formation SD (skip if type was forced via query param)
+  if (!forcedType && accountId) {
     const { data: sds } = await supabaseAdmin
       .from('service_deliveries')
       .select('service_type')
@@ -92,8 +107,8 @@ export default async function WizardPage() {
     else if (types.includes('Tax Return')) wizardType = 'tax'
   }
 
-  // Also check via lead/offer (for leads without account)
-  if (wizardType === 'onboarding') {
+  // Also check via lead/offer (for leads without account, skip if type was forced)
+  if (!forcedType && wizardType === 'onboarding') {
     // Collect all emails to search
     const searchEmails = new Set<string>()
     if (user.email) searchEmails.add(user.email)

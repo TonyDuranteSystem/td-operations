@@ -26,7 +26,7 @@ export function TaxBanner({ taxYear, returnType, locale }: TaxBannerProps) {
 
   return (
     <a
-      href="/portal/wizard"
+      href="/portal/wizard?type=tax"
       className="block w-full rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 transition-all hover:bg-amber-100 hover:shadow-md mb-6"
     >
       <div className="flex items-start gap-4">
