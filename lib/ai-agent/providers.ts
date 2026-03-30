@@ -9,10 +9,73 @@ interface Message {
   content: string
 }
 
+export interface Attachment {
+  name: string
+  type: string   // MIME type: image/png, image/jpeg, image/webp, application/pdf, text/csv, text/plain
+  base64: string // raw base64 (no data: prefix)
+}
+
 interface AgentResponse {
   reply: string
   provider: 'claude' | 'openai'
   toolsUsed: string[]
+}
+
+// Build Claude multimodal content blocks for the last user message
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildClaudeContent(text: string, attachment: Attachment): any[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const blocks: any[] = []
+  const fallbackText = text || `Please analyze this file: ${attachment.name}`
+
+  if (attachment.type.startsWith('image/')) {
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: attachment.type, data: attachment.base64 },
+    })
+    blocks.push({ type: 'text', text: fallbackText })
+  } else if (attachment.type === 'application/pdf') {
+    blocks.push({
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data: attachment.base64 },
+    })
+    blocks.push({ type: 'text', text: fallbackText })
+  } else {
+    // TXT, CSV — decode and embed as text context
+    const fileText = Buffer.from(attachment.base64, 'base64').toString('utf-8').slice(0, 50000)
+    const combined = text
+      ? `${text}\n\n--- Attached: ${attachment.name} ---\n${fileText}`
+      : `Please analyze this file (${attachment.name}):\n\n${fileText}`
+    blocks.push({ type: 'text', text: combined })
+  }
+
+  return blocks
+}
+
+// Build OpenAI multimodal content blocks for the last user message
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildOpenAIContent(text: string, attachment: Attachment): any[] {
+  if (attachment.type.startsWith('image/')) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const blocks: any[] = []
+    blocks.push({ type: 'text', text: text || `Please analyze this image: ${attachment.name}` })
+    blocks.push({ type: 'image_url', image_url: { url: `data:${attachment.type};base64,${attachment.base64}` } })
+    return blocks
+  }
+
+  // Non-image: decode to text (PDF not natively supported in OpenAI)
+  let fileContent: string
+  if (attachment.type === 'application/pdf') {
+    fileContent = '[PDF attached — PDF analysis is best with Claude. Switch to Claude provider for better results.]'
+  } else {
+    fileContent = Buffer.from(attachment.base64, 'base64').toString('utf-8').slice(0, 50000)
+  }
+
+  const combined = text
+    ? `${text}\n\n--- Attached: ${attachment.name} ---\n${fileContent}`
+    : `Please analyze this file (${attachment.name}):\n\n${fileContent}`
+
+  return [{ type: 'text', text: combined }]
 }
 
 // Max tool-use iterations to prevent infinite loops
@@ -31,7 +94,7 @@ async function getTools() {
 // CLAUDE (Anthropic) — Primary Provider
 // ============================================================
 
-async function callClaude(messages: Message[]): Promise<AgentResponse> {
+async function callClaude(messages: Message[], attachment?: Attachment): Promise<AgentResponse> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
@@ -46,10 +109,19 @@ async function callClaude(messages: Message[]): Promise<AgentResponse> {
 
   const toolsUsed: string[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let currentMessages: any[] = messages.map(m => ({
-    role: m.role,
-    content: m.content,
-  }))
+  let currentMessages: any[] = messages.map(m => ({ role: m.role, content: m.content }))
+
+  // Inject attachment into last user message
+  if (attachment) {
+    const lastUserIdx = currentMessages.map(m => m.role).lastIndexOf('user')
+    if (lastUserIdx >= 0) {
+      currentMessages = [
+        ...currentMessages.slice(0, lastUserIdx),
+        { role: 'user', content: buildClaudeContent(currentMessages[lastUserIdx].content, attachment) },
+        ...currentMessages.slice(lastUserIdx + 1),
+      ]
+    }
+  }
 
   for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
     const controller = new AbortController()
@@ -129,7 +201,7 @@ async function callClaude(messages: Message[]): Promise<AgentResponse> {
 // GPT-4o (OpenAI) — Fallback Provider
 // ============================================================
 
-async function callOpenAI(messages: Message[]): Promise<AgentResponse> {
+async function callOpenAI(messages: Message[], attachment?: Attachment): Promise<AgentResponse> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
 
@@ -151,6 +223,18 @@ async function callOpenAI(messages: Message[]): Promise<AgentResponse> {
     { role: 'system', content: SYSTEM_PROMPT },
     ...messages.map(m => ({ role: m.role, content: m.content })),
   ]
+
+  // Inject attachment into last user message
+  if (attachment) {
+    const lastUserIdx = currentMessages.map((m: { role: string }) => m.role).lastIndexOf('user')
+    if (lastUserIdx >= 0) {
+      currentMessages = [
+        ...currentMessages.slice(0, lastUserIdx),
+        { role: 'user', content: buildOpenAIContent(currentMessages[lastUserIdx].content, attachment) },
+        ...currentMessages.slice(lastUserIdx + 1),
+      ]
+    }
+  }
 
   for (let i = 0; i < MAX_TOOL_LOOPS; i++) {
     const controller = new AbortController()
@@ -213,21 +297,21 @@ async function callOpenAI(messages: Message[]): Promise<AgentResponse> {
 // Main Entry — Claude first, fallback to OpenAI
 // ============================================================
 
-export async function callAgent(messages: Message[], forcedProvider?: string): Promise<AgentResponse> {
+export async function callAgent(messages: Message[], forcedProvider?: string, attachment?: Attachment): Promise<AgentResponse> {
   // If a specific provider is forced
   if (forcedProvider === 'claude') {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured')
-    return await callClaude(messages)
+    return await callClaude(messages, attachment)
   }
   if (forcedProvider === 'openai') {
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured')
-    return await callOpenAI(messages)
+    return await callOpenAI(messages, attachment)
   }
 
   // Auto mode: Try Claude first, fallback to OpenAI
   if (process.env.ANTHROPIC_API_KEY) {
     try {
-      return await callClaude(messages)
+      return await callClaude(messages, attachment)
     } catch (err) {
       console.error('[ai-agent] Claude failed, falling back to OpenAI:', err instanceof Error ? err.message : err)
     }
@@ -236,7 +320,7 @@ export async function callAgent(messages: Message[], forcedProvider?: string): P
   // Fallback to OpenAI
   if (process.env.OPENAI_API_KEY) {
     try {
-      return await callOpenAI(messages)
+      return await callOpenAI(messages, attachment)
     } catch (err) {
       console.error('[ai-agent] OpenAI also failed:', err instanceof Error ? err.message : err)
       throw new Error('Both AI providers failed. Please try again later.')

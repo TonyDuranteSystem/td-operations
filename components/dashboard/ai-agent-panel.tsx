@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles } from 'lucide-react'
+import { Bot, X, Send, Loader2, Trash2, Mic, Square, Sparkles, Paperclip, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
+import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 
 interface Message {
@@ -11,7 +12,24 @@ interface Message {
   content: string
 }
 
+interface AttachedFile {
+  name: string
+  size: number
+  type: string
+  base64: string
+  preview?: string  // data URL for images
+}
+
 type Provider = 'auto' | 'claude' | 'openai'
+
+const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/csv', 'text/plain']
+const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [open, setOpen] = useState(false)
@@ -19,8 +37,11 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [provider, setProvider] = useState<Provider>('auto')
+  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Voice input
   const handleTranscript = useCallback((text: string) => {
@@ -36,21 +57,62 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     isSupported: micSupported,
   } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript })
 
+  // File selection + validation
+  const handleFileSelect = useCallback((file: File) => {
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      toast.error('Unsupported file type. Allowed: PNG, JPG, WEBP, PDF, CSV, TXT')
+      return
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error('File too large (max 10MB)')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string
+      const base64 = dataUrl.split(',')[1]
+      setAttachedFile({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        base64,
+        preview: file.type.startsWith('image/') ? dataUrl : undefined,
+      })
+    }
+    reader.readAsDataURL(file)
+  }, [])
+
+  // Drag & drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFileSelect(file)
+  }, [handleFileSelect])
+
   // Listen for open event from sidebar (with optional email context)
   useEffect(() => {
     function handleOpen(e: Event) {
       setOpen(true)
       const detail = (e as CustomEvent)?.detail
       if (detail?.emailContext) {
-        // Auto-send email analysis request
         const ctx = detail.emailContext
         const autoPrompt = `I'm looking at this email. Analyze it and suggest a reply + any CRM actions I should take.\n\n**From:** ${ctx.name}\n**Subject:** ${ctx.subject}\n**Preview:** ${ctx.preview}\n**Thread ID:** ${ctx.threadId}`
-        // Small delay to let panel render
         setTimeout(() => {
           setInput('')
           const userMsg: Message = { role: 'user', content: autoPrompt }
           setMessages(prev => [...prev, userMsg])
-          // Trigger send
           sendMessage([...messages, userMsg])
         }, 200)
       }
@@ -81,7 +143,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
     el.style.height = Math.max(44, Math.min(el.scrollHeight, 120)) + 'px'
   }, [input])
 
-  const sendMessage = async (msgs: Message[]) => {
+  const sendMessage = async (msgs: Message[], attachment?: AttachedFile | null) => {
     setLoading(true)
     try {
       const res = await fetch('/api/ai-agent', {
@@ -90,6 +152,9 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
         body: JSON.stringify({
           messages: msgs.map(m => ({ role: m.role, content: m.content })),
           provider: provider !== 'auto' ? provider : undefined,
+          attachment: attachment
+            ? { name: attachment.name, type: attachment.type, base64: attachment.base64 }
+            : undefined,
         }),
       })
 
@@ -112,14 +177,23 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
 
   const handleSend = async () => {
     const text = input.trim()
-    if (!text || loading) return
+    if ((!text && !attachedFile) || loading) return
     if (isRecording) stopRecording()
 
-    const userMessage: Message = { role: 'user', content: text }
+    // Build display content (what shows in chat history)
+    const displayContent = [
+      text,
+      attachedFile ? `📎 ${attachedFile.name}` : '',
+    ].filter(Boolean).join('\n\n')
+
+    const userMessage: Message = { role: 'user', content: displayContent }
     const newMessages = [...messages, userMessage]
     setMessages(newMessages)
     setInput('')
-    await sendMessage(newMessages)
+    const fileToSend = attachedFile
+    setAttachedFile(null)
+    if (inputRef.current) inputRef.current.style.height = 'auto'
+    await sendMessage(newMessages, fileToSend)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -131,6 +205,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
 
   const clearChat = () => {
     setMessages([])
+    setAttachedFile(null)
   }
 
   if (!open) return null
@@ -158,7 +233,23 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
       />
 
       {/* Panel */}
-      <div className="fixed right-0 top-0 bottom-0 z-[55] w-full sm:w-[420px] bg-white border-l shadow-2xl flex flex-col">
+      <div
+        className="fixed right-0 top-0 bottom-0 z-[55] w-full sm:w-[420px] bg-white border-l shadow-2xl flex flex-col"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Drag & drop overlay */}
+        {isDragging && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-400 bg-violet-50/90 pointer-events-none">
+            <div className="text-center">
+              <Paperclip className="h-10 w-10 text-violet-400 mx-auto mb-2" />
+              <p className="text-sm font-medium text-violet-600">Drop file here</p>
+              <p className="text-xs text-violet-400 mt-1">PNG, JPG, WEBP, PDF, CSV, TXT — max 10MB</p>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b bg-gradient-to-r from-violet-50 to-blue-50">
           <div className="flex items-center gap-2.5">
@@ -294,6 +385,35 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
           </div>
         )}
 
+        {/* File preview strip */}
+        {attachedFile && (
+          <div className="px-3 py-2 border-t bg-violet-50 flex items-center gap-2">
+            {attachedFile.preview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={attachedFile.preview}
+                alt={attachedFile.name}
+                className="h-10 w-10 rounded object-cover border border-violet-200 shrink-0"
+              />
+            ) : (
+              <div className="h-10 w-10 rounded bg-violet-100 border border-violet-200 flex items-center justify-center shrink-0">
+                <FileText className="h-5 w-5 text-violet-500" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-zinc-800 truncate">{attachedFile.name}</p>
+              <p className="text-[10px] text-zinc-400">{formatFileSize(attachedFile.size)}</p>
+            </div>
+            <button
+              onClick={() => setAttachedFile(null)}
+              className="p-1 rounded-full text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
+              title="Remove attachment"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Input */}
         <div className="border-t p-3">
           <div className="flex items-end gap-2">
@@ -309,6 +429,28 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 isRecording && 'ring-2 ring-red-300 bg-red-50/50'
               )}
             />
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp,.pdf,.csv,.txt"
+              onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+              className="hidden"
+            />
+            {/* Attach */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading}
+              className={cn(
+                'p-3 rounded-xl transition-colors shrink-0',
+                attachedFile
+                  ? 'bg-violet-100 text-violet-600'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-violet-100 hover:text-violet-600'
+              )}
+              title="Attach file (PNG, JPG, WEBP, PDF, CSV, TXT)"
+            >
+              <Paperclip className="h-5 w-5" />
+            </button>
             {/* Mic */}
             {micSupported && (
               isRecording ? (
@@ -335,7 +477,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
             {/* Send */}
             <button
               onClick={handleSend}
-              disabled={!input.trim() || loading}
+              disabled={(!input.trim() && !attachedFile) || loading}
               className="p-3 rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
             >
               {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
