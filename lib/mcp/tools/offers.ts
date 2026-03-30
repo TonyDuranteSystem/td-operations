@@ -281,7 +281,8 @@ function buildOfferLinkFallbackEmail(
 
 /**
  * Portal Transition Welcome Email — for legacy clients getting portal access.
- * Bilingual IT+EN. Explains what the portal is, its benefits, and what they need to do.
+ * Matches approved response d70e5107 (Italian) and its English equivalent.
+ * Single language per client (KB rule 66c1e6fa). Dynamic "Cosa devi fare" section.
  * Exported for use in the legacy migration flow.
  */
 export function buildTransitionWelcomeEmail(
@@ -291,6 +292,7 @@ export function buildTransitionWelcomeEmail(
   portalUrl: string,
   companyName: string,
   lang: "en" | "it",
+  pendingDocs?: string[],
 ): string {
   if (lang === "it") {
     return `<div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #333; line-height: 1.7;">
@@ -333,12 +335,12 @@ export function buildTransitionWelcomeEmail(
     <p style="color: #6b7280; font-size: 13px;">Al primo accesso ti verr&agrave; chiesto di cambiare la password.</p>
 
     <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 8px; font-size: 14px; color: #92400e;">Cosa devi fare ora:</h3>
-      <p style="margin: 0; font-size: 14px; color: #92400e;">Nel portale troverai <strong>3 documenti da firmare</strong> per il 2026:</p>
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #92400e;">Cosa Fare Adesso:</h3>
       <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: #92400e; line-height: 1.8;">
-        <li><strong>Contratto di Servizio Annuale</strong> &mdash; conferma i servizi e il piano di pagamento per il 2026</li>
-        <li><strong>Operating Agreement</strong> &mdash; il documento costitutivo aggiornato della tua LLC</li>
-        <li><strong>Contratto di Locazione Ufficio</strong> &mdash; il contratto per l'indirizzo commerciale registrato</li>
+        <li>Accedi al portale con le credenziali qui sopra</li>
+        <li>Cambia la password temporanea</li>
+        <li>Firma i documenti in attesa${pendingDocs?.length ? ": <strong>" + pendingDocs.join(", ") + "</strong>" : ""}</li>
+        <li>Esplora le funzionalit&agrave;: documenti, fatturazione, chat</li>
       </ol>
     </div>
 
@@ -349,21 +351,21 @@ export function buildTransitionWelcomeEmail(
     </p>
 
     <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">Un regalo per te</h3>
-      <p style="margin: 0; font-size: 14px; color: #166534;">Il portale &egrave; stato creato per offrirti un servizio migliore e pi&ugrave; trasparente. &Egrave; incluso nel tuo abbonamento annuale senza costi aggiuntivi. Non cambia nulla nel modo in cui lavoriamo insieme &mdash; il portale rende semplicemente tutto pi&ugrave; facile e accessibile.</p>
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">Un Regalo Per Te</h3>
+      <p style="margin: 0; font-size: 14px; color: #166534;">Il Portale Clienti &egrave; incluso nel tuo contratto annuale, senza costi aggiuntivi. &Egrave; un investimento che abbiamo fatto per offrirti un servizio migliore, pi&ugrave; trasparente e con tutto centralizzato in un unico posto.</p>
     </div>
 
     <div style="background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 8px; font-size: 14px; color: #6b21a8;">Funziona anche sul telefono</h3>
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #6b21a8;">Funziona Anche Sul Telefono</h3>
       <p style="margin: 0 0 12px; font-size: 14px; color: #6b21a8;">Il portale &egrave; ottimizzato per smartphone e tablet. Riceverai notifiche push quando ci sono aggiornamenti importanti (documenti da firmare, risposte dal team, scadenze in arrivo).</p>
       <p style="margin: 0 0 4px; font-size: 13px; color: #6b21a8;"><strong>Per aggiungerlo come app sul tuo iPhone:</strong><br/>Apri Safari &rarr; vai su portal.tonydurante.us &rarr; tocca il pulsante Condividi (quadrato con freccia in su) &rarr; scorri e tocca &ldquo;Aggiungi alla schermata Home&rdquo;</p>
       <p style="margin: 0; font-size: 13px; color: #6b21a8;"><strong>Per aggiungerlo come app su Android:</strong><br/>Apri Chrome &rarr; vai su portal.tonydurante.us &rarr; tocca il menu (tre puntini in alto a destra) &rarr; tocca &ldquo;Aggiungi alla schermata Home&rdquo;</p>
     </div>
 
     <p style="font-size: 14px;">Il portale &egrave; stato progettato per essere semplice e intuitivo. Se hai bisogno di funzionalit&agrave; specifiche per la tua attivit&agrave;, siamo pronti a svilupparle per te &mdash; basta chiedere.</p>
-    <p style="font-size: 14px;">Per qualsiasi domanda, rispondi a questa email o contattaci su WhatsApp. Siamo qui per aiutarti.</p>
+    <p style="font-size: 14px;">Per qualsiasi domanda, scrivici direttamente dalla chat del portale. Siamo qui per aiutarti.</p>
 
-    <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Tony Durante LLC</strong></p>
+    <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Antonio Durante</strong><br/>Tony Durante LLC</p>
 
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af; text-align: center;">
       Tony Durante LLC &middot; 10225 Ulmerton Road, Suite 3D &middot; Largo, FL 33771<br/>
@@ -414,12 +416,12 @@ export function buildTransitionWelcomeEmail(
     <p style="color: #6b7280; font-size: 13px;">On your first login, you'll be asked to change your password.</p>
 
     <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 8px; font-size: 14px; color: #92400e;">What you need to do now:</h3>
-      <p style="margin: 0; font-size: 14px; color: #92400e;">In the portal, you will find <strong>3 documents to sign</strong> for 2026:</p>
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #92400e;">What To Do Now:</h3>
       <ol style="margin: 8px 0 0; padding-left: 20px; font-size: 14px; color: #92400e; line-height: 1.8;">
-        <li><strong>Annual Service Agreement</strong> &mdash; confirms the services and payment schedule for 2026</li>
-        <li><strong>Operating Agreement</strong> &mdash; the updated governing document for your LLC</li>
-        <li><strong>Office Lease Agreement</strong> &mdash; the lease for your registered business address</li>
+        <li>Log in to the portal with the credentials above</li>
+        <li>Change your temporary password</li>
+        <li>Sign the pending documents${pendingDocs?.length ? ": <strong>" + pendingDocs.join(", ") + "</strong>" : ""}</li>
+        <li>Explore the features: documents, invoicing, chat</li>
       </ol>
     </div>
 
@@ -430,21 +432,21 @@ export function buildTransitionWelcomeEmail(
     </p>
 
     <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">A gift for you</h3>
-      <p style="margin: 0; font-size: 14px; color: #166534;">The portal was created to provide you with a better, more transparent service. It is included in your annual subscription at no additional cost. Nothing changes in how we work together &mdash; the portal simply makes everything easier and more accessible.</p>
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #166534;">A Gift For You</h3>
+      <p style="margin: 0; font-size: 14px; color: #166534;">The Client Portal is included in your annual contract at no additional cost. It is an investment we have made to provide you with a better, more transparent service with everything centralized in one place.</p>
     </div>
 
     <div style="background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <h3 style="margin: 0 0 8px; font-size: 14px; color: #6b21a8;">Works on your phone too</h3>
+      <h3 style="margin: 0 0 8px; font-size: 14px; color: #6b21a8;">Works On Your Phone Too</h3>
       <p style="margin: 0 0 12px; font-size: 14px; color: #6b21a8;">The portal is fully optimized for smartphones and tablets. You will receive push notifications for important updates (documents to sign, team replies, upcoming deadlines).</p>
       <p style="margin: 0 0 4px; font-size: 13px; color: #6b21a8;"><strong>To add it as an app on iPhone:</strong><br/>Open Safari &rarr; go to portal.tonydurante.us &rarr; tap the Share button (square with arrow pointing up) &rarr; scroll down and tap &ldquo;Add to Home Screen&rdquo;</p>
       <p style="margin: 0; font-size: 13px; color: #6b21a8;"><strong>To add it as an app on Android:</strong><br/>Open Chrome &rarr; go to portal.tonydurante.us &rarr; tap the menu (three dots, top right) &rarr; tap &ldquo;Add to Home Screen&rdquo;</p>
     </div>
 
     <p style="font-size: 14px;">The portal is designed to be simple and user-friendly. If you need specific features for your business, we are ready to build them for you &mdash; just ask.</p>
-    <p style="font-size: 14px;">For any questions, reply to this email or reach out via WhatsApp. We are here to help.</p>
+    <p style="font-size: 14px;">For any questions, contact us through the portal chat. We are here to help.</p>
 
-    <p style="margin-top: 20px;">Best regards,<br/><strong>Tony Durante LLC</strong></p>
+    <p style="margin-top: 20px;">Best regards,<br/><strong>Antonio Durante</strong><br/>Tony Durante LLC</p>
 
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af; text-align: center;">
       Tony Durante LLC &middot; 10225 Ulmerton Road, Suite 3D &middot; Largo, FL 33771<br/>
