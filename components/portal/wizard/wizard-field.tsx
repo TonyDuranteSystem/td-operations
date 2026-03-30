@@ -1,14 +1,14 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { Loader2, CheckCircle, AlertCircle, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface FieldConfig {
   name: string
   label: string
   labelIt?: string
-  type: 'text' | 'email' | 'tel' | 'date' | 'textarea' | 'select' | 'number' | 'file' | 'checkbox' | 'country'
+  type: 'text' | 'email' | 'tel' | 'date' | 'textarea' | 'select' | 'number' | 'file' | 'checkbox' | 'country' | 'repeater'
   required?: boolean
   placeholder?: string
   placeholderIt?: string
@@ -17,6 +17,10 @@ export interface FieldConfig {
   hintIt?: string
   conditional?: { field: string; value: string } // only show if another field has this value
   prefilled?: boolean
+  accept?: string                  // file input accept attribute override
+  repeaterFields?: FieldConfig[]   // sub-fields for repeater type
+  repeaterAddLabel?: string
+  repeaterAddLabelIt?: string
 }
 
 interface WizardFieldProps {
@@ -42,9 +46,13 @@ const COUNTRIES = [
 export function WizardField({ field, value, onChange, onFileUpload, locale, error }: WizardFieldProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [showHint, setShowHint] = useState(false)
   const label = locale === 'it' && field.labelIt ? field.labelIt : field.label
   const placeholder = locale === 'it' && field.placeholderIt ? field.placeholderIt : field.placeholder
   const hint = locale === 'it' && field.hintIt ? field.hintIt : field.hint
+
+  // repeater fields are rendered by wizard-client, not here
+  if (field.type === 'repeater') return null
 
   const inputClass = cn(
     'w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors',
@@ -54,15 +62,30 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
 
   return (
     <div className="space-y-1">
-      <label className="flex items-center gap-1 text-sm font-medium text-zinc-700">
-        {label}
-        {field.required && <span className="text-red-500">*</span>}
-        {field.prefilled && value && (
-          <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-normal">
-            {locale === 'it' ? 'Pre-compilato' : 'Pre-filled'}
-          </span>
+      <div className="flex items-center gap-1">
+        <label className="flex items-center gap-1 text-sm font-medium text-zinc-700">
+          {label}
+          {field.required && <span className="text-red-500">*</span>}
+          {field.prefilled && value && (
+            <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-normal">
+              {locale === 'it' ? 'Pre-compilato' : 'Pre-filled'}
+            </span>
+          )}
+        </label>
+        {hint && field.type !== 'checkbox' && (
+          <button
+            type="button"
+            onClick={() => setShowHint(s => !s)}
+            className={cn(
+              'ml-0.5 rounded-full transition-colors',
+              showHint ? 'text-blue-600' : 'text-zinc-300 hover:text-zinc-500',
+            )}
+            aria-label="More information"
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
         )}
-      </label>
+      </div>
 
       {field.type === 'textarea' ? (
         <textarea
@@ -132,7 +155,7 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
               }
             }}
             disabled={uploading}
-            accept=".pdf,.jpg,.jpeg,.png,.heic"
+            accept={field.accept ?? '.pdf,.jpg,.jpeg,.png,.heic'}
             className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
           />
           {uploading && (
@@ -164,8 +187,8 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
         />
       )}
 
-      {hint && field.type !== 'checkbox' && (
-        <p className="text-xs text-zinc-400">{hint}</p>
+      {showHint && hint && field.type !== 'checkbox' && (
+        <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1.5 leading-relaxed">{hint}</p>
       )}
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>

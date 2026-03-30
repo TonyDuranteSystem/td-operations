@@ -42,6 +42,16 @@ export function WizardClient({
   const [currentStep, setCurrentStep] = useState(savedStep)
   const [formData, setFormData] = useState<Record<string, string | boolean | number>>(initialData)
   const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
+  // Track row counts for inline repeater fields (e.g., related_party_transactions)
+  const [repeaterCounts, setRepeaterCounts] = useState<Record<string, number>>(() => {
+    const counts: Record<string, number> = {}
+    Object.entries(initialData).forEach(([key, value]) => {
+      if (key.endsWith('_count') && key !== 'member_count' && !Number.isNaN(Number(value))) {
+        counts[key.slice(0, -6)] = Number(value)
+      }
+    })
+    return counts
+  })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
@@ -284,6 +294,8 @@ export function WizardClient({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {stepFields
             .filter(field => {
+              // Repeater fields always render (they have their own visibility logic)
+              if (field.type === 'repeater') return true
               // Conditional show/hide: only render if the referenced field has the expected value
               if (field.conditional) {
                 const refValue = formData[field.conditional.field]
@@ -291,17 +303,85 @@ export function WizardClient({
               }
               return true
             })
-            .map(field => (
-            <div key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
-              <WizardField
-                field={{ ...field, prefilled: !!prefillData[field.name] }}
-                value={formData[field.name] ?? ''}
-                onChange={handleFieldChange}
-                onFileUpload={handleFileUpload}
-                locale={locale}
-              />
-            </div>
-          ))}
+            .map(field => {
+              // ── Inline repeater ─────────────────────────────────────
+              if (field.type === 'repeater') {
+                const count = repeaterCounts[field.name] ?? 0
+                const addLabel = locale === 'it' && field.repeaterAddLabelIt ? field.repeaterAddLabelIt : (field.repeaterAddLabel ?? 'Add')
+                return (
+                  <div key={field.name} className="md:col-span-2 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-zinc-700">{locale === 'it' && field.labelIt ? field.labelIt : field.label}</span>
+                      <span className="text-xs text-zinc-400">{locale === 'it' ? '(opzionale)' : '(optional)'}</span>
+                    </div>
+                    {count === 0 && (
+                      <p className="text-xs text-zinc-400 italic">
+                        {locale === 'it' ? 'Nessuna transazione aggiunta.' : 'No entries added yet.'}
+                      </p>
+                    )}
+                    {Array.from({ length: count }).map((_, idx) => (
+                      <div key={idx} className="border border-zinc-200 rounded-lg p-4 space-y-3 bg-zinc-50/50">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-zinc-500">#{idx + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newCount = count - 1
+                              setRepeaterCounts(prev => ({ ...prev, [field.name]: newCount }))
+                              handleFieldChange(`${field.name}_count`, newCount)
+                              setFormData(prev => {
+                                const next = { ...prev }
+                                field.repeaterFields?.forEach(rf => { delete next[`${field.name}_${idx}_${rf.name}`] })
+                                return next
+                              })
+                            }}
+                            className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
+                          >
+                            <Trash2 className="h-3 w-3" /> {locale === 'it' ? 'Rimuovi' : 'Remove'}
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {field.repeaterFields?.map(rf => (
+                            <div key={rf.name} className={rf.type === 'textarea' ? 'md:col-span-2' : ''}>
+                              <WizardField
+                                field={rf}
+                                value={formData[`${field.name}_${idx}_${rf.name}`] ?? ''}
+                                onChange={(name, value) => handleFieldChange(`${field.name}_${idx}_${name}`, value)}
+                                locale={locale}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newCount = count + 1
+                        setRepeaterCounts(prev => ({ ...prev, [field.name]: newCount }))
+                        handleFieldChange(`${field.name}_count`, newCount)
+                      }}
+                      className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                    >
+                      <Plus className="h-4 w-4" />
+                      {addLabel}
+                    </button>
+                  </div>
+                )
+              }
+              // ── Regular field ────────────────────────────────────────
+              return (
+                <div key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
+                  <WizardField
+                    field={{ ...field, prefilled: !!prefillData[field.name] }}
+                    value={formData[field.name] ?? ''}
+                    onChange={handleFieldChange}
+                    onFileUpload={handleFileUpload}
+                    locale={locale}
+                  />
+                </div>
+              )
+            })}
         </div>
       )}
     </WizardShell>

@@ -180,13 +180,22 @@ const TAX_DOCUMENTS_BASE: FieldConfig[] = [
   { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
 ]
 
+// ─── TAX SMLLC documents (all optional — different from MMLLC/Corp) ──
+
+const TAX_SMLLC_DOCUMENTS: FieldConfig[] = [
+  { name: 'bank_statements', label: 'Bank Statements (optional)', labelIt: 'Estratti Conto (opzionale)', type: 'file', required: false, accept: '.pdf,.csv,.jpg,.jpeg,.png', hint: 'Optional. Upload bank statements for the tax year if available. CSV format is welcome but not required.', hintIt: 'Facoltativo. Carica gli estratti conto dell\'anno fiscale se disponibili. Il formato CSV è benvenuto ma non obbligatorio.' },
+  { name: 'financial_statements', label: 'Financial Statements (optional)', labelIt: 'Rendiconti Finanziari (opzionale)', type: 'file', required: false, hint: 'Optional. Profit & loss statement or balance sheet if your accountant has prepared one.', hintIt: 'Facoltativo. Conto economico o stato patrimoniale se il tuo commercialista ne ha preparato uno.' },
+  { name: 'prior_year_return', label: 'Prior Year Tax Return (optional)', labelIt: 'Dichiarazione Anno Precedente (opzionale)', type: 'file', required: false, hint: 'Optional. Upload last year\'s filed tax return (Form 5472 or 1120) if available.', hintIt: 'Facoltativo. Carica la dichiarazione dell\'anno scorso (Modulo 5472 o 1120) se disponibile.' },
+  { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
+]
+
 // ─── TAX SMLLC (Form 1120/5472) ───────────────────────────
 
 export const TAX_STEPS: WizardStep[] = [
   { id: 'owner', title: 'Owner Information', titleIt: 'Informazioni Titolare', description: 'Personal and tax details', descriptionIt: 'Dati personali e fiscali' },
   { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
   { id: 'financials', title: 'Financial Information', titleIt: 'Informazioni Finanziarie', description: 'Income, expenses, and transactions', descriptionIt: 'Entrate, spese e transazioni' },
-  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload bank statements and review', descriptionIt: 'Carica estratti conto e rivedi' },
+  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload documents and review', descriptionIt: 'Carica documenti e rivedi' },
 ]
 
 export const TAX_FIELDS: Record<string, FieldConfig[]> = {
@@ -195,24 +204,43 @@ export const TAX_FIELDS: Record<string, FieldConfig[]> = {
     // SMLLC-specific: 5472 ownership questions
     { name: 'owner_direct_100_pct', label: 'Are you the 100% direct owner?', labelIt: 'Sei il proprietario diretto al 100%?', type: 'select', required: true, options: [
       { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'owner_ultimate_25_pct', label: 'Do you own 25%+ of the ultimate parent?', labelIt: 'Possiedi il 25%+ della società madre?', type: 'select', required: true, options: [
+    ], hint: 'Answer "Yes" if you personally own 100% of this LLC with no other owner or holding company above you. Answer "No" if another company or person also holds an ownership interest.', hintIt: 'Rispondi "Sì" se possiedi personalmente il 100% di questa LLC. Rispondi "No" se un\'altra società o persona detiene anche una quota.' },
+    { name: 'owner_ultimate_25_pct', label: 'Is there an ultimate owner with more than 25% interest?', labelIt: 'C\'è un proprietario finale con più del 25% di interesse?', type: 'select', required: true, options: [
       { value: 'Yes', label: 'Yes', labelIt: 'Sì' }, { value: 'No', label: 'No' },
-    ]},
-    { name: 'ultimate_owner_name', label: 'Ultimate Owner Name (if not 100% direct)', labelIt: 'Nome Proprietario Finale (se non 100% diretto)', type: 'text', required: false },
-    { name: 'ultimate_owner_address', label: 'Ultimate Owner Address', labelIt: 'Indirizzo Proprietario Finale', type: 'text', required: false },
-    { name: 'ultimate_owner_country', label: 'Ultimate Owner Country', labelIt: 'Paese Proprietario Finale', type: 'country', required: false },
-    { name: 'ultimate_owner_tax_id', label: 'Ultimate Owner Tax ID', labelIt: 'Codice Fiscale Proprietario Finale', type: 'text', required: false },
+    ], hint: 'The "ultimate beneficial owner" is the real person (not a company) at the top of the ownership chain who owns or controls the LLC. Answer "Yes" if that person holds more than 25%.', hintIt: 'Il "proprietario finale" è la persona fisica (non una società) in cima alla catena proprietaria. Rispondi "Sì" se quella persona detiene più del 25%.' },
+    { name: 'ultimate_owner_name', label: 'Ultimate Owner Name', labelIt: 'Nome Proprietario Finale', type: 'text', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' }, hint: 'Full legal name of the ultimate beneficial owner (the real person at the top of the ownership chain).', hintIt: 'Nome legale completo del proprietario finale (la persona fisica in cima alla catena proprietaria).' },
+    { name: 'ultimate_owner_address', label: 'Ultimate Owner Address', labelIt: 'Indirizzo Proprietario Finale', type: 'text', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' }, hint: 'Full residential or registered address of the ultimate beneficial owner.', hintIt: 'Indirizzo residenziale o registrato completo del proprietario finale.' },
+    { name: 'ultimate_owner_country', label: 'Ultimate Owner Country', labelIt: 'Paese Proprietario Finale', type: 'country', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' } },
+    { name: 'ultimate_owner_tax_id', label: 'Ultimate Owner Tax ID', labelIt: 'Codice Fiscale Proprietario Finale', type: 'text', required: false, conditional: { field: 'owner_ultimate_25_pct', value: 'Yes' }, hint: 'Tax identification number in the owner\'s country of residence (e.g., Codice Fiscale for Italy, NIF for Spain).', hintIt: 'Codice fiscale nel paese di residenza del proprietario (es. Codice Fiscale per l\'Italia).' },
   ],
   company: TAX_COMPANY_BASE,
   financials: [
-    { name: 'formation_costs', label: 'Formation Costs ($)', labelIt: 'Costi di Costituzione ($)', type: 'number', required: true, hint: 'Total LLC formation expenses', hintIt: 'Spese totali di costituzione LLC' },
-    { name: 'bank_contributions', label: 'Bank Contributions ($)', labelIt: 'Conferimenti Bancari ($)', type: 'number', required: true, hint: 'Capital contributed to bank account', hintIt: 'Capitale conferito su conto bancario' },
-    { name: 'distributions_withdrawals', label: 'Distributions/Withdrawals ($)', labelIt: 'Distribuzioni/Prelievi ($)', type: 'number', required: true },
-    { name: 'personal_expenses', label: 'Personal Expenses ($)', labelIt: 'Spese Personali ($)', type: 'number', required: true },
-    { name: 'smllc_additional_comments', label: 'Additional Comments', labelIt: 'Commenti Aggiuntivi', type: 'textarea', required: false },
+    { name: 'formation_costs', label: 'Formation Costs ($)', labelIt: 'Costi di Costituzione ($)', type: 'number', required: true, hint: 'Total amount paid to form the LLC: state filing fees, registered agent fees, attorney/service fees. Enter 0 if already deducted in a prior year.', hintIt: 'Importo totale pagato per costituire la LLC: tasse statali, agente registrato, avvocato/servizio. Inserisci 0 se già dedotto in un anno precedente.' },
+    { name: 'bank_contributions', label: 'Bank Contributions ($)', labelIt: 'Conferimenti Bancari ($)', type: 'number', required: true, hint: 'Total money you personally deposited or wired INTO the LLC bank account during the year (capital contributions, not revenue).', hintIt: 'Denaro totale che hai depositato o trasferito SUL conto bancario della LLC durante l\'anno (conferimenti di capitale, non ricavi).' },
+    { name: 'distributions_withdrawals', label: 'Distributions / Withdrawals ($)', labelIt: 'Distribuzioni / Prelievi ($)', type: 'number', required: true, hint: 'Total money you took OUT of the LLC bank account for personal use during the year.', hintIt: 'Denaro totale che hai prelevato dal conto bancario della LLC per uso personale durante l\'anno.' },
+    { name: 'personal_expenses', label: 'Personal Expenses Paid by LLC ($)', labelIt: 'Spese Personali Pagate dalla LLC ($)', type: 'number', required: true, hint: 'Total personal (non-business) expenses paid from the LLC account. Examples: personal travel, personal subscriptions, gifts. Enter 0 if none.', hintIt: 'Spese personali (non aziendali) pagate dal conto della LLC. Esempi: viaggi personali, abbonamenti personali, regali. Inserisci 0 se nessuna.' },
+    {
+      name: 'related_party_transactions',
+      label: 'Related Party Transactions',
+      labelIt: 'Transazioni con Parti Correlate',
+      type: 'repeater',
+      required: false,
+      hint: 'Required for Form 5472: list any transactions between your LLC and a related foreign person or entity (e.g., payments to/from a foreign company you own, or that owns you). Leave empty if none.',
+      hintIt: 'Obbligatorio per il Modulo 5472: elenca le transazioni tra la tua LLC e una persona o entità straniera correlata. Lascia vuoto se nessuna.',
+      repeaterFields: [
+        { name: 'rpt_company_name', label: 'Company / Person Name', labelIt: 'Nome Società / Persona', type: 'text', required: true, hint: 'Legal name of the related foreign company or person.', hintIt: 'Nome legale della società o persona straniera correlata.' },
+        { name: 'rpt_address', label: 'Address', labelIt: 'Indirizzo', type: 'text', required: true },
+        { name: 'rpt_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+        { name: 'rpt_vat_number', label: 'VAT / Foreign Tax ID', labelIt: 'P.IVA / Codice Fiscale Estero', type: 'text', required: false, hint: 'Tax identification number in the other party\'s country. Optional but recommended.', hintIt: 'Numero di identificazione fiscale nel paese della controparte. Facoltativo ma consigliato.' },
+        { name: 'rpt_amount', label: 'Transaction Amount ($)', labelIt: 'Importo Transazione ($)', type: 'number', required: true, hint: 'Total USD value of transactions with this party for the year. Use the exchange rate at the time of the transaction.', hintIt: 'Valore totale in USD delle transazioni con questa parte per l\'anno.' },
+        { name: 'rpt_description', label: 'Description', labelIt: 'Descrizione', type: 'textarea', required: false, hint: 'Describe the nature of the transaction (e.g., "Service fee paid for consulting", "Loan from parent company", "Royalty payment").', hintIt: 'Descrivi la natura della transazione (es. "Commissione di servizio per consulenza", "Prestito dalla società madre").' },
+      ],
+      repeaterAddLabel: 'Add related party transaction',
+      repeaterAddLabelIt: 'Aggiungi transazione con parte correlata',
+    },
+    { name: 'smllc_additional_comments', label: 'Additional Comments', labelIt: 'Commenti Aggiuntivi', type: 'textarea', required: false, hint: 'Any other financial details, unusual transactions, or information you think is relevant for your tax return.', hintIt: 'Qualsiasi altro dettaglio finanziario, transazione insolita o informazione che ritieni rilevante per la tua dichiarazione.' },
   ],
-  documents: TAX_DOCUMENTS_BASE,
+  documents: TAX_SMLLC_DOCUMENTS,
 }
 
 // ─── TAX MMLLC / Partnership (Form 1065) ──────────────────
