@@ -23,6 +23,7 @@ export interface SignableDocument {
   suiteNumber?: string
   signedAt?: string
   contractYear?: number
+  driveLink?: string  // set for legacy docs pulled from documents table
 }
 
 export default async function PortalSignPage() {
@@ -166,6 +167,43 @@ export default async function PortalSignPage() {
       companyName: f8832.company_name,
       signedAt: f8832.signed_at,
     })
+  }
+
+  // Fallback: legacy clients may have signed docs in Drive but no formal signature records.
+  // Check the documents table for any missing types and surface them as already-signed.
+  const DOC_DRIVE_MAP: Record<string, SignableDocument['type']> = {
+    'Operating Agreement': 'oa',
+    'Office Lease': 'lease',
+    'Form SS-4': 'ss4',
+  }
+  const coveredTypes = new Set(documents.map(d => d.type))
+  const missingDocNames = Object.entries(DOC_DRIVE_MAP)
+    .filter(([, type]) => !coveredTypes.has(type))
+    .map(([name]) => name)
+
+  if (missingDocNames.length > 0) {
+    const { data: legacyDocs } = await supabaseAdmin
+      .from('documents')
+      .select('document_type_name, drive_link, processed_at')
+      .eq('account_id', selectedAccountId)
+      .in('document_type_name', missingDocNames)
+      .not('drive_link', 'is', null)
+      .order('processed_at', { ascending: false })
+
+    if (legacyDocs) {
+      const seen = new Set<string>()
+      for (const doc of legacyDocs) {
+        const docType = DOC_DRIVE_MAP[doc.document_type_name ?? '']
+        if (!docType || seen.has(docType)) continue
+        seen.add(docType)
+        documents.push({
+          type: docType,
+          status: 'signed',
+          href: doc.drive_link!,
+          driveLink: doc.drive_link!,
+        })
+      }
+    }
   }
 
   // Get company name from first available document or account
