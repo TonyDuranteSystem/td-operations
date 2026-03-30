@@ -247,30 +247,84 @@ After running this tool, review the output and fix any gaps before creating the 
         }
 
         // --- SIGN DOCUMENTS ---
-        lines.push("")
-        lines.push("--- SIGN DOCUMENTS ---")
-        const signDocStatus: Record<string, string> = {}
-        for (const [typeName, label] of Object.entries(DOC_TYPE_TO_SIGN_TYPE)) {
-          const hasFormal = (label === "OA" && oaRes.data) || (label === "Lease" && leaseRes.data) || (label === "SS-4" && ss4Res.data)
-          const hasDriveDoc = docs.find(d => d.document_type_name === typeName && d.drive_link)
-          if (hasFormal) {
-            const rec = label === "OA" ? oaRes.data : label === "Lease" ? leaseRes.data : ss4Res.data
-            signDocStatus[label] = rec?.status === "signed" ? "Signed (formal)" : `Awaiting signature (${rec?.status})`
-          } else if (hasDriveDoc) {
-            signDocStatus[label] = "Signed (detected from documents)"
-          } else {
-            signDocStatus[label] = "Not found"
+        // Auto-create OA if missing (all data available from account + contact)
+        let oaData = oaRes.data
+        let oaCreated = false
+        if (!oaData && primaryContact) {
+          const entityType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+          const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+          const token = `${companySlug}-oa-${new Date().getFullYear()}`
+          const today = new Date().toISOString().slice(0, 10)
+          const { data: newOa } = await supabaseAdmin
+            .from("oa_agreements")
+            .insert({
+              token,
+              account_id: account.id,
+              contact_id: primaryContact.id,
+              company_name: account.company_name,
+              state_of_formation: account.state_of_formation || "Wyoming",
+              formation_date: account.formation_date || today,
+              ein_number: account.ein_number || null,
+              entity_type: entityType,
+              manager_name: primaryContact.full_name,
+              member_name: primaryContact.full_name,
+              member_email: primaryContact.email || null,
+              effective_date: today,
+              business_purpose: "any and all lawful business activities",
+              initial_contribution: "$0.00",
+              fiscal_year_end: "December 31",
+              accounting_method: "Cash",
+              duration: "Perpetual",
+              principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+              language: "en",
+              status: "draft",
+            })
+            .select("id, token, status, access_code, signed_at")
+            .single()
+          if (newOa) {
+            oaData = { status: newOa.status, signed_at: newOa.signed_at }
+            oaCreated = true
+            logAction({ action_type: "create", table_name: "oa_agreements", record_id: newOa.id, account_id: account.id, summary: `Auto-created OA for ${account.company_name} (legacy onboard)` })
           }
         }
 
-        if (leaseRes.data?.suite_number) {
-          signDocStatus["Lease"] += ` -- Suite ${leaseRes.data.suite_number}`
-        } else if (!signDocStatus["Lease"].includes("detected") && !signDocStatus["Lease"].includes("formal")) {
-          signDocStatus["Lease"] = "No lease -- create after suite assignment"
+        lines.push("")
+        lines.push("--- SIGN DOCUMENTS ---")
+
+        // OA status
+        if (oaData) {
+          const s = oaData.status === "signed" ? "Signed" : `Awaiting signature (${oaData.status})`
+          lines.push(`  OA: ${s}${oaCreated ? " -- AUTO-CREATED" : ""}`)
+        } else {
+          lines.push("  OA: Cannot create (no contact linked)")
+          issues.push("Cannot create OA -- no contact linked to account")
         }
 
-        for (const [label, status] of Object.entries(signDocStatus)) {
-          lines.push(`  ${label}: ${status}`)
+        // Lease status
+        if (leaseRes.data) {
+          const s = leaseRes.data.status === "signed" ? "Signed" : `Awaiting signature (${leaseRes.data.status})`
+          lines.push(`  Lease: ${s}${leaseRes.data.suite_number ? ` -- Suite ${leaseRes.data.suite_number}` : ""}`)
+        } else {
+          lines.push("  Lease: MISSING -- needs suite number to create (use lease_create)")
+          issues.push("No lease -- assign suite number then use lease_create")
+        }
+
+        // SS-4 status: skip if EIN exists (already obtained)
+        if (account.ein_number) {
+          // EIN already obtained, SS-4 is irrelevant for signing
+          const hasSs4Doc = docs.find(d => d.document_type_name === "Form SS-4" && d.drive_link)
+          if (ss4Res.data) {
+            lines.push(`  SS-4: ${ss4Res.data.status === "signed" ? "Signed" : ss4Res.data.status}`)
+          } else if (hasSs4Doc) {
+            lines.push("  SS-4: N/A (EIN already obtained)")
+          } else {
+            lines.push("  SS-4: N/A (EIN already obtained)")
+          }
+        } else if (ss4Res.data) {
+          lines.push(`  SS-4: ${ss4Res.data.status === "signed" ? "Signed" : `Awaiting signature (${ss4Res.data.status})`}`)
+        } else {
+          lines.push("  SS-4: Not found -- create with ss4_create if EIN needed")
+          issues.push("No SS-4 and no EIN -- create SS-4 with ss4_create")
         }
 
         // --- SERVICES ---
