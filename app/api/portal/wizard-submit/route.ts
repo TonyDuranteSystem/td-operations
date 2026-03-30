@@ -132,7 +132,21 @@ export async function POST(req: NextRequest) {
 
       const uploadPaths = extractUploadPaths(data)
 
-      const { data: sub } = await supabaseAdmin.from(submissionTable).upsert({
+      // For tax submissions, look up tax_year from tax_returns (required field)
+      let taxYear: number | null = null
+      if ((wizard_type === 'tax' || wizard_type === 'tax_return') && account_id) {
+        const { data: tr } = await supabaseAdmin
+          .from('tax_returns')
+          .select('tax_year')
+          .eq('account_id', account_id)
+          .eq('data_received', false)
+          .order('tax_year', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        taxYear = tr?.tax_year ?? null
+      }
+
+      const submissionRecord: Record<string, unknown> = {
         token: submissionToken,
         lead_id: null,
         contact_id: contact_id || null,
@@ -144,8 +158,20 @@ export async function POST(req: NextRequest) {
         changed_fields: {},
         upload_paths: uploadPaths,
         status: 'completed',
-      }, { onConflict: 'token' }).select('id').single()
+      }
 
+      // Only include tax_year if we resolved it (avoids NOT NULL constraint violation)
+      if (taxYear !== null) submissionRecord.tax_year = taxYear
+
+      const { data: sub, error: subErr } = await supabaseAdmin
+        .from(submissionTable)
+        .upsert(submissionRecord, { onConflict: 'token' })
+        .select('id')
+        .single()
+
+      if (subErr) {
+        console.error('[wizard-submit] Submission upsert failed:', subErr.message)
+      }
       submissionId = sub?.id || null
     }
 
