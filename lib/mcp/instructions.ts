@@ -305,9 +305,11 @@ Always check \`contacts.gender\` before composing any client email. The \`getGre
 ## Client Portal — Legacy Onboarding
 
 For clients onboarded BEFORE the portal existed, use portal_legacy_onboard(account_id) BEFORE creating a portal account. This tool:
-1. Sets portal_visible=true on allowed document types (Form SS-4, Articles of Organization, Office Lease, Operating Agreement, EIN Letter (IRS), Form 8832)
-2. Sets portal_visible=false on everything else (passports, registered agent docs, receipts, etc.)
-3. Reports: Documents tab contents, Sign Documents status (formal records + fallback from documents table), portal account status, active services, and pending manual steps
+1. Scans Google Drive for unprocessed files and processes them (OCR + classify + store)
+2. Sets portal_visible=true on allowed document types (Form SS-4, Articles of Organization, Office Lease, Operating Agreement, EIN Letter (IRS), Form 8832, ITIN Letter)
+3. Sets portal_visible=false on everything else (passports, registered agent docs, receipts, etc.)
+4. Audits the full environment: account data, contacts, services, deadlines, tax returns, payments, Drive folder
+5. Reports a readiness score (X/8) with actionable next steps
 
 Workflow for legacy clients:
 1. portal_legacy_onboard(account_id) -- prepare documents and get status report

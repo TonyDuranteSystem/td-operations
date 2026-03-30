@@ -42,7 +42,7 @@ const PROCESSABLE_MIMES = [
 
 // ─── Helpers ────────────────────────────────────────────────
 
-interface DriveFileMeta {
+export interface DriveFileMeta {
   id: string
   name: string
   mimeType: string
@@ -54,7 +54,7 @@ interface DriveFileMeta {
 /**
  * Process a single file: extract text -> classify -> upsert into documents table.
  */
-async function processFile(
+export async function processFile(
   fileId: string,
   accountId?: string,
   accountName?: string,
@@ -188,7 +188,7 @@ async function processFile(
 /**
  * Recursively collect all processable files from a folder and its subfolders.
  */
-async function collectFilesRecursive(
+export async function collectFilesRecursive(
   folderId: string,
   maxDepth: number = 3,
   depth: number = 0,

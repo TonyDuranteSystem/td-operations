@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
+import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 
 // Document types allowed to be visible in the client portal Documents tab
 const PORTAL_VISIBLE_DOC_TYPES = [
@@ -36,9 +37,10 @@ export function registerPortalTools(server: McpServer) {
     `Prepare a legacy client for portal access. Run this BEFORE creating a portal account for any client onboarded before the portal existed.
 
 What it does:
-1. Sets portal_visible on documents (true for allowed types, false for everything else)
-2. Audits the full portal environment: account data, contacts, services, deadlines, tax returns, payments, documents, sign documents
-3. Reports a readiness score and lists exactly what's missing or needs fixing
+1. Scans Google Drive for unprocessed files and processes them (OCR + classify + store)
+2. Sets portal_visible on documents (true for allowed types, false for everything else)
+3. Audits the full portal environment: account data, contacts, services, deadlines, tax returns, payments, documents, sign documents
+4. Reports a readiness score and lists exactly what's missing or needs fixing
 
 Allowed document types (visible in portal): Form SS-4, Articles of Organization, Office Lease, Operating Agreement, EIN Letter (IRS), Form 8832, ITIN Letter
 
@@ -57,7 +59,36 @@ After running this tool, review the output and fix any gaps before creating the 
 
         if (!account) return { content: [{ type: "text" as const, text: "Account not found" }] }
 
-        // 2. Parallel queries for all data
+        // 2. Scan Drive for unprocessed files (if folder linked)
+        let driveProcessed = 0
+        let driveSkipped = 0
+        if (account.drive_folder_id) {
+          const allFiles = await collectFilesRecursive(account.drive_folder_id, 3)
+          if (allFiles.length > 0) {
+            // Check which are already processed
+            const fileIds = allFiles.map(f => f.id)
+            const existingIds = new Set<string>()
+            for (let i = 0; i < fileIds.length; i += 50) {
+              const chunk = fileIds.slice(i, i + 50)
+              const { data: existing } = await supabaseAdmin
+                .from("documents")
+                .select("drive_file_id")
+                .in("drive_file_id", chunk)
+              existing?.forEach(e => existingIds.add(e.drive_file_id))
+            }
+            const toProcess = allFiles.filter(f => !existingIds.has(f.id))
+            driveSkipped = allFiles.length - toProcess.length
+
+            // Process up to 20 new files
+            const batch = toProcess.slice(0, 20)
+            for (const file of batch) {
+              const r = await processFile(file.id, account.id, account.company_name)
+              if (r.success) driveProcessed++
+            }
+          }
+        }
+
+        // 3. Parallel queries for all data (AFTER Drive scan so new docs are included)
         const [
           docsRes,
           oaRes,
@@ -200,7 +231,13 @@ After running this tool, review the output and fix any gaps before creating the 
 
         lines.push("")
         lines.push("--- DOCUMENTS ---")
+        if (driveProcessed > 0 || driveSkipped > 0) {
+          lines.push(`Drive scan: ${driveProcessed} new files processed, ${driveSkipped} already in system`)
+        } else if (!account.drive_folder_id) {
+          lines.push("Drive scan: SKIPPED (no drive_folder_id)")
+        }
         lines.push(`Visible (${visibleDocs.length}):`)
+
         for (const d of visibleDocs) {
           lines.push(`  ${d.document_type_name}`)
         }
@@ -333,7 +370,7 @@ After running this tool, review the output and fix any gaps before creating the 
           table_name: "documents",
           record_id: account_id,
           account_id,
-          summary: `Legacy portal onboard: ${account.company_name} -- ${visibleDocs.length} docs visible, readiness ${checksPassed}/${checksTotal}`,
+          summary: `Legacy portal onboard: ${account.company_name} -- ${driveProcessed} new from Drive, ${visibleDocs.length} docs visible, readiness ${checksPassed}/${checksTotal}`,
         })
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
