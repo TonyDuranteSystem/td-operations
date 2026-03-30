@@ -47,6 +47,9 @@ const PUBLIC_PREFIXES = [
   // OAuth and well-known
   '/.well-known',
   '/oauth',
+  // PWA manifests — must be public for Chrome installability
+  '/manifest.webmanifest',
+  '/portal/manifest.webmanifest',
 ]
 
 function isPublicPath(pathname: string): boolean {
@@ -164,6 +167,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|templates/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|templates/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf|webmanifest)$).*)',
   ],
 }
