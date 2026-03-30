@@ -14,6 +14,17 @@ function isImageUrl(url: string): boolean {
   return ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+interface PendingFile {
+  file: File
+  previewUrl?: string // for images
+}
+
 function formatMessageDate(dateStr: string): string {
   const date = parseISO(dateStr)
   if (isToday(date)) return 'Today'
@@ -32,6 +43,8 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const [micConsented, setMicConsented] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  const [pendingFile, setPendingFile] = useState<PendingFile | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -77,20 +90,37 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   }, [messages])
 
   const handleSend = async () => {
-    if (!input.trim() || sending) return
-    // Stop recording if active
+    if ((!input.trim() && !pendingFile) || sending || uploading) return
     if (isRecording) stopRecording()
     const msg = input
     const replyId = replyTo?.id
+    const fileToSend = pendingFile
     setInput('')
     setReplyTo(null)
-    // Reset textarea height
+    setPendingFile(null)
     if (inputRef.current) inputRef.current.style.height = 'auto'
+
     try {
-      await sendMessage(msg, undefined, replyId)
+      if (fileToSend) {
+        setUploading(true)
+        try {
+          const formData = new FormData()
+          formData.append('file', fileToSend.file)
+          formData.append('account_id', accountId || '')
+          formData.append('contact_id', contactId)
+          const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+          if (!res.ok) throw new Error('Upload failed')
+          const { url, name } = await res.json()
+          await sendMessage(msg || '', { url, name }, replyId)
+        } finally {
+          setUploading(false)
+        }
+      } else {
+        await sendMessage(msg, undefined, replyId)
+      }
     } catch {
       toast.error('Failed to send message')
-      setInput(msg) // Restore on error
+      setInput(msg)
     }
     inputRef.current?.focus()
   }
@@ -102,27 +132,41 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
     }
   }
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileSelect = (file: File) => {
+    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain']
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      toast.error('Unsupported file type')
+      return
+    }
     if (file.size > 10 * 1024 * 1024) {
       toast.error('File too large (max 10MB)')
       return
     }
-    setUploading(true)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('account_id', accountId || '')
-      formData.append('contact_id', contactId)
-      const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-      if (!res.ok) throw new Error('Upload failed')
-      const { url, name } = await res.json()
-      await sendMessage(input || '', { url, name })
-      setInput('')
-    } catch {
-      toast.error('Failed to upload file')
-    } finally {
-      setUploading(false)
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onload = e => setPendingFile({ file, previewUrl: e.target?.result as string })
+      reader.readAsDataURL(file)
+    } else {
+      setPendingFile({ file })
     }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragging(false)
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) handleFileSelect(file)
   }
 
   const handleMicToggle = () => {
@@ -148,7 +192,19 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   let lastDate = ''
 
   return (
-    <div className="flex-1 flex flex-col bg-white rounded-xl border shadow-sm overflow-hidden">
+    <div
+      className="flex-1 flex flex-col bg-white rounded-xl border shadow-sm overflow-hidden relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDragging && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
+          <Paperclip className="h-10 w-10 text-blue-400 mb-2" />
+          <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
+        </div>
+      )}
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-1">
         {loading ? (
@@ -338,20 +394,50 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
         </div>
       )}
 
+      {/* File preview strip */}
+      {pendingFile && (
+        <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50 flex items-center gap-3">
+          {pendingFile.previewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={pendingFile.previewUrl} alt={pendingFile.file.name} className="h-12 w-12 rounded object-cover border border-zinc-200 shrink-0" />
+          ) : (
+            <div className="h-12 w-12 rounded border border-zinc-200 bg-white flex items-center justify-center shrink-0">
+              <FileText className="h-5 w-5 text-zinc-400" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-zinc-700 truncate">{pendingFile.file.name}</p>
+            <p className="text-[10px] text-zinc-400">{formatFileSize(pendingFile.file.size)}</p>
+          </div>
+          <button
+            onClick={() => { setPendingFile(null); if (fileRef.current) fileRef.current.value = '' }}
+            className="p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 shrink-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Input */}
-      <div className={cn('border-t p-3', replyTo && 'border-t-0')}>
+      <div className={cn('border-t p-3', (replyTo || pendingFile) && 'border-t-0')}>
         <div className="flex items-end gap-2">
           <button
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
-            className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 transition-colors shrink-0"
+            className={cn(
+              'p-2 rounded-full transition-colors shrink-0',
+              pendingFile
+                ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
+                : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
+            )}
           >
             {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
           </button>
           <input
             ref={fileRef}
             type="file"
-            onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
+            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+            onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
             className="hidden"
           />
           <textarea
@@ -399,7 +485,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
           {/* Send */}
           <button
             onClick={handleSend}
-            disabled={!input.trim() || sending}
+            disabled={(!input.trim() && !pendingFile) || sending || uploading}
             className="p-3 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
           >
             {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}

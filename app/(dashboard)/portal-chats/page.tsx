@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
@@ -42,6 +42,17 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   return outputArray
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+interface PendingAdminFile {
+  file: File
+  previewUrl?: string
+}
+
 export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
@@ -60,8 +71,12 @@ export default function PortalChatsPage() {
   // Extra accounts found by search that aren't in existing threads
   const [searchExtraAccounts, setSearchExtraAccounts] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
+  const [pendingAdminFile, setPendingAdminFile] = useState<PendingAdminFile | null>(null)
+  const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
+  const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const adminFileRef = useRef<HTMLInputElement>(null)
   const prevTotalUnreadRef = useRef(0)
   const lastSuggestedMsgRef = useRef<string | null>(null)
   const queryClient = useQueryClient()
@@ -223,11 +238,11 @@ export default function PortalChatsPage() {
 
   // Send reply
   const sendMutation = useMutation({
-    mutationFn: async ({ message, reply_to_id }: { message: string; reply_to_id?: string }) => {
+    mutationFn: async ({ message, reply_to_id, attachment_url, attachment_name }: { message: string; reply_to_id?: string; attachment_url?: string; attachment_name?: string }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: selectedAccountId, message, reply_to_id }),
+        body: JSON.stringify({ account_id: selectedAccountId, message, reply_to_id, attachment_url, attachment_name }),
       })
       if (!res.ok) throw new Error('Failed to send')
       return res.json()
@@ -235,6 +250,7 @@ export default function PortalChatsPage() {
     onSuccess: () => {
       setReplyText('')
       setReplyToMsg(null)
+      setPendingAdminFile(null)
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
@@ -253,11 +269,67 @@ export default function PortalChatsPage() {
     el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
   }, [replyText])
 
-  const handleSend = () => {
-    if (!replyText.trim() || !selectedAccountId) return
+  const handleAdminFileSelect = (file: File) => {
+    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain']
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      toast.error('Unsupported file type')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File too large (max 10MB)')
+      return
+    }
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onload = e => setPendingAdminFile({ file, previewUrl: e.target?.result as string })
+      reader.readAsDataURL(file)
+    } else {
+      setPendingAdminFile({ file })
+    }
+  }
+
+  const handleAdminDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDraggingAdmin(true)
+  }
+
+  const handleAdminDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDraggingAdmin(false)
+    }
+  }
+
+  const handleAdminDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDraggingAdmin(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) handleAdminFileSelect(file)
+  }
+
+  const handleSend = async () => {
+    if ((!replyText.trim() && !pendingAdminFile) || !selectedAccountId || sendMutation.isPending || uploadingAdminFile) return
     if (isRecording) stopRecording()
-    sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id })
     if (inputRef.current) inputRef.current.style.height = 'auto'
+
+    if (pendingAdminFile) {
+      setUploadingAdminFile(true)
+      try {
+        const formData = new FormData()
+        formData.append('file', pendingAdminFile.file)
+        formData.append('account_id', selectedAccountId)
+        const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+        if (!res.ok) throw new Error('Upload failed')
+        const { url, name } = await res.json()
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachment_url: url, attachment_name: name })
+      } catch {
+        toast.error('Failed to upload file')
+      } finally {
+        setUploadingAdminFile(false)
+        if (adminFileRef.current) adminFileRef.current.value = ''
+      }
+    } else {
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id })
+    }
   }
 
   const handlePolish = async () => {
@@ -481,10 +553,22 @@ export default function PortalChatsPage() {
       </div>
 
       {/* Message thread */}
-      <div className={cn(
-        'flex-1 min-w-0 flex flex-col overflow-hidden',
-        !selectedAccountId ? 'hidden lg:flex' : 'flex'
-      )}>
+      <div
+        className={cn(
+          'flex-1 min-w-0 flex flex-col overflow-hidden relative',
+          !selectedAccountId ? 'hidden lg:flex' : 'flex'
+        )}
+        onDragOver={handleAdminDragOver}
+        onDragLeave={handleAdminDragLeave}
+        onDrop={handleAdminDrop}
+      >
+        {/* Drag overlay */}
+        {isDraggingAdmin && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 pointer-events-none">
+            <Paperclip className="h-10 w-10 text-blue-400 mb-2" />
+            <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
+          </div>
+        )}
         {!selectedAccountId ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
@@ -614,17 +698,29 @@ export default function PortalChatsPage() {
                           </div>
                         )}
                         {msg.attachment_url && (
-                          <a
-                            href={msg.attachment_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={cn(
-                              'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
-                              isAdmin ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
-                            )}
-                          >
-                            <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
-                          </a>
+                          (() => {
+                            const ext = msg.attachment_url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+                            const isImg = ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
+                            return isImg ? (
+                              <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="block mb-1">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={msg.attachment_url} alt={msg.attachment_name || 'Image'} className="max-w-[200px] rounded-lg" loading="lazy" />
+                              </a>
+                            ) : (
+                              <a
+                                href={msg.attachment_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={cn(
+                                  'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
+                                  isAdmin ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                                )}
+                              >
+                                <FileText className="h-3.5 w-3.5 shrink-0" />
+                                <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
+                              </a>
+                            )
+                          })()
                         )}
                         <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
                         <p className={cn(
@@ -737,9 +833,54 @@ export default function PortalChatsPage() {
               </div>
             )}
 
+            {/* File preview strip */}
+            {pendingAdminFile && (
+              <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50 flex items-center gap-3 shrink-0">
+                {pendingAdminFile.previewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={pendingAdminFile.previewUrl} alt={pendingAdminFile.file.name} className="h-12 w-12 rounded object-cover border border-zinc-200 shrink-0" />
+                ) : (
+                  <div className="h-12 w-12 rounded border border-zinc-200 bg-white flex items-center justify-center shrink-0">
+                    <FileText className="h-5 w-5 text-zinc-400" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-zinc-700 truncate">{pendingAdminFile.file.name}</p>
+                  <p className="text-[10px] text-zinc-400">{formatFileSize(pendingAdminFile.file.size)}</p>
+                </div>
+                <button
+                  onClick={() => { setPendingAdminFile(null); if (adminFileRef.current) adminFileRef.current.value = '' }}
+                  className="p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 shrink-0"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Reply input */}
-            <div className={cn('p-4 border-t bg-white shrink-0', replyToMsg && 'border-t-0')}>
+            <div className={cn('p-4 border-t bg-white shrink-0', (replyToMsg || pendingAdminFile) && 'border-t-0')}>
               <div className="flex gap-2 items-end">
+                {/* Paperclip */}
+                <button
+                  onClick={() => adminFileRef.current?.click()}
+                  disabled={uploadingAdminFile}
+                  className={cn(
+                    'p-3 rounded-lg transition-colors shrink-0',
+                    pendingAdminFile
+                      ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
+                      : 'text-zinc-400 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50'
+                  )}
+                  title="Attach file"
+                >
+                  {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+                </button>
+                <input
+                  ref={adminFileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+                  onChange={e => { if (e.target.files?.[0]) handleAdminFileSelect(e.target.files[0]) }}
+                  className="hidden"
+                />
                 <textarea
                   ref={inputRef}
                   value={replyText}
@@ -792,7 +933,7 @@ export default function PortalChatsPage() {
                 {/* Send */}
                 <button
                   onClick={handleSend}
-                  disabled={!replyText.trim() || sendMutation.isPending}
+                  disabled={(!replyText.trim() && !pendingAdminFile) || sendMutation.isPending || uploadingAdminFile}
                   className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
                 >
                   {sendMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
