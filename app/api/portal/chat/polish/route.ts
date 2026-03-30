@@ -2,13 +2,14 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
+import { callAI } from '@/lib/portal/ai-provider'
+import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * POST /api/portal/chat/polish
  * Rewrites a rough admin message into clean, professional form.
- * Keeps the same meaning and language, but fixes grammar,
- * adds clarity, and makes it sound polished.
+ * Uses KB Brain for tone/style reference, then Claude Haiku (primary) or GPT-4o-mini (fallback).
  */
 export async function POST(request: NextRequest) {
   // Rate limit: max 12 polishes per minute
@@ -23,8 +24,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
@@ -57,6 +57,10 @@ export async function POST(request: NextRequest) {
       .slice(0, 8)
       .map(m => m.message)
 
+    // Fetch KB Brain context matching the message content
+    const kbQuery = buildKBQuery(message)
+    const kbContext = await fetchKBContext(kbQuery)
+
     const systemPrompt = `You are a writing assistant for Antonio, who runs Tony Durante LLC (US business formation & tax consulting).
 
 YOUR JOB: Rewrite his rough message into a clean, professional version.
@@ -73,45 +77,19 @@ RULES:
 
 ${styleExamples.length > 0 ? `ANTONIO'S WRITING STYLE (examples from past messages):\n${styleExamples.map((m, i) => `${i + 1}. "${m}"`).join('\n')}` : ''}
 
+${kbContext ? `\n${kbContext}` : ''}
+
 ${companyName ? `CLIENT COMPANY: ${companyName}` : ''}`
 
-    // 30s timeout
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000)
-
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Rewrite this message:\n\n${message}` },
-        ],
-        max_tokens: 500,
-        temperature: 0.5,
-      }),
-      signal: controller.signal,
+    const result = await callAI({
+      systemPrompt,
+      userPrompt: `Rewrite this message:\n\n${message}`,
+      maxTokens: 500,
+      temperature: 0.5,
     })
-    clearTimeout(timeout)
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      console.error('[polish] OpenAI error:', err)
-      return NextResponse.json({ error: 'AI polishing failed' }, { status: 500 })
-    }
-
-    const result = await res.json()
-    const polished = result.choices?.[0]?.message?.content?.trim() || ''
-
-    return NextResponse.json({ polished })
+    return NextResponse.json({ polished: result.text, provider: result.provider })
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      return NextResponse.json({ error: 'AI request timed out. Please try again.' }, { status: 504 })
-    }
     console.error('[polish] Error:', err)
     return NextResponse.json({ error: 'Failed to polish message' }, { status: 500 })
   }

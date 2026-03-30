@@ -2,19 +2,22 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
+import { callAI } from '@/lib/portal/ai-provider'
+import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * POST /api/portal/chat/suggest
- * AI-powered reply suggestion for admin. Learns from past admin messages.
+ * AI-powered reply suggestion for admin. Learns from past admin messages + KB Brain.
  *
- * 1. Loads admin's past replies across ALL clients (style examples)
- * 2. Loads this client's account context (services, deadlines, payments)
- * 3. Loads conversation history with this client
- * 4. Generates a reply that sounds like the admin
+ * 1. Loads KB articles + approved responses matching conversation topic
+ * 2. Loads admin's past replies across ALL clients (style examples)
+ * 3. Loads this client's account context (services, deadlines, payments)
+ * 4. Loads conversation history with this client
+ * 5. Generates a reply via Claude Haiku (primary) or GPT-4o-mini (fallback)
  */
 export async function POST(request: NextRequest) {
-  // Rate limit: max 6 suggestions per minute (expensive OpenAI calls)
+  // Rate limit: max 6 suggestions per minute (AI calls)
   const rl = checkRateLimit(getRateLimitKey(request) + ':suggest', 6, 60_000)
   if (!rl.allowed) {
     return NextResponse.json({ error: 'Too many requests. Please wait.' }, { status: 429, headers: { 'Retry-After': String(rl.retryAfter ?? 10) } })
@@ -26,8 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
@@ -107,11 +109,9 @@ export async function POST(request: NextRequest) {
     }
 
     const { data: conversation } = await conversationQuery
-
     const conversationHistory = (conversation ?? []).reverse()
 
     // 6. Get admin's past replies from OTHER conversations (style examples)
-    // Pick diverse examples: recent + from different clients
     const { data: styleExamples } = await supabaseAdmin
       .from('portal_messages')
       .select('message, account_id')
@@ -133,15 +133,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 7. Also get admin replies IN this conversation (for consistency)
+    // 7. Get admin replies IN this conversation (for consistency)
     const adminRepliesInThread = conversationHistory
       .filter(m => m.sender_type === 'admin')
       .map(m => m.message)
       .slice(-5)
 
-    // 8. Build the context
+    // 8. Fetch KB Brain context (approved responses + business rules)
+    const lastClientMessage = conversationHistory
+      .filter(m => m.sender_type !== 'admin')
+      .slice(-1)[0]?.message ?? ''
+
+    const serviceKeywords = (services ?? []).map(s => s.service_type).filter(Boolean)
+    const kbQuery = buildKBQuery(lastClientMessage, [account?.entity_type ?? '', ...serviceKeywords])
+    const kbContext = await fetchKBContext(kbQuery)
+
+    // 9. Build the context
     const clientContext = [
-      `Company: ${account?.company_name || 'Unknown'}`,
+      `Company: ${account?.company_name || contactInfo?.full_name || 'Unknown'}`,
       account?.entity_type ? `Entity: ${account.entity_type}` : '',
       account?.state_of_formation ? `State: ${account.state_of_formation}` : '',
       account?.ein_number ? `EIN: ${account.ein_number}` : '',
@@ -157,9 +166,6 @@ export async function POST(request: NextRequest) {
       .map(m => `${m.sender_type === 'admin' ? 'Admin' : 'Client'}: ${m.message}`)
       .join('\n')
 
-    // 9. Call GPT-4 (with 30s timeout)
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 30_000)
     const systemPrompt = `You are an AI assistant that helps Antonio (admin of Tony Durante LLC, a US business formation and tax consulting company) draft replies to client portal messages.
 
 YOUR JOB: Generate a reply that sounds EXACTLY like Antonio would write it. Match his tone, style, and level of detail.
@@ -172,6 +178,8 @@ ${adminRepliesInThread.length > 0 ? `\nANTONIO'S REPLIES IN THIS SPECIFIC CONVER
 CLIENT ACCOUNT CONTEXT:
 ${clientContext}
 
+${kbContext ? `\n${kbContext}` : ''}
+
 RULES:
 - Write the reply as if you ARE Antonio. Don't say "I suggest..." — just write the actual reply.
 - ALWAYS reply in English. Even if the client writes in Italian or another language, your reply MUST be in English. This is a strict rule.
@@ -183,39 +191,15 @@ RULES:
 
     const userPrompt = `Here is the conversation:\n\n${conversationText}\n\nThe client just sent the last message. Write Antonio's reply:`
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 500,
-        temperature: 0.7,
-      }),
-      signal: controller.signal,
+    const result = await callAI({
+      systemPrompt,
+      userPrompt,
+      maxTokens: 500,
+      temperature: 0.7,
     })
-    clearTimeout(timeout)
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      console.error('[suggest] OpenAI error:', err)
-      return NextResponse.json({ error: 'AI generation failed' }, { status: 500 })
-    }
-
-    const result = await res.json()
-    const suggestion = result.choices?.[0]?.message?.content?.trim() || ''
-
-    return NextResponse.json({ suggestion })
+    return NextResponse.json({ suggestion: result.text, provider: result.provider })
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      return NextResponse.json({ error: 'AI request timed out. Please try again.' }, { status: 504 })
-    }
     console.error('[suggest] Error:', err)
     return NextResponse.json({ error: 'Failed to generate suggestion' }, { status: 500 })
   }
