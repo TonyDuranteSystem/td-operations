@@ -32,8 +32,12 @@ export function WizardClient({
 }: WizardClientProps) {
   const { steps, fields } = getWizardConfig(wizardType, entityType)
 
-  // Merge prefill → saved → current (saved takes precedence over prefill)
-  const initialData = { ...prefillData, ...savedData }
+  // Merge prefill → saved → current (saved takes precedence over prefill, but only for non-empty values)
+  // Empty saved values (from stale records saved before prefill fix) must NOT override prefill
+  const filteredSaved = Object.fromEntries(
+    Object.entries(savedData).filter(([, v]) => v !== '' && v !== null && v !== undefined)
+  )
+  const initialData = { ...prefillData, ...filteredSaved }
 
   const [currentStep, setCurrentStep] = useState(savedStep)
   const [formData, setFormData] = useState<Record<string, string | boolean | number>>(initialData)
