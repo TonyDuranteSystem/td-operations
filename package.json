@@ -18,7 +18,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx}": [
-      "eslint --max-warnings 0"
+      "eslint --no-ignore --ignore-pattern 'node_modules/**' --ignore-pattern '.next/**' --max-warnings 0"
     ]
   },
   "dependencies": {

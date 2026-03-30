@@ -1654,7 +1654,7 @@ export function registerOperationsTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "cron_status",
-    "Show recent Vercel cron executions — success/error, duration, last run time. Use this to check if crons (QB refresh, sync-drive, sync-airtable) are running correctly. Returns the last 5 executions per endpoint.",
+    "Show recent Vercel cron executions — success/error, duration, last run time. Use this to check if crons are running correctly. Returns the last 5 executions per endpoint. Crons: QB refresh (6h), sync-drive (6h), sync-airtable (6h), check-wire-payments (6h), ra-renewal-check (daily 9am), annual-report-check (daily 9am), overdue-payments-report (daily 9am), portal-issues (hourly), email-monitor (5min), annual-installments (1st of month), deadline-reminders (daily 8am), wizard-reminders (daily 9:17am), process-jobs (5min), invoice-overdue (daily 9am), faxage-ss4-confirm (every 2h).",
     {},
     async () => {
       try {
