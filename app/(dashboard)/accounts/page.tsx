@@ -77,10 +77,10 @@ export default async function AccountsPage({
   const serviceMap: Record<string, number> = {}
   if (accountIds.length > 0) {
     const { data: services } = await supabase
-      .from('services')
+      .from('service_deliveries')
       .select('account_id')
       .in('account_id', accountIds)
-      .in('status', ['Not Started', 'In Progress', 'Blocked'])
+      .eq('status', 'active')
 
     if (services) {
       for (const s of services) {

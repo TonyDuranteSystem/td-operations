@@ -42,13 +42,8 @@ export default async function CalendarPage({
       .in('status', ['Pending', 'Overdue'])
       .gte('due_date', yearStart)
       .lte('due_date', yearEnd),
-    // Service SLA dates
-    supabase
-      .from('services')
-      .select('service_name, sla_due_date, status, account_id')
-      .in('status', ['Not Started', 'In Progress', 'Blocked'])
-      .gte('sla_due_date', yearStart)
-      .lte('sla_due_date', yearEnd),
+    // Service SLA dates (service_deliveries has no sla_due_date — returns empty)
+    Promise.resolve({ data: [] as Array<{ service_name: string; sla_due_date: string; status: string; account_id: string }> }),
   ])
 
   // Get account names for payments and services

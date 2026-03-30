@@ -55,10 +55,10 @@ export async function POST(request: NextRequest) {
 
       // 2. Get active services for this client
       const { data: svc } = await supabaseAdmin
-        .from('services')
-        .select('service_name, service_type, status, current_step, total_steps')
+        .from('service_deliveries')
+        .select('service_name, service_type, stage, status')
         .eq('account_id', account_id)
-        .in('status', ['Not Started', 'In Progress', 'Waiting Client', 'Waiting Third Party'])
+        .eq('status', 'active')
         .limit(10)
       services = svc
 

@@ -13,9 +13,9 @@ export default async function ServicesPage({
   const typeFilter = searchParams.type ?? ''
 
   let dbQuery = supabase
-    .from('services')
-    .select('id, service_name, service_type, account_id, status, start_date, end_date, billing_type, amount, amount_currency, current_step, total_steps, blocked_waiting_external, blocked_reason, blocked_since, sla_due_date, stage_entered_at, notes, updated_at')
-    .in('status', ['Not Started', 'In Progress', 'Blocked'])
+    .from('service_deliveries')
+    .select('id, service_name, service_type, account_id, stage, status, start_date, end_date, notes, updated_at')
+    .eq('status', 'active')
     .order('updated_at', { ascending: false })
 
   if (typeFilter) {
@@ -37,12 +37,32 @@ export default async function ServicesPage({
     }
   }
 
+  // Map service_deliveries to the shape ServiceBoard expects
   const services = (rawServices ?? []).map(s => ({
-    ...s,
+    id: s.id,
+    service_name: s.service_name ?? s.service_type ?? 'Service',
+    service_type: s.service_type ?? '',
+    account_id: s.account_id,
+    status: 'In Progress',
+    start_date: s.start_date ?? null,
+    end_date: s.end_date ?? null,
+    billing_type: null,
+    amount: null,
+    amount_currency: null,
+    current_step: null,
+    total_steps: null,
+    blocked_waiting_external: false,
+    blocked_reason: null,
+    blocked_since: null,
+    sla_due_date: null,
+    stage_entered_at: null,
+    notes: s.notes ?? null,
+    updated_at: s.updated_at,
     company_name: s.account_id ? accountMap[s.account_id] ?? null : null,
+    current_stage: s.stage ?? null,
   }))
 
-  // Group by status
+  // Group by status (all active SDs show as "In Progress")
   const columns = STATUS_ORDER.filter(s => s !== 'Completed').map(status => ({
     status,
     items: services.filter(s => s.status === status),
@@ -59,10 +79,10 @@ export default async function ServicesPage({
 
   const stats = {
     total: services.length,
-    notStarted: services.filter(s => s.status === 'Not Started').length,
-    inProgress: services.filter(s => s.status === 'In Progress').length,
-    blocked: services.filter(s => s.blocked_waiting_external === true).length,
-    withSla: services.filter(s => s.sla_due_date && s.sla_due_date <= today).length,
+    notStarted: 0,
+    inProgress: services.length,
+    blocked: 0,
+    withSla: 0,
   }
 
   return (
