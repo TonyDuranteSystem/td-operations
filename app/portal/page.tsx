@@ -209,8 +209,7 @@ export default async function PortalDashboardPage() {
     )
   }
   const today = new Date().toISOString().split('T')[0]
-  const activeServices = services.filter(s => s.status !== 'Completed')
-  const _completedServices = services.filter(s => s.status === 'Completed')
+  const allServices = services
   const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
 
   return (
@@ -293,19 +292,19 @@ export default async function PortalDashboardPage() {
           </div>
         )}
 
-        {/* Active Services Card */}
+        {/* Services Card */}
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
-            {t('dashboard.activeServices', locale)} ({activeServices.length})
+            {t('dashboard.activeServices', locale)} ({allServices.length})
           </h2>
-          {activeServices.length === 0 ? (
+          {allServices.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
               <CheckCircle2 className="h-8 w-8 mb-2" />
               <p className="text-sm">{t('dashboard.noServices', locale)}</p>
             </div>
           ) : (
             <div className="space-y-2">
-              {activeServices.map(s => (
+              {allServices.map(s => (
                 <div key={s.id} className={cn('rounded-lg border p-3', s.blocked_waiting_external && 'border-red-200 bg-red-50/50')}>
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <span className="text-sm font-medium truncate">{s.service_name}</span>

@@ -56,6 +56,30 @@ export async function getPortalMembers(accountId: string) {
 }
 
 export async function getPortalServices(accountId: string): Promise<PortalService[]> {
+  // Primary source: service_deliveries (new table, account-linked)
+  const { data: deliveries } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name, service_type, stage, status, start_date, updated_at')
+    .eq('account_id', accountId)
+    .in('status', ['active', 'completed'])
+    .order('updated_at', { ascending: false })
+
+  if ((deliveries ?? []).length > 0) {
+    return (deliveries ?? []).map(sd => ({
+      id: sd.id,
+      service_name: sd.service_name ?? sd.service_type ?? 'Service',
+      service_type: sd.service_type ?? '',
+      status: sd.status === 'active' ? 'In Progress' : 'Completed',
+      current_step: null,
+      total_steps: null,
+      blocked_waiting_external: false,
+      blocked_reason: null,
+      start_date: sd.start_date,
+      current_stage: sd.stage ?? null,
+    })) as PortalService[]
+  }
+
+  // Fallback: legacy services table (for older accounts not yet migrated to service_deliveries)
   const { data } = await supabaseAdmin
     .from('services')
     .select('id, service_name, service_type, status, current_step, total_steps, blocked_waiting_external, blocked_reason, start_date')
@@ -63,23 +87,9 @@ export async function getPortalServices(accountId: string): Promise<PortalServic
     .in('status', ['Not Started', 'In Progress', 'Waiting Client', 'Waiting Third Party', 'Completed'])
     .order('updated_at', { ascending: false })
 
-  // Get current_stage from service_deliveries (linked by account_id + service_name)
-  let stageMap: Record<string, string> = {}
-
-  if ((data ?? []).length > 0) {
-    const { data: deliveries } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('service_name, stage')
-      .eq('account_id', accountId)
-
-    if (deliveries) {
-      stageMap = Object.fromEntries(deliveries.map(d => [d.service_name, d.stage]))
-    }
-  }
-
   return (data ?? []).map(s => ({
     ...s,
-    current_stage: stageMap[s.service_name] ?? null,
+    current_stage: null,
   })) as PortalService[]
 }
 
