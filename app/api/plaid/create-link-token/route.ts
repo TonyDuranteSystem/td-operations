@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { plaidClient, PLAID_PRODUCTS, PLAID_COUNTRY_CODES } from '@/lib/plaid'
 import { isAdmin } from '@/lib/auth'
+import { INTERNAL_BASE_URL } from '@/lib/config'
 import { CountryCode, Products } from 'plaid'
 
 export async function POST() {
@@ -17,6 +18,7 @@ export async function POST() {
     products: PLAID_PRODUCTS as unknown as Products[],
     country_codes: PLAID_COUNTRY_CODES as unknown as CountryCode[],
     language: 'en',
+    webhook: `${INTERNAL_BASE_URL}/api/plaid/webhook`,
   })
 
   return NextResponse.json({ link_token: response.data.link_token })
