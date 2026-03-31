@@ -23,7 +23,7 @@ import {
   PenSquare,
   PenLine,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
@@ -41,6 +41,7 @@ interface PortalSidebarProps {
   portalTier?: string
   unreadChatCount?: number
   accountType?: string | null
+  contactId?: string
 }
 
 // Nav items organized into collapsible groups
@@ -101,12 +102,57 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [liveUnreadCount, setLiveUnreadCount] = useState(unreadChatCount)
+  const pathnameRef = useRef(pathname)
   const { t, locale } = useLocale()
+
+  // Keep pathname ref in sync for use inside realtime callback
+  useEffect(() => {
+    pathnameRef.current = pathname
+  }, [pathname])
+
+  // Reset badge when user opens the chat page
+  useEffect(() => {
+    if (pathname === '/portal/chat') {
+      setLiveUnreadCount(0)
+    }
+  }, [pathname])
+
+  // Subscribe to new admin messages for real-time badge updates
+  useEffect(() => {
+    const filterColumn = selectedAccountId ? 'account_id' : (contactId ? 'contact_id' : null)
+    const filterValue = selectedAccountId || contactId
+    if (!filterColumn || !filterValue) return
+
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`sidebar-unread-${filterValue}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: `${filterColumn}=eq.${filterValue}`,
+        },
+        (payload) => {
+          const newMsg = payload.new as { sender_type: string }
+          if (newMsg.sender_type === 'admin' && pathnameRef.current !== '/portal/chat') {
+            setLiveUnreadCount(prev => prev + 1)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [selectedAccountId, contactId])
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -130,7 +176,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const displayName = user.email?.split('@')[0] ?? 'User'
 
   const renderNavItem = (item: NavItem) => {
-    const badge = item.href === '/portal/chat' && unreadChatCount > 0 ? unreadChatCount : 0
+    const badge = item.href === '/portal/chat' && liveUnreadCount > 0 ? liveUnreadCount : 0
     return (
       <Link
         key={item.href}

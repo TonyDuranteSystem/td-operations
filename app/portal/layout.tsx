@@ -96,6 +96,7 @@ export default async function PortalLayout({
             portalTier={portalTier}
             unreadChatCount={unreadChatCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
+            contactId={contactId || undefined}
           />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />
