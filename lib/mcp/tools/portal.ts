@@ -46,7 +46,7 @@ const REQUIRED_ACCOUNT_FIELDS = [
 
 export function registerPortalTools(server: McpServer) {
   server.tool(
-    "portal_legacy_onboard",
+    "portal_transition_setup",
     `Prepare a legacy client for portal access. Fully automated end-to-end:
 
 1. Scans Google Drive for unprocessed files and processes them (OCR + classify)
@@ -453,7 +453,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         await supabaseAdmin.from("accounts").update({
           portal_account: true, portal_tier: "active",
           portal_created_date: new Date().toISOString().split("T")[0],
-          notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal legacy onboard completed [PORTAL_LEGACY_ONBOARD]`,
+          notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed [PORTAL_TRANSITION_SETUP]`,
         }).eq("id", account.id)
 
         await supabaseAdmin.from("contacts").update({
