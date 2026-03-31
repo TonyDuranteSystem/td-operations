@@ -89,9 +89,36 @@ export async function updateWithLock(
 
   // .select("id") returns matched rows — if 0, timestamp didn't match
   if (!data || data.length === 0) {
-    return {
-      success: false,
-      error: "Record modified by another user. Please refresh.",
+    // Auto-retry once: fetch fresh updated_at and try again.
+    // This handles the common case where MCP or another machine updated
+    // the record but the Next.js RSC cache served a stale updated_at.
+    const { data: fresh } = await supabase
+      .from(table)
+      .select("updated_at")
+      .eq("id", id)
+      .single()
+
+    if (!fresh) {
+      return { success: false, error: "Record not found." }
+    }
+
+    const retryNow = new Date().toISOString()
+    const { data: retryData, error: retryError } = await supabase
+      .from(table)
+      .update({ ...updates, updated_at: retryNow })
+      .eq("id", id)
+      .eq("updated_at", fresh.updated_at)
+      .select("id")
+
+    if (retryError) {
+      return { success: false, error: retryError.message }
+    }
+
+    if (!retryData || retryData.length === 0) {
+      return {
+        success: false,
+        error: "Record modified by another user. Please refresh.",
+      }
     }
   }
 

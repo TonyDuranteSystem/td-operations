@@ -12,7 +12,7 @@ export async function updateAccountField(
   updatedAt: string
 ): Promise<ActionResult> {
   const allowedFields = [
-    'company_name', 'entity_type', 'status', 'ein_number', 'filing_id',
+    'company_name', 'entity_type', 'account_type', 'status', 'ein_number', 'filing_id',
     'state_of_formation', 'formation_date', 'physical_address',
     'registered_agent', 'ra_renewal_date', 'notes',
     'installment_1_amount', 'installment_1_currency',
