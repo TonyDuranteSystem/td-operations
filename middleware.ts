@@ -44,6 +44,9 @@ const PUBLIC_PREFIXES = [
   '/tax-quote',
   '/contract-template',
   '/ss4',
+  '/sign-document',
+  '/api/signature-request',
+  '/api/signature-request-signed',
   // OAuth and well-known
   '/.well-known',
   '/oauth',
