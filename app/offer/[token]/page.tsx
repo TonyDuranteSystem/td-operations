@@ -35,7 +35,7 @@ const LABELS = {
     acceptAndSign: 'Accept & Sign Contract',
     afterSignature: 'After signing you will be guided to payment',
     questions: 'Have questions? Contact us before proceeding.',
-    contactWhatsApp: 'Contact us on WhatsApp',
+    contactWhatsApp: 'Write to us in the App',
     paymentSecure: 'Secure and encrypted transaction',
     paymentNote: 'Secure payment via credit card, Apple Pay or Bancontact',
     bankDetails: 'Bank Details',
@@ -58,7 +58,7 @@ const LABELS = {
     emailGateButton: 'View Proposal',
     emailGateError: 'The email address does not match. Please try again.',
     emailPlaceholder: 'your@email.com',
-    contactPayment: 'Contact us on WhatsApp to proceed with payment.',
+    contactPayment: 'Write to us in the App to proceed with payment.',
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
   },
@@ -89,7 +89,7 @@ const LABELS = {
     acceptAndSign: 'Accetta e Firma Contratto',
     afterSignature: 'Dopo la firma verrai guidato al pagamento',
     questions: 'Hai domande? Contattaci prima di procedere.',
-    contactWhatsApp: 'Contattaci su WhatsApp',
+    contactWhatsApp: 'Scrivici nella App',
     paymentSecure: 'Transazione protetta e crittografata',
     paymentNote: 'Pagamento sicuro tramite carta di credito, Apple Pay o Bancontact',
     bankDetails: 'Coordinate Bancarie',
@@ -112,7 +112,7 @@ const LABELS = {
     emailGateButton: 'Visualizza Proposta',
     emailGateError: 'L\'indirizzo email non corrisponde. Riprova.',
     emailPlaceholder: 'tua@email.com',
-    contactPayment: 'Contattaci su WhatsApp per procedere con il pagamento.',
+    contactPayment: 'Scrivici nella App per procedere con il pagamento.',
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
   },
@@ -583,10 +583,10 @@ export default function OfferPage() {
               </div>
             )}
 
-            {/* WhatsApp */}
+            {/* Contact via Portal Chat */}
             <div className="offer-payment-section">
               <p style={{ opacity: 0.8, marginBottom: 12 }}>{L.questions}</p>
-              <a href="https://wa.me/17273187027" className="offer-cta-button">{L.contactWhatsApp}</a>
+              <a href="https://portal.tonydurante.us/portal/chat" className="offer-cta-button">{L.contactWhatsApp}</a>
             </div>
           </div>
         </div>
