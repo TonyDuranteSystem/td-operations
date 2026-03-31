@@ -10,6 +10,10 @@
  * - onboarding: After payment. Can fill data wizard, upload docs.
  * - active: After data reviewed. Can see services, invoices, deadlines.
  * - full: After EIN/completion. Everything visible.
+ *
+ * Account Types:
+ * - Client: Annual management — full feature set per tier.
+ * - One-Time: Standalone service — limited features (no billing/invoicing/customers/deadlines).
  */
 
 export type PortalTier = 'lead' | 'onboarding' | 'active' | 'full'
@@ -65,15 +69,34 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
   ],
 }
 
+// Features excluded for One-Time accounts (standalone service customers)
+// They get portal access but don't need annual management tools
+const ONE_TIME_EXCLUDED = [
+  'billing',       // No TD invoices/installments
+  'invoices',      // No client invoicing tools
+  'customers',     // No client database
+  'deadlines',     // No recurring compliance
+  'bankAccounts',  // No bank account setup
+  'taxDocuments',  // No tax document section (they see docs in Documents tab)
+  'activity',      // No activity feed
+]
+
 /**
- * Check if a feature is visible for the given tier.
+ * Check if a feature is visible for the given tier and account type.
  * Returns true if the feature is allowed at this tier.
+ * One-Time accounts have additional exclusions on top of tier permissions.
  */
-export function isTierFeatureVisible(tier: PortalTier | string | null, featureKey: string): boolean {
+export function isTierFeatureVisible(
+  tier: PortalTier | string | null,
+  featureKey: string,
+  accountType?: string | null,
+): boolean {
   const t = (tier || 'lead') as PortalTier // Default to most restricted tier, not 'active'
   const allowed = TIER_FEATURES[t]
   if (!allowed) return true // Unknown tier = show everything (safe fallback)
-  return allowed.includes(featureKey)
+  if (!allowed.includes(featureKey)) return false
+  if (accountType === 'One-Time' && ONE_TIME_EXCLUDED.includes(featureKey)) return false
+  return true
 }
 
 /**

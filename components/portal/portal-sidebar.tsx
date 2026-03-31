@@ -40,6 +40,7 @@ interface PortalSidebarProps {
   navVisibility?: PortalNavVisibility
   portalTier?: string
   unreadChatCount?: number
+  accountType?: string | null
 }
 
 // Nav items organized into collapsible groups
@@ -100,7 +101,7 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0 }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -235,7 +236,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             // Filter items by visibility flags
             const visibleItems = group.items.filter(item => {
               // Check tier visibility first
-              if (item.visibilityKey && !isTierFeatureVisible(portalTier || null, item.visibilityKey)) return false
+              if (item.visibilityKey && !isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType)) return false
               // Then check data-driven visibility
               if (!item.visibilityKey || !navVisibility) return true
               return navVisibility[item.visibilityKey]

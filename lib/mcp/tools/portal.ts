@@ -37,7 +37,7 @@ function isCurrentTDAddress(address: string | null): boolean {
 }
 
 // Account fields required for a complete portal experience
-const REQUIRED_ACCOUNT_FIELDS = [
+const _REQUIRED_ACCOUNT_FIELDS = [
   "ein_number",
   "formation_date",
   "entity_type",
@@ -79,14 +79,10 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         // ─── 2. PRE-FLIGHT CHECKS ───
         const flags: string[] = []
 
-        // Check account type
-        if (account.account_type === "One-Time") {
-          flags.push("FLAG: One-Time account -- needs manual review (no auto-processing)")
-          return { content: [{ type: "text" as const, text: `${account.company_name}\n\n${flags.join("\n")}\n\nOne-Time clients are flagged for individual review. Use this tool only for Client (annual) accounts.` }] }
-        }
+        const isOneTime = account.account_type === "One-Time"
 
-        // Check TD address
-        if (!isTDAddress(account.physical_address)) {
+        // Check TD address (Client accounts only — One-Time don't need TD address)
+        if (!isOneTime && !isTDAddress(account.physical_address)) {
           flags.push(`FLAG: Non-TD address (${account.physical_address || "NULL"}) -- check annual report for real address`)
           return { content: [{ type: "text" as const, text: `${account.company_name}\n\n${flags.join("\n")}\n\nOnly Client accounts with TD addresses (Ulmerton/Gulf/Park) can be auto-processed. This account needs manual address verification first.` }] }
         }
@@ -186,12 +182,26 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         lines.push(`Documents: ${visibleDocs.length} visible, ${hiddenIds.length} hidden`)
         for (const d of visibleDocs) lines.push(`  ${d.document_type_name}`)
 
-        // ─── 7. AUTO-CREATE OA ───
+        // ─── 7-9. AUTO-CREATE OA, LEASE, RENEWAL MSA (Client accounts only) ───
         const pendingDocs: string[] = []
+
+        let oaStatus = "N/A"
+        let leaseStatus = "N/A"
+        let msaStatus = "N/A"
+
+        if (isOneTime) {
+          lines.push("OA: SKIPPED (One-Time account)")
+          lines.push("Lease: SKIPPED (One-Time account)")
+          lines.push("Renewal MSA: SKIPPED (One-Time account)")
+        }
+
+        // --- BEGIN: Client-only document creation ---
+        if (!isOneTime) {
+
         const { data: existingOA } = await supabaseAdmin.from("oa_agreements")
           .select("id, status").eq("account_id", account_id).maybeSingle()
 
-        let oaStatus = ""
+        oaStatus = ""
         if (existingOA) {
           oaStatus = existingOA.status === "signed" ? "Signed" : `Exists (${existingOA.status})`
           if (existingOA.status !== "signed") pendingDocs.push("Operating Agreement")
@@ -231,7 +241,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           .select("id, status, suite_number").eq("account_id", account_id).maybeSingle()
         const hasLeaseDriveDoc = allDocs.find(d => d.document_type_name === "Office Lease" && d.drive_link)
 
-        let leaseStatus = ""
+        leaseStatus = ""
         if (existingLease) {
           leaseStatus = existingLease.status === "signed" ? `Signed (Suite ${existingLease.suite_number})` : `Exists (${existingLease.status}, Suite ${existingLease.suite_number})`
           if (existingLease.status !== "signed") pendingDocs.push("Lease Agreement")
@@ -273,7 +283,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         const { data: existingMSA } = await supabaseAdmin.from("offers")
           .select("id, token, status").eq("account_id", account_id).eq("contract_type", "renewal").maybeSingle()
 
-        let msaStatus = ""
+        msaStatus = ""
         if (existingMSA) {
           msaStatus = `Exists (${existingMSA.status}, token: ${existingMSA.token})`
           if (existingMSA.status !== "signed" && existingMSA.status !== "completed") pendingDocs.push("Contratto Annuale")
@@ -308,6 +318,8 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         }
         lines.push(`Renewal MSA: ${msaStatus}`)
 
+        } // --- END: Client-only document creation ---
+
         // ─── 10. AUTO-CREATE SERVICE DELIVERIES ───
         const { data: existingSDs } = await supabaseAdmin.from("service_deliveries")
           .select("id, service_type, status").eq("account_id", account_id)
@@ -338,8 +350,8 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           createdSDs.push("EIN (completed)")
         }
 
-        // Annual Renewal (active)
-        if (!existingSDTypes.has("Annual Renewal")) {
+        // Annual Renewal (active) — Client accounts only
+        if (!isOneTime && !existingSDTypes.has("Annual Renewal")) {
           await supabaseAdmin.from("service_deliveries").insert({
             account_id: account.id, service_type: "Annual Renewal",
             service_name: `Annual Renewal -- ${account.company_name}`,
@@ -349,8 +361,8 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           createdSDs.push("Annual Renewal (active)")
         }
 
-        // CMRA (active) - all TD address clients get CMRA
-        if (!existingSDTypes.has("CMRA Mailing Address")) {
+        // CMRA (active) — Client accounts with TD address only
+        if (!isOneTime && !existingSDTypes.has("CMRA Mailing Address")) {
           await supabaseAdmin.from("service_deliveries").insert({
             account_id: account.id, service_type: "CMRA Mailing Address",
             service_name: `CMRA -- ${account.company_name}`,
@@ -382,11 +394,12 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
 
         if (createdSDs.length > 0) lines.push(`SDs created: ${createdSDs.join(", ")}`)
 
-        // ─── 11. AUTO-CREATE DEADLINES ───
+        // ─── 11. AUTO-CREATE DEADLINES (Client accounts only) ───
+        const createdDeadlines: string[] = []
+        if (!isOneTime) {
         const { data: existingDeadlines } = await supabaseAdmin.from("deadlines")
           .select("deadline_type").eq("account_id", account_id)
         const existingDLTypes = new Set((existingDeadlines ?? []).map(d => d.deadline_type))
-        const createdDeadlines: string[] = []
 
         if (account.formation_date && account.state_of_formation) {
           const formDate = new Date(account.formation_date)
@@ -424,6 +437,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           }
         }
 
+        } // end !isOneTime deadlines
         if (createdDeadlines.length > 0) lines.push(`Deadlines created: ${createdDeadlines.join(", ")}`)
 
         // ─── 12. OLD ADDRESS FLAG ───
@@ -568,9 +582,15 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
 
         let portalTier = "lead"
         if (account_id) {
-          const { data: offers } = await supabaseAdmin.from("offers").select("status")
-            .eq("account_id", account_id).in("status", ["completed", "signed"]).limit(1)
-          if (offers?.length) portalTier = "onboarding"
+          // Check account type — One-Time customers with paid deals go straight to active
+          const { data: acctData } = await supabaseAdmin.from("accounts").select("account_type").eq("id", account_id).single()
+          if (acctData?.account_type === "One-Time") {
+            portalTier = "active"
+          } else {
+            const { data: offers } = await supabaseAdmin.from("offers").select("status")
+              .eq("account_id", account_id).in("status", ["completed", "signed"]).limit(1)
+            if (offers?.length) portalTier = "onboarding"
+          }
 
           if (portalTier === "lead") {
             const { data: existingSds } = await supabaseAdmin.from("service_deliveries").select("id").eq("account_id", account_id).limit(1)

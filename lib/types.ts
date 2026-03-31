@@ -302,6 +302,7 @@ export interface PortalAccount {
   formation_date: string | null
   status: string
   physical_address: string | null
+  account_type: string | null
 }
 
 export interface PortalDocument {

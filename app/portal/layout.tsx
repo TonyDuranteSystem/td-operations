@@ -95,6 +95,7 @@ export default async function PortalLayout({
             navVisibility={navVisibility}
             portalTier={portalTier}
             unreadChatCount={unreadChatCount}
+            accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
           />
         <main className="flex-1 overflow-y-auto">
           <div className="h-14 lg:hidden" />

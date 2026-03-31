@@ -18,7 +18,7 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
   const accountIds = links.map(l => l.account_id)
   const { data: accounts } = await supabaseAdmin
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, account_type')
     .in('id', accountIds)
     .eq('status', 'Active')
     .order('company_name')
