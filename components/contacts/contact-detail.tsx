@@ -58,7 +58,7 @@ const LANGUAGE_OPTIONS = [
 function formatDate(d: string | null): string {
   if (!d) return '—'
   try {
-    return format(parseISO(d), 'dd/MM/yyyy')
+    return format(parseISO(d), 'MMM d, yyyy')
   } catch {
     return d
   }
@@ -67,7 +67,7 @@ function formatDate(d: string | null): string {
 function formatDateTime(d: string | null): string {
   if (!d) return '—'
   try {
-    return format(parseISO(d), 'dd/MM/yyyy HH:mm')
+    return format(parseISO(d), 'MMM d, yyyy h:mm a')
   } catch {
     return d
   }

@@ -82,7 +82,7 @@ function formatCurrency(amount: number | string | null, currency?: string | null
 
 function formatDate(d: string | null): string {
   if (!d) return '—'
-  try { return format(parseISO(d), 'dd/MM/yyyy') } catch { return d }
+  try { return format(parseISO(d), 'MMM d, yyyy') } catch { return d }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

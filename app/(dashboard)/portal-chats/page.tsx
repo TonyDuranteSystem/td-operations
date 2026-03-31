@@ -81,12 +81,21 @@ export default function PortalChatsPage() {
   const [sidebarView, setSidebarView] = useState<'chats' | 'internal'>('chats')
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
   const [internalReplyText, setInternalReplyText] = useState('')
+  const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
+  const [internalUploading, setInternalUploading] = useState(false)
+  // AI assistant panel
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [aiPanelMessages, setAiPanelMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([])
+  const [aiPanelInput, setAiPanelInput] = useState('')
+  const [aiPanelLoading, setAiPanelLoading] = useState(false)
+  const aiPanelEndRef = useRef<HTMLDivElement>(null)
   // Emoji picker
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showInternalEmojiPicker, setShowInternalEmojiPicker] = useState(false)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const internalEmojiPickerRef = useRef<HTMLDivElement>(null)
   const internalInputRef = useRef<HTMLTextAreaElement>(null)
+  const internalFileRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -96,7 +105,7 @@ export default function PortalChatsPage() {
   const queryClient = useQueryClient()
   const { playSound } = useNotificationSound()
 
-  // Voice input
+  // Voice input for client chat
   const handleTranscript = useCallback((text: string) => {
     setReplyText(prev => (prev ? prev + ' ' + text : text).trim())
     inputRef.current?.focus()
@@ -109,6 +118,35 @@ export default function PortalChatsPage() {
     stopRecording,
     isSupported: micSupported,
   } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript })
+
+  // Voice input for internal chat
+  const handleInternalTranscript = useCallback((text: string) => {
+    setInternalReplyText(prev => (prev ? prev + ' ' + text : text).trim())
+    internalInputRef.current?.focus()
+  }, [])
+
+  const {
+    isRecording: internalIsRecording,
+    isTranscribing: internalIsTranscribing,
+    startRecording: internalStartRecording,
+    stopRecording: internalStopRecording,
+  } = useVoiceInput({ language: 'en-US', onTranscript: handleInternalTranscript })
+
+  // Internal file select
+  const handleInternalFileSelect = (file: File) => {
+    const maxSize = 10 * 1024 * 1024
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'text/csv', 'text/plain']
+    if (file.size > maxSize) { toast.error('File too large (max 10MB)'); return }
+    if (!allowedTypes.includes(file.type)) { toast.error('File type not allowed'); return }
+    const isImg = file.type.startsWith('image/')
+    if (isImg) {
+      const reader = new FileReader()
+      reader.onload = () => setInternalPendingFile({ file, previewUrl: reader.result as string })
+      reader.readAsDataURL(file)
+    } else {
+      setInternalPendingFile({ file })
+    }
+  }
 
   // Request browser notification permission + register service worker for push
   useEffect(() => {
@@ -228,6 +266,8 @@ export default function PortalChatsPage() {
     sender_id: string
     sender_name: string
     message: string
+    attachment_url: string | null
+    attachment_name: string | null
     read_at: string | null
     created_at: string
   }
@@ -274,14 +314,42 @@ export default function PortalChatsPage() {
   }
 
   const sendInternalMessage = async () => {
-    if (!internalReplyText.trim() || !selectedThreadId) return
+    if (!internalReplyText.trim() && !internalPendingFile) return
+    if (!selectedThreadId) return
     const text = internalReplyText.trim()
     setInternalReplyText('')
+
+    // Upload file first if pending
+    let attachmentUrl: string | null = null
+    let attachmentName: string | null = null
+    if (internalPendingFile) {
+      setInternalUploading(true)
+      try {
+        const formData = new FormData()
+        formData.append('file', internalPendingFile.file)
+        const uploadRes = await fetch(`/api/internal/threads/${selectedThreadId}/upload`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!uploadRes.ok) throw new Error('Upload failed')
+        const uploadData = await uploadRes.json()
+        attachmentUrl = uploadData.url
+        attachmentName = uploadData.name
+      } catch {
+        toast.error('File upload failed')
+        setInternalUploading(false)
+        return
+      }
+      setInternalUploading(false)
+      setInternalPendingFile(null)
+      if (internalFileRef.current) internalFileRef.current.value = ''
+    }
+
     try {
       const res = await fetch(`/api/internal/threads/${selectedThreadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, attachment_url: attachmentUrl, attachment_name: attachmentName }),
       })
       if (!res.ok) throw new Error('Failed to send')
       queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', selectedThreadId] })
@@ -305,6 +373,47 @@ export default function PortalChatsPage() {
       toast.error('Failed to update thread')
     }
   }
+
+  // AI assistant: send question
+  const sendAiQuestion = async () => {
+    if (!aiPanelInput.trim()) return
+    const question = aiPanelInput.trim()
+    setAiPanelInput('')
+    setAiPanelMessages(prev => [...prev, { role: 'user', text: question }])
+    setAiPanelLoading(true)
+    try {
+      const accountId = selectedAccountId || (selectedThreadId ? internalMessages?.thread?.account_id : null)
+      if (!accountId) { toast.error('No client context'); return }
+      const res = await fetch('/api/internal/ai-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId,
+          user_message: question,
+          context_type: selectedThreadId ? 'internal_thread' : 'client_chat',
+          thread_id: selectedThreadId || undefined,
+        }),
+      })
+      if (!res.ok) throw new Error('AI failed')
+      const data = await res.json()
+      setAiPanelMessages(prev => [...prev, { role: 'ai', text: data.reply }])
+    } catch {
+      setAiPanelMessages(prev => [...prev, { role: 'ai', text: 'Sorry, something went wrong. Try again.' }])
+    } finally {
+      setAiPanelLoading(false)
+    }
+  }
+
+  // Reset AI panel when switching chats
+  useEffect(() => {
+    setAiPanelMessages([])
+    setAiPanelInput('')
+  }, [selectedAccountId, selectedThreadId])
+
+  // Scroll AI panel to bottom
+  useEffect(() => {
+    aiPanelEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [aiPanelMessages])
 
   // WhatsApp-style notifications: sound + browser notification + tab badge
   useEffect(() => {
@@ -762,18 +871,30 @@ export default function PortalChatsPage() {
                 <p className="text-xs text-zinc-500 truncate">{internalMessages?.thread?.title ?? ''}</p>
               </div>
             </div>
-            <button
-              onClick={() => resolveThread(selectedThreadId, !internalMessages?.thread?.resolved_at)}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
-                internalMessages?.thread?.resolved_at
-                  ? 'bg-green-50 text-green-700 hover:bg-green-100'
-                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-              )}
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              {internalMessages?.thread?.resolved_at ? 'Resolved' : 'Resolve'}
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setAiPanelOpen(v => !v)}
+                className={cn(
+                  'p-2 rounded-lg transition-colors',
+                  aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
+                )}
+                title="AI Assistant"
+              >
+                <Sparkles className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => resolveThread(selectedThreadId, !internalMessages?.thread?.resolved_at)}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                  internalMessages?.thread?.resolved_at
+                    ? 'bg-green-50 text-green-700 hover:bg-green-100'
+                    : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                )}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {internalMessages?.thread?.resolved_at ? 'Resolved' : 'Resolve'}
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -803,7 +924,22 @@ export default function PortalChatsPage() {
                           : 'bg-emerald-600 text-white'
                       )}>
                         <p className="text-[10px] font-semibold opacity-70 mb-0.5">{msg.sender_name}</p>
-                        <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>
+                        {msg.attachment_url && (() => {
+                          const ext = msg.attachment_url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+                          const isImg = ['jpg','jpeg','png','gif','webp'].includes(ext)
+                          return isImg ? (
+                            <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="block mb-1">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={msg.attachment_url} alt={msg.attachment_name || 'Image'} className="max-w-[200px] rounded-lg" loading="lazy" />
+                            </a>
+                          ) : (
+                            <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1 bg-white/20 hover:bg-white/30">
+                              <FileText className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
+                            </a>
+                          )
+                        })()}
+                        {msg.message && <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>}
                         <p className="text-xs mt-1 opacity-50 text-right">
                           {format(parseISO(msg.created_at), 'h:mm a')}
                         </p>
@@ -816,9 +952,51 @@ export default function PortalChatsPage() {
             )}
           </div>
 
+          {/* Internal file preview */}
+          {internalPendingFile && (
+            <div className="px-4 py-2 border-t border-orange-100 bg-orange-50/50 flex items-center gap-3">
+              {internalPendingFile.previewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={internalPendingFile.previewUrl} alt={internalPendingFile.file.name} className="h-12 w-12 rounded object-cover border border-zinc-200 shrink-0" />
+              ) : (
+                <div className="h-12 w-12 rounded border border-zinc-200 bg-white flex items-center justify-center shrink-0">
+                  <FileText className="h-5 w-5 text-zinc-400" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-zinc-700 truncate">{internalPendingFile.file.name}</p>
+                <p className="text-[10px] text-zinc-400">{formatFileSize(internalPendingFile.file.size)}</p>
+              </div>
+              <button onClick={() => { setInternalPendingFile(null); if (internalFileRef.current) internalFileRef.current.value = '' }} className="p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 shrink-0">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Internal input */}
-          <div className="p-4 border-t bg-white shrink-0">
+          <div className={cn('p-4 border-t bg-white shrink-0', internalPendingFile && 'border-t-0')}>
             <div className="flex gap-2 items-end">
+              {/* Paperclip */}
+              <button
+                onClick={() => internalFileRef.current?.click()}
+                disabled={internalUploading}
+                className={cn(
+                  'p-3 rounded-lg transition-colors shrink-0',
+                  internalPendingFile
+                    ? 'text-orange-600 bg-orange-100 hover:bg-orange-200'
+                    : 'text-zinc-400 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50'
+                )}
+                title="Attach file"
+              >
+                {internalUploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+              </button>
+              <input
+                ref={internalFileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+                onChange={e => { if (e.target.files?.[0]) handleInternalFileSelect(e.target.files[0]) }}
+                className="hidden"
+              />
               {/* Emoji button */}
               <div className="relative" ref={internalEmojiPickerRef}>
                 <button
@@ -860,15 +1038,35 @@ export default function PortalChatsPage() {
                 onChange={e => setInternalReplyText(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInternalMessage() } }}
                 rows={1}
-                placeholder="Team message..."
-                className="flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none overflow-y-auto"
+                placeholder={internalIsRecording ? 'Recording...' : 'Team message...'}
+                className={cn(
+                  "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none overflow-y-auto",
+                  internalIsRecording && "ring-2 ring-red-300 bg-red-50/50"
+                )}
               />
+              {/* Mic */}
+              {micSupported && (
+                internalIsRecording ? (
+                  <button onClick={internalStopRecording} className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0" title="Stop recording">
+                    <Square className="h-5 w-5 fill-current" />
+                  </button>
+                ) : internalIsTranscribing ? (
+                  <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </button>
+                ) : (
+                  <button onClick={internalStartRecording} className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0" title="Voice input">
+                    <Mic className="h-5 w-5" />
+                  </button>
+                )
+              )}
+              {/* Send */}
               <button
                 onClick={sendInternalMessage}
-                disabled={!internalReplyText.trim()}
+                disabled={(!internalReplyText.trim() && !internalPendingFile) || internalUploading}
                 className="p-3 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
               >
-                <Send className="h-5 w-5" />
+                {internalUploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               </button>
             </div>
           </div>
@@ -912,13 +1110,25 @@ export default function PortalChatsPage() {
               {(() => {
                 const selectedThread = threads?.find(t => t.account_id === selectedAccountId)
                 return (
-                  <div>
-                    <p className="text-sm font-semibold text-zinc-900">
-                      {selectedThread?.company_name ?? 'Chat'}
-                    </p>
-                    {selectedThread?.contact_name && (
-                      <p className="text-xs text-zinc-500">{selectedThread.contact_name}</p>
-                    )}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-900">
+                        {selectedThread?.company_name ?? 'Chat'}
+                      </p>
+                      {selectedThread?.contact_name && (
+                        <p className="text-xs text-zinc-500">{selectedThread.contact_name}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setAiPanelOpen(v => !v)}
+                      className={cn(
+                        'p-2 rounded-lg transition-colors',
+                        aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
+                      )}
+                      title="AI Assistant"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                    </button>
                   </div>
                 )
               })()}
@@ -1381,6 +1591,85 @@ export default function PortalChatsPage() {
           companyName={threads?.find(t => t.account_id === selectedAccountId)?.company_name ?? ''}
           onClose={() => setQuickCreate(null)}
         />
+      )}
+
+      {/* AI Assistant side panel */}
+      {aiPanelOpen && (selectedAccountId || selectedThreadId) && (
+        <div className="w-[320px] lg:w-[360px] shrink-0 border-l flex flex-col bg-white">
+          <div className="px-4 py-3 border-b flex items-center justify-between bg-gradient-to-r from-violet-50 to-blue-50">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-violet-500" />
+              <h3 className="text-sm font-semibold text-violet-900">AI Assistant</h3>
+            </div>
+            <button onClick={() => setAiPanelOpen(false)} className="p-1 rounded hover:bg-violet-100 text-violet-400">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {aiPanelMessages.length === 0 && (
+              <div className="text-center py-8">
+                <Sparkles className="h-8 w-8 text-violet-200 mx-auto mb-2" />
+                <p className="text-sm text-zinc-500">Ask me anything about this client</p>
+                <p className="text-xs text-zinc-400 mt-1">I can help draft replies, explain context, or suggest next steps</p>
+              </div>
+            )}
+            {aiPanelMessages.map((msg, i) => (
+              <div key={i} className={cn('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+                <div className={cn(
+                  'max-w-[90%] rounded-xl px-3.5 py-2.5 text-sm',
+                  msg.role === 'user'
+                    ? 'bg-violet-600 text-white'
+                    : 'bg-zinc-100 text-zinc-800'
+                )}>
+                  <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                  {msg.role === 'ai' && (
+                    <button
+                      onClick={() => {
+                        if (selectedThreadId) {
+                          setInternalReplyText(msg.text)
+                          internalInputRef.current?.focus()
+                        } else {
+                          setReplyText(msg.text)
+                          inputRef.current?.focus()
+                        }
+                        toast.success('Inserted as reply')
+                      }}
+                      className="mt-2 flex items-center gap-1 text-[10px] text-violet-600 hover:text-violet-800 font-medium"
+                    >
+                      <Reply className="h-3 w-3" /> Use as reply
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {aiPanelLoading && (
+              <div className="flex items-center gap-2 text-violet-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-xs">Thinking...</span>
+              </div>
+            )}
+            <div ref={aiPanelEndRef} />
+          </div>
+          <div className="p-3 border-t">
+            <div className="flex gap-2">
+              <textarea
+                value={aiPanelInput}
+                onChange={e => setAiPanelInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiQuestion() } }}
+                rows={1}
+                placeholder="Ask AI..."
+                className="flex-1 min-w-0 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
+              />
+              <button
+                onClick={sendAiQuestion}
+                disabled={!aiPanelInput.trim() || aiPanelLoading}
+                className="p-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 transition-colors shrink-0"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

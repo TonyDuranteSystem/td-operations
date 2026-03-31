@@ -184,7 +184,7 @@ export function AuditBoard({ entries, stats, filters, totalCount, tableNames }: 
                 {/* Timestamp */}
                 <div className="text-sm text-zinc-600 flex items-center gap-1">
                   <span className="md:hidden text-xs text-zinc-400 mr-1">Data:</span>
-                  {format(parseISO(entry.created_at), 'dd MMM HH:mm')}
+                  {format(parseISO(entry.created_at), 'MMM d, h:mm a')}
                   {hasDetails && (
                     isExpanded
                       ? <ChevronUp className="h-3 w-3 text-zinc-400 hidden md:block" />

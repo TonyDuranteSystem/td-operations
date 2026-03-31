@@ -56,7 +56,7 @@ const ENTITY_LABELS: Record<string, string> = {
 function formatDate(d: string | null): string {
   if (!d) return '—'
   try {
-    return format(parseISO(d), 'dd/MM/yyyy')
+    return format(parseISO(d), 'MMM d, yyyy')
   } catch {
     return d
   }

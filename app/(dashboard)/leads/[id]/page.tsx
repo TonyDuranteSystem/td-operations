@@ -42,7 +42,7 @@ const ACTIVATION_STATUS_COLORS: Record<string, string> = {
 function formatDate(d: string | null): string {
   if (!d) return '\u2014'
   try {
-    return format(parseISO(d), 'dd/MM/yyyy')
+    return format(parseISO(d), 'MMM d, yyyy')
   } catch {
     return d
   }

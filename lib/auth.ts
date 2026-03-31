@@ -45,9 +45,6 @@ export function isDashboardUser(user: User | null): boolean {
 
 /** Paths that require admin role. Team users are redirected to /. */
 export const ADMIN_ONLY_PATHS = [
-  '/invoice-settings',
-  '/reconciliation',
-  '/portal-launch',
-  '/audit',
+  '/dev-tools',
   '/team-management',
 ]

@@ -20,10 +20,12 @@ export async function POST(
 
   const { id: threadId } = await params
   const body = await request.json()
-  const message = body.message?.trim()
+  const message = body.message?.trim() ?? ''
+  const attachmentUrl = body.attachment_url ?? null
+  const attachmentName = body.attachment_name ?? null
 
-  if (!message) {
-    return NextResponse.json({ error: 'message is required' }, { status: 400 })
+  if (!message && !attachmentUrl) {
+    return NextResponse.json({ error: 'message or attachment required' }, { status: 400 })
   }
 
   if (message.length > 5000) {
@@ -50,6 +52,8 @@ export async function POST(
       sender_id: user.id,
       sender_name: displayName,
       message,
+      attachment_url: attachmentUrl,
+      attachment_name: attachmentName,
     })
     .select()
     .single()
