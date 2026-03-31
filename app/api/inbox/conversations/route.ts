@@ -187,24 +187,19 @@ export async function GET(req: NextRequest) {
             const subject = getHeader(firstMsg?.payload?.headers, "Subject")
             const lastDate = getHeader(lastMsg?.payload?.headers, "Date")
 
-            // Find the external party (not us) — check all messages for a non-internal sender
+            // Detect if this is a draft-only thread (all messages are drafts)
+            const isDraftThread = thread.messages.every(m => m.labelIds?.includes("DRAFT"))
+
+            // Find the external party (not us)
             let externalFrom = ''
             let externalEmail = ''
-            for (const msg of thread.messages) {
-              const msgFrom = getHeader(msg?.payload?.headers, "From")
-              const msgEmail = extractEmail(msgFrom)
-              if (!OUR_EMAILS.has(msgEmail)) {
-                externalFrom = msgFrom
-                externalEmail = msgEmail
-                break
-              }
-            }
-            // If all messages are from us (outbound thread), check To headers across ALL messages
-            if (!externalFrom) {
+
+            // For draft threads, check To: FIRST — the recipient is the relevant party
+            // For regular threads, check From first (external sender)
+            if (isDraftThread) {
               for (const msg of thread.messages) {
                 const toHeader = getHeader(msg?.payload?.headers, "To")
                 if (toHeader) {
-                  // To can have multiple recipients — split and find external one
                   const recipients = toHeader.split(',')
                   for (const recipient of recipients) {
                     const recEmail = extractEmail(recipient.trim())
@@ -217,8 +212,37 @@ export async function GET(req: NextRequest) {
                   if (externalFrom) break
                 }
               }
+            } else {
+              // Regular thread: find external sender first
+              for (const msg of thread.messages) {
+                const msgFrom = getHeader(msg?.payload?.headers, "From")
+                const msgEmail = extractEmail(msgFrom)
+                if (!OUR_EMAILS.has(msgEmail)) {
+                  externalFrom = msgFrom
+                  externalEmail = msgEmail
+                  break
+                }
+              }
+              // If all messages are from us (outbound thread), check To headers
+              if (!externalFrom) {
+                for (const msg of thread.messages) {
+                  const toHeader = getHeader(msg?.payload?.headers, "To")
+                  if (toHeader) {
+                    const recipients = toHeader.split(',')
+                    for (const recipient of recipients) {
+                      const recEmail = extractEmail(recipient.trim())
+                      if (!OUR_EMAILS.has(recEmail)) {
+                        externalFrom = recipient.trim()
+                        externalEmail = recEmail
+                        break
+                      }
+                    }
+                    if (externalFrom) break
+                  }
+                }
+              }
             }
-            // Final fallback: first message From
+            // Final fallback: first message From (only useful for non-draft threads)
             if (!externalFrom) {
               externalFrom = getHeader(firstMsg?.payload?.headers, "From")
               externalEmail = extractEmail(externalFrom)
