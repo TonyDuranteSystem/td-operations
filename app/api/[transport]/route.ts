@@ -34,6 +34,7 @@
  *   offer_*    — Client offers (create, get, update, list)
  *   sysdoc_*   — System documentation (read, list, update)
  *   kb_*       — Knowledge base (search, get, create, update articles & responses)
+ *   hc_*       — Harbor Compliance (RA changes, deliveries, licenses, company sync)
  *
  * Deploy: Vercel serverless function (Pro plan, 300s timeout)
  */
@@ -76,6 +77,7 @@ import { registerTaxQuoteTools } from "@/lib/mcp/tools/tax-quote"
 import { registerBankStatementTools } from "@/lib/mcp/tools/bank-statements"
 import { registerSignatureTools } from "@/lib/mcp/tools/signature"
 import { registerTestingTools } from "@/lib/mcp/tools/testing"
+import { registerHarborComplianceTools } from "@/lib/mcp/tools/harbor-compliance"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -127,6 +129,7 @@ const handler = createMcpHandler(
     registerBankStatementTools(server)
     registerSignatureTools(server)
     registerTestingTools(server)
+    registerHarborComplianceTools(server)
   },
   {
     capabilities: {},

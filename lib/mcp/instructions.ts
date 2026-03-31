@@ -2,7 +2,7 @@
  * MCP Server Instructions
  *
  * Sent to Claude.ai during the MCP protocol handshake (initialize response).
- * This guides Claude on how to use the 175 tools, data source priority,
+ * This guides Claude on how to use the 185 tools, data source priority,
  * critical decision rules, and anti-compaction memory protocol.
  *
  * Source of truth: docs/claude-connector-system-instructions.md
@@ -97,7 +97,7 @@ All three domains point to the same server. Old links on any domain still work. 
 
 ## Tool Selection — Key Rules
 
-You have 168 tools across 33 modules. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
+You have 185 tools across 38 modules. Read each tool's description carefully — they contain prerequisites, return values, and cross-references.
 
 ### CRM Core (13 tools)
 - crm_get_client_summary: START HERE for any client query. Returns full 360° view in one call.
@@ -210,6 +210,7 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 - execute_sql: LAST RESORT — raw SQL. Prefer dedicated tools.
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).
+- hc_*: Harbor Compliance registered agent integration (8 tools). Sync companies, submit RA change orders, download RA deliveries to Drive, track licenses, sync license expirations to deadlines table. Requires HC_CLIENT_ID/HC_CLIENT_SECRET env vars. Use hc_sync_company to link a CRM account to HC before submitting orders.
 
 ## Form Admin Preview — MANDATORY RULE
 All client forms (formation, onboarding, tax, lease, banking, and any future forms) support \`?preview=td\` query parameter:
