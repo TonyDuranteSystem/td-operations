@@ -64,20 +64,22 @@ export function registerSignatureTools(server: McpServer) {
         const docSlug = document_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30)
         const token = `sig-${slug}-${docSlug}-${Date.now().toString(36)}`
 
-        // Download PDF from Drive
-        const { buffer, fileName } = await downloadFileBinary(drive_file_id)
-
-        // Upload to Supabase Storage
-        const storagePath = `${token}/${fileName}`
-        const { error: uploadError } = await supabaseAdmin.storage
-          .from("signature-requests")
-          .upload(storagePath, buffer, { contentType: "application/pdf", upsert: false })
-
-        if (uploadError) {
-          return { content: [{ type: "text" as const, text: `Storage upload failed: ${uploadError.message}` }] }
+        // Try uploading to Supabase Storage, fall back to Drive-only
+        let storagePath = ""
+        try {
+          const { buffer, fileName } = await downloadFileBinary(drive_file_id)
+          storagePath = `${token}/${fileName}`
+          const { error: uploadError } = await supabaseAdmin.storage
+            .from("signature-requests")
+            .upload(storagePath, buffer, { contentType: "application/pdf", upsert: false })
+          if (uploadError) {
+            storagePath = "" // Fall back to Drive-only
+          }
+        } catch {
+          storagePath = "" // Fall back to Drive-only
         }
 
-        // Insert signature_request
+        // Insert signature_request (PDF served from Drive if storage failed)
         const coords = signature_coords || { x: 150, y: 80, page: 0 }
         const { data: sigReq, error: insertError } = await supabaseAdmin
           .from("signature_requests")
@@ -87,7 +89,8 @@ export function registerSignatureTools(server: McpServer) {
             contact_id: resolvedContactId,
             document_name,
             description: description || null,
-            pdf_storage_path: storagePath,
+            pdf_storage_path: storagePath || `drive:${drive_file_id}`,
+            drive_file_id,
             signature_coords: coords,
             status: "draft",
             created_by: "claude",
