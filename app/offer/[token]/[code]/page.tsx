@@ -336,7 +336,37 @@ export default function OfferPageWithCode() {
       if (sv.optional && !selectedOptional.has(sv.name)) return // skip deselected
       const priceMatch = sv.price?.match(/[\d.,]+/)
       if (priceMatch && !sv.price?.toLowerCase().includes('inclus') && !sv.price?.toLowerCase().includes('year') && !sv.price?.toLowerCase().includes('anno')) {
-        totalCents += Math.round(parseFloat(priceMatch[0].replace(/\./g, '').replace(',', '.')) * 100)
+        // Handle both formats: "2,500" (EN thousands) and "2.500,00" (EU thousands)
+        let raw = priceMatch[0]
+        if (raw.includes(',') && raw.includes('.')) {
+          // Mixed: determine which is decimal by position (last separator wins)
+          const lastComma = raw.lastIndexOf(',')
+          const lastDot = raw.lastIndexOf('.')
+          if (lastComma > lastDot) {
+            // EU format: 2.500,00 → remove dots, comma→dot
+            raw = raw.replace(/\./g, '').replace(',', '.')
+          } else {
+            // EN format: 2,500.00 → remove commas
+            raw = raw.replace(/,/g, '')
+          }
+        } else if (raw.includes(',')) {
+          // Only commas: "2,500" = EN thousands OR "2,50" = EU decimal
+          // If digits after comma are exactly 3, it's a thousands separator
+          const afterComma = raw.split(',')[1]
+          if (afterComma && afterComma.length === 3) {
+            raw = raw.replace(/,/g, '') // thousands separator
+          } else {
+            raw = raw.replace(',', '.') // decimal separator
+          }
+        } else if (raw.includes('.')) {
+          // Only dots: "2.500" = EU thousands OR "2.50" = EN decimal
+          const afterDot = raw.split('.')[1]
+          if (afterDot && afterDot.length === 3) {
+            raw = raw.replace(/\./g, '') // thousands separator
+          }
+          // else: decimal, leave as is
+        }
+        totalCents += Math.round(parseFloat(raw) * 100)
       }
     })
     if (totalCents === 0) return baseAmount
