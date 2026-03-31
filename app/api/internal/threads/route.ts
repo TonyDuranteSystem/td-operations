@@ -96,7 +96,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id is required' }, { status: 400 })
   }
 
-  // Create thread
+  // Check for existing unresolved thread for this account — reuse it instead of creating a duplicate
+  const { data: existingThread } = await supabaseAdmin
+    .from('internal_threads')
+    .select('*')
+    .eq('account_id', account_id)
+    .is('resolved_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+
+  if (existingThread) {
+    // Add a message to the existing thread instead of creating a new one
+    const displayName = getUserDisplayName(user)
+    let contextMessage = 'Added to this discussion.'
+    if (source_message_id) {
+      const { data: srcMsg } = await supabaseAdmin
+        .from('portal_messages')
+        .select('message')
+        .eq('id', source_message_id)
+        .single()
+      if (srcMsg?.message) {
+        contextMessage = `Flagged another message: "${srcMsg.message.slice(0, 200)}"`
+      }
+    } else if (title) {
+      contextMessage = `New discussion topic: ${title}`
+    }
+
+    await supabaseAdmin.from('internal_messages').insert({
+      thread_id: existingThread.id,
+      sender_id: user.id,
+      sender_name: displayName,
+      message: contextMessage,
+    })
+
+    return NextResponse.json({ thread: existingThread, reused: true })
+  }
+
+  // Create new thread
   const { data: thread, error } = await supabaseAdmin
     .from('internal_threads')
     .insert({

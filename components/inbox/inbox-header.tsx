@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { MessageSquare, Mail, Send } from 'lucide-react'
+import { Mail } from 'lucide-react'
 import type { InboxStats, InboxChannel } from '@/lib/types'
 
 interface InboxHeaderProps {
@@ -17,9 +17,6 @@ export function InboxHeader({ activeChannel, onChannelChange }: InboxHeaderProps
   })
 
   const channels: { key: InboxChannel | null; label: string; icon: React.ElementType; count: number }[] = [
-    { key: null, label: 'All', icon: MessageSquare, count: stats?.total || 0 },
-    { key: 'whatsapp', label: 'WhatsApp', icon: MessageSquare, count: stats?.whatsapp || 0 },
-    { key: 'telegram', label: 'Telegram', icon: Send, count: stats?.telegram || 0 },
     { key: 'gmail', label: 'Gmail', icon: Mail, count: stats?.gmail || 0 },
   ]
 

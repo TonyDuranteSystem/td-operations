@@ -299,7 +299,7 @@ export default function PortalChatsPage() {
       const res = await fetch('/api/internal/threads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, source_message_id: sourceMessageId, title: sourceText.slice(0, 100) }),
+        body: JSON.stringify({ account_id: accountId, source_message_id: sourceMessageId || undefined, title: sourceText.slice(0, 100) || undefined }),
       })
       if (!res.ok) throw new Error('Failed to create thread')
       const data = await res.json()
@@ -307,7 +307,8 @@ export default function PortalChatsPage() {
       setSelectedThreadId(data.thread.id)
       setSelectedAccountId(null)
       queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
-      toast.success('Internal thread created')
+      queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', data.thread.id] })
+      toast.success(data.reused ? 'Added to existing thread' : 'Internal thread created')
     } catch {
       toast.error('Failed to create internal thread')
     }
@@ -649,9 +650,18 @@ export default function PortalChatsPage() {
             <h1 className="text-lg font-semibold text-zinc-900">Portal Chats</h1>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => { setNewChatOpen(true); setNewChatSearch(''); setNewChatResults([]) }}
-                className="p-2 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors"
-                title="Start new chat with a client"
+                onClick={() => {
+                  setNewChatOpen(true)
+                  setNewChatSearch('')
+                  setNewChatResults([])
+                }}
+                className={cn(
+                  "p-2 rounded-lg transition-colors",
+                  sidebarView === 'internal'
+                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
+                    : "text-blue-600 bg-blue-50 hover:bg-blue-100"
+                )}
+                title={sidebarView === 'internal' ? 'New team discussion' : 'Start new chat with a client'}
               >
                 <Plus className="h-4 w-4" />
               </button>
@@ -1522,14 +1532,23 @@ export default function PortalChatsPage() {
         )}
       </div>
 
-      {/* New Chat dialog */}
+      {/* New Chat / New Team Discussion dialog */}
       {newChatOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[70vh]">
             <div className="flex items-center justify-between px-5 py-3 border-b">
               <div className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-blue-600" />
-                <h2 className="text-sm font-semibold text-zinc-900">New Chat</h2>
+                {sidebarView === 'internal' ? (
+                  <>
+                    <Users className="h-4 w-4 text-orange-500" />
+                    <h2 className="text-sm font-semibold text-zinc-900">New Team Discussion</h2>
+                  </>
+                ) : (
+                  <>
+                    <MessageSquare className="h-4 w-4 text-blue-600" />
+                    <h2 className="text-sm font-semibold text-zinc-900">New Chat</h2>
+                  </>
+                )}
               </div>
               <button onClick={() => setNewChatOpen(false)} className="p-1 rounded hover:bg-zinc-100 text-zinc-500">
                 <X className="h-4 w-4" />
@@ -1541,7 +1560,7 @@ export default function PortalChatsPage() {
                 type="text"
                 value={newChatSearch}
                 onChange={(e) => setNewChatSearch(e.target.value)}
-                placeholder="Search client by name or company..."
+                placeholder={sidebarView === 'internal' ? 'Search client to discuss...' : 'Search client by name or company...'}
                 className="flex-1 text-sm outline-none bg-transparent"
                 autoFocus
               />
@@ -1557,14 +1576,18 @@ export default function PortalChatsPage() {
                 <button
                   key={acct.id}
                   onClick={() => {
-                    setSelectedAccountId(acct.id)
+                    if (sidebarView === 'internal') {
+                      // Create team discussion for this account
+                      createInternalThread(acct.id, '', `Discussion about ${acct.company_name}`)
+                    } else {
+                      setSelectedAccountId(acct.id)
+                    }
                     setNewChatOpen(false)
-                    // If this account isn't in threads yet, it'll appear after the first message
                   }}
                   className="w-full flex items-start gap-3 px-4 py-3 hover:bg-zinc-50 transition-colors text-left"
                 >
-                  <div className="p-1.5 rounded-full bg-blue-50 shrink-0 mt-0.5">
-                    <Building2 className="h-3.5 w-3.5 text-blue-500" />
+                  <div className={cn('p-1.5 rounded-full shrink-0 mt-0.5', sidebarView === 'internal' ? 'bg-orange-50' : 'bg-blue-50')}>
+                    <Building2 className={cn('h-3.5 w-3.5', sidebarView === 'internal' ? 'text-orange-500' : 'text-blue-500')} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-zinc-900">{acct.company_name}</p>

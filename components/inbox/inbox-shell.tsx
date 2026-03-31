@@ -34,7 +34,7 @@ interface GmailLabel {
 }
 
 export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
-  const [activeChannel, setActiveChannel] = useState<InboxChannel | null>(null)
+  const [activeChannel, setActiveChannel] = useState<InboxChannel | null>('gmail')
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
   const [selected, setSelected] = useState<InboxConversation | null>(null)
@@ -297,16 +297,6 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
                 >
                   <Mail className="h-4 w-4 text-blue-500" />
                   New Email
-                </button>
-                <button
-                  onClick={() => {
-                    setComposeMenuOpen(false)
-                    setWhatsappOpen(true)
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
-                >
-                  <MessageSquare className="h-4 w-4 text-green-500" />
-                  New WhatsApp
                 </button>
               </div>
             </>
@@ -611,7 +601,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
             <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
               <MessageSquare className="h-12 w-12 mb-3 stroke-1" />
               <p className="text-sm font-medium">Select a conversation</p>
-              <p className="text-xs mt-1">Choose from WhatsApp, Telegram, or Gmail</p>
+              <p className="text-xs mt-1">Choose an email from the inbox</p>
             </div>
           )}
         </div>
