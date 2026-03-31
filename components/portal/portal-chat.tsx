@@ -1,13 +1,16 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
+import dynamic from 'next/dynamic'
+
+const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
 function isImageUrl(url: string): boolean {
   const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || ''
@@ -45,10 +48,24 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const { t } = useLocale()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const emojiPickerRef = useRef<HTMLDivElement>(null)
+
+  // Close emoji picker on click outside
+  useEffect(() => {
+    if (!showEmojiPicker) return
+    const handler = (e: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmojiPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showEmojiPicker])
 
   // Check if mic consent was previously given
   useEffect(() => {
@@ -440,6 +457,41 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
             onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
             className="hidden"
           />
+          {/* Emoji picker */}
+          <div className="relative" ref={emojiPickerRef}>
+            <button
+              onClick={() => setShowEmojiPicker(v => !v)}
+              className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+              title="Emoji"
+            >
+              <Smile className="h-5 w-5" />
+            </button>
+            {showEmojiPicker && (
+              <div className="absolute bottom-12 left-0 z-30">
+                <EmojiPicker
+                  onEmojiClick={(emojiData: { emoji: string }) => {
+                    const ref = inputRef.current
+                    if (ref) {
+                      const start = ref.selectionStart ?? input.length
+                      const end = ref.selectionEnd ?? start
+                      const newText = input.slice(0, start) + emojiData.emoji + input.slice(end)
+                      setInput(newText)
+                      setShowEmojiPicker(false)
+                      requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
+                    } else {
+                      setInput(prev => prev + emojiData.emoji)
+                      setShowEmojiPicker(false)
+                    }
+                  }}
+                  width={320}
+                  height={400}
+                  lazyLoadEmojis
+                  skinTonesDisabled
+                  previewConfig={{ showPreview: false }}
+                />
+              </div>
+            )}
+          </div>
           <textarea
             ref={inputRef}
             value={input}

@@ -3,12 +3,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
+import dynamic from 'next/dynamic'
+
+const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
 interface ChatThread {
   account_id: string
@@ -63,7 +67,6 @@ export default function PortalChatsPage() {
   const [polishing, setPolishing] = useState(false)
   const [chatSearch, setChatSearch] = useState('')
   const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string } | null>(null)
-  const [actionMenuMsg, setActionMenuMsg] = useState<string | null>(null) // message id
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [newChatSearch, setNewChatSearch] = useState('')
   const [newChatResults, setNewChatResults] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
@@ -74,7 +77,18 @@ export default function PortalChatsPage() {
   const [pendingAdminFile, setPendingAdminFile] = useState<PendingAdminFile | null>(null)
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
+  // Internal team chat
+  const [sidebarView, setSidebarView] = useState<'chats' | 'internal'>('chats')
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  const [internalReplyText, setInternalReplyText] = useState('')
+  // Emoji picker
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [showInternalEmojiPicker, setShowInternalEmojiPicker] = useState(false)
+  const emojiPickerRef = useRef<HTMLDivElement>(null)
+  const internalEmojiPickerRef = useRef<HTMLDivElement>(null)
+  const internalInputRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const adminFileRef = useRef<HTMLInputElement>(null)
   const prevTotalUnreadRef = useRef(0)
@@ -193,7 +207,106 @@ export default function PortalChatsPage() {
       .finally(() => setAiLoading(false))
   }, [messages, selectedAccountId])
 
-  // 🔔 WhatsApp-style notifications: sound + browser notification + tab badge
+  // Internal team threads
+  interface InternalThread {
+    id: string
+    account_id: string
+    source_message_id: string | null
+    created_by: string
+    title: string | null
+    resolved_at: string | null
+    created_at: string
+    company_name?: string
+    source_message?: string
+    unread_count?: number
+    last_message_at?: string
+    last_message_preview?: string
+  }
+  interface InternalMsg {
+    id: string
+    thread_id: string
+    sender_id: string
+    sender_name: string
+    message: string
+    read_at: string | null
+    created_at: string
+  }
+
+  const { data: internalThreads, isLoading: internalThreadsLoading } = useQuery<InternalThread[]>({
+    queryKey: ['internal-threads'],
+    queryFn: () => fetch('/api/internal/threads').then(r => r.json()).then(d => d.threads ?? []),
+    refetchInterval: 10_000,
+  })
+
+  const { data: internalMessages, isLoading: internalMessagesLoading } = useQuery<{ thread: InternalThread; messages: InternalMsg[] }>({
+    queryKey: ['internal-thread-messages', selectedThreadId],
+    queryFn: () => fetch(`/api/internal/threads/${selectedThreadId}`).then(r => r.json()),
+    enabled: !!selectedThreadId,
+    refetchInterval: 5_000,
+  })
+
+  // Scroll internal messages to bottom
+  useEffect(() => {
+    if (internalMessagesEndRef.current) {
+      internalMessagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [internalMessages?.messages])
+
+  const internalTotalUnread = internalThreads?.reduce((sum, t) => sum + (t.unread_count ?? 0), 0) ?? 0
+
+  const createInternalThread = async (accountId: string, sourceMessageId: string, sourceText: string) => {
+    try {
+      const res = await fetch('/api/internal/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, source_message_id: sourceMessageId, title: sourceText.slice(0, 100) }),
+      })
+      if (!res.ok) throw new Error('Failed to create thread')
+      const data = await res.json()
+      setSidebarView('internal')
+      setSelectedThreadId(data.thread.id)
+      setSelectedAccountId(null)
+      queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
+      toast.success('Internal thread created')
+    } catch {
+      toast.error('Failed to create internal thread')
+    }
+  }
+
+  const sendInternalMessage = async () => {
+    if (!internalReplyText.trim() || !selectedThreadId) return
+    const text = internalReplyText.trim()
+    setInternalReplyText('')
+    try {
+      const res = await fetch(`/api/internal/threads/${selectedThreadId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      })
+      if (!res.ok) throw new Error('Failed to send')
+      queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', selectedThreadId] })
+      queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
+    } catch {
+      toast.error('Failed to send message')
+      setInternalReplyText(text)
+    }
+  }
+
+  const resolveThread = async (threadId: string, resolved: boolean) => {
+    try {
+      await fetch(`/api/internal/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved }),
+      })
+      queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
+      queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', threadId] })
+    } catch {
+      toast.error('Failed to update thread')
+    }
+  }
+
+  // WhatsApp-style notifications: sound + browser notification + tab badge
   useEffect(() => {
     if (!threads) return
 
@@ -356,13 +469,20 @@ export default function PortalChatsPage() {
     queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
   }
 
-  // Close action menu on click outside
+  // Close emoji picker on click outside
   useEffect(() => {
-    if (!actionMenuMsg) return
-    const handler = () => setActionMenuMsg(null)
-    document.addEventListener('click', handler)
-    return () => document.removeEventListener('click', handler)
-  }, [actionMenuMsg])
+    if (!showEmojiPicker && !showInternalEmojiPicker) return
+    const handler = (e: MouseEvent) => {
+      if (showEmojiPicker && emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmojiPicker(false)
+      }
+      if (showInternalEmojiPicker && internalEmojiPickerRef.current && !internalEmojiPickerRef.current.contains(e.target as Node)) {
+        setShowInternalEmojiPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showEmojiPicker, showInternalEmojiPicker])
 
   // Chat search bar: also find accounts without existing threads
   useEffect(() => {
@@ -415,40 +535,61 @@ export default function PortalChatsPage() {
         'w-full lg:w-[350px] lg:shrink-0 border-r flex flex-col',
         selectedAccountId ? 'hidden lg:flex' : 'flex'
       )}>
-        <div className="px-4 py-3 border-b flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-semibold text-zinc-900">Portal Chats</h1>
-              {totalUnread > 0 && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-blue-600 text-white">
-                  {totalUnread}
-                </span>
-              )}
+        <div className="px-4 py-3 border-b">
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-lg font-semibold text-zinc-900">Portal Chats</h1>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => { setNewChatOpen(true); setNewChatSearch(''); setNewChatResults([]) }}
+                className="p-2 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors"
+                title="Start new chat with a client"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+              <button
+                onClick={enableNotifications}
+                className={cn(
+                  "p-2 rounded-lg transition-colors",
+                  notificationsEnabled ? "text-blue-600 bg-blue-50" : "text-zinc-400 hover:bg-zinc-100"
+                )}
+                title={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}
+              >
+                {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+              </button>
             </div>
-            <p className="text-xs text-zinc-500">{threads?.length ?? 0} conversations</p>
           </div>
-          <div className="flex items-center gap-1">
-            {/* New Chat button */}
+          {/* Sidebar tabs: Chats | Team */}
+          <div className="flex rounded-lg bg-zinc-100 p-0.5">
             <button
-              onClick={() => { setNewChatOpen(true); setNewChatSearch(''); setNewChatResults([]) }}
-              className="p-2 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors"
-              title="Start new chat with a client"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-            {/* Notification toggle */}
-            <button
-              onClick={enableNotifications}
+              onClick={() => { setSidebarView('chats'); setSelectedThreadId(null) }}
               className={cn(
-                "p-2 rounded-lg transition-colors",
-                notificationsEnabled ? "text-blue-600 bg-blue-50" : "text-zinc-400 hover:bg-zinc-100"
+                'flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors',
+                sidebarView === 'chats' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
               )}
-              title={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}
             >
-              {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+              <MessageSquare className="h-3.5 w-3.5" />
+              Chats
+              {totalUnread > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white">{totalUnread}</span>
+              )}
+            </button>
+            <button
+              onClick={() => { setSidebarView('internal'); setSelectedAccountId(null) }}
+              className={cn(
+                'flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors',
+                sidebarView === 'internal' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
+              )}
+            >
+              <Users className="h-3.5 w-3.5" />
+              Team
+              {internalTotalUnread > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-500 text-white">{internalTotalUnread}</span>
+              )}
             </button>
           </div>
         </div>
+        {sidebarView === 'chats' ? (
+        <>
         {/* Chat search */}
         <div className="px-3 py-2 border-b">
           <div className="relative">
@@ -550,13 +691,195 @@ export default function PortalChatsPage() {
             </>
           )}
         </div>
+        </>
+        ) : (
+        /* Internal team threads list */
+        <div className="flex-1 overflow-y-auto">
+          {internalThreadsLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+            </div>
+          ) : !internalThreads?.length ? (
+            <div className="text-center py-12">
+              <Users className="h-10 w-10 text-zinc-200 mx-auto mb-2" />
+              <p className="text-sm text-zinc-400">No internal threads yet</p>
+              <p className="text-xs text-zinc-300 mt-1">Use &quot;Discuss with Team&quot; on any message</p>
+            </div>
+          ) : (
+            internalThreads.map(thread => (
+              <button
+                key={thread.id}
+                onClick={() => { setSelectedThreadId(thread.id); setSelectedAccountId(null) }}
+                className={cn(
+                  'w-full px-4 py-3 text-left border-b hover:bg-zinc-50 transition-colors',
+                  selectedThreadId === thread.id && 'bg-orange-50 border-l-2 border-l-orange-500'
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
+                    <span className="text-sm font-medium text-zinc-900 truncate">{thread.company_name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {thread.resolved_at && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+                    {(thread.unread_count ?? 0) > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-orange-500 text-white">
+                        {thread.unread_count}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-zinc-500 truncate mt-1">{thread.title || thread.source_message || 'Internal discussion'}</p>
+                {thread.last_message_at && (
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {format(parseISO(thread.last_message_at), 'MMM d, h:mm a')}
+                  </p>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+        )}
       </div>
 
-      {/* Message thread */}
+      {/* Internal thread panel */}
+      {selectedThreadId && (
+        <div className={cn(
+          'flex-1 min-w-0 flex flex-col overflow-hidden',
+          !selectedThreadId ? 'hidden lg:flex' : 'flex'
+        )}>
+          {/* Header */}
+          <div className="px-4 py-3 border-b bg-white flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0">
+              <button onClick={() => setSelectedThreadId(null)} className="lg:hidden text-sm text-orange-600">
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <Users className="h-4 w-4 text-orange-500 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-zinc-900 truncate">
+                  {internalMessages?.thread?.company_name ?? 'Team Discussion'}
+                </p>
+                <p className="text-xs text-zinc-500 truncate">{internalMessages?.thread?.title ?? ''}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => resolveThread(selectedThreadId, !internalMessages?.thread?.resolved_at)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                internalMessages?.thread?.resolved_at
+                  ? 'bg-green-50 text-green-700 hover:bg-green-100'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+              )}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {internalMessages?.thread?.resolved_at ? 'Resolved' : 'Resolve'}
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-zinc-50/50">
+            {internalMessagesLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+              </div>
+            ) : (
+              <>
+                {/* Source message card */}
+                {internalMessages?.thread?.source_message && (
+                  <div className="bg-white border border-zinc-200 rounded-lg p-3 mb-4">
+                    <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">Original Message</p>
+                    <p className="text-sm text-zinc-700 whitespace-pre-wrap">{internalMessages.thread.source_message}</p>
+                  </div>
+                )}
+                {internalMessages?.messages?.map(msg => {
+                  // Simple heuristic: first admin user = blue, second = green
+                  const isFirstSender = msg.sender_name === internalMessages.messages[0]?.sender_name
+                  return (
+                    <div key={msg.id} className={cn('flex', isFirstSender ? 'justify-end' : 'justify-start')}>
+                      <div className={cn(
+                        'max-w-[75%] rounded-xl px-4 py-2.5',
+                        isFirstSender
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-emerald-600 text-white'
+                      )}>
+                        <p className="text-[10px] font-semibold opacity-70 mb-0.5">{msg.sender_name}</p>
+                        <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>
+                        <p className="text-xs mt-1 opacity-50 text-right">
+                          {format(parseISO(msg.created_at), 'h:mm a')}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                })}
+                <div ref={internalMessagesEndRef} />
+              </>
+            )}
+          </div>
+
+          {/* Internal input */}
+          <div className="p-4 border-t bg-white shrink-0">
+            <div className="flex gap-2 items-end">
+              {/* Emoji button */}
+              <div className="relative" ref={internalEmojiPickerRef}>
+                <button
+                  onClick={() => setShowInternalEmojiPicker(v => !v)}
+                  className="p-3 rounded-lg text-zinc-400 bg-zinc-100 hover:bg-zinc-200 transition-colors shrink-0"
+                  title="Emoji"
+                >
+                  <Smile className="h-5 w-5" />
+                </button>
+                {showInternalEmojiPicker && (
+                  <div className="absolute bottom-14 left-0 z-30">
+                    <EmojiPicker
+                      onEmojiClick={(emojiData: { emoji: string }) => {
+                        const ref = internalInputRef.current
+                        if (ref) {
+                          const start = ref.selectionStart ?? internalReplyText.length
+                          const end = ref.selectionEnd ?? start
+                          const newText = internalReplyText.slice(0, start) + emojiData.emoji + internalReplyText.slice(end)
+                          setInternalReplyText(newText)
+                          setShowInternalEmojiPicker(false)
+                          requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
+                        } else {
+                          setInternalReplyText(prev => prev + emojiData.emoji)
+                          setShowInternalEmojiPicker(false)
+                        }
+                      }}
+                      width={320}
+                      height={400}
+                      lazyLoadEmojis
+                      skinTonesDisabled
+                      previewConfig={{ showPreview: false }}
+                    />
+                  </div>
+                )}
+              </div>
+              <textarea
+                ref={internalInputRef}
+                value={internalReplyText}
+                onChange={e => setInternalReplyText(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInternalMessage() } }}
+                rows={1}
+                placeholder="Team message..."
+                className="flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none overflow-y-auto"
+              />
+              <button
+                onClick={sendInternalMessage}
+                disabled={!internalReplyText.trim()}
+                className="p-3 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                <Send className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Message thread (client chat) */}
       <div
         className={cn(
           'flex-1 min-w-0 flex flex-col overflow-hidden relative',
-          !selectedAccountId ? 'hidden lg:flex' : 'flex'
+          selectedThreadId ? 'hidden' : (!selectedAccountId ? 'hidden lg:flex' : 'flex')
         )}
         onDragOver={handleAdminDragOver}
         onDragLeave={handleAdminDragLeave}
@@ -624,52 +947,57 @@ export default function PortalChatsPage() {
                 {messages?.map(msg => {
                   const isAdmin = msg.sender_type === 'admin'
                   const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
-                  const menuOpen = actionMenuMsg === msg.id
-
                   const actionButton = (
-                    <div className="relative shrink-0">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setActionMenuMsg(menuOpen ? null : msg.id) }}
-                        className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
-                        title="Actions"
-                      >
-                        <MoreVertical className="h-3.5 w-3.5" />
-                      </button>
-                      {menuOpen && (
-                        <div
-                          className={cn(
-                            'absolute z-20 w-48 py-1 bg-white rounded-lg shadow-lg border text-sm',
-                            isAdmin ? 'right-0' : 'left-0'
-                          )}
-                          onClick={e => e.stopPropagation()}
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <button
+                          className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
+                          title="Actions"
                         >
-                          <button
-                            onClick={() => { setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type }); setActionMenuMsg(null); inputRef.current?.focus() }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          <MoreVertical className="h-3.5 w-3.5" />
+                        </button>
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          className="z-50 w-48 py-1 bg-white rounded-lg shadow-lg border text-sm animate-in fade-in-0 zoom-in-95"
+                          sideOffset={4}
+                          collisionPadding={8}
+                          align={isAdmin ? 'end' : 'start'}
+                        >
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => { setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type }); inputRef.current?.focus() }}
                           >
                             <Reply className="h-3.5 w-3.5 text-zinc-400" /> Reply
-                          </button>
-                          <button
-                            onClick={() => { setQuickCreate({ type: 'task', messageText: msg.message }); setActionMenuMsg(null) }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => { if (selectedAccountId) createInternalThread(selectedAccountId, msg.id, msg.message) }}
+                          >
+                            <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => setQuickCreate({ type: 'task', messageText: msg.message })}
                           >
                             <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Create Task
-                          </button>
-                          <button
-                            onClick={() => { setQuickCreate({ type: 'sd', messageText: msg.message }); setActionMenuMsg(null) }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => setQuickCreate({ type: 'sd', messageText: msg.message })}
                           >
-                            <Truck className="h-3.5 w-3.5 text-zinc-400" /> Create Service Delivery
-                          </button>
-                          <button
-                            onClick={() => { setQuickCreate({ type: 'invoice', messageText: msg.message }); setActionMenuMsg(null) }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-zinc-700 hover:bg-zinc-50"
+                            <Truck className="h-3.5 w-3.5 text-zinc-400" /> Create Service
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                            onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.message })}
                           >
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Create Invoice
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
                   )
 
                   return (
@@ -881,6 +1209,41 @@ export default function PortalChatsPage() {
                   onChange={e => { if (e.target.files?.[0]) handleAdminFileSelect(e.target.files[0]) }}
                   className="hidden"
                 />
+                {/* Emoji picker */}
+                <div className="relative" ref={emojiPickerRef}>
+                  <button
+                    onClick={() => setShowEmojiPicker(v => !v)}
+                    className="p-3 rounded-lg text-zinc-400 bg-zinc-100 hover:bg-zinc-200 transition-colors shrink-0"
+                    title="Emoji"
+                  >
+                    <Smile className="h-5 w-5" />
+                  </button>
+                  {showEmojiPicker && (
+                    <div className="absolute bottom-14 left-0 z-30">
+                      <EmojiPicker
+                        onEmojiClick={(emojiData: { emoji: string }) => {
+                          const ref = inputRef.current
+                          if (ref) {
+                            const start = ref.selectionStart ?? replyText.length
+                            const end = ref.selectionEnd ?? start
+                            const newText = replyText.slice(0, start) + emojiData.emoji + replyText.slice(end)
+                            setReplyText(newText)
+                            setShowEmojiPicker(false)
+                            requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
+                          } else {
+                            setReplyText(prev => prev + emojiData.emoji)
+                            setShowEmojiPicker(false)
+                          }
+                        }}
+                        width={320}
+                        height={400}
+                        lazyLoadEmojis
+                        skinTonesDisabled
+                        previewConfig={{ showPreview: false }}
+                      />
+                    </div>
+                  )}
+                </div>
                 <textarea
                   ref={inputRef}
                   value={replyText}
