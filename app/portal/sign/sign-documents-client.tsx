@@ -31,6 +31,11 @@ const DOC_INFO: Record<string, { en: { title: string; desc: string }; it: { titl
     it: { title: 'Form 8832 (Elezione C-Corp)', desc: 'Elezione di Classificazione dell\'Entità — elegge la tua LLC a essere tassata come Corporation.' },
     icon: FileText,
   },
+  document: {
+    en: { title: 'Document', desc: 'A document requiring your signature.' },
+    it: { title: 'Documento', desc: 'Un documento che richiede la tua firma.' },
+    icon: FileSignature,
+  },
 }
 
 const STATUS_LABELS: Record<string, { en: string; it: string }> = {
@@ -132,7 +137,7 @@ export function SignDocumentsClient({ documents, companyName }: Props) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <h3 className={`font-semibold ${isSigned ? 'text-green-800' : 'text-zinc-900'}`}>
-                    {info[locale]?.title || info.en.title}
+                    {doc.type === 'document' && doc.documentName ? doc.documentName : (info[locale]?.title || info.en.title)}
                   </h3>
                   {doc.suiteNumber && (
                     <span className="text-xs bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full">

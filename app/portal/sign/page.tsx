@@ -16,7 +16,7 @@ import { cookies } from 'next/headers'
 import { SignDocumentsClient } from './sign-documents-client'
 
 export interface SignableDocument {
-  type: 'oa' | 'lease' | 'ss4' | 'msa' | '8832'
+  type: 'oa' | 'lease' | 'ss4' | 'msa' | '8832' | 'document'
   status: 'pending' | 'awaiting' | 'signed'
   href: string
   companyName?: string
@@ -24,6 +24,7 @@ export interface SignableDocument {
   signedAt?: string
   contractYear?: number
   driveLink?: string  // set for legacy docs pulled from documents table
+  documentName?: string  // for generic signature_requests
 }
 
 export default async function PortalSignPage() {
@@ -65,8 +66,8 @@ export default async function PortalSignPage() {
     )
   }
 
-  // Query OA, Lease, SS-4, Form 8832, and renewal MSA in parallel
-  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result] = await Promise.all([
+  // Query OA, Lease, SS-4, Form 8832, renewal MSA, and generic signature requests in parallel
+  const [oaResult, leaseResult, ss4Result, msaResult, form8832Result, sigReqResult] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
       .select('token, status, company_name, signed_at')
@@ -105,6 +106,12 @@ export default async function PortalSignPage() {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Generic signature requests (Form 8879, engagement letters, etc.)
+    supabaseAdmin
+      .from('signature_requests')
+      .select('token, access_code, status, document_name, signed_at')
+      .eq('account_id', selectedAccountId)
+      .order('created_at', { ascending: false }),
   ])
 
   const documents: SignableDocument[] = []
@@ -167,6 +174,19 @@ export default async function PortalSignPage() {
       companyName: f8832.company_name,
       signedAt: f8832.signed_at,
     })
+  }
+
+  // Generic signature requests (Form 8879, etc.)
+  if (sigReqResult.data) {
+    for (const sr of sigReqResult.data) {
+      documents.push({
+        type: 'document',
+        status: sr.status === 'signed' ? 'signed' : 'awaiting',
+        href: `/portal/sign/document?token=${sr.token}`,
+        documentName: sr.document_name,
+        signedAt: sr.signed_at,
+      })
+    }
   }
 
   // Fallback: legacy clients may have signed docs in Drive but no formal signature records.
