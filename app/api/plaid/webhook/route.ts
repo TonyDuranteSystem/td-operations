@@ -2,8 +2,7 @@
  * POST /api/plaid/webhook
  * Receives Plaid webhook events and triggers transaction sync.
  *
- * Register this URL in Plaid Dashboard:
- * https://td-operations.vercel.app/api/plaid/webhook
+ * Register this URL in Plaid Dashboard: <your-domain>/api/plaid/webhook
  */
 
 import { NextRequest, NextResponse } from 'next/server'
