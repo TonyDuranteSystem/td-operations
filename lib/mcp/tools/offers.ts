@@ -363,6 +363,7 @@ export function buildTransitionWelcomeEmail(
     </div>
 
     <p style="font-size: 14px;">Il portale &egrave; stato progettato per essere semplice e intuitivo. Se hai bisogno di funzionalit&agrave; specifiche per la tua attivit&agrave;, siamo pronti a svilupparle per te &mdash; basta chiedere.</p>
+    <p style="font-size: 14px;">Il portale &egrave; in continua evoluzione. Se trovi qualcosa che non funziona come dovrebbe, ci scusiamo in anticipo &mdash; &egrave; un progetto grande quello che stiamo costruendo per voi. Faccelo sapere e ci aiuterai a migliorare il sistema per tutti i nostri clienti.</p>
     <p style="font-size: 14px;">Per qualsiasi domanda, scrivici direttamente dalla chat del portale. Siamo qui per aiutarti.</p>
 
     <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Antonio Durante</strong><br/>Tony Durante LLC</p>
@@ -444,6 +445,7 @@ export function buildTransitionWelcomeEmail(
     </div>
 
     <p style="font-size: 14px;">The portal is designed to be simple and user-friendly. If you need specific features for your business, we are ready to build them for you &mdash; just ask.</p>
+    <p style="font-size: 14px;">The portal is continuously evolving. If you find anything that doesn't work as expected, we apologize in advance &mdash; it's a big project we are building for you. Let us know and you'll help us improve the system for all our clients.</p>
     <p style="font-size: 14px;">For any questions, contact us through the portal chat. We are here to help.</p>
 
     <p style="margin-top: 20px;">Best regards,<br/><strong>Antonio Durante</strong><br/>Tony Durante LLC</p>
