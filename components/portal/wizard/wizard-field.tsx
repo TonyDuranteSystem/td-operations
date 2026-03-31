@@ -102,7 +102,7 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
 
       {field.type === 'textarea' ? (
         <textarea
-          value={String(value || '')}
+          value={String(value ?? '')}
           onChange={e => onChange(field.name, e.target.value)}
           placeholder={placeholder}
           rows={3}
@@ -110,7 +110,7 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
         />
       ) : field.type === 'select' ? (
         <select
-          value={String(value || '')}
+          value={String(value ?? '')}
           onChange={e => onChange(field.name, e.target.value)}
           className={inputClass}
         >
@@ -123,7 +123,7 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
         </select>
       ) : field.type === 'country' ? (
         <select
-          value={String(value || '')}
+          value={String(value ?? '')}
           onChange={e => onChange(field.name, e.target.value)}
           className={inputClass}
         >
@@ -193,8 +193,8 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
       ) : (
         <input
           type={field.type}
-          value={String(value || '')}
-          onChange={e => onChange(field.name, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+          value={String(value ?? '')}
+          onChange={e => onChange(field.name, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
           placeholder={placeholder}
           className={inputClass}
         />
