@@ -643,7 +643,7 @@ export default function PortalChatsPage() {
       {/* Thread list */}
       <div className={cn(
         'w-full lg:w-[350px] lg:shrink-0 border-r flex flex-col',
-        selectedAccountId ? 'hidden lg:flex' : 'flex'
+        (selectedAccountId || selectedThreadId) ? 'hidden lg:flex' : 'flex'
       )}>
         <div className="px-4 py-3 border-b">
           <div className="flex items-center justify-between mb-2">
