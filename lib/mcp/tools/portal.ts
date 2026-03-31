@@ -111,8 +111,10 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           return { content: [{ type: "text" as const, text: `${account.company_name}\n\nBLOCKER: Contact ${contact?.full_name || "unknown"} has no email. Cannot create portal account.` }] }
         }
 
-        // Determine language: contacts.language, default Italian (KB rule 66c1e6fa)
-        const lang: "en" | "it" = contact.language?.toLowerCase().startsWith("en") ? "en" : "it"
+        // Determine language: check ALL contacts, prefer English if any contact has it
+        const allContacts = contactLinks.map(cl => cl.contact as unknown as { language: string | null })
+        const hasEnglish = allContacts.some(c => c?.language?.toLowerCase().startsWith("en"))
+        const lang: "en" | "it" = hasEnglish ? "en" : "it"
 
         // ─── 4. CHECK IF ALREADY DONE ───
         if (account.portal_account) {
@@ -281,7 +283,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           const year = new Date().getFullYear()
           const token = `renewal-${companySlug}-${year}`
           const today = new Date().toISOString().slice(0, 10)
-          const { data: newMSA } = await supabaseAdmin.from("offers").insert({
+          const { data: newMSA, error: msaError } = await supabaseAdmin.from("offers").insert({
             token, account_id: account.id, client_name: contact.full_name,
             client_email: contact.email, language: lang, contract_type: "renewal",
             payment_type: "bank_transfer", status: "draft", offer_date: today,
@@ -297,8 +299,8 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
             pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
             logAction({ action_type: "create", table_name: "offers", record_id: newMSA.id, account_id: account.id, summary: `Auto-created renewal MSA for ${account.company_name} (legacy onboard)` })
           } else {
-            msaStatus = "FAILED to create"
-            flags.push("ERROR: Renewal MSA creation failed")
+            msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
+            flags.push(`ERROR: Renewal MSA creation failed${msaError ? ` — ${msaError.message}` : ""}`)
           }
         } else {
           msaStatus = "SKIPPED -- no installment amounts on account"

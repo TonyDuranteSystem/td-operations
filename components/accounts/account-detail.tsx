@@ -348,6 +348,17 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
         </div>
       </div>
 
+      {/* Billing */}
+      <div className="bg-white rounded-lg border p-5 space-y-4">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
+        <div className="grid gap-3 text-sm">
+          <EditableField icon={CreditCard} label="1st Installment" value={account.installment_1_amount?.toString() ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('installment_1_amount')} />
+          <EditableField icon={Globe} label="1st Currency" value={account.installment_1_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} readOnly={!isAdmin} onSave={makeAccountSaver('installment_1_currency')} />
+          <EditableField icon={CreditCard} label="2nd Installment" value={account.installment_2_amount?.toString() ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('installment_2_amount')} />
+          <EditableField icon={Globe} label="2nd Currency" value={account.installment_2_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} readOnly={!isAdmin} onSave={makeAccountSaver('installment_2_currency')} />
+        </div>
+      </div>
+
       {/* Contacts */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">

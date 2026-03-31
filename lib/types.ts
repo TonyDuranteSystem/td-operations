@@ -78,6 +78,10 @@ export interface Account {
   gdrive_folder_url: string | null
   notes: string | null
   client_health: string | null
+  installment_1_amount: number | null
+  installment_1_currency: string | null
+  installment_2_amount: number | null
+  installment_2_currency: string | null
   created_at: string
   updated_at: string
 }
