@@ -766,13 +766,16 @@ export default function PortalChatsPage() {
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-xs text-zinc-500 truncate flex-1">{thread.last_message}</p>
                   {thread.unread_count === 0 && (
-                    <button
+                    <span
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => { e.stopPropagation(); markAsUnread(thread.account_id) }}
-                      className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1"
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread.account_id) } }}
+                      className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
                       title="Mark as unread"
                     >
                       <MailOpen className="h-3 w-3" />
-                    </button>
+                    </span>
                   )}
                 </div>
                 <p className="text-xs text-zinc-400 mt-0.5">
