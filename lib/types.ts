@@ -77,6 +77,7 @@ export interface Account {
   lead_source: string | null
   gdrive_folder_url: string | null
   notes: string | null
+  account_type: string | null
   client_health: string | null
   installment_1_amount: number | null
   installment_1_currency: string | null

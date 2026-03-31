@@ -316,6 +316,11 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
     { label: 'Partnership', value: 'Partnership' },
   ]
 
+  const ACCOUNT_TYPE_OPTIONS = [
+    { label: 'Client', value: 'Client' },
+    { label: 'One-Time', value: 'One-Time' },
+  ]
+
   const _STATUS_OPTIONS = [
     { label: 'Active', value: 'Active' },
     { label: 'Inactive', value: 'Inactive' },
@@ -329,6 +334,7 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
         <div className="grid gap-3 text-sm">
+          <EditableField icon={Briefcase} label="Account Type" value={account.account_type ?? ''} type="select" options={ACCOUNT_TYPE_OPTIONS} readOnly={!isAdmin} onSave={makeAccountSaver('account_type')} />
           <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} readOnly={!isAdmin} onSave={makeAccountSaver('entity_type')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('state_of_formation')} />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeAccountSaver('formation_date')} />
