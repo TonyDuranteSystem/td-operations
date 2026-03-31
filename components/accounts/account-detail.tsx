@@ -371,7 +371,7 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
                 <div className="pl-9 grid gap-1.5">
                   <EditableField icon={Mail} label="Email" value={c.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
                   <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
-                  <EditableField icon={Globe} label="Language" value={c.language ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
+                  <EditableField icon={Globe} label="Language" type="select" options={[{ label: '', value: '' }, { label: 'English', value: 'English' }, { label: 'Italian', value: 'Italian' }]} value={c.language ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
                 </div>
               </div>
             ))}
