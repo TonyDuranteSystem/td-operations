@@ -3,6 +3,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { Pencil, Check, X, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { format, parseISO } from 'date-fns'
+
+function formatDisplayDate(val: string): string {
+  if (!val) return '\u2014'
+  try { return format(parseISO(val), 'MMM d, yyyy') } catch { return val }
+}
 
 interface EditableFieldProps {
   label: string
@@ -79,7 +85,7 @@ export function EditableField({
       <div className="flex items-center gap-2 group">
         {Icon && <Icon className="h-4 w-4 text-muted-foreground shrink-0" />}
         <span className="text-muted-foreground min-w-[100px] text-sm">{label}</span>
-        <span className="font-medium text-sm flex-1">{value || '\u2014'}</span>
+        <span className="font-medium text-sm flex-1">{type === 'date' ? formatDisplayDate(value) : (value || '\u2014')}</span>
         {!readOnly && (
           <button
             onClick={() => setEditing(true)}
