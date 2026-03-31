@@ -370,8 +370,22 @@ After building or fixing any CRM/Portal feature, you MUST:
 - **After fixing a bug** — verify the fix AND check for regressions
 - **Before telling Antonio "it's done"** — if you haven't screenshotted the working result, it's NOT done
 
+### QA Test Accounts — USE THESE, DO NOT CREATE NEW ONES
+These accounts exist so Claude can test UI changes directly. Every session on every machine MUST use these. Do NOT waste time looking for credentials or creating new test accounts.
+
+**Admin (CRM Dashboard):**
+- URL: `https://td-operations.vercel.app`
+- Email: `qa-staff@tonydurante.us`
+- Password: `TDqa-admin-2026!`
+
+**Client (Portal):**
+- URL: `https://portal.tonydurante.us/portal/login`
+- Email: `uxio74@gmail.com`
+- Password: `TDqa-client-2026!`
+- Account: Uxio Test LLC (`30c2cd96-03e4-43cf-9536-81d961b18b1d`)
+
 ### Test data:
-- Always use **Uxio Test LLC** for invoice/payment tests
+- Always use **Uxio Test LLC** for invoice/payment/document tests
 - Always use **QA Test** prefix for task/form tests
 - Clean up test data after testing (delete drafts, void test invoices)
 
