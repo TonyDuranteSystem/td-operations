@@ -298,6 +298,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
             client_email: contact.email, language: lang, contract_type: "renewal",
             payment_type: "bank_transfer", status: "draft", offer_date: today,
             effective_date: `${year}-01-01`,
+            bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
             services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
             cost_summary: [
               { label: "First Installment (January)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
@@ -414,6 +415,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
             let arDue: string | null = null
             if (state === "Wyoming") arDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-01`
             else if (state === "Florida") arDue = `${nextYear}-05-01`
+            else if (state === "Delaware") arDue = `${nextYear}-06-01`
             // NM has no annual report
             if (arDue) {
               await supabaseAdmin.from("deadlines").insert({
@@ -466,10 +468,13 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         }
 
         // ─── 14. UPDATE CRM FLAGS ───
+        // NOTE: portal_account stays FALSE until the email is actually sent.
+        // The session must call gmail_send, then update portal_account=true + portal_email_sent_at.
+        // This prevents the bug where accounts are marked as "done" but the client was never notified.
         await supabaseAdmin.from("accounts").update({
-          portal_account: true, portal_tier: "active",
+          portal_tier: "active",
           portal_created_date: new Date().toISOString().split("T")[0],
-          notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed [PORTAL_TRANSITION_SETUP]`,
+          notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed. Email NOT sent yet. [PORTAL_TRANSITION_SETUP]`,
         }).eq("id", account.id)
 
         await supabaseAdmin.from("contacts").update({
@@ -509,7 +514,11 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         lines.push(`Language: ${lang}`)
         lines.push("")
         lines.push("Review the email, then send with:")
-        lines.push(`gmail_send(to: "${contact.email}", subject: "${emailSubject}", body_html: [the HTML below], account_id: "${account.id}", contact_id: "${contact.id}", tag: "portal-legacy-onboard")`)
+        lines.push(`gmail_send(to: "${contact.email}", subject: "${emailSubject}", body_html: [the HTML below], account_id: "${account.id}", contact_id: "${contact.id}", tag: "portal-credentials")`)
+        lines.push("")
+        lines.push("AFTER sending, you MUST run these 2 updates:")
+        lines.push(`1. crm_update_record(accounts, "${account.id}", {portal_account: true})`)
+        lines.push(`2. crm_update_record(contacts, "${contact.id}", {portal_email_sent_at: "${new Date().toISOString().split("T")[0]}", portal_email_template: "${lang === "it" ? "it-branded-v2" : "en-branded-v2"}"})`)
 
         logAction({
           action_type: "update", table_name: "accounts", record_id: account.id, account_id: account.id,
