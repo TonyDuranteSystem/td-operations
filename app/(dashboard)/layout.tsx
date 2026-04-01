@@ -29,7 +29,17 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
     ])
 
     const taskCount = tasksResult.status === 'fulfilled' ? (tasksResult.value.count ?? 0) : 0
-    const portalChatsCount = portalChatsResult.status === 'fulfilled' ? (portalChatsResult.value.count ?? 0) : 0
+
+    let portalChatsCount = 0
+    if (portalChatsResult.status === 'fulfilled') {
+      if (portalChatsResult.value.error) {
+        console.error('[getBadgeCounts] portal_messages error:', portalChatsResult.value.error)
+      } else {
+        portalChatsCount = portalChatsResult.value.count ?? 0
+      }
+    } else {
+      console.error('[getBadgeCounts] portal_messages rejected:', portalChatsResult.reason)
+    }
 
     // Inbox unread count — fetch from stats API is complex, use 0 for now
     return { inbox: 0, tasks: taskCount, portalChats: portalChatsCount }
