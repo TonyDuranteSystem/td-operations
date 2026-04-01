@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { X, Send, Loader2 } from 'lucide-react'
 
@@ -26,6 +26,11 @@ export function ComposeDialog({
   const [body, setBody] = useState(prefillBody)
   const [showCc, setShowCc] = useState(false)
   const queryClient = useQueryClient()
+
+  // Sync prefill props when they change (e.g., forward opens with new data)
+  useEffect(() => { setTo(prefillTo) }, [prefillTo])
+  useEffect(() => { setSubject(prefillSubject) }, [prefillSubject])
+  useEffect(() => { setBody(prefillBody) }, [prefillBody])
 
   const sendMutation = useMutation({
     mutationFn: async () => {

@@ -41,7 +41,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
   const [composeOpen, setComposeOpen] = useState(false)
   const [whatsappOpen, setWhatsappOpen] = useState(false)
   const [composeMenuOpen, setComposeMenuOpen] = useState(false)
-  const [forwardData, setForwardData] = useState<{ subject: string } | null>(null)
+  const [forwardData, setForwardData] = useState<{ subject: string; body: string; from: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -216,10 +216,29 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
     setSelected(null)
   }
 
-  const handleForward = () => {
+  const handleForward = async () => {
     if (!selected) return
-    setForwardData({ subject: selected.subject || '' })
-    setComposeOpen(true)
+    try {
+      // Fetch the full thread to get the last message body
+      const params = activeMailbox ? `?mailbox=${activeMailbox}` : ''
+      const res = await fetch(`/api/inbox/messages/${encodeURIComponent(selected.id)}${params}`)
+      const data = await res.json()
+      const messages = data?.messages || []
+      const lastMsg = messages[messages.length - 1]
+      const fwdBody = lastMsg
+        ? `\n\n---------- Forwarded message ----------\nFrom: ${lastMsg.from || selected.name}\nDate: ${lastMsg.createdAt ? new Date(lastMsg.createdAt).toLocaleString() : ''}\nSubject: ${selected.subject || ''}\n\n${lastMsg.body || lastMsg.text || selected.preview || ''}`
+        : ''
+      setForwardData({
+        subject: selected.subject || '',
+        body: fwdBody,
+        from: lastMsg?.from || selected.name,
+      })
+      setComposeOpen(true)
+    } catch {
+      // Fallback: open compose with just subject
+      setForwardData({ subject: selected.subject || '', body: '', from: selected.name })
+      setComposeOpen(true)
+    }
   }
 
   const handleSearch = () => {
@@ -611,6 +630,7 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
         open={composeOpen}
         onClose={() => { setComposeOpen(false); setForwardData(null) }}
         prefillSubject={forwardData ? `Fwd: ${forwardData.subject}` : ''}
+        prefillBody={forwardData?.body || ''}
       />
 
       <NewWhatsAppDialog

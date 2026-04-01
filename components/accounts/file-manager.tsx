@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
-  MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2,
+  MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2, Search,
   RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet, Globe,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
@@ -290,13 +290,13 @@ function FileRow({
             {formatDate(file.modifiedTime)}
           </span>
 
-          {/* Quick preview button */}
+          {/* Quick preview button — magnifying glass to distinguish from portal toggle */}
           <button
             onClick={() => onPreview(file)}
-            className="p-1 rounded hover:bg-blue-100 text-zinc-300 hover:text-blue-600 transition-colors shrink-0"
-            title="Preview"
+            className="p-1 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors shrink-0"
+            title="Preview document"
           >
-            <Eye className="h-4 w-4" />
+            <Search className="h-3.5 w-3.5" />
           </button>
 
           {/* Portal visibility toggle */}
