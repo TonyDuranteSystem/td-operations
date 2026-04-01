@@ -1,8 +1,17 @@
-import { supabaseAdmin } from '@/lib/supabase-admin'
+import { createClient } from '@supabase/supabase-js'
 import { gmailGet } from '@/lib/gmail'
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+// Fresh client per request — avoids stale cached connections from supabaseAdmin singleton
+function getDb() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+}
 
 /**
  * GET /api/dashboard/badges
@@ -15,7 +24,7 @@ export async function GET() {
     // Run all queries in parallel
     const [portalResult, gmailSupportResult, gmailAntonioResult, tasksResult] = await Promise.allSettled([
       // Portal chats: count unread client messages using select('id') instead of head:true
-      supabaseAdmin
+      getDb()
         .from('portal_messages')
         .select('id')
         .eq('sender_type', 'client')
@@ -26,7 +35,7 @@ export async function GET() {
       // Gmail: antonio@ unread
       gmailGet('/labels/INBOX', {}, 'antonio.durante@tonydurante.us') as Promise<{ messagesUnread?: number }>,
       // Tasks: count open tasks
-      supabaseAdmin
+      getDb()
         .from('tasks')
         .select('id')
         .in('status', ['To Do', 'In Progress', 'Waiting'])
