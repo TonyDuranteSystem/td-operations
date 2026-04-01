@@ -173,6 +173,7 @@ export function Sidebar({
   const [navOrder, setNavOrder] = useState<string[]>([])
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
   const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
+  const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const pathnameRef = useRef(pathname)
 
   // Keep pathname ref in sync for use inside realtime callback
@@ -197,6 +198,52 @@ export function Sidebar({
       setLivePortalChats(0)
     }
   }, [pathname])
+
+  // Fetch inbox unread count on mount + poll every 30s
+  useEffect(() => {
+    const fetchInbox = () => {
+      fetch('/api/inbox/stats')
+        .then(r => r.json())
+        .then(data => {
+          if (typeof data.total === 'number') setLiveInbox(data.total)
+        })
+        .catch(() => {})
+    }
+    if (pathname !== '/inbox') fetchInbox()
+    const interval = setInterval(fetchInbox, 30_000)
+    return () => clearInterval(interval)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset inbox badge when user is on inbox page
+  useEffect(() => {
+    if (pathname === '/inbox') {
+      setLiveInbox(0)
+    }
+  }, [pathname])
+
+  // Subscribe to new WhatsApp/Telegram messages for inbox badge
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel('admin-inbox-badge')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: 'direction=eq.inbound',
+        },
+        () => {
+          if (pathnameRef.current !== '/inbox') {
+            setLiveInbox(prev => prev + 1)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [])
 
   // Subscribe to new client messages for real-time badge updates
   useEffect(() => {
@@ -248,7 +295,7 @@ export function Sidebar({
       const item = defaultNavigation.find(n => n.id === id)
       if (!item) return null
       // Apply live badges
-      if (item.id === 'inbox' && badgeCounts?.inbox) return { ...item, badge: badgeCounts.inbox }
+      if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
       if (item.id === 'tasks' && badgeCounts?.tasks) return { ...item, badge: badgeCounts.tasks }
       if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
       return item

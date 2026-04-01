@@ -41,8 +41,18 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       console.error('[getBadgeCounts] portal_messages rejected:', portalChatsResult.reason)
     }
 
-    // Inbox unread count — fetch from stats API is complex, use 0 for now
-    return { inbox: 0, tasks: taskCount, portalChats: portalChatsCount }
+    // Inbox unread count — WhatsApp/Telegram from Supabase view
+    let inboxUnread = 0
+    try {
+      const { data: viewData } = await supabaseAdmin
+        .from('v_messaging_inbox')
+        .select('unread_count')
+      if (viewData) {
+        inboxUnread = viewData.reduce((sum, row) => sum + (row.unread_count || 0), 0)
+      }
+    } catch { /* ignore */ }
+
+    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount }
   } catch {
     return { inbox: 0, tasks: 0, portalChats: 0 }
   }
