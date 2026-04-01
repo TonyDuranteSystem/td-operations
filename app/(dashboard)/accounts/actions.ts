@@ -162,3 +162,23 @@ export async function toggleDocumentPortalVisibility(
     summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
   })
 }
+
+export async function unlinkContactFromAccount(
+  accountId: string,
+  contactId: string,
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('account_contacts')
+      .delete()
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+
+    if (error) throw new Error(error.message)
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'delete', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`,
+    summary: `Unlinked contact ${contactId} from account ${accountId}`,
+  })
+}

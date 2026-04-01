@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
-  AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox,
+  AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -392,6 +392,25 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
                     {c.full_name}
                   </Link>
                   {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
+                  {isAdmin && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Remove ${c.full_name} from this company?`)) return
+                        const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
+                        const result = await unlinkContactFromAccount(account.id, c.id)
+                        if (result.success) {
+                          toast.success(`${c.full_name} unlinked`)
+                          window.location.reload()
+                        } else {
+                          toast.error('Failed to unlink contact')
+                        }
+                      }}
+                      className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
+                      title={`Remove ${c.full_name} from this company`}
+                    >
+                      <Unlink className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
                 <div className="pl-9 grid gap-1.5">
                   <EditableField icon={Mail} label="Email" value={c.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
