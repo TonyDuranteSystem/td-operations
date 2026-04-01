@@ -9,6 +9,7 @@ import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
+import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { cookies } from 'next/headers'
 import Script from 'next/script'
@@ -99,6 +100,7 @@ export default async function PortalLayout({
             contactId={contactId || undefined}
           />
         <main className="flex-1 overflow-y-auto">
+          <PullToRefresh />
           <div className="h-14 lg:hidden" />
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
           {contactId && (

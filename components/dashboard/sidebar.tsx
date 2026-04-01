@@ -33,7 +33,7 @@ import {
   Target,
   Wrench,
 } from 'lucide-react'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
@@ -68,7 +68,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number }
   enabledFeatures?: string[]
 }
 
@@ -172,6 +172,46 @@ export function Sidebar({
   const [editMode, setEditMode] = useState(false)
   const [navOrder, setNavOrder] = useState<string[]>([])
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
+  const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
+  const pathnameRef = useRef(pathname)
+
+  // Keep pathname ref in sync for use inside realtime callback
+  useEffect(() => {
+    pathnameRef.current = pathname
+  }, [pathname])
+
+  // Reset badge when admin opens the portal chats page
+  useEffect(() => {
+    if (pathname === '/portal-chats') {
+      setLivePortalChats(0)
+    }
+  }, [pathname])
+
+  // Subscribe to new client messages for real-time badge updates
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel('admin-portal-chats-badge')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'portal_messages',
+        },
+        (payload) => {
+          const newMsg = payload.new as { sender_type: string }
+          if (newMsg.sender_type === 'client' && pathnameRef.current !== '/portal-chats') {
+            setLivePortalChats(prev => prev + 1)
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
 
   // Load saved order from localStorage
   useEffect(() => {
@@ -199,6 +239,7 @@ export function Sidebar({
       // Apply live badges
       if (item.id === 'inbox' && badgeCounts?.inbox) return { ...item, badge: badgeCounts.inbox }
       if (item.id === 'tasks' && badgeCounts?.tasks) return { ...item, badge: badgeCounts.tasks }
+      if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
       return item
     })
     .filter((item): item is NavItem => {
