@@ -152,7 +152,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         <span className="flex-1">{item.name}</span>
         {item.badge != null && item.badge > 0 && (
           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse">
-            {item.badge > 99 ? '99+' : item.badge}
+            {item.badge > 999 ? '999+' : item.badge}
           </span>
         )}
       </Link>
@@ -206,10 +206,23 @@ export function Sidebar({
     return () => { clearTimeout(initialTimer); clearInterval(interval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset badges when entering the respective pages
+  // When entering a page, refetch badges instead of resetting to 0
+  // The badge disappears naturally when messages are actually read
   useEffect(() => {
-    if (pathname === '/portal-chats') setLivePortalChats(0)
-    if (pathname === '/inbox') setLiveInbox(0)
+    if (pathname === '/portal-chats' || pathname === '/inbox') {
+      // Refetch after a short delay to allow read-marking to happen
+      const timer = setTimeout(() => {
+        fetch('/api/dashboard/badges')
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!data) return
+            if (typeof data.portalChats === 'number') setLivePortalChats(data.portalChats)
+            if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
+          })
+          .catch(() => {})
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
   }, [pathname])
 
   // Subscribe to new WhatsApp/Telegram messages for inbox badge
