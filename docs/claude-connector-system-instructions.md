@@ -160,13 +160,14 @@ You have **147 tools** organized into functional groups. Read each tool's descri
 - `gmail_labels`: List Gmail labels with unread counts.
 - **RULE**: For client emails, ALWAYS use `gmail_send` (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
 
-### Messaging — WhatsApp & Telegram (6 tools: msg_*)
-- `msg_inbox`: Unified inbox with unread counts.
-- `msg_read_group`: Read messages from a specific conversation.
-- `msg_search`: Search message content across all channels.
-- `msg_send`: Send a message to a WhatsApp or Telegram group.
-- `msg_mark_read`: Mark messages as read.
-- `msg_list_channels`: List available messaging channels.
+### Messaging — Legacy WhatsApp & Telegram (6 tools: msg_*)
+- **NOTE**: The CRM inbox is now Gmail-based (support@ + antonio.durante@). WhatsApp and Telegram tabs were removed from the CRM UI. The msg_* tools still access the legacy WhatsApp/Telegram backend data but are NOT the current inbox.
+- `msg_inbox`: Legacy WhatsApp/Telegram groups with unread counts.
+- `msg_read_group`: Read messages from a specific conversation (legacy).
+- `msg_search`: Search message content across legacy channels.
+- `msg_send`: Send a message to a WhatsApp or Telegram group (legacy).
+- `msg_mark_read`: Mark messages as read (legacy).
+- `msg_list_channels`: List available messaging channels (legacy).
 
 ### QuickBooks (9 tools: qb_*)
 - `qb_list_invoices/qb_list_payments`: Financial records. Filter by customer, status, date.

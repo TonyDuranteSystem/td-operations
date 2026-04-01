@@ -3,15 +3,20 @@
  * Schedule: every 2 hours via Vercel cron
  *
  * Watches support@tonydurante.us inbox for FaxAge confirmation emails
- * confirming SS-4 was successfully faxed to the IRS at (855)641-6935.
+ * for SS-4 faxes sent to the IRS at (855)641-6935.
  *
- * On confirmation:
+ * On SUCCESS:
  * 1. Updates ss4_applications.status → 'submitted'
  * 2. Advances Company Formation pipeline to 'EIN Submitted' stage
  * 3. Closes open 'Fax signed SS-4' tasks for the account
  * 4. Logs to action_log (actor='system', action_type='ss4_fax_confirmed')
  *
- * Idempotent: skips if message_id already in action_log or SS-4 already submitted.
+ * On FAILURE:
+ * 1. Updates ss4_applications.status → 'fax_failed'
+ * 2. Creates an URGENT task for Luca to retry the fax
+ * 3. Logs to action_log (actor='system', action_type='ss4_fax_failed')
+ *
+ * Idempotent: skips if message_id already in action_log.
  */
 
 export const dynamic = 'force-dynamic'
@@ -32,6 +37,7 @@ interface CronResults {
   processed: number
   skipped_already_processed: number
   skipped_not_success: number
+  failures_detected: number
   no_ss4_match: number
   errors: string[]
 }
@@ -49,6 +55,7 @@ export async function GET(request: NextRequest) {
     processed: 0,
     skipped_already_processed: 0,
     skipped_not_success: 0,
+    failures_detected: 0,
     no_ss4_match: 0,
     errors: [],
   }
@@ -90,11 +97,11 @@ export async function GET(request: NextRequest) {
 
 // ─── Per-email processor ─────────────────────────────────────────────────────
 async function processEmail(messageId: string, results: CronResults): Promise<void> {
-  // Idempotency: already processed this message?
+  // Idempotency: already processed this message? (check both success and failure action types)
   const { data: existing } = await supabaseAdmin
     .from('action_log')
     .select('id')
-    .eq('action_type', 'ss4_fax_confirmed')
+    .in('action_type', ['ss4_fax_confirmed', 'ss4_fax_failed'])
     .filter('details->>message_id', 'eq', messageId)
     .limit(1)
 
@@ -125,9 +132,16 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
 
   console.warn(`[faxage-ss4] msg=${messageId} job=${jobId} company="${companyName}" status=${faxStatus}`)
 
-  // Only process successful faxes
+  // Handle failed faxes — create Urgent task for retry
+  if (faxStatus && faxStatus.toLowerCase() === 'failure') {
+    console.warn(`[faxage-ss4] Fax FAILED for job ${jobId} company="${companyName}" — creating urgent task`)
+    await handleFaxFailure(messageId, jobId, companyName, body, results)
+    return
+  }
+
+  // Skip unknown/missing status
   if (!faxStatus || faxStatus.toLowerCase() !== 'success') {
-    console.warn(`[faxage-ss4] Fax not successful (status="${faxStatus}") for job ${jobId} — skipping`)
+    console.warn(`[faxage-ss4] Fax status unknown (status="${faxStatus}") for job ${jobId} — skipping`)
     results.skipped_not_success++
     return
   }
@@ -210,6 +224,81 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
   })
 
   results.processed++
+}
+
+// ─── Handle fax failure — create Urgent task ────────────────────────────────
+async function handleFaxFailure(
+  messageId: string,
+  jobId: string | null,
+  companyName: string | null,
+  body: string,
+  results: CronResults
+): Promise<void> {
+  // Parse failure reason: "Reason: Communication failure during Phase B/C ; Giving up after 3 attempts"
+  const reasonMatch = body.match(/Reason:\s+(.+?)(?:\n|$)/i)
+  const failureReason = reasonMatch ? reasonMatch[1].trim() : 'Unknown reason'
+
+  // Try to find the SS-4 record to get account_id
+  let accountId: string | null = null
+  if (companyName) {
+    const { data: ss4Records } = await supabaseAdmin
+      .from('ss4_applications')
+      .select('id, account_id, company_name, status')
+      .ilike('company_name', companyName)
+      .in('status', ['signed', 'fax_failed'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    if (ss4Records && ss4Records.length > 0) {
+      accountId = ss4Records[0].account_id
+
+      // Update SS-4 status to fax_failed
+      await supabaseAdmin
+        .from('ss4_applications')
+        .update({ status: 'fax_failed', updated_at: new Date().toISOString() })
+        .eq('id', ss4Records[0].id)
+    }
+  }
+
+  const displayName = companyName || 'Unknown Company'
+
+  // Create Urgent task for retry
+  await supabaseAdmin.from('tasks').insert({
+    task_title: `FAXAGE FAILED: ${displayName} -- Retry SS-4 fax`,
+    assigned_to: 'Luca',
+    priority: 'Urgent',
+    category: 'Filing',
+    status: 'To Do',
+    description: [
+      `The SS-4 fax to the IRS FAILED for ${displayName}.`,
+      '',
+      `Job ID: ${jobId || 'Unknown'}`,
+      `Reason: ${failureReason}`,
+      `IRS Fax Number: ${IRS_FAX_NUMBER}`,
+      '',
+      'Action: Retry the fax from FAXAGE or send manually.',
+    ].join('\n'),
+    ...(accountId ? { account_id: accountId } : {}),
+  })
+
+  // Log to action_log
+  await supabaseAdmin.from('action_log').insert({
+    actor: 'system',
+    action_type: 'ss4_fax_failed',
+    table_name: 'ss4_applications',
+    record_id: null,
+    account_id: accountId,
+    summary: `FaxAge FAILED: SS-4 fax to IRS failed for ${displayName} (Job ${jobId || 'Unknown'})`,
+    details: {
+      job_id: jobId,
+      message_id: messageId,
+      company_name: companyName,
+      fax_status: 'Failure',
+      failure_reason: failureReason,
+    },
+  })
+
+  results.failures_detected++
 }
 
 // ─── Advance Company Formation pipeline to EIN Submitted ─────────────────────

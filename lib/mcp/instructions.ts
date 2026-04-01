@@ -44,7 +44,7 @@ DATA COLLECTION:
 COMMUNICATION:
 - Official documents: gmail_send (email only -- rule M1)
 - Day-to-day with portal clients: portal_chat_send (staff -> client via portal chat)
-- Day-to-day without portal: msg_send (WhatsApp/Telegram)
+- Day-to-day without portal: gmail_send or WhatsApp (manual, outside system)
 
 OFFERS:
 - New leads: portal_create_user -> offer_create -> client sees offer in portal after login. Do NOT use offer_send
@@ -225,9 +225,10 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - gmail_labels: List Gmail labels with unread counts.
 - RULE: For client emails, ALWAYS use gmail_send (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
 
-### Messaging — WhatsApp & Telegram (6 tools: msg_*)
-- msg_inbox: Unified inbox with unread counts.
-- msg_send: Send to WhatsApp or Telegram group.
+### Messaging — Legacy WhatsApp & Telegram (6 tools: msg_*)
+- NOTE: The CRM inbox is now Gmail-based (support@ + antonio.durante@). WhatsApp and Telegram tabs were removed from the CRM UI. The msg_* tools still access the legacy WhatsApp/Telegram backend data but are NOT the current inbox.
+- msg_inbox: Legacy WhatsApp/Telegram groups with unread counts.
+- msg_send: Send to WhatsApp or Telegram group (legacy).
 
 ### QuickBooks (9 tools: qb_*)
 - qb_list_invoices/qb_list_payments: Financial records. Filter by customer, status, date.
