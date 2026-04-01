@@ -191,32 +191,28 @@ export function Sidebar({
       .catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset badge when admin opens the portal chats page
+  // Reset badge when admin opens the portal chats page + update last-seen cookie
   useEffect(() => {
     if (pathname === '/portal-chats') {
       setLivePortalChats(0)
+      // Update cookie so SSR badge count resets on next page load
+      const now = new Date().toISOString()
+      document.cookie = `portal_chats_last_seen=${now}; path=/; max-age=${30 * 86400}; SameSite=Lax`
     }
   }, [pathname])
 
-  // Subscribe to new client messages for real-time badge updates
+  // Subscribe to new client messages for real-time badge updates.
+  // Uses Supabase Broadcast (not postgres_changes) to avoid RLS blocking admin users.
+  // The broadcast is emitted by the API route after inserting a client message.
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
-      .channel('admin-portal-chats-badge')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'portal_messages',
-          filter: 'sender_type=eq.client',
-        },
-        () => {
-          if (pathnameRef.current !== '/portal-chats') {
-            setLivePortalChats(prev => prev + 1)
-          }
+      .channel('admin-chat-badge')
+      .on('broadcast', { event: 'new_client_message' }, () => {
+        if (pathnameRef.current !== '/portal-chats') {
+          setLivePortalChats(prev => prev + 1)
         }
-      )
+      })
       .subscribe()
 
     return () => {

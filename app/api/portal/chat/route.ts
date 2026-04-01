@@ -149,6 +149,8 @@ export async function POST(request: NextRequest) {
   if (senderType === 'client') {
     notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
     pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {})
+    // Broadcast to CRM sidebar for real-time badge update (bypasses RLS)
+    broadcastAdminChatBadge().catch(() => {})
   }
 
   // Audit log
@@ -272,5 +274,32 @@ async function pushNotifyAdmin(accountId: string | null, contactId: string | nul
     body: messagePreview.slice(0, 200) || '[Attachment]',
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
     tag: `admin-chat-${accountId || contactId || 'unknown'}`,
+  })
+}
+
+/**
+ * Broadcast a real-time event to all CRM admin browsers via Supabase Broadcast REST API.
+ * This bypasses RLS (no postgres_changes subscription needed) so admin users
+ * receive badge updates regardless of their row-level SELECT permissions.
+ */
+async function broadcastAdminChatBadge() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!supabaseUrl || !serviceKey) return
+
+  await fetch(`${supabaseUrl}/realtime/v1/api/broadcast`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': serviceKey,
+      'Authorization': `Bearer ${serviceKey}`,
+    },
+    body: JSON.stringify({
+      messages: [{
+        topic: 'realtime:admin-chat-badge',
+        event: 'new_client_message',
+        payload: {},
+      }],
+    }),
   })
 }

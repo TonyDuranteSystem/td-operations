@@ -1,12 +1,14 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 
 /**
  * GET /api/portal/chat/badge
- * Admin only: returns total count of unread client portal messages.
- * Used by the CRM sidebar to show the portal chats badge count.
+ * Admin only: returns count of client portal messages since admin last visited /portal-chats.
+ * Uses the portal_chats_last_seen cookie (set by the browser) instead of read_at IS NULL
+ * so it works even if the read_at column doesn't exist in the DB.
  */
 export async function GET() {
   const supabase = createClient()
@@ -15,11 +17,16 @@ export async function GET() {
     return NextResponse.json({ count: 0 })
   }
 
+  const cookieStore = cookies()
+  const lastSeenCookie = cookieStore.get('portal_chats_last_seen')?.value
+  // Default: last 30 days when admin has never visited portal-chats
+  const lastSeen = lastSeenCookie ?? new Date(Date.now() - 30 * 86400000).toISOString()
+
   const { count, error } = await supabaseAdmin
     .from('portal_messages')
     .select('id', { count: 'exact', head: true })
     .eq('sender_type', 'client')
-    .is('read_at', null)
+    .gt('created_at', lastSeen)
 
   if (error) {
     console.error('[portal/chat/badge] query error:', error)

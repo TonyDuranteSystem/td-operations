@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
@@ -16,6 +17,13 @@ export const metadata: Metadata = {
 
 async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
   try {
+    // Cookie-based "last seen" — set by admin browser when visiting /portal-chats.
+    // Avoids dependency on read_at column (which may not exist) and bypasses RLS.
+    const cookieStore = cookies()
+    const lastSeenCookie = cookieStore.get('portal_chats_last_seen')?.value
+    // Default: count messages from the last 30 days when admin has never visited
+    const lastSeen = lastSeenCookie ?? new Date(Date.now() - 30 * 86400000).toISOString()
+
     const [tasksResult, portalChatsResult] = await Promise.allSettled([
       supabase
         .from('tasks')
@@ -25,7 +33,7 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
         .from('portal_messages')
         .select('id', { count: 'exact', head: true })
         .eq('sender_type', 'client')
-        .is('read_at', null),
+        .gt('created_at', lastSeen),
     ])
 
     const taskCount = tasksResult.status === 'fulfilled' ? (tasksResult.value.count ?? 0) : 0
