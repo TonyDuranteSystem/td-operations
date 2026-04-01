@@ -57,6 +57,15 @@ export async function POST(req: NextRequest) {
         threadId,
       })
 
+      // Ensure thread stays in INBOX after reply (Gmail API may remove INBOX label)
+      try {
+        await gmailPost(`/threads/${threadId}/modify`, {
+          addLabelIds: ['INBOX'],
+        })
+      } catch {
+        // Non-critical — thread was sent, just label may be wrong
+      }
+
       return NextResponse.json({
         success: true,
         channel: "gmail",
