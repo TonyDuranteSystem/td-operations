@@ -163,6 +163,48 @@ export async function toggleDocumentPortalVisibility(
   })
 }
 
+export async function linkContactToAccount(
+  accountId: string,
+  contactId: string,
+  role: string = 'owner',
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+
+    // Check if already linked
+    const { data: existing } = await supabase
+      .from('account_contacts')
+      .select('account_id')
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+      .maybeSingle()
+
+    if (existing) throw new Error('Contact is already linked to this account')
+
+    const { error } = await supabase
+      .from('account_contacts')
+      .insert({ account_id: accountId, contact_id: contactId, role })
+
+    if (error) throw new Error(error.message)
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'create', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`,
+    summary: `Linked contact ${contactId} to account ${accountId} as ${role}`,
+  })
+}
+
+export async function searchContacts(
+  query: string,
+): Promise<{ id: string; full_name: string; email: string | null }[]> {
+  const supabase = createClient()
+  const { data } = await supabase
+    .from('contacts')
+    .select('id, full_name, email')
+    .ilike('full_name', `%${query}%`)
+    .limit(10)
+  return data || []
+}
+
 export async function unlinkContactFromAccount(
   accountId: string,
   contactId: string,

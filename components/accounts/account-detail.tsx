@@ -6,6 +6,7 @@ import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
+  Plus, Search, Loader2,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -97,6 +98,188 @@ interface AccountDetailProps {
   documents?: DocumentRecord[]
   today: string
   isAdmin?: boolean
+}
+
+// ─── Contacts Section with Link/Unlink ────────────────────
+function ContactsSection({
+  contacts,
+  account,
+  isAdmin,
+  makeContactSaver,
+}: {
+  contacts: Contact[]
+  account: Account
+  isAdmin: boolean
+  makeContactSaver: (contactId: string, field: string, updatedAt: string) => (value: string) => Promise<{ success: boolean; error?: string }>
+}) {
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<{ id: string; full_name: string; email: string | null }[]>([])
+  const [searching, setSearching] = useState(false)
+  const [linking, setLinking] = useState(false)
+  const [selectedRole, setSelectedRole] = useState('owner')
+
+  const handleSearch = async (query: string) => {
+    setSearchQuery(query)
+    if (query.length < 2) { setSearchResults([]); return }
+    setSearching(true)
+    try {
+      const { searchContacts } = await import('@/app/(dashboard)/accounts/actions')
+      const results = await searchContacts(query)
+      // Filter out contacts already linked
+      const linkedIds = new Set(contacts.map(c => c.id))
+      setSearchResults(results.filter(r => !linkedIds.has(r.id)))
+    } catch {
+      setSearchResults([])
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  const handleLink = async (contactId: string, contactName: string) => {
+    setLinking(true)
+    try {
+      const { linkContactToAccount } = await import('@/app/(dashboard)/accounts/actions')
+      const result = await linkContactToAccount(account.id, contactId, selectedRole)
+      if (result.success) {
+        toast.success(`${contactName} linked as ${selectedRole}`)
+        setShowSearch(false)
+        setSearchQuery('')
+        setSearchResults([])
+        window.location.reload()
+      } else {
+        toast.error(result.error ?? 'Failed to link contact')
+      }
+    } catch {
+      toast.error('Failed to link contact')
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+          Contacts ({contacts.length})
+        </h3>
+        {isAdmin && (
+          <button
+            onClick={() => setShowSearch(!showSearch)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Link Contact
+          </button>
+        )}
+      </div>
+
+      {/* Link contact search */}
+      {showSearch && (
+        <div className="space-y-2 p-3 bg-zinc-50 rounded-lg border">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-zinc-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => handleSearch(e.target.value)}
+                placeholder="Search by name..."
+                className="w-full pl-8 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoFocus
+              />
+            </div>
+            <select
+              value={selectedRole}
+              onChange={e => setSelectedRole(e.target.value)}
+              className="text-xs border rounded-md px-2 py-1.5 bg-white"
+            >
+              <option value="owner">Owner</option>
+              <option value="member">Member</option>
+              <option value="manager">Manager</option>
+              <option value="authorized">Authorized</option>
+            </select>
+            <button
+              onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchResults([]) }}
+              className="text-xs text-zinc-500 hover:text-zinc-700"
+            >
+              Cancel
+            </button>
+          </div>
+          {searching && (
+            <div className="flex items-center gap-2 text-xs text-zinc-400 py-1">
+              <Loader2 className="h-3 w-3 animate-spin" /> Searching...
+            </div>
+          )}
+          {searchResults.length > 0 && (
+            <div className="divide-y border rounded-md bg-white max-h-40 overflow-y-auto">
+              {searchResults.map(r => (
+                <button
+                  key={r.id}
+                  onClick={() => handleLink(r.id, r.full_name)}
+                  disabled={linking}
+                  className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-blue-50 transition-colors disabled:opacity-50"
+                >
+                  <div>
+                    <span className="font-medium">{r.full_name}</span>
+                    {r.email && <span className="text-xs text-zinc-400 ml-2">{r.email}</span>}
+                  </div>
+                  <Plus className="h-3.5 w-3.5 text-blue-600" />
+                </button>
+              ))}
+            </div>
+          )}
+          {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
+            <p className="text-xs text-zinc-400 py-1">No contacts found</p>
+          )}
+        </div>
+      )}
+
+      {contacts.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No linked contacts</p>
+      ) : (
+        <div className="space-y-4">
+          {contacts.map(c => (
+            <div key={c.id} className="space-y-2 pb-3 border-b last:border-b-0">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-full bg-zinc-100 flex items-center justify-center shrink-0">
+                  <User className="h-3.5 w-3.5 text-zinc-500" />
+                </div>
+                <Link href={`/contacts/${c.id}`} className="font-medium text-sm text-blue-600 hover:underline">
+                  {c.full_name}
+                </Link>
+                {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
+                {isAdmin && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Remove ${c.full_name} from this company?`)) return
+                      const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
+                      const result = await unlinkContactFromAccount(account.id, c.id)
+                      if (result.success) {
+                        toast.success(`${c.full_name} unlinked`)
+                        window.location.reload()
+                      } else {
+                        toast.error('Failed to unlink contact')
+                      }
+                    }}
+                    className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
+                    title={`Remove ${c.full_name} from this company`}
+                  >
+                    <Unlink className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="pl-9 grid gap-1.5">
+                <EditableField icon={Mail} label="Email" value={c.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
+                <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
+                <EditableField icon={Globe} label="Language" type="select" options={[{ label: '', value: '' }, { label: 'English', value: 'English' }, { label: 'Italian', value: 'Italian' }]} value={c.language ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false }: AccountDetailProps) {
@@ -374,54 +557,12 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
       </div>
 
       {/* Contacts */}
-      <div className="bg-white rounded-lg border p-5 space-y-4">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          Contacts ({contacts.length})
-        </h3>
-        {contacts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No linked contacts</p>
-        ) : (
-          <div className="space-y-4">
-            {contacts.map(c => (
-              <div key={c.id} className="space-y-2 pb-3 border-b last:border-b-0">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-full bg-zinc-100 flex items-center justify-center shrink-0">
-                    <User className="h-3.5 w-3.5 text-zinc-500" />
-                  </div>
-                  <Link href={`/contacts/${c.id}`} className="font-medium text-sm text-blue-600 hover:underline">
-                    {c.full_name}
-                  </Link>
-                  {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
-                  {isAdmin && (
-                    <button
-                      onClick={async () => {
-                        if (!confirm(`Remove ${c.full_name} from this company?`)) return
-                        const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
-                        const result = await unlinkContactFromAccount(account.id, c.id)
-                        if (result.success) {
-                          toast.success(`${c.full_name} unlinked`)
-                          window.location.reload()
-                        } else {
-                          toast.error('Failed to unlink contact')
-                        }
-                      }}
-                      className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
-                      title={`Remove ${c.full_name} from this company`}
-                    >
-                      <Unlink className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-                <div className="pl-9 grid gap-1.5">
-                  <EditableField icon={Mail} label="Email" value={c.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
-                  <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
-                  <EditableField icon={Globe} label="Language" type="select" options={[{ label: '', value: '' }, { label: 'English', value: 'English' }, { label: 'Italian', value: 'Italian' }]} value={c.language ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <ContactsSection
+        contacts={contacts}
+        account={account}
+        isAdmin={isAdmin}
+        makeContactSaver={makeContactSaver}
+      />
 
       {/* Notes */}
       <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
