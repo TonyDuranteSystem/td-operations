@@ -234,29 +234,35 @@ async function handleFaxFailure(
   body: string,
   results: CronResults
 ): Promise<void> {
-  // Parse failure reason: "Reason: Communication failure during Phase B/C ; Giving up after 3 attempts"
-  const reasonMatch = body.match(/Reason:\s+(.+?)(?:\n|$)/i)
+  // Parse failure reason — FAXAGE uses "Reason: ..." which can span the rest of the line
+  const reasonMatch = body.match(/Reason:\s+(.+)/i)
   const failureReason = reasonMatch ? reasonMatch[1].trim() : 'Unknown reason'
 
-  // Try to find the SS-4 record to get account_id
+  // Try to find the SS-4 record to get account_id (match any status — success email may have processed first)
   let accountId: string | null = null
   if (companyName) {
     const { data: ss4Records } = await supabaseAdmin
       .from('ss4_applications')
       .select('id, account_id, company_name, status')
       .ilike('company_name', companyName)
-      .in('status', ['signed', 'fax_failed'])
       .order('created_at', { ascending: false })
       .limit(1)
 
     if (ss4Records && ss4Records.length > 0) {
       accountId = ss4Records[0].account_id
+    }
+  }
 
-      // Update SS-4 status to fax_failed
-      await supabaseAdmin
-        .from('ss4_applications')
-        .update({ status: 'fax_failed', updated_at: new Date().toISOString() })
-        .eq('id', ss4Records[0].id)
+  // Fallback: look up account by company name if SS-4 didn't yield an account_id
+  if (!accountId && companyName) {
+    const { data: accounts } = await supabaseAdmin
+      .from('accounts')
+      .select('id')
+      .ilike('company_name', companyName)
+      .limit(1)
+
+    if (accounts && accounts.length > 0) {
+      accountId = accounts[0].id
     }
   }
 
