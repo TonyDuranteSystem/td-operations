@@ -1184,6 +1184,16 @@ export default function PortalChatsPage() {
                 </div>
               ) : (
                 <>
+                {/* Empty conversation — encourage first message */}
+                {(!messages || messages.length === 0) && !messagesLoading && (
+                  <div className="flex-1 flex items-center justify-center py-12">
+                    <div className="text-center">
+                      <MessageSquare className="h-10 w-10 text-zinc-200 mx-auto mb-3" />
+                      <p className="text-sm font-medium text-zinc-500 mb-1">No messages yet</p>
+                      <p className="text-xs text-zinc-400">Type a message below to start the conversation</p>
+                    </div>
+                  </div>
+                )}
                 {/* Load older messages */}
                 {messages && messages.length >= 50 && (
                   <div className="flex justify-center mb-2">
@@ -1504,7 +1514,7 @@ export default function PortalChatsPage() {
                   onChange={e => setReplyText(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
                   rows={1}
-                  placeholder={isRecording ? 'Recording...' : 'Type a reply...'}
+                  placeholder={isRecording ? 'Recording...' : 'Type a message...'}
                   className={cn(
                     "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto",
                     isRecording && "ring-2 ring-red-300 bg-red-50/50"
