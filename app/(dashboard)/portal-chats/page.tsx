@@ -62,6 +62,7 @@ export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null)
+  const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
@@ -759,6 +760,7 @@ export default function PortalChatsPage() {
               <button
                 key={threadKey}
                 onClick={() => {
+                  setSelectedName({ company: thread.company_name, contact: thread.contact_name || undefined })
                   if (thread.account_id) {
                     setSelectedAccountId(thread.account_id)
                     setSelectedContactId(null)
@@ -1148,17 +1150,19 @@ export default function PortalChatsPage() {
                 &larr; Back
               </button>
               {(() => {
-                const selectedThread = threads?.find(t =>
-                  selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId
-                )
+                const threadName = selectedName?.company
+                  || threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)?.company_name
+                  || 'Chat'
+                const contactName = selectedName?.contact
+                  || threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)?.contact_name
                 return (
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-semibold text-zinc-900">
-                        {selectedThread?.company_name ?? 'Chat'}
+                        {threadName}
                       </p>
-                      {selectedThread?.contact_name && (
-                        <p className="text-xs text-zinc-500">{selectedThread.contact_name}</p>
+                      {contactName && (
+                        <p className="text-xs text-zinc-500">{contactName}</p>
                       )}
                     </div>
                     <button
@@ -1621,10 +1625,11 @@ export default function PortalChatsPage() {
                   key={acct.id}
                   onClick={() => {
                     if (sidebarView === 'internal') {
-                      // Create team discussion for this account
                       createInternalThread(acct.id, '', `Discussion about ${acct.company_name}`)
                     } else {
                       setSelectedAccountId(acct.id)
+                      setSelectedContactId(null)
+                      setSelectedName({ company: acct.company_name, contact: acct.contact_name || undefined })
                     }
                     setNewChatOpen(false)
                   }}
