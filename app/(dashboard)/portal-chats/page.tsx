@@ -15,7 +15,8 @@ import dynamic from 'next/dynamic'
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
 interface ChatThread {
-  account_id: string
+  account_id: string | null
+  contact_id: string | null
   company_name: string
   contact_name: string | null
   last_message: string
@@ -60,6 +61,7 @@ interface PendingAdminFile {
 export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null)
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
@@ -198,32 +200,40 @@ export default function PortalChatsPage() {
     refetchInterval: 8_000, // faster polling for WhatsApp-like feel
   })
 
-  // Fetch messages for selected thread
+  // Fetch messages for selected thread (by account_id or contact_id)
+  const chatQueryParam = selectedAccountId
+    ? `account_id=${selectedAccountId}`
+    : selectedContactId
+      ? `contact_id=${selectedContactId}`
+      : null
   const { data: messages, isLoading: messagesLoading } = useQuery<ChatMessage[]>({
-    queryKey: ['portal-chat-messages', selectedAccountId],
-    queryFn: () => fetch(`/api/portal/chat?account_id=${selectedAccountId}&limit=50`).then(r => r.json()).then(d => d.messages),
-    enabled: !!selectedAccountId,
+    queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId],
+    queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&limit=50`).then(r => r.json()).then(d => d.messages),
+    enabled: !!(selectedAccountId || selectedContactId),
     refetchInterval: 3_000, // faster for active conversation
   })
 
   // Mark messages as read when admin opens a thread
   useEffect(() => {
-    if (!selectedAccountId) return
+    if (!selectedAccountId && !selectedContactId) return
     setAiSuggestion('')
     setReplyToMsg(null)
     lastSuggestedMsgRef.current = null
+    const readBody = selectedAccountId
+      ? { account_id: selectedAccountId }
+      : { contact_id: selectedContactId }
     fetch('/api/portal/chat/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_id: selectedAccountId }),
+      body: JSON.stringify(readBody),
     }).then(() => {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     }).catch(() => {})
-  }, [selectedAccountId, queryClient])
+  }, [selectedAccountId, selectedContactId, queryClient])
 
   // Auto-suggest reply when last message is from client
   useEffect(() => {
-    if (!messages?.length || !selectedAccountId) return
+    if (!messages?.length || (!selectedAccountId && !selectedContactId)) return
     const lastMsg = messages[messages.length - 1]
     if (lastMsg.sender_type !== 'client') return
     // Don't re-suggest for the same message
@@ -235,7 +245,7 @@ export default function PortalChatsPage() {
     fetch('/api/portal/chat/suggest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_id: selectedAccountId }),
+      body: JSON.stringify(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }),
     })
       .then(r => r.json())
       .then(data => {
@@ -243,7 +253,7 @@ export default function PortalChatsPage() {
       })
       .catch(() => {})
       .finally(() => setAiLoading(false))
-  }, [messages, selectedAccountId])
+  }, [messages, selectedAccountId, selectedContactId])
 
   // Internal team threads
   interface InternalThread {
@@ -465,7 +475,10 @@ export default function PortalChatsPage() {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: selectedAccountId, message, reply_to_id, attachment_url, attachment_name }),
+        body: JSON.stringify({
+          ...(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }),
+          message, reply_to_id, attachment_url, attachment_name,
+        }),
       })
       if (!res.ok) throw new Error('Failed to send')
       return res.json()
@@ -474,7 +487,7 @@ export default function PortalChatsPage() {
       setReplyText('')
       setReplyToMsg(null)
       setPendingAdminFile(null)
-      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
   })
@@ -530,7 +543,7 @@ export default function PortalChatsPage() {
   }
 
   const handleSend = async () => {
-    if ((!replyText.trim() && !pendingAdminFile) || !selectedAccountId || sendMutation.isPending || uploadingAdminFile) return
+    if ((!replyText.trim() && !pendingAdminFile) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
 
@@ -539,7 +552,7 @@ export default function PortalChatsPage() {
       try {
         const formData = new FormData()
         formData.append('file', pendingAdminFile.file)
-        formData.append('account_id', selectedAccountId)
+        formData.append(selectedAccountId ? 'account_id' : 'contact_id', (selectedAccountId || selectedContactId)!)
         const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
         if (!res.ok) throw new Error('Upload failed')
         const { url, name } = await res.json()
@@ -562,7 +575,7 @@ export default function PortalChatsPage() {
       const res = await fetch('/api/portal/chat/polish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: replyText, account_id: selectedAccountId }),
+        body: JSON.stringify({ message: replyText, ...(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }) }),
       })
       const data = await res.json()
       if (data.polished) setReplyText(data.polished)
@@ -643,7 +656,7 @@ export default function PortalChatsPage() {
       {/* Thread list */}
       <div className={cn(
         'w-full lg:w-[350px] lg:shrink-0 border-r flex flex-col',
-        (selectedAccountId || selectedThreadId) ? 'hidden lg:flex' : 'flex'
+        (selectedAccountId || selectedContactId || selectedThreadId) ? 'hidden lg:flex' : 'flex'
       )}>
         <div className="px-4 py-3 border-b">
           <div className="flex items-center justify-between mb-2">
@@ -737,14 +750,27 @@ export default function PortalChatsPage() {
               if (!chatSearch.trim()) return true
               const q = chatSearch.toLowerCase()
               return t.company_name.toLowerCase().includes(q) || (t.contact_name?.toLowerCase().includes(q) ?? false)
-            }).map(thread => (
+            }).map(thread => {
+              const threadKey = thread.account_id || thread.contact_id || ''
+              const isSelected = thread.account_id
+                ? selectedAccountId === thread.account_id
+                : selectedContactId === thread.contact_id
+              return (
               <button
-                key={thread.account_id}
-                onClick={() => setSelectedAccountId(thread.account_id)}
+                key={threadKey}
+                onClick={() => {
+                  if (thread.account_id) {
+                    setSelectedAccountId(thread.account_id)
+                    setSelectedContactId(null)
+                  } else if (thread.contact_id) {
+                    setSelectedContactId(thread.contact_id)
+                    setSelectedAccountId(null)
+                  }
+                }}
                 title={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name}
                 className={cn(
                   'w-full px-4 py-3 text-left border-b hover:bg-zinc-50 transition-colors',
-                  selectedAccountId === thread.account_id && 'bg-blue-50 border-l-2 border-l-blue-600'
+                  isSelected && 'bg-blue-50 border-l-2 border-l-blue-600'
                 )}
               >
                 <div className="flex items-center justify-between">
@@ -782,7 +808,8 @@ export default function PortalChatsPage() {
                   {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
                 </p>
               </button>
-            ))
+              )
+            })
           )}
           {/* Extra accounts from search (no existing thread) */}
           {chatSearch.length >= 2 && searchExtraAccounts.length > 0 && (
@@ -1090,7 +1117,7 @@ export default function PortalChatsPage() {
       <div
         className={cn(
           'flex-1 min-w-0 flex flex-col overflow-hidden relative',
-          selectedThreadId ? 'hidden' : (!selectedAccountId ? 'hidden lg:flex' : 'flex')
+          selectedThreadId ? 'hidden' : (!(selectedAccountId || selectedContactId) ? 'hidden lg:flex' : 'flex')
         )}
         onDragOver={handleAdminDragOver}
         onDragLeave={handleAdminDragLeave}
@@ -1103,7 +1130,7 @@ export default function PortalChatsPage() {
             <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
           </div>
         )}
-        {!selectedAccountId ? (
+        {!(selectedAccountId || selectedContactId) ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <MessageSquare className="h-12 w-12 text-zinc-200 mx-auto mb-3" />
@@ -1115,13 +1142,15 @@ export default function PortalChatsPage() {
             {/* Header */}
             <div className="px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => setSelectedAccountId(null)}
+                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
               </button>
               {(() => {
-                const selectedThread = threads?.find(t => t.account_id === selectedAccountId)
+                const selectedThread = threads?.find(t =>
+                  selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId
+                )
                 return (
                   <div className="flex items-center justify-between">
                     <div>
@@ -1195,7 +1224,7 @@ export default function PortalChatsPage() {
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => { if (selectedAccountId) createInternalThread(selectedAccountId, msg.id, msg.message) }}
+                            onSelect={() => { const acctId = selectedAccountId; if (acctId) createInternalThread(acctId, msg.id, msg.message) }}
                           >
                             <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
                           </DropdownMenu.Item>
