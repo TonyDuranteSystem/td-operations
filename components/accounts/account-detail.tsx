@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
-  AlertCircle, CheckCircle2, ExternalLink, MessageSquare,
+  AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -16,6 +16,7 @@ import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { FileManager } from './file-manager'
+import { CorrespondenceUpload } from './correspondence-upload'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
@@ -28,6 +29,7 @@ const TABS = [
   { key: 'pagamenti', label: 'Payments', icon: CreditCard, adminOnly: true },
   { key: 'tax', label: 'Tax Returns', icon: FileText, adminOnly: false },
   { key: 'documenti', label: 'Documents', icon: FileText, adminOnly: false },
+  { key: 'corrispondenza', label: 'Correspondence', icon: Inbox, adminOnly: false },
   { key: 'comunicazioni', label: 'Communications', icon: MessageSquare, adminOnly: false },
 ]
 
@@ -268,6 +270,11 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       )}
       {activeTab === 'documenti' && (
         <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={isAdmin} />
+      )}
+      {activeTab === 'corrispondenza' && (
+        <div className="p-4">
+          <CorrespondenceUpload accountId={account.id} />
+        </div>
       )}
       {activeTab === 'comunicazioni' && (
         <AccountCommunications accountId={account.id} />

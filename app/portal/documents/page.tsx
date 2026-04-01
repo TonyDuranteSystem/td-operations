@@ -6,8 +6,9 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
+import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
-import { FileText } from 'lucide-react'
+import { FileText, Mail } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,7 +35,7 @@ export default async function PortalDocumentsPage() {
 
   const locale = getLocale(user)
 
-  // Fetch documents: account-based OR contact-based, filtered by portal_visible
+  // Fetch regular documents: account-based OR contact-based, filtered by portal_visible
   let documents: Array<{
     id: string; file_name: string; document_type_name: string | null
     category: number | null; drive_file_id: string | null
@@ -62,8 +63,23 @@ export default async function PortalDocumentsPage() {
     documents = data
   }
 
+  // Fetch correspondence (contact-centric: direct + all linked accounts)
+  const accountIds = accounts.map(a => a.id)
+  const orFilter = [
+    `contact_id.eq.${contactId}`,
+    accountIds.length > 0 ? `account_id.in.(${accountIds.join(',')})` : null,
+  ].filter(Boolean).join(',')
+
+  const { data: correspondence } = await supabaseAdmin
+    .from('client_correspondence')
+    .select('id, file_name, description, drive_file_url, read_at, created_at, account_id')
+    .or(orFilter)
+    .order('created_at', { ascending: false })
+
+  const unreadCount = (correspondence ?? []).filter(c => !c.read_at).length
+
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('documents.title', locale)}</h1>
@@ -72,6 +88,23 @@ export default async function PortalDocumentsPage() {
         {selectedAccountId && <DocumentUploadButton accountId={selectedAccountId} />}
       </div>
 
+      {/* Correspondence section — shown only if there is any */}
+      {(correspondence && correspondence.length > 0) && (
+        <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-4 border-b bg-zinc-50">
+            <Mail className="h-4 w-4 text-zinc-500" />
+            <span className="text-sm font-semibold text-zinc-800">Correspondence</span>
+            {unreadCount > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                {unreadCount} new
+              </span>
+            )}
+          </div>
+          <CorrespondenceList items={correspondence} />
+        </div>
+      )}
+
+      {/* Regular documents */}
       {(!documents || documents.length === 0) ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
