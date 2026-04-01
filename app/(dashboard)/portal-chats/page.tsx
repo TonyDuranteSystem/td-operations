@@ -1309,10 +1309,12 @@ export default function PortalChatsPage() {
                         )}>
                           {format(parseISO(msg.created_at), 'MMM d, h:mm a')}
                           {isAdmin && (
-                            <CheckCheck className={cn(
-                              'h-3 w-3',
-                              msg.read_at ? 'text-blue-300' : 'text-blue-200/50'
-                            )} />
+                            <span title={msg.read_at ? `Read by client: ${format(parseISO(msg.read_at), 'MMM d, h:mm a')}` : 'Not read yet'}>
+                              <CheckCheck className={cn(
+                                'h-3 w-3',
+                                msg.read_at ? 'text-green-300' : 'text-blue-200/50'
+                              )} />
+                            </span>
                           )}
                         </p>
                       </div>
