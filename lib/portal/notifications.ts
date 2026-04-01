@@ -2,7 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
 
 // Notification types that also trigger an email
-const EMAIL_TYPES = ['service', 'deadline', 'tax_document_uploaded']
+const EMAIL_TYPES = ['service', 'deadline', 'tax_document_uploaded', 'chat']
 
 /**
  * Create a portal notification for a client.
