@@ -180,6 +180,17 @@ export function Sidebar({
     pathnameRef.current = pathname
   }, [pathname])
 
+  // Fetch real count from API on mount (corrects stale server-side layout value)
+  useEffect(() => {
+    if (pathname === '/portal-chats') return // already reset below
+    fetch('/api/portal/chat/badge')
+      .then(r => r.json())
+      .then(({ count }: { count: number }) => {
+        if (typeof count === 'number') setLivePortalChats(count)
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Reset badge when admin opens the portal chats page
   useEffect(() => {
     if (pathname === '/portal-chats') {
