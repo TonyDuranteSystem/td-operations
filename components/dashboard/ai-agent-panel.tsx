@@ -342,7 +342,7 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
                 )}
               >
                 {msg.role === 'assistant' ? (
-                  <div className="prose prose-sm prose-zinc max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_a]:text-blue-600 [&_a]:underline [&_code]:bg-zinc-200 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-zinc-800 [&_pre]:text-zinc-100 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_img]:rounded-lg [&_img]:max-w-full [&_img]:my-2 [&_img]:border [&_img]:shadow-sm">
+                  <div className="prose prose-sm prose-zinc max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_a]:text-blue-600 [&_a]:underline [&_code]:bg-zinc-200 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-zinc-800 [&_pre]:text-zinc-100 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_img]:rounded-lg [&_img]:max-w-full [&_img]:my-2 [&_img]:border [&_img]:shadow-sm">
                     <ReactMarkdown
                       components={{
                         // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
