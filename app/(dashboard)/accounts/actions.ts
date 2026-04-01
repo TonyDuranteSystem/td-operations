@@ -143,6 +143,19 @@ export async function toggleDocumentPortalVisibility(
         body: doc.file_name || 'A new document has been shared with you',
         link: '/portal/documents',
       })
+
+      // Also send a portal chat message so client sees it in chat
+      if (doc.account_id) {
+        const { supabaseAdmin: adminClient } = await import('@/lib/supabase-admin')
+        const adminUserId = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
+        await adminClient.from('portal_messages').insert({
+          account_id: doc.account_id,
+          contact_id: doc.contact_id || null,
+          sender_type: 'admin',
+          sender_id: adminUserId,
+          message: `A new document has been added to your folder: ${doc.file_name}`,
+        })
+      }
     }
   }, {
     action_type: 'update', table_name: 'documents', record_id: documentId,
