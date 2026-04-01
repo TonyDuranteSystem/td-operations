@@ -488,6 +488,48 @@ async function createTaxReturnRecord(
 
     const deadline = `${taxYear + 1}-03-15` // March 15 of following year for most LLCs
 
+    // Check if tax return was bundled (included) in the client's offer
+    let isBundled = false
+    const { data: contactLink } = await supabaseAdmin
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", accountId)
+      .limit(1)
+      .maybeSingle()
+
+    if (contactLink?.contact_id) {
+      const { data: lead } = await supabaseAdmin
+        .from("leads")
+        .select("id")
+        .eq("converted_to_contact_id", contactLink.contact_id)
+        .limit(1)
+        .maybeSingle()
+
+      if (lead?.id) {
+        const { data: offer } = await supabaseAdmin
+          .from("offers")
+          .select("services, bundled_pipelines")
+          .eq("lead_id", lead.id)
+          .in("status", ["completed", "signed", "viewed", "sent"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (offer?.services && offer?.bundled_pipelines) {
+          const pipelines = Array.isArray(offer.bundled_pipelines) ? offer.bundled_pipelines : []
+          const services = Array.isArray(offer.services) ? offer.services : []
+          if (pipelines.some((p: string) => /tax.return/i.test(p))) {
+            const taxService = services.find((s: { pipeline_type?: string; price?: string }) =>
+              s.pipeline_type === "Tax Return" &&
+              s.price &&
+              /inclus[ao]|included|€?\s*0|\$?\s*0/i.test(s.price)
+            )
+            if (taxService) isBundled = true
+          }
+        }
+      }
+    }
+
     const { data: tr, error: insertErr } = await supabaseAdmin
       .from("tax_returns")
       .insert({
@@ -497,7 +539,8 @@ async function createTaxReturnRecord(
         return_type: returnType,
         tax_year: taxYear,
         deadline,
-        status: "Not Invoiced",
+        status: isBundled ? "Paid - Not Started" : "Not Invoiced",
+        ...(isBundled ? { paid: true } : {}),
       })
       .select("id")
       .single()
@@ -506,7 +549,8 @@ async function createTaxReturnRecord(
       return { name: "tax_return", status: "error", detail: insertErr?.message || "Insert failed" }
     }
 
-    return { name: "tax_return", status: "ok", detail: `Created tax return record for ${taxYear} (${returnType})` }
+    const note = isBundled ? `Created as Paid (bundled in offer)` : `Created (${returnType})`
+    return { name: "tax_return", status: "ok", detail: `Tax return ${taxYear}: ${note}` }
   } catch (err) {
     return { name: "tax_return", status: "error", detail: err instanceof Error ? err.message : "Unknown error" }
   }

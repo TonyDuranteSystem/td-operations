@@ -757,6 +757,34 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       { year: currentYear, field: "tax_return_current_year_filed", label: "Current year" },
     ]
 
+    // Check if tax return is bundled (included) in the client's offer
+    let taxReturnIncludedInOffer = false
+    if (p.lead_id) {
+      const { data: offer } = await supabaseAdmin
+        .from("offers")
+        .select("services, bundled_pipelines")
+        .eq("lead_id", p.lead_id)
+        .in("status", ["completed", "signed", "viewed", "sent"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (offer?.services && offer?.bundled_pipelines) {
+        const pipelines = Array.isArray(offer.bundled_pipelines) ? offer.bundled_pipelines : []
+        const services = Array.isArray(offer.services) ? offer.services : []
+        if (pipelines.some((p: string) => /tax.return/i.test(p))) {
+          const taxService = services.find((s: { pipeline_type?: string; price?: string }) =>
+            s.pipeline_type === "Tax Return" &&
+            s.price &&
+            /inclus[ao]|included|€?\s*0|\$?\s*0/i.test(s.price)
+          )
+          if (taxService) {
+            taxReturnIncludedInOffer = true
+          }
+        }
+      }
+    }
+
     for (const tc of taxChecks) {
       const fieldValue = String(submitted[tc.field] || "").toLowerCase()
       if (fieldValue === "no") {
@@ -772,6 +800,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             result.steps.push(step(`tax_return:${tc.year}`, "skipped", `Already exists: ${existingTR.id}`))
           } else {
             const deadline = `${tc.year + 1}-${deadlineMonth}-15`
+            const isBundled = taxReturnIncludedInOffer && tc.year === previousYear
             const { error: trErr } = await supabaseAdmin
               .from("tax_returns")
               .insert({
@@ -780,12 +809,14 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 return_type: returnType,
                 tax_year: tc.year,
                 deadline,
-                status: "Not Invoiced",
+                status: isBundled ? "Paid - Not Started" : "Not Invoiced",
+                ...(isBundled ? { paid: true } : {}),
               })
             if (trErr) {
               result.steps.push(step(`tax_return:${tc.year}`, "error", trErr.message))
             } else {
-              result.steps.push(step(`tax_return:${tc.year}`, "ok", `Created (deadline: ${deadline})`))
+              const note = isBundled ? "Created as Paid (bundled in offer)" : `Created (deadline: ${deadline})`
+              result.steps.push(step(`tax_return:${tc.year}`, "ok", note))
             }
           }
         } catch (e) {
