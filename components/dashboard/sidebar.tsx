@@ -151,7 +151,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         <item.icon className="h-4 w-4 shrink-0" />
         <span className="flex-1">{item.name}</span>
         {item.badge != null && item.badge > 0 && (
-          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-600 text-white min-w-[20px] text-center">
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse">
             {item.badge > 99 ? '99+' : item.badge}
           </span>
         )}
@@ -181,44 +181,30 @@ export function Sidebar({
     pathnameRef.current = pathname
   }, [pathname])
 
-  // Fetch real count from API on mount (corrects stale server-side layout value)
+  // Fetch all badge counts on mount + poll every 15s
   useEffect(() => {
-    if (pathname === '/portal-chats') return // already reset below
-    fetch('/api/portal/chat/badge')
-      .then(r => r.json())
-      .then(({ count }: { count: number }) => {
-        if (typeof count === 'number') setLivePortalChats(count)
-      })
-      .catch(() => {})
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reset badge when admin opens the portal chats page
-  useEffect(() => {
-    if (pathname === '/portal-chats') {
-      setLivePortalChats(0)
-    }
-  }, [pathname])
-
-  // Fetch inbox unread count on mount + poll every 30s
-  useEffect(() => {
-    const fetchInbox = () => {
-      fetch('/api/inbox/stats')
+    const fetchBadges = () => {
+      fetch('/api/dashboard/badges')
         .then(r => r.json())
-        .then(data => {
-          if (typeof data.total === 'number') setLiveInbox(data.total)
+        .then((data: { portalChats?: number; inbox?: number }) => {
+          if (typeof data.portalChats === 'number' && pathnameRef.current !== '/portal-chats') {
+            setLivePortalChats(data.portalChats)
+          }
+          if (typeof data.inbox === 'number' && pathnameRef.current !== '/inbox') {
+            setLiveInbox(data.inbox)
+          }
         })
         .catch(() => {})
     }
-    if (pathname !== '/inbox') fetchInbox()
-    const interval = setInterval(fetchInbox, 30_000)
+    fetchBadges()
+    const interval = setInterval(fetchBadges, 15_000)
     return () => clearInterval(interval)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset inbox badge when user is on inbox page
+  // Reset badges when entering the respective pages
   useEffect(() => {
-    if (pathname === '/inbox') {
-      setLiveInbox(0)
-    }
+    if (pathname === '/portal-chats') setLivePortalChats(0)
+    if (pathname === '/inbox') setLiveInbox(0)
   }, [pathname])
 
   // Subscribe to new WhatsApp/Telegram messages for inbox badge
