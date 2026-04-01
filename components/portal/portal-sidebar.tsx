@@ -123,6 +123,16 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [pathname])
 
+  // Sync PWA app icon badge with unread count
+  useEffect(() => {
+    if (!('setAppBadge' in navigator)) return
+    if (liveUnreadCount > 0) {
+      navigator.setAppBadge(liveUnreadCount).catch(() => {})
+    } else {
+      navigator.clearAppBadge().catch(() => {})
+    }
+  }, [liveUnreadCount])
+
   // Subscribe to new admin messages for real-time badge updates
   useEffect(() => {
     const filterColumn = selectedAccountId ? 'account_id' : (contactId ? 'contact_id' : null)

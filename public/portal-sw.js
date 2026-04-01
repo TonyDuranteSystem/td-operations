@@ -95,13 +95,23 @@ self.addEventListener('push', function (event) {
     vibrate: [200, 100, 200],
   }
 
-  event.waitUntil(
-    self.registration.showNotification(data.title || 'TD Portal', options)
-  )
+  var showAndBadge = self.registration.showNotification(data.title || 'TD Portal', options)
+    .then(function () {
+      if (self.navigator && 'setAppBadge' in self.navigator) {
+        return self.navigator.setAppBadge(data.badge || 1).catch(function () {})
+      }
+    })
+
+  event.waitUntil(showAndBadge)
 })
 
 self.addEventListener('notificationclick', function (event) {
   event.notification.close()
+
+  // Clear the app badge when user interacts with a notification
+  if (self.navigator && 'clearAppBadge' in self.navigator) {
+    self.navigator.clearAppBadge().catch(function () {})
+  }
 
   var url = event.notification.data && event.notification.data.url ? event.notification.data.url : '/portal'
 

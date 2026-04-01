@@ -16,20 +16,25 @@ export const metadata: Metadata = {
 
 async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
   try {
-    const [tasksResult] = await Promise.allSettled([
+    const [tasksResult, portalChatsResult] = await Promise.allSettled([
       supabase
         .from('tasks')
         .select('id', { count: 'exact', head: true })
         .in('status', ['To Do', 'In Progress', 'Waiting']),
+      supabaseAdmin
+        .from('portal_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('sender_type', 'client')
+        .is('read_at', null),
     ])
 
     const taskCount = tasksResult.status === 'fulfilled' ? (tasksResult.value.count ?? 0) : 0
+    const portalChatsCount = portalChatsResult.status === 'fulfilled' ? (portalChatsResult.value.count ?? 0) : 0
 
     // Inbox unread count — fetch from stats API is complex, use 0 for now
-    // Phase 5 (Realtime) will wire this properly
-    return { inbox: 0, tasks: taskCount }
+    return { inbox: 0, tasks: taskCount, portalChats: portalChatsCount }
   } catch {
-    return { inbox: 0, tasks: 0 }
+    return { inbox: 0, tasks: 0, portalChats: 0 }
   }
 }
 
