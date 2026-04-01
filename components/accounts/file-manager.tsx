@@ -4,8 +4,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
-  MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, Trash2,
-  RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet,
+  MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2,
+  RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet, Globe,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { cn } from '@/lib/utils'
@@ -31,9 +31,15 @@ interface FolderData {
   subfolders: FolderData[]
 }
 
+interface DocInfo {
+  docId: string
+  portalVisible: boolean
+}
+
 interface FilesResponse {
   folders: FolderData[]
   rootFiles: DriveFile[]
+  docMap?: Record<string, DocInfo>
   error?: string
 }
 
@@ -68,6 +74,8 @@ function FileRow({
   index,
   onRefresh,
   onPreview,
+  docInfo,
+  isAdmin,
 }: {
   file: DriveFile
   accountId: string
@@ -75,6 +83,8 @@ function FileRow({
   index: number
   onRefresh: () => void
   onPreview: (file: DriveFile) => void
+  docInfo?: DocInfo
+  isAdmin?: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -84,6 +94,8 @@ function FileRow({
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showThumb, setShowThumb] = useState(false)
+  const [portalVisible, setPortalVisible] = useState(docInfo?.portalVisible ?? false)
+  const [togglingVisibility, setTogglingVisibility] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -185,6 +197,25 @@ function FileRow({
     setShowThumb(false)
   }
 
+  const handleTogglePortalVisibility = async () => {
+    if (!docInfo?.docId) return
+    setTogglingVisibility(true)
+    try {
+      const { toggleDocumentPortalVisibility } = await import('@/app/(dashboard)/accounts/actions')
+      const result = await toggleDocumentPortalVisibility(docInfo.docId, !portalVisible)
+      if (result.success) {
+        setPortalVisible(!portalVisible)
+        toast.success(`Portal visibility ${!portalVisible ? 'enabled' : 'disabled'}`)
+      } else {
+        toast.error('Failed to toggle visibility')
+      }
+    } catch {
+      toast.error('Failed to toggle visibility')
+    } finally {
+      setTogglingVisibility(false)
+    }
+  }
+
   return (
     <Draggable draggableId={file.id} index={index}>
       {(provided, snapshot) => (
@@ -258,6 +289,38 @@ function FileRow({
           <span className="text-xs text-zinc-400 shrink-0 hidden md:inline w-20 text-right">
             {formatDate(file.modifiedTime)}
           </span>
+
+          {/* Quick preview button */}
+          <button
+            onClick={() => onPreview(file)}
+            className="p-1 rounded hover:bg-blue-100 text-zinc-300 hover:text-blue-600 transition-colors shrink-0"
+            title="Preview"
+          >
+            <Eye className="h-4 w-4" />
+          </button>
+
+          {/* Portal visibility toggle */}
+          {isAdmin && docInfo?.docId && (
+            <button
+              onClick={handleTogglePortalVisibility}
+              disabled={togglingVisibility}
+              title={portalVisible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}
+              className={cn(
+                'p-1 rounded transition-colors shrink-0',
+                portalVisible
+                  ? 'text-green-600 hover:bg-green-50'
+                  : 'text-zinc-300 hover:bg-zinc-100 hover:text-zinc-500'
+              )}
+            >
+              {togglingVisibility ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : portalVisible ? (
+                <Globe className="h-4 w-4" />
+              ) : (
+                <EyeOff className="h-4 w-4" />
+              )}
+            </button>
+          )}
 
           {/* Context menu */}
           <div className="relative shrink-0" ref={menuRef}>
@@ -363,6 +426,8 @@ function FolderSection({
   allFolders,
   onRefresh,
   onPreview,
+  docMap,
+  isAdmin,
   defaultExpanded = true,
   depth = 0,
 }: {
@@ -371,6 +436,8 @@ function FolderSection({
   allFolders: FolderData[]
   onRefresh: () => void
   onPreview: (file: DriveFile) => void
+  docMap: Record<string, DocInfo>
+  isAdmin?: boolean
   defaultExpanded?: boolean
   depth?: number
 }) {
@@ -425,6 +492,8 @@ function FolderSection({
                     index={idx}
                     onRefresh={onRefresh}
                     onPreview={onPreview}
+                    docInfo={docMap[file.id]}
+                    isAdmin={isAdmin}
                   />
                 ))}
                 {provided.placeholder}
@@ -441,6 +510,8 @@ function FolderSection({
               allFolders={allFolders}
               onRefresh={onRefresh}
               onPreview={onPreview}
+              docMap={docMap}
+              isAdmin={isAdmin}
               defaultExpanded={false}
               depth={depth + 1}
             />
@@ -457,7 +528,7 @@ function FolderSection({
 
 // ─── Main FileManager Component ───────────────────────────
 
-export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null }) {
+export function FileManager({ accountId, driveFolderId, isAdmin }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
 
@@ -536,6 +607,7 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
 
   const folders = data?.folders || []
   const rootFiles = data?.rootFiles || []
+  const docMap = data?.docMap || {}
   const totalFiles = folders.reduce((sum, f) => sum + f.files.length + f.subfolders.reduce((s, sf) => s + sf.files.length, 0), 0) + rootFiles.length
 
   return (
@@ -562,6 +634,8 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
               allFolders={folders}
               onRefresh={handleRefresh}
               onPreview={setPreviewFile}
+              docMap={docMap}
+              isAdmin={isAdmin}
             />
           ))}
 
@@ -583,6 +657,8 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
                         index={idx}
                         onRefresh={handleRefresh}
                         onPreview={setPreviewFile}
+                        docInfo={docMap[file.id]}
+                        isAdmin={isAdmin}
                       />
                     ))}
                     {provided.placeholder}

@@ -267,7 +267,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <TaxTab taxReturns={taxReturns} today={today} />
       )}
       {activeTab === 'documenti' && (
-        <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} />
+        <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={isAdmin} />
       )}
       {activeTab === 'comunicazioni' && (
         <AccountCommunications accountId={account.id} />

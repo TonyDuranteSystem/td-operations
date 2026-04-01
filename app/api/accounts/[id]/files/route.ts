@@ -100,7 +100,21 @@ export async function GET(
       folders.push({ id: folder.id, name: folder.name, files, subfolders })
     }
 
-    return NextResponse.json({ folders, rootFiles })
+    // Fetch document records from Supabase to get portal_visible + document IDs
+    const { data: docs } = await supabaseAdmin
+      .from('documents')
+      .select('id, drive_file_id, portal_visible')
+      .eq('account_id', accountId)
+
+    // Build a map: drive_file_id -> { docId, portal_visible }
+    const docMap = new Map<string, { docId: string; portalVisible: boolean }>()
+    for (const doc of docs || []) {
+      if (doc.drive_file_id) {
+        docMap.set(doc.drive_file_id, { docId: doc.id, portalVisible: doc.portal_visible ?? false })
+      }
+    }
+
+    return NextResponse.json({ folders, rootFiles, docMap: Object.fromEntries(docMap) })
   } catch (err) {
     console.error('[files] Error listing Drive folder:', err)
     return NextResponse.json({ error: 'Failed to list Drive folder' }, { status: 500 })
