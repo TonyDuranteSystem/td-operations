@@ -19,19 +19,24 @@ export function PullToRefresh() {
   const refreshingRef = useRef(false)
 
   useEffect(() => {
-    const getScrollEl = () => document.querySelector('main.flex-1') as HTMLElement | null
+    // Attach directly to the scrollable container (the portal main element).
+    // This is required on iOS Safari: addEventListener on `document` with
+    // passive:false still can't reliably cancel the browser's elastic-scroll
+    // bounce when the touch target is a scrolling child element. Attaching to
+    // the element itself gives us a reliable passive:false touchmove that
+    // actually calls preventDefault() before the browser starts its bounce.
+    const scrollEl = document.querySelector('main') as HTMLElement | null
+    if (!scrollEl) return
 
     const onTouchStart = (e: TouchEvent) => {
-      const scrollEl = getScrollEl()
-      if (!scrollEl || scrollEl.scrollTop > 0) return
+      if (scrollEl.scrollTop > 0) return
       startYRef.current = e.touches[0].clientY
       pullingRef.current = false
     }
 
     const onTouchMove = (e: TouchEvent) => {
       if (startYRef.current === null || refreshingRef.current) return
-      const scrollEl = getScrollEl()
-      if (!scrollEl || scrollEl.scrollTop > 0) {
+      if (scrollEl.scrollTop > 0) {
         startYRef.current = null
         return
       }
@@ -42,7 +47,7 @@ export function PullToRefresh() {
         return
       }
 
-      // Prevent native scroll-bounce from interfering
+      // Prevent the browser's native pull-to-refresh / elastic-scroll
       e.preventDefault()
       pullingRef.current = true
 
@@ -75,14 +80,15 @@ export function PullToRefresh() {
       pullingRef.current = false
     }
 
-    document.addEventListener('touchstart', onTouchStart, { passive: true })
-    document.addEventListener('touchmove', onTouchMove, { passive: false })
-    document.addEventListener('touchend', onTouchEnd, { passive: true })
+    scrollEl.addEventListener('touchstart', onTouchStart, { passive: true })
+    // passive: false required so e.preventDefault() actually works
+    scrollEl.addEventListener('touchmove', onTouchMove, { passive: false })
+    scrollEl.addEventListener('touchend', onTouchEnd, { passive: true })
 
     return () => {
-      document.removeEventListener('touchstart', onTouchStart)
-      document.removeEventListener('touchmove', onTouchMove)
-      document.removeEventListener('touchend', onTouchEnd)
+      scrollEl.removeEventListener('touchstart', onTouchStart)
+      scrollEl.removeEventListener('touchmove', onTouchMove)
+      scrollEl.removeEventListener('touchend', onTouchEnd)
     }
   }, [router])
 

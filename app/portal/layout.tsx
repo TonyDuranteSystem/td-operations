@@ -10,6 +10,7 @@ import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PullToRefresh } from '@/components/portal/pull-to-refresh'
+import { PortalSwRegister } from '@/components/portal/portal-sw-register'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { cookies } from 'next/headers'
 import Script from 'next/script'
@@ -84,6 +85,7 @@ export default async function PortalLayout({
 
   return (
     <Providers>
+      <PortalSwRegister />
       <LocaleProvider locale={locale}>
         <PasswordGate mustChangePassword={mustChangePassword} />
         {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
@@ -99,7 +101,7 @@ export default async function PortalLayout({
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
           />
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
           <div className="h-14 lg:hidden" />
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
