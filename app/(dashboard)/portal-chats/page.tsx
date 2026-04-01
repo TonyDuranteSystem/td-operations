@@ -981,7 +981,7 @@ export default function PortalChatsPage() {
                         })()}
                         {msg.message && <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>}
                         <p className="text-xs mt-1 opacity-50 text-right">
-                          {format(parseISO(msg.created_at), 'h:mm a')}
+                          {format(parseISO(msg.created_at), 'MMM d, h:mm a')}
                         </p>
                       </div>
                     </div>
@@ -1307,7 +1307,7 @@ export default function PortalChatsPage() {
                           'text-xs mt-1 flex items-center gap-1',
                           isAdmin ? 'text-blue-200 justify-end' : 'text-zinc-400'
                         )}>
-                          {format(parseISO(msg.created_at), 'h:mm a')}
+                          {format(parseISO(msg.created_at), 'MMM d, h:mm a')}
                           {isAdmin && (
                             <CheckCheck className={cn(
                               'h-3 w-3',

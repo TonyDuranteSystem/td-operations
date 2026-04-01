@@ -36,7 +36,7 @@ function formatMessageDate(dateStr: string): string {
 }
 
 function formatTime(dateStr: string): string {
-  return format(parseISO(dateStr), 'h:mm a')
+  return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
 export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { accountId?: string; contactId: string; userId: string; locale?: string }) {
