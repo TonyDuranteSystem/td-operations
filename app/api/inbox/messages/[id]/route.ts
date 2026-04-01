@@ -54,6 +54,21 @@ export async function GET(
         .replace(/^(Re|Fwd|FW|RE):\s*/gi, '') // double strip for "Re: Re:"
         .trim()
 
+      // Helper: extract the external (non-Tony Durant) email from a message
+      const getExternalEmail = (msg: GmailAPIMessage): string => {
+        const from = getHeader(msg.payload.headers, "From")
+        const to = getHeader(msg.payload.headers, "To")
+        const isOutbound =
+          from.includes("support@tonydurante.us") ||
+          from.includes("antonio.durante@tonydurante.us")
+        return isOutbound ? to : from
+      }
+
+      // Current thread's external contact (use first message)
+      const currentExternalEmail = thread.messages[0]
+        ? getExternalEmail(thread.messages[0])
+        : ""
+
       if (baseSubject.length > 3) {
         try {
           const searchResult = (await gmailGet("/threads", {
@@ -81,7 +96,22 @@ export async function GET(
 
             for (const result of relatedResults) {
               if (result.status !== "fulfilled") continue
-              for (const msg of result.value.messages) {
+              const relatedMsgs = result.value.messages
+              if (!relatedMsgs || relatedMsgs.length === 0) continue
+
+              // Only merge threads that share the same external email address.
+              // This prevents outbound emails to DIFFERENT recipients (same subject)
+              // from being incorrectly grouped together in the inbox.
+              const relatedExternalEmail = getExternalEmail(relatedMsgs[0])
+              if (
+                currentExternalEmail &&
+                relatedExternalEmail &&
+                currentExternalEmail !== relatedExternalEmail
+              ) {
+                continue
+              }
+
+              for (const msg of relatedMsgs) {
                 if (!seenMessageIds.has(msg.id)) {
                   seenMessageIds.add(msg.id)
                   allGmailMessages.push(msg)
