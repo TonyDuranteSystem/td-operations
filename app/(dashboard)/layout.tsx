@@ -8,6 +8,7 @@ import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { isAdmin } from '@/lib/auth'
 import { SwRegister } from '@/components/dashboard/sw-register'
+import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -87,6 +88,7 @@ export default async function DashboardLayout({
   return (
     <Providers>
       <SwRegister />
+      <RealtimeNotifications />
       <div className="flex h-screen">
         <Sidebar
           user={user}
