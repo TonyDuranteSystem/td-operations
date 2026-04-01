@@ -225,13 +225,20 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
       const data = await res.json()
       const messages = data?.messages || []
       const lastMsg = messages[messages.length - 1]
+
+      // Strip HTML tags and decode entities to get plain text
+      const htmlContent = lastMsg?.content || ''
+      const tempDiv = document.createElement('div')
+      tempDiv.innerHTML = htmlContent
+      const plainText = tempDiv.textContent || tempDiv.innerText || selected.preview || ''
+
       const fwdBody = lastMsg
-        ? `\n\n---------- Forwarded message ----------\nFrom: ${lastMsg.from || selected.name}\nDate: ${lastMsg.createdAt ? new Date(lastMsg.createdAt).toLocaleString() : ''}\nSubject: ${selected.subject || ''}\n\n${lastMsg.body || lastMsg.text || selected.preview || ''}`
+        ? `\n\n---------- Forwarded message ----------\nFrom: ${lastMsg.sender || selected.name}\nDate: ${lastMsg.createdAt ? new Date(lastMsg.createdAt).toLocaleString() : ''}\nSubject: ${selected.subject || ''}\n\n${plainText}`
         : ''
       setForwardData({
         subject: selected.subject || '',
         body: fwdBody,
-        from: lastMsg?.from || selected.name,
+        from: lastMsg?.sender || selected.name,
       })
       setComposeOpen(true)
     } catch {
