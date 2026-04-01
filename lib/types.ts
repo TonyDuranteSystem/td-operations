@@ -76,6 +76,7 @@ export interface Account {
   referrer: string | null
   lead_source: string | null
   gdrive_folder_url: string | null
+  drive_folder_id: string | null
   notes: string | null
   account_type: string | null
   client_health: string | null
