@@ -752,9 +752,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     const previousYear = currentYear - 1
     const deadlineMonth = returnType === "MMLLC" ? "03" : "04"
 
+    // Only create tax return for previous year — current year is still in progress,
+    // nothing to file yet. Current year returns are created by the annual installment handler.
     const taxChecks = [
       { year: previousYear, field: "tax_return_previous_year_filed", label: "Previous year" },
-      { year: currentYear, field: "tax_return_current_year_filed", label: "Current year" },
     ]
 
     // Check if tax return is bundled (included) in the client's offer
