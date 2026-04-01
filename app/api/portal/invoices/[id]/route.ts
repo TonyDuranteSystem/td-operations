@@ -54,9 +54,23 @@ export async function GET(
     .eq('invoice_id', id)
     .order('sort_order')
 
+  // Fetch payment methods for unpaid invoices
+  let paymentMethods: unknown[] = []
+  if (['Sent', 'Overdue'].includes(invoice.status)) {
+    const { data: settings } = await supabaseAdmin
+      .from('invoice_settings')
+      .select('bank_accounts, payment_gateways')
+      .limit(1)
+      .single()
+    if (settings?.bank_accounts) {
+      paymentMethods = settings.bank_accounts as unknown[]
+    }
+  }
+
   return NextResponse.json({
     ...invoice,
     customer,
     items: items ?? [],
+    payment_methods: paymentMethods,
   })
 }

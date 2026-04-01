@@ -11,6 +11,21 @@ import { toast } from 'sonner'
 import { markInvoiceAsPaid, createTemplate } from '../actions'
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
+import { PayNow } from '@/components/portal/pay-now'
+
+interface PaymentMethod {
+  name: string
+  currency: string
+  active: boolean
+  type: 'zelle' | 'ach' | 'wire'
+  email?: string
+  bank_name?: string
+  account_number?: string
+  routing_number?: string
+  account_holder?: string
+  iban?: string
+  swift?: string
+}
 
 interface InvoiceDetail {
   id: string
@@ -27,8 +42,10 @@ interface InvoiceDetail {
   notes: string | null
   message: string | null
   created_at: string
+  whop_checkout_url: string | null
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
+  payment_methods: PaymentMethod[]
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -46,10 +63,10 @@ function fmtDate(d: string | null): string {
 
 export default function InvoiceDetailPage() {
   const params = useParams()
-  const router = useRouter()
+  const _router = useRouter()
   const invoiceId = params.id as string
 
-  const { t } = useLocale()
+  const { t, locale } = useLocale()
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
@@ -291,6 +308,18 @@ export default function InvoiceDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Pay Now — only for Sent/Overdue invoices */}
+      {['Sent', 'Overdue'].includes(invoice.status) && invoice.payment_methods?.length > 0 && (
+        <PayNow
+          invoiceNumber={invoice.invoice_number}
+          total={invoice.total}
+          currency={invoice.currency}
+          paymentMethods={invoice.payment_methods}
+          whopCheckoutUrl={invoice.whop_checkout_url ?? null}
+          locale={locale}
+        />
       )}
 
       {/* Invoice Card */}

@@ -40,6 +40,19 @@ const translations: Record<Locale, Record<string, string>> = {
     'billing.status.voided': 'Voided',
     'billing.status.credit': 'Credit',
 
+    // Pay Now
+    'pay.title': 'Pay This Invoice',
+    'pay.card': 'Pay by Card',
+    'pay.cardFee': 'includes 5% processing fee',
+    'pay.payNow': 'Pay Now',
+    'pay.sendTo': 'Send to',
+    'pay.amount': 'Amount',
+    'pay.reference': 'Reference',
+    'pay.bank': 'Bank',
+    'pay.beneficiary': 'Beneficiary',
+    'pay.routing': 'Routing',
+    'pay.accountNo': 'Account',
+
     // Dashboard
     'dashboard.title': 'Dashboard',
     'dashboard.companyInfo': 'Company Info',
@@ -482,6 +495,19 @@ const translations: Record<Locale, Record<string, string>> = {
     'billing.status.overdue': 'Scaduta',
     'billing.status.voided': 'Annullata',
     'billing.status.credit': 'Nota di Credito',
+
+    // Pay Now
+    'pay.title': 'Paga Questa Fattura',
+    'pay.card': 'Paga con Carta',
+    'pay.cardFee': 'include 5% di commissione',
+    'pay.payNow': 'Paga Ora',
+    'pay.sendTo': 'Invia a',
+    'pay.amount': 'Importo',
+    'pay.reference': 'Riferimento',
+    'pay.bank': 'Banca',
+    'pay.beneficiary': 'Beneficiario',
+    'pay.routing': 'Routing',
+    'pay.accountNo': 'Conto',
 
     // Dashboard
     'dashboard.title': 'Dashboard',

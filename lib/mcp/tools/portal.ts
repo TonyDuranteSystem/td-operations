@@ -820,15 +820,67 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
           .select("id")
           .single()
 
+        // Auto-create Whop checkout plan for card payment (+5%)
+        let whopUrl: string | null = null
+        let whopPlanId: string | null = null
+        try {
+          const whopKey = process.env.WHOP_API_KEY
+          if (whopKey && !mark_as_paid) {
+            const cardAmount = Math.ceil(total * 1.05)
+            const firstItem = line_items[0]?.description || "Invoice"
+            const planTitle = `${firstItem} - ${customerName}`.substring(0, 80)
+
+            // Find a suitable product — use "LLC Onboarding" as default
+            const prodRes = await fetch("https://api.whop.com/api/v1/products?company_id=biz_rssyD9YyMnXd7P&first=50", {
+              headers: { Authorization: `Bearer ${whopKey}`, "Content-Type": "application/json" },
+            })
+            const prodData = await prodRes.json()
+            const products = prodData.data || []
+            const defaultProduct = products.find((p: { title: string }) => p.title?.includes("Onboarding")) || products[0]
+
+            if (defaultProduct) {
+              const planRes = await fetch("https://api.whop.com/api/v1/plans", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${whopKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  company_id: "biz_rssyD9YyMnXd7P",
+                  product_id: defaultProduct.id,
+                  title: planTitle,
+                  initial_price: cardAmount,
+                  currency: cur.toLowerCase(),
+                  plan_type: "one_time",
+                  release_method: "buy_now",
+                  visibility: "visible",
+                  unlimited_stock: true,
+                }),
+              })
+              if (planRes.ok) {
+                const plan = await planRes.json()
+                whopUrl = plan.purchase_url || `https://whop.com/checkout/${plan.id}`
+                whopPlanId = plan.id
+
+                // Store on invoice
+                await supabaseAdmin
+                  .from("client_invoices")
+                  .update({ whop_checkout_url: whopUrl, whop_plan_id: whopPlanId })
+                  .eq("id", invoice.id)
+              }
+            }
+          }
+        } catch {
+          // Whop plan creation failed — invoice still works, just no card option
+        }
+
         await logAction({
           action_type: "create",
           table_name: "client_invoices",
           record_id: invoice.id,
           account_id: resolvedAccountId || undefined,
-          summary: `Portal invoice ${invoiceNumber} created: ${cur} ${total.toFixed(2)} (${status})`,
+          summary: `Portal invoice ${invoiceNumber} created: ${cur} ${total.toFixed(2)} (${status})${whopUrl ? " + Whop checkout" : ""}`,
         })
 
         const csym = cur === "EUR" ? "EUR" : "$"
+        const cardAmount = Math.ceil(total * 1.05)
         return {
           content: [{
             type: "text" as const,
@@ -842,6 +894,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
               payment ? `- CRM Payment ID: ${payment.id}` : "",
               resolvedContactId ? `- Contact: ${resolvedContactId}` : "",
               resolvedAccountId ? `- Account: ${resolvedAccountId}` : "",
+              whopUrl ? `- Card payment: ${whopUrl} (${csym}${cardAmount} with 5% fee)` : "",
               ``,
               mark_as_paid ? "Marked as paid." : "Use portal_invoice_send to email the invoice to the client.",
             ].filter(Boolean).join("\n"),

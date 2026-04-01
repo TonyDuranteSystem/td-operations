@@ -2,7 +2,8 @@
 
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { FileText, Download, CheckCircle2, Clock, AlertCircle } from 'lucide-react'
+import Link from 'next/link'
+import { FileText, Download, CheckCircle2, Clock, AlertCircle, CreditCard } from 'lucide-react'
 import { t, type Locale } from '@/lib/portal/i18n'
 
 interface BillingInvoice {
@@ -112,16 +113,28 @@ export function BillingList({ invoices, locale }: Props) {
                 </span>
               )}
 
-              {/* Download PDF */}
-              <a
-                href={`/api/invoices/${inv.id}/pdf`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
-              >
-                <Download className="h-3.5 w-3.5" />
-                PDF
-              </a>
+              <div className="ml-auto flex items-center gap-2">
+                {/* Pay link for unpaid invoices */}
+                {(status === 'Sent' || status === 'Overdue') && (
+                  <Link
+                    href={`/portal/invoices/${inv.id}`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors text-xs font-medium"
+                  >
+                    <CreditCard className="h-3.5 w-3.5" />
+                    {t('pay.payNow', locale)}
+                  </Link>
+                )}
+                {/* Download PDF */}
+                <a
+                  href={`/api/invoices/${inv.id}/pdf`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  PDF
+                </a>
+              </div>
             </div>
 
             {/* Line items (expandable) */}
