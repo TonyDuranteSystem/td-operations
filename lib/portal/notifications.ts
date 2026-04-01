@@ -1,8 +1,8 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
 
-// Notification types that also trigger an email
-const EMAIL_TYPES = ['service', 'deadline', 'tax_document_uploaded', 'chat']
+// Email digest is handled by /api/cron/portal-digest (every 5 min)
+// All notification types are eligible for digest emails.
 
 /**
  * Create a portal notification for a client.
@@ -53,20 +53,17 @@ export async function createPortalNotification(params: {
     }).catch(() => {})
   }
 
-  // Send email for important notification types (fire-and-forget)
-  if (EMAIL_TYPES.includes(params.type)) {
-    if (params.contact_id) {
-      sendNotificationEmailToContact(params.contact_id, params.title, params.body || '').catch(() => {})
-    } else if (params.account_id) {
-      sendNotificationEmail(params.account_id, params.title, params.body || '').catch(() => {})
-    }
-  }
+  // Email is now handled by the digest cron (/api/cron/portal-digest)
+  // which batches all pending notifications into one email per client every 5 minutes.
+  // No immediate email — only push notifications are instant.
 }
 
 /**
  * Send email notification to the primary contact of an account.
+ * NOTE: No longer called from createPortalNotification (digest handles email).
+ * Kept as utility for direct email needs.
  */
-async function sendNotificationEmail(accountId: string, title: string, body: string) {
+async function _sendNotificationEmail(accountId: string, title: string, body: string) {
   // Get primary contact email
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
@@ -139,9 +136,10 @@ async function sendNotificationEmail(accountId: string, title: string, body: str
 
 /**
  * Send email notification directly to a contact (no account lookup needed).
- * Used for contact-only notifications (ITIN clients, pre-account contacts).
+ * NOTE: No longer called from createPortalNotification (digest handles email).
+ * Kept as utility for direct email needs.
  */
-async function sendNotificationEmailToContact(contactId: string, title: string, body: string) {
+async function _sendNotificationEmailToContact(contactId: string, title: string, body: string) {
   const { data: contact } = await supabaseAdmin
     .from('contacts')
     .select('email, full_name')

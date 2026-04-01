@@ -119,12 +119,31 @@ export async function toggleDocumentPortalVisibility(
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
+    const { data: doc } = await supabase
+      .from('documents')
+      .select('id, file_name, account_id, contact_id')
+      .eq('id', documentId)
+      .single()
+
     const { error } = await supabase
       .from('documents')
       .update({ portal_visible: visible })
       .eq('id', documentId)
 
     if (error) throw new Error(error.message)
+
+    // Notify client when document is shared (not when hidden)
+    if (visible && doc) {
+      const { createPortalNotification } = await import('@/lib/portal/notifications')
+      await createPortalNotification({
+        account_id: doc.account_id || undefined,
+        contact_id: doc.contact_id || undefined,
+        type: 'document',
+        title: 'New document available',
+        body: doc.file_name || 'A new document has been shared with you',
+        link: '/portal/documents',
+      })
+    }
   }, {
     action_type: 'update', table_name: 'documents', record_id: documentId,
     summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,

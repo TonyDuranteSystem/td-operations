@@ -59,6 +59,10 @@
     {
       "path": "/api/cron/faxage-ss4-confirm",
       "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/portal-digest",
+      "schedule": "*/5 * * * *"
     }
   ],
   "rewrites": [

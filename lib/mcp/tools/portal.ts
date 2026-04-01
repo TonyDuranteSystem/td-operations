@@ -892,6 +892,19 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
           summary: `Portal invoice ${invoiceNumber} created: ${cur} ${total.toFixed(2)} (${status})${whopUrl ? " + Whop checkout" : ""}`,
         })
 
+        // Notify client about new invoice (digest email)
+        if (!mark_as_paid && (resolvedAccountId || resolvedContactId)) {
+          const { createPortalNotification } = await import("@/lib/portal/notifications")
+          await createPortalNotification({
+            account_id: resolvedAccountId || undefined,
+            contact_id: resolvedContactId || undefined,
+            type: "invoice",
+            title: `New invoice ${invoiceNumber}`,
+            body: `${cur === "EUR" ? "EUR" : "$"}${total.toFixed(2)}`,
+            link: "/portal/billing",
+          }).catch(() => {})
+        }
+
         const csym = cur === "EUR" ? "EUR" : "$"
         const cardAmount = Math.ceil(total * 1.05)
         return {
