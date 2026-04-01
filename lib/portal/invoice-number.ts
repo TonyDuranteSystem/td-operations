@@ -1,19 +1,21 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 /**
- * Generate next invoice number for an account.
+ * Generate next invoice number.
  * Format: INV-{YEAR}-{SEQ} (e.g., INV-2026-001)
- * Scoped per account — each LLC has its own sequence.
- * UNIQUE constraint on (account_id, invoice_number) with retry on collision.
+ * Scoped per owner — each account or contact has its own sequence.
+ * Supports contact-only invoices (before any account exists).
  */
-export async function generateInvoiceNumber(accountId: string): Promise<string> {
+export async function generateInvoiceNumber(ownerId: string, ownerType: 'account' | 'contact' = 'account'): Promise<string> {
   const year = new Date().getFullYear()
   const prefix = `INV-${year}-`
+
+  const col = ownerType === 'account' ? 'account_id' : 'contact_id'
 
   const { data } = await supabaseAdmin
     .from('client_invoices')
     .select('invoice_number')
-    .eq('account_id', accountId)
+    .eq(col, ownerId)
     .like('invoice_number', `${prefix}%`)
     .order('invoice_number', { ascending: false })
     .limit(1)

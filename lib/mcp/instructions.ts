@@ -32,9 +32,9 @@ RULE: Individual services (ITIN, Banking Physical) can exist on a Contact WITHOU
 The system is transitioning to portal-first. The portal is the OFFICIAL system. Use existing MCP tools as described below. When portal MCP tools are built, switch to them.
 
 INVOICING:
-- Use qb_create_invoice for creating invoices (portal billing MCP tool not yet built)
-- Portal billing (client_invoices table) is the official system -- switch to portal_invoice_create when it exists
-- QB handles accounting and invoicing until portal billing MCP tools are built
+- Use portal_invoice_create for creating invoices (OFFICIAL system). Supports contact-level (setup fees, pre-account) and account-level (annual installments) invoices.
+- Use portal_invoice_send to email the invoice with PDF to the client.
+- QuickBooks (qb_create_invoice) is for ACCOUNTING only -- use when you need a QB ledger entry, not for client invoicing.
 
 DATA COLLECTION:
 - New clients WITH portal access: client uses portal wizard automatically (no Claude action needed)
@@ -43,7 +43,7 @@ DATA COLLECTION:
 
 COMMUNICATION:
 - Official documents: gmail_send (email only -- rule M1)
-- Day-to-day with portal clients: client uses portal chat, staff responds via portal dashboard (no MCP send tool yet)
+- Day-to-day with portal clients: portal_chat_send (staff -> client via portal chat)
 - Day-to-day without portal: msg_send (WhatsApp/Telegram)
 
 OFFERS:

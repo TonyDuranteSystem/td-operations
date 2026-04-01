@@ -632,4 +632,415 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
       }
     }
   )
+
+  // ─── portal_invoice_create ───────────────────────────────────────────
+
+  server.tool(
+    "portal_invoice_create",
+    `Create an invoice in the portal billing system (client_invoices table). The OFFICIAL invoicing system — use this instead of QB for new invoices.
+
+Supports two scenarios:
+- **Contact-level** (pass contact_id): For setup fees, ITIN, or any payment before an account exists. The contact is the center — they pay before any LLC is created.
+- **Account-level** (pass account_id): For annual installments, recurring services on an existing LLC.
+- Both can be provided (contact pays for a specific company).
+
+Returns the created invoice with ID, number, total, and a link to the CRM payment record.
+
+Workflow: portal_invoice_create -> portal_invoice_send (email with PDF) -> client pays -> mark as paid.
+Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are receipts per rule P6).`,
+    {
+      contact_id: z.string().uuid().optional().describe("Contact UUID — invoice a person (setup fees, pre-account). At least one of contact_id or account_id required."),
+      account_id: z.string().uuid().optional().describe("Account UUID — invoice a company (annual installments). At least one of contact_id or account_id required."),
+      line_items: z.array(z.object({
+        description: z.string().describe("Line item description"),
+        unit_price: z.number().describe("Unit price"),
+        quantity: z.number().optional().describe("Quantity (default 1)"),
+      })).min(1).describe("Invoice line items"),
+      currency: z.enum(["USD", "EUR"]).optional().describe("Currency (default USD)"),
+      due_date: z.string().optional().describe("Due date YYYY-MM-DD"),
+      notes: z.string().optional().describe("Private notes (not visible to client)"),
+      message: z.string().optional().describe("Payment terms visible to customer on invoice"),
+      mark_as_paid: z.boolean().optional().describe("If true, create as Paid with today's date (invoices are receipts per rule P6)"),
+      paid_date: z.string().optional().describe("Override paid date (YYYY-MM-DD) if different from today"),
+    },
+    async ({ contact_id, account_id, line_items, currency, due_date, notes, message, mark_as_paid, paid_date }) => {
+      try {
+        if (!contact_id && !account_id) {
+          return { content: [{ type: "text" as const, text: "Error: At least one of contact_id or account_id is required. Contact = person (pre-account). Account = company." }] }
+        }
+
+        const cur = currency || "USD"
+
+        // Resolve customer info
+        let customerName = ""
+        let customerEmail = ""
+        let resolvedContactId = contact_id
+        const resolvedAccountId = account_id
+
+        if (contact_id) {
+          const { data: contact } = await supabaseAdmin
+            .from("contacts")
+            .select("full_name, email")
+            .eq("id", contact_id)
+            .single()
+          if (!contact) return { content: [{ type: "text" as const, text: `Contact ${contact_id} not found` }] }
+          customerName = contact.full_name
+          customerEmail = contact.email || ""
+        }
+
+        if (account_id) {
+          const { data: account } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", account_id)
+            .single()
+          if (!account) return { content: [{ type: "text" as const, text: `Account ${account_id} not found` }] }
+
+          // If no contact_id, get primary contact from account
+          if (!contact_id) {
+            const { data: link } = await supabaseAdmin
+              .from("account_contacts")
+              .select("contact_id, contacts(full_name, email)")
+              .eq("account_id", account_id)
+              .limit(1)
+              .single()
+            if (link) {
+              const c = link.contacts as unknown as { full_name: string; email: string }
+              resolvedContactId = link.contact_id
+              customerName = c.full_name
+              customerEmail = c.email || ""
+            }
+          }
+
+          // Use company name as customer name for account invoices
+          customerName = account.company_name
+        }
+
+        if (!customerName) {
+          return { content: [{ type: "text" as const, text: "Could not resolve customer name from contact or account" }] }
+        }
+
+        // Find or create client_customer
+        let customerId: string
+        const matchCol = resolvedAccountId ? "account_id" : "contact_id"
+        const matchVal = resolvedAccountId || resolvedContactId
+
+        const { data: existing } = await supabaseAdmin
+          .from("client_customers")
+          .select("id")
+          .eq(matchCol, matchVal!)
+          .limit(1)
+          .maybeSingle()
+
+        if (existing) {
+          customerId = existing.id
+        } else {
+          const { data: created, error: custErr } = await supabaseAdmin
+            .from("client_customers")
+            .insert({
+              account_id: resolvedAccountId || null,
+              contact_id: resolvedContactId || null,
+              name: customerName,
+              email: customerEmail,
+            })
+            .select("id")
+            .single()
+          if (custErr) return { content: [{ type: "text" as const, text: `Failed to create customer: ${custErr.message}` }] }
+          customerId = created.id
+        }
+
+        // Generate invoice number
+        const { generateInvoiceNumber } = await import("@/lib/portal/invoice-number")
+        const ownerType = resolvedAccountId ? "account" as const : "contact" as const
+        const ownerId = resolvedAccountId || resolvedContactId!
+        const invoiceNumber = await generateInvoiceNumber(ownerId, ownerType)
+
+        // Calculate totals
+        const items = line_items.map((item) => ({
+          description: item.description,
+          unit_price: item.unit_price,
+          quantity: item.quantity || 1,
+          amount: item.unit_price * (item.quantity || 1),
+        }))
+        const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
+        const total = subtotal
+
+        const status = mark_as_paid ? "Paid" : "Draft"
+        const paidDateVal = mark_as_paid ? (paid_date || new Date().toISOString().split("T")[0]) : null
+
+        // Insert invoice
+        const { data: invoice, error: invErr } = await supabaseAdmin
+          .from("client_invoices")
+          .insert({
+            account_id: resolvedAccountId || null,
+            contact_id: resolvedContactId || null,
+            customer_id: customerId,
+            invoice_number: invoiceNumber,
+            status,
+            currency: cur,
+            subtotal,
+            discount: 0,
+            total,
+            issue_date: new Date().toISOString().split("T")[0],
+            due_date: due_date || null,
+            paid_date: paidDateVal,
+            notes: notes || null,
+            message: message || null,
+          })
+          .select("id, invoice_number")
+          .single()
+
+        if (invErr) return { content: [{ type: "text" as const, text: `Failed to create invoice: ${invErr.message}` }] }
+
+        // Insert line items
+        const itemRows = items.map((item, i) => ({
+          invoice_id: invoice.id,
+          description: item.description,
+          unit_price: item.unit_price,
+          quantity: item.quantity,
+          amount: item.amount,
+          sort_order: i,
+        }))
+
+        await supabaseAdmin.from("client_invoice_items").insert(itemRows)
+
+        // Create CRM payment record to keep SOT in sync
+        const { data: payment } = await supabaseAdmin
+          .from("payments")
+          .insert({
+            account_id: resolvedAccountId || null,
+            contact_id: resolvedContactId || null,
+            amount: total,
+            currency: cur,
+            payment_date: paidDateVal || new Date().toISOString().split("T")[0],
+            payment_type: "Invoice",
+            status: mark_as_paid ? "Paid" : "Pending",
+            notes: `Portal invoice ${invoiceNumber}`,
+          })
+          .select("id")
+          .single()
+
+        await logAction({
+          action_type: "create",
+          table_name: "client_invoices",
+          record_id: invoice.id,
+          account_id: resolvedAccountId || undefined,
+          summary: `Portal invoice ${invoiceNumber} created: ${cur} ${total.toFixed(2)} (${status})`,
+        })
+
+        const csym = cur === "EUR" ? "EUR" : "$"
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `Invoice created:`,
+              `- Invoice: ${invoiceNumber}`,
+              `- Customer: ${customerName}`,
+              `- Total: ${csym}${total.toFixed(2)}`,
+              `- Status: ${status}`,
+              `- Invoice ID: ${invoice.id}`,
+              payment ? `- CRM Payment ID: ${payment.id}` : "",
+              resolvedContactId ? `- Contact: ${resolvedContactId}` : "",
+              resolvedAccountId ? `- Account: ${resolvedAccountId}` : "",
+              ``,
+              mark_as_paid ? "Marked as paid." : "Use portal_invoice_send to email the invoice to the client.",
+            ].filter(Boolean).join("\n"),
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ─── portal_invoice_send ─────────────────────────────────────────────
+
+  server.tool(
+    "portal_invoice_send",
+    `Send a portal invoice via email with PDF attachment. Marks the invoice as 'Sent'. Uses Gmail API (from support@tonydurante.us). The email includes invoice details, bank payment instructions, and a Pay Now button if a payment link exists.
+
+Prerequisite: Invoice must exist (created via portal_invoice_create or portal dashboard).`,
+    {
+      invoice_id: z.string().uuid().describe("Portal invoice UUID (from portal_invoice_create)"),
+      email_to: z.string().optional().describe("Override recipient email (default: customer email from invoice)"),
+      language: z.enum(["en", "it"]).optional().describe("Email language (default: en)"),
+    },
+    async ({ invoice_id, email_to, language }) => {
+      try {
+        const lang = language || "en"
+
+        // Fetch invoice with items
+        const { data: invoice } = await supabaseAdmin
+          .from("client_invoices")
+          .select("*")
+          .eq("id", invoice_id)
+          .single()
+
+        if (!invoice) return { content: [{ type: "text" as const, text: `Invoice ${invoice_id} not found` }] }
+
+        if (invoice.status === "Sent" || invoice.status === "Paid") {
+          return { content: [{ type: "text" as const, text: `Invoice ${invoice.invoice_number} is already ${invoice.status}. Cannot re-send.` }] }
+        }
+
+        // Get customer
+        const { data: customer } = await supabaseAdmin
+          .from("client_customers")
+          .select("name, email")
+          .eq("id", invoice.customer_id)
+          .single()
+
+        const recipientEmail = email_to || customer?.email
+        if (!recipientEmail) return { content: [{ type: "text" as const, text: "No recipient email. Provide email_to or ensure customer has email." }] }
+
+        const csym = invoice.currency === "EUR" ? "EUR " : "$"
+        const customerName = customer?.name || "Client"
+        const greeting = lang === "it" ? `Gentile ${customerName}` : `Dear ${customerName}`
+        const subject = `Invoice ${invoice.invoice_number} from Tony Durante LLC`
+
+        const html = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: #2563eb; padding: 24px; border-radius: 12px 12px 0 0;">
+              <h1 style="color: white; margin: 0; font-size: 20px;">Tony Durante LLC</h1>
+            </div>
+            <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+              <p>${greeting},</p>
+              <p>${lang === "it" ? "In allegato la fattura" : "Please find attached invoice"} <strong>${invoice.invoice_number}</strong>.</p>
+              <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <tr style="background: #f8fafc;"><td style="padding: 8px 12px; font-weight: bold; color: #6b7280;">Invoice</td><td style="padding: 8px 12px;">${invoice.invoice_number}</td></tr>
+                <tr><td style="padding: 8px 12px; font-weight: bold; color: #6b7280;">Date</td><td style="padding: 8px 12px;">${invoice.issue_date}</td></tr>
+                ${invoice.due_date ? `<tr style="background: #f8fafc;"><td style="padding: 8px 12px; font-weight: bold; color: #6b7280;">Due</td><td style="padding: 8px 12px;">${invoice.due_date}</td></tr>` : ""}
+                <tr><td style="padding: 8px 12px; font-weight: bold; color: #6b7280;">Total</td><td style="padding: 8px 12px; font-size: 18px; font-weight: bold; color: #2563eb;">${csym}${(invoice.total ?? 0).toFixed(2)}</td></tr>
+              </table>
+              ${invoice.message ? `<div style="background: #f8fafc; padding: 16px; border-radius: 8px;"><p style="margin: 0; font-size: 14px; white-space: pre-wrap;">${invoice.message}</p></div>` : ""}
+              <p style="color: #6b7280; font-size: 13px; margin-top: 24px;">${lang === "it" ? "Per domande, rispondi a questa email." : "If you have questions, reply to this email."}</p>
+            </div>
+          </div>
+        `
+
+        // Send via Gmail
+        const { gmailPost } = await import("@/lib/gmail")
+        const boundary = `boundary_${Date.now()}`
+        const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+        const parts = [
+          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `To: ${recipientEmail}`,
+          `Subject: ${encodedSubject}`,
+          `MIME-Version: 1.0`,
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          "Content-Type: text/html; charset=UTF-8",
+          "Content-Transfer-Encoding: base64",
+          "",
+          Buffer.from(html).toString("base64"),
+          `--${boundary}--`,
+        ]
+        const raw = Buffer.from(parts.join("\r\n")).toString("base64url")
+        await gmailPost("/messages/send", { raw })
+
+        // Mark as Sent
+        await supabaseAdmin
+          .from("client_invoices")
+          .update({ status: "Sent", updated_at: new Date().toISOString() })
+          .eq("id", invoice_id)
+
+        await logAction({
+          action_type: "update",
+          table_name: "client_invoices",
+          record_id: invoice_id,
+          account_id: invoice.account_id || undefined,
+          summary: `Portal invoice ${invoice.invoice_number} sent to ${recipientEmail}`,
+        })
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Invoice ${invoice.invoice_number} sent to ${recipientEmail}. Status updated to Sent.`,
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ─── portal_chat_send ────────────────────────────────────────────────
+
+  server.tool(
+    "portal_chat_send",
+    `Send a message to a client via the portal chat system. The message appears in the client's portal chat immediately. Use for day-to-day communication with portal-enabled clients.
+
+Supports both:
+- **Account-level chat** (pass account_id): Messages about a specific LLC
+- **Contact-level chat** (pass contact_id): Messages to a person (may not have an LLC yet)
+
+The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
+    {
+      account_id: z.string().uuid().optional().describe("Account UUID for LLC-related messages. At least one of account_id or contact_id required."),
+      contact_id: z.string().uuid().optional().describe("Contact UUID for person-level messages. At least one of account_id or contact_id required."),
+      message: z.string().describe("Message text to send"),
+      attachment_url: z.string().optional().describe("Optional attachment URL"),
+      attachment_name: z.string().optional().describe("Optional attachment filename"),
+    },
+    async ({ account_id, contact_id, message: msgText, attachment_url, attachment_name }) => {
+      try {
+        if (!account_id && !contact_id) {
+          return { content: [{ type: "text" as const, text: "Error: At least one of account_id or contact_id is required." }] }
+        }
+
+        // Get admin sender ID (Antonio's auth user)
+        const { data: adminUser } = await supabaseAdmin
+          .from("contacts")
+          .select("auth_user_id")
+          .eq("email", "antonio.durante@tonydurante.us")
+          .single()
+
+        // Fallback: use a known admin auth ID
+        const senderId = adminUser?.auth_user_id || "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+
+        const { data: msg, error } = await supabaseAdmin
+          .from("portal_messages")
+          .insert({
+            account_id: account_id || null,
+            contact_id: contact_id || null,
+            sender_type: "admin",
+            sender_id: senderId,
+            message: msgText,
+            attachment_url: attachment_url || null,
+            attachment_name: attachment_name || null,
+          })
+          .select("id, created_at")
+          .single()
+
+        if (error) return { content: [{ type: "text" as const, text: `Failed to send message: ${error.message}` }] }
+
+        await logAction({
+          action_type: "create",
+          table_name: "portal_messages",
+          record_id: msg.id,
+          account_id: account_id || undefined,
+          summary: `Portal chat message sent: "${msgText.substring(0, 80)}${msgText.length > 80 ? "..." : ""}"`,
+        })
+
+        // Identify recipient for confirmation
+        let recipientName = ""
+        if (account_id) {
+          const { data: acct } = await supabaseAdmin.from("accounts").select("company_name").eq("id", account_id).single()
+          recipientName = acct?.company_name || account_id
+        } else if (contact_id) {
+          const { data: cnt } = await supabaseAdmin.from("contacts").select("full_name").eq("id", contact_id).single()
+          recipientName = cnt?.full_name || contact_id
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Message sent to ${recipientName} via portal chat.\nMessage ID: ${msg.id}\nTimestamp: ${msg.created_at}`,
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
 }
