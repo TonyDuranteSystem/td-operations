@@ -198,10 +198,10 @@ export function Sidebar({
           event: 'INSERT',
           schema: 'public',
           table: 'portal_messages',
+          filter: 'sender_type=eq.client',
         },
-        (payload) => {
-          const newMsg = payload.new as { sender_type: string }
-          if (newMsg.sender_type === 'client' && pathnameRef.current !== '/portal-chats') {
+        () => {
+          if (pathnameRef.current !== '/portal-chats') {
             setLivePortalChats(prev => prev + 1)
           }
         }
