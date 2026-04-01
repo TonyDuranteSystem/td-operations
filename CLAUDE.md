@@ -222,9 +222,20 @@ What to update:
 If you send an email and don't update the CRM, that action is INCOMPLETE. Antonio should NEVER have to remind you.
 
 ## Business Rules
-All business rules live on Supabase in `knowledge_articles` (57) and `sop_runbooks` (14).
+All business rules live on Supabase in `knowledge_articles` and `sop_runbooks`.
 Do NOT put business rules in code comments or local files — they belong on Supabase.
 Search with `kb_search()` via MCP, or query directly.
+**Master Rules KB (370347b6)** is the CANONICAL source for all business rules. When values conflict between sources, Master Rules wins.
+
+## Decision Propagation — MANDATORY
+When a decision is made that changes how the system works (pricing, workflows, tool usage, business rules):
+1. Update **Master Rules KB** FIRST — `kb_search("MASTER RULES")` → `kb_update`
+2. Update the **relevant SOP** if a workflow changed
+3. Update **instructions.ts** if it affects Claude.ai/co-work behavior (code change)
+4. Update **session-context** sysdoc — `sysdoc_update('session-context')`
+5. Update **CLAUDE.md** if it affects Claude Code behavior
+6. **Checkpoint** the decision with `session_checkpoint`
+A decision saved in only ONE place WILL be lost. All affected sources must be updated.
 
 ## File Structure
 ```
