@@ -198,16 +198,33 @@ function FileRow({
   }
 
   const handleTogglePortalVisibility = async () => {
-    if (!docInfo?.docId) return
     setTogglingVisibility(true)
     try {
-      const { toggleDocumentPortalVisibility } = await import('@/app/(dashboard)/accounts/actions')
-      const result = await toggleDocumentPortalVisibility(docInfo.docId, !portalVisible)
-      if (result.success) {
-        setPortalVisible(!portalVisible)
-        toast.success(`Portal visibility ${!portalVisible ? 'enabled' : 'disabled'}`)
+      if (docInfo?.docId) {
+        // Already processed — just toggle visibility
+        const { toggleDocumentPortalVisibility } = await import('@/app/(dashboard)/accounts/actions')
+        const result = await toggleDocumentPortalVisibility(docInfo.docId, !portalVisible)
+        if (result.success) {
+          setPortalVisible(!portalVisible)
+          toast.success(`Portal visibility ${!portalVisible ? 'enabled' : 'disabled'}`)
+        } else {
+          toast.error('Failed to toggle visibility')
+        }
       } else {
-        toast.error('Failed to toggle visibility')
+        // Not processed yet — process + share in one call
+        const res = await fetch(`/api/accounts/${accountId}/files/process-and-share`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileId: file.id }),
+        })
+        const data = await res.json()
+        if (res.ok && data.success) {
+          setPortalVisible(true)
+          toast.success('Document processed and shared with client')
+          onRefresh()
+        } else {
+          toast.error(data.error || 'Failed to process document')
+        }
       }
     } catch {
       toast.error('Failed to toggle visibility')
@@ -299,8 +316,8 @@ function FileRow({
             <Search className="h-3.5 w-3.5" />
           </button>
 
-          {/* Portal visibility toggle */}
-          {isAdmin && docInfo?.docId && (
+          {/* Portal visibility toggle — shown for all files, processes unprocessed ones on click */}
+          {isAdmin && (
             <button
               onClick={handleTogglePortalVisibility}
               disabled={togglingVisibility}
