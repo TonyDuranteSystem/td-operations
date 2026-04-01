@@ -611,7 +611,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         logAction({
           action_type: "create", table_name: "auth.users",
           record_id: newUser.user.id, account_id: account_id || undefined,
-          summary: `Portal user created: ${userName} (${userEmail})`,
+          summary: `Portal user created: ${userName} (${userEmail}). IMPORTANT: Credentials email NOT sent yet -- send via gmail_send then update contacts.portal_email_sent_at.`,
         })
 
         return {
@@ -624,6 +624,10 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
               `Login: ${PORTAL_BASE_URL}/portal/login`,
               ``,
               `Client will be asked to change password on first login.`,
+              ``,
+              `IMPORTANT: Credentials email has NOT been sent yet.`,
+              `After sending the email with gmail_send, you MUST update the contact:`,
+              `crm_update_record(contacts, ${resolvedContactId || '<contact_id>'}, {portal_email_sent_at: '${new Date().toISOString().split("T")[0]}', portal_email_template: '<template_name>'})`,
             ].join("\n"),
           }],
         }
