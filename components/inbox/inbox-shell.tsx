@@ -226,11 +226,19 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
       const messages = data?.messages || []
       const lastMsg = messages[messages.length - 1]
 
-      // Strip HTML tags and decode entities to get plain text
+      // Strip HTML to plain text: remove style/script tags, decode entities, collapse whitespace
       const htmlContent = lastMsg?.content || ''
       const tempDiv = document.createElement('div')
-      tempDiv.innerHTML = htmlContent
-      const plainText = tempDiv.textContent || tempDiv.innerText || selected.preview || ''
+      // Remove style and script tags before extracting text
+      tempDiv.innerHTML = htmlContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      const rawText = tempDiv.textContent || tempDiv.innerText || ''
+      // Collapse multiple blank lines into max 2, trim each line
+      const plainText = rawText
+        .split('\n')
+        .map(line => line.trim())
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim() || selected.preview || ''
 
       const fwdBody = lastMsg
         ? `\n\n---------- Forwarded message ----------\nFrom: ${lastMsg.sender || selected.name}\nDate: ${lastMsg.createdAt ? new Date(lastMsg.createdAt).toLocaleString() : ''}\nSubject: ${selected.subject || ''}\n\n${plainText}`
