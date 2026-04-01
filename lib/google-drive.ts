@@ -199,7 +199,7 @@ export async function listFolder(folderId: string, maxResults = 50) {
     q,
     driveId: SHARED_DRIVE_ID(),
     corpora: "drive",
-    fields: "files(id,name,mimeType,size,createdTime,modifiedTime,webViewLink)",
+    fields: "files(id,name,mimeType,size,createdTime,modifiedTime,webViewLink,thumbnailLink,iconLink)",
     pageSize: String(Math.min(maxResults, 100)),
     orderBy: "folder,name",
   })

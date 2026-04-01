@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
-  MoreVertical, Pencil, ArrowRight, ExternalLink, Eye,
+  MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, Trash2,
   RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
@@ -20,6 +20,8 @@ interface DriveFile {
   size?: string
   modifiedTime?: string
   webViewLink?: string
+  thumbnailLink?: string
+  iconLink?: string
 }
 
 interface FolderData {
@@ -79,8 +81,13 @@ function FileRow({
   const [newName, setNewName] = useState(file.name)
   const [saving, setSaving] = useState(false)
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showThumb, setShowThumb] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hasThumbnail = !!file.thumbnailLink
 
   useEffect(() => {
     if (renaming && inputRef.current) {
@@ -148,6 +155,36 @@ function FileRow({
     }
   }
 
+  const handleDelete = async () => {
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/accounts/${accountId}/files/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileId: file.id }),
+      })
+      if (!res.ok) throw new Error('Delete failed')
+      toast.success(`"${file.name}" moved to trash`)
+      onRefresh()
+    } catch {
+      toast.error('Failed to delete file')
+    } finally {
+      setDeleting(false)
+      setConfirmDelete(false)
+      setMenuOpen(false)
+    }
+  }
+
+  const handleMouseEnter = () => {
+    if (!hasThumbnail) return
+    hoverTimer.current = setTimeout(() => setShowThumb(true), 400)
+  }
+
+  const handleMouseLeave = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current)
+    setShowThumb(false)
+  }
+
   return (
     <Draggable draggableId={file.id} index={index}>
       {(provided, snapshot) => (
@@ -164,8 +201,26 @@ function FileRow({
             <GripVertical className="h-3.5 w-3.5 text-zinc-400" />
           </div>
 
-          {/* File icon */}
-          <div className="shrink-0">{getFileIcon(file.mimeType)}</div>
+          {/* File icon with thumbnail hover */}
+          <div
+            className="shrink-0 relative"
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+          >
+            {getFileIcon(file.mimeType)}
+            {/* Thumbnail preview tooltip */}
+            {showThumb && file.thumbnailLink && (
+              <div className="absolute left-6 top-0 z-40 bg-white border rounded-lg shadow-xl p-1 pointer-events-none">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={file.thumbnailLink}
+                  alt={file.name}
+                  className="max-w-[220px] max-h-[160px] rounded object-contain"
+                  loading="eager"
+                />
+              </div>
+            )}
+          </div>
 
           {/* Name (or rename input) */}
           <div className="flex-1 min-w-0">
@@ -244,6 +299,37 @@ function FileRow({
                     <ExternalLink className="h-3.5 w-3.5" /> Open in Drive
                   </a>
                 )}
+
+                {/* Delete */}
+                <div className="border-t mt-1 pt-1">
+                  {!confirmDelete ? (
+                    <button
+                      onClick={() => setConfirmDelete(true)}
+                      className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete
+                    </button>
+                  ) : (
+                    <div className="px-3 py-1.5">
+                      <p className="text-xs text-red-600 mb-1.5">Move to trash? (recoverable 30 days)</p>
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={handleDelete}
+                          disabled={deleting}
+                          className="flex-1 text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                        >
+                          {deleting ? 'Deleting...' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(false)}
+                          className="flex-1 text-xs px-2 py-1 bg-zinc-100 text-zinc-600 rounded hover:bg-zinc-200"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Move submenu */}
                 {moveMenuOpen && (
