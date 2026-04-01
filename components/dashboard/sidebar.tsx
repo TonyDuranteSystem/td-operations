@@ -181,12 +181,16 @@ export function Sidebar({
     pathnameRef.current = pathname
   }, [pathname])
 
-  // Fetch all badge counts on mount + poll every 15s
+  // Fetch badge counts via API (uses supabaseAdmin server-side to bypass RLS)
   useEffect(() => {
     const fetchBadges = () => {
       fetch('/api/dashboard/badges')
-        .then(r => r.json())
-        .then((data: { portalChats?: number; inbox?: number }) => {
+        .then(r => {
+          if (!r.ok) return null
+          return r.json()
+        })
+        .then(data => {
+          if (!data) return
           if (typeof data.portalChats === 'number' && pathnameRef.current !== '/portal-chats') {
             setLivePortalChats(data.portalChats)
           }
@@ -196,9 +200,10 @@ export function Sidebar({
         })
         .catch(() => {})
     }
-    fetchBadges()
+    // Delay first fetch to ensure auth cookies are set after hydration
+    const initialTimer = setTimeout(fetchBadges, 2000)
     const interval = setInterval(fetchBadges, 15_000)
-    return () => clearInterval(interval)
+    return () => { clearTimeout(initialTimer); clearInterval(interval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset badges when entering the respective pages
