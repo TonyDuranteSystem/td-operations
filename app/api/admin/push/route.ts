@@ -18,11 +18,7 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Only allow admin emails
   const email = user.email || ''
-  if (!email.endsWith('@tonydurante.us') && !email.endsWith('@tonydurante.com')) {
-    return NextResponse.json({ error: 'Admin access only' }, { status: 403 })
-  }
 
   const body = await request.json()
   const { subscription } = body

@@ -9,6 +9,7 @@ import { Providers } from '@/components/providers'
 import { isAdmin } from '@/lib/auth'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
+import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -89,13 +90,14 @@ export default async function DashboardLayout({
     <Providers>
       <SwRegister />
       <RealtimeNotifications />
+      <DashboardPullToRefresh />
       <div className="flex h-screen">
         <Sidebar
           user={user}
           isAdmin={admin}
           badgeCounts={badgeCounts}
         />
-        <main className="flex-1 overflow-y-auto bg-zinc-50">
+        <main className="flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50">
           <DashboardHeader />
           <div className="h-14 lg:hidden" />
           {children}

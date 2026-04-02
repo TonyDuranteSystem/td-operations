@@ -10,10 +10,7 @@ export async function POST() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const email = user.email || ''
-  if (!email.endsWith('@tonydurante.us') && !email.endsWith('@tonydurante.com')) {
-    return NextResponse.json({ error: 'Admin access only' }, { status: 403 })
-  }
+  // Any authenticated dashboard user can test push
 
   const result = await sendPushToAdmin({
     title: 'TD Portal Test',

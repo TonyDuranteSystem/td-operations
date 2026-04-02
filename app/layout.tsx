@@ -10,11 +10,24 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  themeColor: '#18181b',
 }
 
 export const metadata: Metadata = {
   title: 'TD Operations',
   description: 'CRM Dashboard — Tony Durante LLC',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: '32x32' },
+      { url: '/portal-icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'TD Ops',
+  },
 }
 
 export default function RootLayout({
