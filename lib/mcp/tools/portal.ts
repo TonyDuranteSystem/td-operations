@@ -11,10 +11,12 @@ const PORTAL_VISIBLE_DOC_TYPES = [
   "Form SS-4",
   "Articles of Organization",
   "Office Lease",
+  "Lease Agreement",
   "Operating Agreement",
   "EIN Letter (IRS)",
   "Form 8832",
   "ITIN Letter",
+  "Signed Contract",
 ]
 
 // TD office addresses = CMRA clients
