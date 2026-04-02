@@ -15,6 +15,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
+import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 
 interface MatchResult {
   matched: boolean
@@ -153,17 +154,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       })
       .eq("id", feedId)
 
-    // Mark invoice as Paid
+    // Mark invoice as Paid via unified system (updates BOTH payments + client_invoices)
     const today = new Date().toISOString().split("T")[0]
+    await syncInvoiceStatus("payment", best.id, "Paid", today)
+
+    // Also set payment_method on the payments record
+    const paymentMethod = feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire"
     await supabaseAdmin
       .from("payments")
-      .update({
-        status: "Paid",
-        invoice_status: "Paid",
-        paid_date: today,
-        payment_method: feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire",
-        updated_at: now,
-      })
+      .update({ payment_method: paymentMethod })
       .eq("id", best.id)
 
     // QB sync (non-blocking)
@@ -209,17 +208,14 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       .eq("id", paymentId)
       .single()
 
-    // If it's an invoice, mark as paid
+    // If it's an invoice, mark as paid via unified system (updates BOTH payments + client_invoices)
     if (payment?.invoice_status && !["Paid", "Voided", "Credit"].includes(payment.invoice_status)) {
+      await syncInvoiceStatus("payment", paymentId, "Paid", today)
+
+      // Also set payment_method
       await supabaseAdmin
         .from("payments")
-        .update({
-          status: "Paid",
-          invoice_status: "Paid",
-          paid_date: today,
-          payment_method: "Wire (Manual Match)",
-          updated_at: now,
-        })
+        .update({ payment_method: "Wire (Manual Match)" })
         .eq("id", paymentId)
 
       syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
