@@ -203,44 +203,80 @@ function decodeBase64Url(data: string): string {
   return Buffer.from(base64, "base64").toString("utf-8")
 }
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#\d+;/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
 function extractBody(payload: GmailMessage["payload"]): string {
-  // Try to get plain text body first
-  if (payload.body?.data) {
+  // Try to get plain text body first (top-level, no parts)
+  if (payload.body?.data && !payload.parts) {
     return decodeBase64Url(payload.body.data)
   }
 
   if (payload.parts) {
-    // Look for text/plain first
+    // Look for text/plain first — prefer it over HTML
     for (const part of payload.parts) {
       if (part.mimeType === "text/plain" && part.body?.data) {
         return decodeBase64Url(part.body.data)
       }
     }
-    // Then text/html
+    // Recurse into multipart/alternative or multipart/related for text/plain
     for (const part of payload.parts) {
-      if (part.mimeType === "text/html" && part.body?.data) {
-        const html = decodeBase64Url(part.body.data)
-        // Strip HTML tags for readability
-        return html
-          .replace(/<br\s*\/?>/gi, "\n")
-          .replace(/<\/p>/gi, "\n\n")
-          .replace(/<[^>]+>/g, "")
-          .replace(/&nbsp;/g, " ")
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&#39;/g, "'")
-          .replace(/&quot;/g, '"')
-          .trim()
+      if (part.mimeType?.startsWith("multipart/") && part.parts) {
+        for (const sub of part.parts) {
+          if (sub.mimeType === "text/plain" && sub.body?.data) {
+            return decodeBase64Url(sub.body.data)
+          }
+        }
       }
     }
-    // Recurse into multipart
+    // Fall back to text/html — strip tags
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/html" && part.body?.data) {
+        return stripHtml(decodeBase64Url(part.body.data))
+      }
+    }
+    // Recurse into multipart for HTML
+    for (const part of payload.parts) {
+      if (part.mimeType?.startsWith("multipart/") && part.parts) {
+        for (const sub of part.parts) {
+          if (sub.mimeType === "text/html" && sub.body?.data) {
+            return stripHtml(decodeBase64Url(sub.body.data))
+          }
+        }
+      }
+    }
+    // Deep recurse into any nested parts
     for (const part of payload.parts) {
       if (part.parts) {
         const body = extractBody({ headers: [], mimeType: part.mimeType, parts: part.parts })
-        if (body) return body
+        if (body && body !== "(no readable body)") return body
       }
     }
+  }
+
+  // Last resort: if top-level has data (even with parts), decode it
+  if (payload.body?.data) {
+    return decodeBase64Url(payload.body.data)
   }
 
   return "(no readable body)"
@@ -319,8 +355,9 @@ export function registerGmailTools(server: McpServer) {
     {
       message_id: z.string().describe("Gmail message ID (from gmail_search results)"),
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
+      max_chars: z.number().optional().describe("Maximum characters for body text (default: 10000). Truncates after HTML stripping."),
     },
-    async ({ message_id, as_user }) => {
+    async ({ message_id, as_user, max_chars }) => {
       try {
         const msg = await gmailGet(`/messages/${message_id}`, {
           format: "full",
@@ -377,7 +414,8 @@ export function registerGmailTools(server: McpServer) {
 
         lines.push("")
         lines.push("── Body ──────────────────────────────")
-        lines.push(body.length > 5000 ? body.slice(0, 5000) + "\n\n⚠️ Truncated (5000 chars)" : body)
+        const limit = max_chars ?? 10000
+        lines.push(body.length > limit ? body.slice(0, limit) + `\n\n⚠️ Truncated (${limit} chars)` : body)
 
         return {
           content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }],

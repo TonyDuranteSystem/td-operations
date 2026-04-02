@@ -88,16 +88,12 @@ describe('getCrmRole', () => {
 })
 
 describe('ADMIN_ONLY_PATHS', () => {
-  it('includes invoice-settings', () => {
-    expect(ADMIN_ONLY_PATHS).toContain('/invoice-settings')
+  it('includes dev-tools', () => {
+    expect(ADMIN_ONLY_PATHS).toContain('/dev-tools')
   })
 
-  it('includes reconciliation', () => {
-    expect(ADMIN_ONLY_PATHS).toContain('/reconciliation')
-  })
-
-  it('includes portal-launch', () => {
-    expect(ADMIN_ONLY_PATHS).toContain('/portal-launch')
+  it('includes team-management', () => {
+    expect(ADMIN_ONLY_PATHS).toContain('/team-management')
   })
 
   it('does not include /tasks', () => {
