@@ -89,22 +89,66 @@ export default async function WizardPage({
   let entityType = account.entity_type || 'SMLLC'
   let isItinRenewal = false
 
-  // Check if there's a pending formation SD (skip if type was forced via query param)
+  // Collect ALL pending wizard types from service deliveries
+  const pendingWizardTypes: { type: WizardType; label: string; serviceType: string }[] = []
+
   if (!forcedType && accountId) {
     const { data: sds } = await supabaseAdmin
       .from('service_deliveries')
       .select('service_type')
       .eq('account_id', accountId)
       .in('status', ['active'])
-      .limit(5)
+      .limit(10)
 
     const types = (sds || []).map(s => s.service_type)
-    if (types.includes('Company Formation')) wizardType = 'formation'
-    else if (types.includes('Banking Fintech')) wizardType = 'banking'
-    else if (types.includes('Company Closure')) wizardType = 'closure'
-    else if (types.includes('ITIN Renewal')) { wizardType = 'itin'; isItinRenewal = true } // Renewal uses same wizard, pre-fills previous ITIN
-    else if (types.includes('ITIN')) wizardType = 'itin'
-    else if (types.includes('Tax Return')) wizardType = 'tax'
+
+    // Check which wizard types have already been submitted
+    const { data: submittedWizards } = await supabaseAdmin
+      .from('wizard_progress')
+      .select('wizard_type, status')
+      .eq('account_id', accountId)
+      .in('status', ['submitted'])
+
+    const submittedTypes = new Set((submittedWizards || []).map(w => w.wizard_type))
+
+    // Build list of ALL applicable wizard types (both pending and submitted)
+    if (types.includes('Company Formation')) {
+      pendingWizardTypes.push({ type: 'formation', label: 'LLC Formation', serviceType: 'Company Formation' })
+    }
+    if (types.includes('Banking Fintech')) {
+      pendingWizardTypes.push({ type: 'banking', label: 'Banking Application', serviceType: 'Banking Fintech' })
+    }
+    if (types.includes('Company Closure')) {
+      pendingWizardTypes.push({ type: 'closure', label: 'Company Closure', serviceType: 'Company Closure' })
+    }
+    if (types.includes('ITIN Renewal')) {
+      pendingWizardTypes.push({ type: 'itin', label: 'ITIN Renewal', serviceType: 'ITIN Renewal' })
+      isItinRenewal = true
+    } else if (types.includes('ITIN')) {
+      pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
+    }
+    if (types.includes('Tax Return')) {
+      pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: 'Tax Return' })
+    }
+
+    // If only one pending wizard, use it directly
+    if (pendingWizardTypes.length === 1) {
+      wizardType = pendingWizardTypes[0].type
+      if (pendingWizardTypes[0].type === 'itin' && types.includes('ITIN Renewal')) isItinRenewal = true
+    } else if (pendingWizardTypes.length > 1) {
+      // Multiple wizards — filter out already-submitted ones for auto-selection
+      const unsubmitted = pendingWizardTypes.filter(w => !submittedTypes.has(w.type))
+      if (unsubmitted.length === 1) {
+        // Only one unsubmitted — go directly to it
+        wizardType = unsubmitted[0].type
+      } else if (unsubmitted.length > 1) {
+        // Multiple unsubmitted — pick first one as default but we'll show selection
+        wizardType = unsubmitted[0].type
+      } else {
+        // All submitted — show the first one for review
+        wizardType = pendingWizardTypes[0].type
+      }
+    }
   }
 
   // Also check via lead/offer (for leads without account, skip if type was forced)
@@ -226,8 +270,53 @@ export default async function WizardPage({
   if (entityType === 'Single Member LLC') entityType = 'SMLLC'
   if (entityType === 'Multi-Member LLC') entityType = 'MMLLC'
 
+  // Build wizard list with submission status for the selector
+  // Query all wizard progress for this account to know which are submitted
+  let allSubmittedTypes = new Set<string>()
+  if (accountId && pendingWizardTypes.length > 1) {
+    const { data: allProgress } = await supabaseAdmin
+      .from('wizard_progress')
+      .select('wizard_type, status')
+      .eq('account_id', accountId)
+      .eq('status', 'submitted')
+    allSubmittedTypes = new Set((allProgress || []).map(p => p.wizard_type))
+  }
+  const wizardList = pendingWizardTypes.map(w => ({
+    ...w,
+    submitted: allSubmittedTypes.has(w.type),
+  }))
+
   return (
     <div className="px-4 py-6 lg:px-8">
+      {/* Show form selector when multiple wizards are pending */}
+      {wizardList.length > 1 && !forcedType && (
+        <div className="mb-6 border rounded-lg bg-white p-4">
+          <p className="text-sm font-medium text-zinc-700 mb-3">
+            {locale === 'it' ? 'Moduli da compilare:' : 'Forms to complete:'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {wizardList.map(w => {
+              const isCurrent = w.type === wizardType
+              return (
+                <a
+                  key={w.type}
+                  href={`/portal/wizard?type=${w.type}`}
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isCurrent
+                      ? 'bg-blue-600 text-white'
+                      : w.submitted
+                        ? 'bg-green-50 text-green-700 border border-green-200 hover:bg-green-100'
+                        : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+                  }`}
+                >
+                  {w.submitted && <span>&#10003;</span>}
+                  {w.label}
+                </a>
+              )
+            })}
+          </div>
+        </div>
+      )}
       <WizardClient
         wizardType={wizardType}
         entityType={entityType}
