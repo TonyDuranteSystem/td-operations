@@ -99,6 +99,13 @@ function FileRow({
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hasThumbnail = !!file.thumbnailLink
 
+  // Sync local state when docInfo prop changes (e.g., after React Query refetch)
+  useEffect(() => {
+    if (!togglingVisibility) {
+      setPortalVisible(docInfo?.portalVisible ?? false)
+    }
+  }, [docInfo?.portalVisible, togglingVisibility])
+
   useEffect(() => {
     if (renaming && inputRef.current) {
       inputRef.current.focus()
@@ -201,10 +208,13 @@ function FileRow({
       if (docInfo?.docId) {
         // Already processed — just toggle visibility
         const { toggleDocumentPortalVisibility } = await import('@/app/(dashboard)/accounts/actions')
-        const result = await toggleDocumentPortalVisibility(docInfo.docId, !portalVisible)
+        const newVisible = !portalVisible
+        const result = await toggleDocumentPortalVisibility(docInfo.docId, newVisible)
         if (result.success) {
-          setPortalVisible(!portalVisible)
-          toast.success(`Portal visibility ${!portalVisible ? 'enabled' : 'disabled'}`)
+          setPortalVisible(newVisible)
+          toast.success(`Portal visibility ${newVisible ? 'enabled' : 'disabled'}`)
+          // Invalidate cache so docMap reflects new state on next page visit
+          onRefresh()
         } else {
           toast.error('Failed to toggle visibility')
         }
