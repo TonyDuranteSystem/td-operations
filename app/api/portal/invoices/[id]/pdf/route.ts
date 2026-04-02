@@ -211,6 +211,19 @@ export async function GET(
   page.drawText(L.total, { x: 400, y, size: 11, font: helveticaBold, color: blue })
   page.drawText(`${csym}${(invoice.total ?? 0).toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: blue })
 
+  // Amount Paid / Balance Due (only for partial payments)
+  const amountPaid = Number(invoice.amount_paid ?? 0)
+  const amountDue = Number(invoice.amount_due ?? invoice.total ?? 0)
+  if (amountPaid > 0 && amountPaid < Number(invoice.total ?? 0)) {
+    y -= 18
+    page.drawText(L.amountPaid, { x: 400, y, size: 9, font: helvetica, color: rgb(0.2, 0.7, 0.2) })
+    page.drawText(`-${csym}${amountPaid.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.2, 0.7, 0.2) })
+    y -= 18
+    page.drawLine({ start: { x: 395, y: y + 8 }, end: { x: 545, y: y + 8 }, thickness: 1, color: rgb(0.9, 0.4, 0.1) })
+    page.drawText(L.balanceDue, { x: 400, y, size: 11, font: helveticaBold, color: rgb(0.9, 0.4, 0.1) })
+    page.drawText(`${csym}${amountDue.toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: rgb(0.9, 0.4, 0.1) })
+  }
+
   // Message / payment terms (message content is NOT translated)
   if (invoice.message) {
     y -= 40

@@ -142,6 +142,44 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     // Auto-match: mark feed as matched
     const now = new Date().toISOString()
+    const today = new Date().toISOString().split("T")[0]
+    const paymentMethod = feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire"
+
+    // Check if this is a partial payment (feed amount < invoice amount)
+    const bestInvoice = openInvoices.find(inv => inv.id === best.id)
+    const bestInvoiceAmount = Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
+    const isPartialPayment = feedAmount < bestInvoiceAmount && feedAmount >= bestInvoiceAmount * 0.2 && Math.abs(feedAmount - bestInvoiceAmount) >= 1
+
+    if (isPartialPayment) {
+      // Partial payment — mark as Partial, not Paid
+      await supabaseAdmin
+        .from("td_bank_feeds")
+        .update({
+          matched_payment_id: best.id,
+          match_confidence: "partial",
+          matched_at: now,
+          matched_by: "auto",
+          status: "matched",
+          updated_at: now,
+        })
+        .eq("id", feedId)
+
+      await syncInvoiceStatus("payment", best.id, "Partial", today, feedAmount)
+
+      await supabaseAdmin
+        .from("payments")
+        .update({ payment_method: paymentMethod })
+        .eq("id", best.id)
+
+      return {
+        matched: true,
+        paymentId: best.id,
+        invoiceNumber: best.invoiceNumber ?? undefined,
+        confidence: "partial",
+      }
+    }
+
+    // Full payment — mark as Paid
     await supabaseAdmin
       .from("td_bank_feeds")
       .update({
@@ -155,11 +193,9 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       .eq("id", feedId)
 
     // Mark invoice as Paid via unified system (updates BOTH payments + client_invoices)
-    const today = new Date().toISOString().split("T")[0]
-    await syncInvoiceStatus("payment", best.id, "Paid", today)
+    await syncInvoiceStatus("payment", best.id, "Paid", today, feedAmount)
 
     // Also set payment_method on the payments record
-    const paymentMethod = feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire"
     await supabaseAdmin
       .from("payments")
       .update({ payment_method: paymentMethod })

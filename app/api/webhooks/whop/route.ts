@@ -205,20 +205,32 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         .in("invoice_status", ["Sent", "Overdue"])
 
       if (openInvoices?.length) {
-        // Find invoice with matching amount (±$1 tolerance)
-        const match = openInvoices.find(inv => {
+        const today = new Date().toISOString().split("T")[0]
+        const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
+
+        // Try exact match first (±$1 tolerance)
+        let match = openInvoices.find(inv => {
           const invAmount = Number(inv.total ?? inv.amount ?? 0)
           return Math.abs(invAmount - total) < 1
         })
 
         if (match) {
           console.warn(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
-          const today = new Date().toISOString().split("T")[0]
+          await syncInvoiceStatus("payment", match.id, "Paid", today, total)
+        } else {
+          // Fallback: partial match (Whop amount < invoice, at least 20% of invoice)
+          const partialMatch = openInvoices.find(inv => {
+            const invAmount = Number(inv.total ?? inv.amount ?? 0)
+            return total < invAmount && total >= invAmount * 0.2
+          })
+          if (partialMatch) {
+            console.warn(`[whop-webhook] Partial-matched Whop payment to invoice ${partialMatch.invoice_number}`)
+            match = partialMatch
+            await syncInvoiceStatus("payment", partialMatch.id, "Partial", today, total)
+          }
+        }
 
-          // Use syncInvoiceStatus for bidirectional update
-          const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
-          await syncInvoiceStatus("payment", match.id, "Paid", today)
-
+        if (match) {
           // Also set payment method on the payment record
           await getSupabase()
             .from("payments")

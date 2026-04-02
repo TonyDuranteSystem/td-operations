@@ -38,6 +38,8 @@ export interface UnifiedInvoiceInput {
   recurring_frequency?: 'monthly' | 'quarterly' | 'yearly' | null
   recurring_end_date?: string | null
   recurring_parent_id?: string | null
+  amount_paid?: number
+  parent_invoice_id?: string | null
 }
 
 export interface UnifiedInvoiceResult {
@@ -100,7 +102,18 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
   const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
   const total = subtotal
 
-  const status = mark_as_paid ? 'Paid' : 'Draft'
+  const effectiveAmountPaid = input.amount_paid ?? (mark_as_paid ? total : 0)
+  const effectiveAmountDue = Math.max(total - effectiveAmountPaid, 0)
+
+  let status: string
+  if (mark_as_paid || effectiveAmountDue <= 0) {
+    status = 'Paid'
+  } else if (effectiveAmountPaid > 0 && effectiveAmountPaid < total) {
+    status = 'Partial'
+  } else {
+    status = 'Draft'
+  }
+
   const today = new Date().toISOString().split('T')[0]
   const paidDateVal = mark_as_paid ? (paid_date || today) : null
 
@@ -117,6 +130,8 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       subtotal,
       discount: 0,
       total,
+      amount_paid: effectiveAmountPaid,
+      amount_due: effectiveAmountDue,
       issue_date: today,
       due_date: due_date || null,
       paid_date: paidDateVal,
@@ -125,6 +140,7 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       recurring_frequency: recurring_frequency || null,
       recurring_end_date: recurring_end_date || null,
       recurring_parent_id: recurring_parent_id || null,
+      parent_invoice_id: input.parent_invoice_id || null,
     })
     .select('id, invoice_number')
     .single()
@@ -219,19 +235,116 @@ export async function syncInvoiceStatus(
   source: 'invoice' | 'payment',
   id: string,
   newStatus: string,
-  paidDate?: string
+  paidDate?: string,
+  amountPaid?: number
 ): Promise<{ synced: boolean; linkedId?: string }> {
   const statusMap: Record<string, string> = {
     // client_invoices status → payments status
     'Draft': 'Pending',
     'Sent': 'Pending',
     'Paid': 'Paid',
+    'Partial': 'Partial',
+    'Split': 'Split',
     'Overdue': 'Overdue',
     'Cancelled': 'Cancelled',
     // payments status → client_invoices status (reverse)
     'Pending': 'Sent',  // best-effort mapping
   }
 
+  // If amountPaid is provided, calculate partial payment status
+  if (amountPaid !== undefined) {
+    // Resolve the invoice ID to get the invoice total and current amount_paid
+    let invoiceId: string | null = null
+
+    if (source === 'invoice') {
+      invoiceId = id
+    } else {
+      const { data: payRec } = await supabaseAdmin
+        .from('payments')
+        .select('portal_invoice_id')
+        .eq('id', id)
+        .single()
+      invoiceId = payRec?.portal_invoice_id || null
+    }
+
+    if (invoiceId) {
+      const { data: inv } = await supabaseAdmin
+        .from('client_invoices')
+        .select('total, amount_paid')
+        .eq('id', invoiceId)
+        .single()
+
+      if (inv) {
+        const currentAmountPaid = Number(inv.amount_paid) || 0
+        const newAmountPaid = currentAmountPaid + amountPaid
+        const total = Number(inv.total)
+        const newAmountDue = Math.max(total - newAmountPaid, 0)
+
+        // Determine status based on payment amount
+        if (newAmountDue <= 0) {
+          newStatus = 'Paid'
+        } else if (newAmountPaid > 0) {
+          newStatus = 'Partial'
+        }
+
+        // Update client_invoices with partial payment fields
+        const invUpdates: Record<string, unknown> = {
+          status: newStatus,
+          amount_paid: newAmountPaid,
+          amount_due: newAmountDue,
+          updated_at: new Date().toISOString(),
+        }
+        if (paidDate) invUpdates.paid_date = paidDate
+        await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', invoiceId)
+
+        // Update linked payment record
+        const paymentStatus = statusMap[newStatus] || newStatus
+        if (source === 'invoice') {
+          const { data: linkedPay } = await supabaseAdmin
+            .from('payments')
+            .select('id')
+            .eq('portal_invoice_id', invoiceId)
+            .limit(1)
+            .maybeSingle()
+          if (linkedPay) {
+            const payUpdates: Record<string, unknown> = {
+              status: paymentStatus,
+              invoice_status: newStatus,
+              amount_paid: newAmountPaid,
+              amount_due: newAmountDue,
+              updated_at: new Date().toISOString(),
+            }
+            if (paidDate) payUpdates.paid_date = paidDate
+            await supabaseAdmin.from('payments').update(payUpdates).eq('id', linkedPay.id)
+
+            // Check if this is a child of a split invoice
+            await checkParentCompletion(invoiceId)
+            return { synced: true, linkedId: linkedPay.id }
+          }
+        } else {
+          const payUpdates: Record<string, unknown> = {
+            status: paymentStatus,
+            invoice_status: newStatus,
+            amount_paid: newAmountPaid,
+            amount_due: newAmountDue,
+            updated_at: new Date().toISOString(),
+          }
+          if (paidDate) payUpdates.paid_date = paidDate
+          await supabaseAdmin.from('payments').update(payUpdates).eq('id', id)
+
+          // Check if this is a child of a split invoice
+          await checkParentCompletion(invoiceId)
+          return { synced: true, linkedId: invoiceId }
+        }
+
+        // Check if this is a child of a split invoice
+        await checkParentCompletion(invoiceId)
+        return { synced: true }
+      }
+    }
+  }
+
+  // Original behavior (no amountPaid — simple status change)
   const updates: Record<string, unknown> = {
     status: newStatus,
     updated_at: new Date().toISOString(),
@@ -262,8 +375,13 @@ export async function syncInvoiceStatus(
       }
       if (paidDate) payUpdates.paid_date = paidDate
       await supabaseAdmin.from('payments').update(payUpdates).eq('id', payment.id)
+
+      // Check if this is a child of a split invoice
+      if (newStatus === 'Paid') await checkParentCompletion(id)
       return { synced: true, linkedId: payment.id }
     }
+
+    if (newStatus === 'Paid') await checkParentCompletion(id)
     return { synced: false }
   } else {
     // source === 'payment'
@@ -289,9 +407,62 @@ export async function syncInvoiceStatus(
       }
       if (paidDate) invUpdates.paid_date = paidDate
       await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', payment.portal_invoice_id)
+
+      // Check if this is a child of a split invoice
+      if (newStatus === 'Paid') await checkParentCompletion(payment.portal_invoice_id)
       return { synced: true, linkedId: payment.portal_invoice_id }
     }
     return { synced: false }
+  }
+}
+
+// ─── Parent Completion Check (Split Invoices) ─────────
+
+/**
+ * When a child invoice of a split is marked Paid,
+ * check if ALL children are Paid → mark parent as Paid too.
+ */
+async function checkParentCompletion(invoiceId: string): Promise<void> {
+  // Get the invoice to check if it has a parent
+  const { data: inv } = await supabaseAdmin
+    .from('client_invoices')
+    .select('parent_invoice_id')
+    .eq('id', invoiceId)
+    .single()
+
+  if (!inv?.parent_invoice_id) return
+
+  // Check all children of the parent
+  const { data: children } = await supabaseAdmin
+    .from('client_invoices')
+    .select('status')
+    .eq('parent_invoice_id', inv.parent_invoice_id)
+
+  if (children?.length && children.every(c => c.status === 'Paid')) {
+    const today = new Date().toISOString().split('T')[0]
+    // All children paid — mark parent as Paid (without amountPaid to avoid recursion)
+    const parentUpdates: Record<string, unknown> = {
+      status: 'Paid',
+      paid_date: today,
+      updated_at: new Date().toISOString(),
+    }
+    await supabaseAdmin.from('client_invoices').update(parentUpdates).eq('id', inv.parent_invoice_id)
+
+    // Also update linked payment
+    const { data: linkedPay } = await supabaseAdmin
+      .from('payments')
+      .select('id')
+      .eq('portal_invoice_id', inv.parent_invoice_id)
+      .limit(1)
+      .maybeSingle()
+    if (linkedPay) {
+      await supabaseAdmin.from('payments').update({
+        status: 'Paid',
+        invoice_status: 'Paid',
+        paid_date: today,
+        updated_at: new Date().toISOString(),
+      }).eq('id', linkedPay.id)
+    }
   }
 }
 

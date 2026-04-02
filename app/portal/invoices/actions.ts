@@ -94,12 +94,131 @@ export async function updateInvoice(input: UpdateInvoiceInput): Promise<ActionRe
 export async function markInvoiceAsPaid(invoiceId: string, paidDate: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
-    // Bidirectional sync: updates client_invoices AND linked payments record
-    await syncInvoiceStatus('invoice', invoiceId, 'Paid', paidDate)
+    // Fetch invoice total to pass as amount
+    const { data: inv } = await supabaseAdmin.from('client_invoices').select('total, amount_paid').eq('id', invoiceId).single()
+    const remainingAmount = inv ? Number(inv.total) - (Number(inv.amount_paid) || 0) : undefined
+    await syncInvoiceStatus('invoice', invoiceId, 'Paid', paidDate, remainingAmount)
     revalidatePath('/portal/invoices')
   }, {
     action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
     summary: 'Invoice marked as paid',
+  })
+}
+
+export async function recordPartialPayment(
+  invoiceId: string,
+  amountPaid: number,
+  paidDate: string
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
+    await syncInvoiceStatus('invoice', invoiceId, 'Partial', paidDate, amountPaid)
+    revalidatePath('/portal/invoices')
+  }, {
+    action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
+    summary: `Partial payment recorded: ${amountPaid}`,
+  })
+}
+
+export async function splitInvoice(
+  invoiceId: string,
+  installments: Array<{ amount: number; due_date: string }>
+): Promise<ActionResult<{ childIds: string[] }>> {
+  return safeAction(async () => {
+    const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
+
+    // 1. Fetch parent invoice (must be status 'Sent' or 'Draft')
+    const { data: parent, error: parentErr } = await supabaseAdmin
+      .from('client_invoices')
+      .select('*, client_invoice_items(*)')
+      .eq('id', invoiceId)
+      .single()
+
+    if (parentErr || !parent) throw new Error(`Invoice not found: ${parentErr?.message || 'not found'}`)
+    if (!['Sent', 'Draft'].includes(parent.status)) {
+      throw new Error(`Cannot split invoice with status '${parent.status}' — must be Draft or Sent`)
+    }
+
+    // 2. Validate: sum of installment amounts must equal parent total
+    const installmentSum = installments.reduce((sum, inst) => sum + inst.amount, 0)
+    if (Math.abs(installmentSum - Number(parent.total)) >= 0.01) {
+      throw new Error(`Installment sum (${installmentSum}) does not match invoice total (${parent.total})`)
+    }
+
+    // 3. Update parent: status = 'Split' (non-payable)
+    await supabaseAdmin
+      .from('client_invoices')
+      .update({ status: 'Split', updated_at: new Date().toISOString() })
+      .eq('id', invoiceId)
+
+    // Also update linked payment
+    const { data: linkedPay } = await supabaseAdmin
+      .from('payments')
+      .select('id')
+      .eq('portal_invoice_id', invoiceId)
+      .limit(1)
+      .maybeSingle()
+    if (linkedPay) {
+      await supabaseAdmin.from('payments').update({
+        status: 'Split',
+        invoice_status: 'Split',
+        updated_at: new Date().toISOString(),
+      }).eq('id', linkedPay.id)
+    }
+
+    // 4. Create child invoices
+    const childIds: string[] = []
+    const childStatus = parent.status === 'Sent' ? 'Sent' : 'Draft'
+
+    for (const inst of installments) {
+      // Proportionally distribute line items
+      const ratio = inst.amount / Number(parent.total)
+      const items = (parent.client_invoice_items as Array<{ description: string; unit_price: number; quantity: number }> || [])
+      const childItems = items.map(item => ({
+        description: item.description,
+        unit_price: Number((item.unit_price * ratio).toFixed(2)),
+        quantity: item.quantity,
+      }))
+
+      // If no items, create a single item for the installment
+      const lineItems = childItems.length > 0 ? childItems : [{
+        description: `Installment — ${parent.invoice_number || 'Split'}`,
+        unit_price: inst.amount,
+        quantity: 1,
+      }]
+
+      const result = await createUnifiedInvoice({
+        account_id: parent.account_id || undefined,
+        contact_id: parent.contact_id || undefined,
+        customer_id: parent.customer_id || undefined,
+        line_items: lineItems,
+        currency: parent.currency,
+        due_date: inst.due_date,
+        notes: parent.notes || undefined,
+        message: parent.message || undefined,
+        parent_invoice_id: invoiceId,
+      })
+
+      // If parent was 'Sent', update child to 'Sent' too
+      if (childStatus === 'Sent') {
+        await supabaseAdmin
+          .from('client_invoices')
+          .update({ status: 'Sent' })
+          .eq('id', result.invoiceId)
+        await supabaseAdmin
+          .from('payments')
+          .update({ status: 'Pending', invoice_status: 'Sent' })
+          .eq('id', result.paymentId)
+      }
+
+      childIds.push(result.invoiceId)
+    }
+
+    revalidatePath('/portal/invoices')
+    return { childIds }
+  }, {
+    action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
+    summary: `Invoice split into ${installments.length} installments`,
   })
 }
 

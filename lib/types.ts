@@ -352,6 +352,8 @@ export interface ClientInvoice {
   subtotal: number
   discount: number
   total: number
+  amount_paid: number
+  amount_due: number
   issue_date: string
   due_date: string | null
   paid_date: string | null
@@ -361,10 +363,25 @@ export interface ClientInvoice {
   recurring_next_date: string | null
   recurring_end_date: string | null
   recurring_parent_id: string | null
+  parent_invoice_id: string | null
   created_at: string
   updated_at: string
   // Joined
   customer_name?: string
+}
+
+export interface ClientCreditNote {
+  id: string
+  account_id: string | null
+  contact_id: string | null
+  credit_note_number: string
+  original_invoice_id: string
+  applied_to_invoice_id: string | null
+  amount: number
+  reason: string | null
+  status: 'issued' | 'applied' | 'voided'
+  created_at: string
+  updated_at: string
 }
 
 export interface ClientInvoiceItem {
