@@ -7,6 +7,7 @@ import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
 
 // Document types allowed to be visible in the client portal Documents tab
+// Document types visible to clients in the portal (by type name)
 const PORTAL_VISIBLE_DOC_TYPES = [
   "Form SS-4",
   "Articles of Organization",
@@ -18,6 +19,9 @@ const PORTAL_VISIBLE_DOC_TYPES = [
   "ITIN Letter",
   "Signed Contract",
 ]
+
+// Entire categories visible to clients (3=Tax, 5=Correspondence)
+const PORTAL_VISIBLE_CATEGORIES = [3, 5]
 
 // TD office addresses = CMRA clients
 const TD_ADDRESS_PATTERNS = [
@@ -158,7 +162,7 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
 
         // ─── 6. SET PORTAL_VISIBLE ON DOCUMENTS ───
         const { data: docs } = await supabaseAdmin.from("documents")
-          .select("id, file_name, document_type_name, portal_visible, drive_link")
+          .select("id, file_name, document_type_name, category, portal_visible, drive_link")
           .eq("account_id", account_id)
           .order("processed_at", { ascending: false })
 
@@ -169,8 +173,11 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
 
         for (const doc of allDocs) {
           const typeName = doc.document_type_name ?? ""
-          if (PORTAL_VISIBLE_DOC_TYPES.includes(typeName) && !seenTypes.has(typeName)) {
-            seenTypes.add(typeName)
+          const docCategory = doc.category as number | null
+          const isVisibleByType = PORTAL_VISIBLE_DOC_TYPES.includes(typeName) && !seenTypes.has(typeName)
+          const isVisibleByCategory = docCategory != null && PORTAL_VISIBLE_CATEGORIES.includes(docCategory)
+          if (isVisibleByType || isVisibleByCategory) {
+            if (isVisibleByType) seenTypes.add(typeName)
             allowedIds.push(doc.id)
           } else {
             hiddenIds.push(doc.id)
