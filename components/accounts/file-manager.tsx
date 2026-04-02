@@ -75,7 +75,6 @@ function FileRow({
   onRefresh,
   onPreview,
   docInfo,
-  isAdmin,
 }: {
   file: DriveFile
   accountId: string
@@ -84,7 +83,6 @@ function FileRow({
   onRefresh: () => void
   onPreview: (file: DriveFile) => void
   docInfo?: DocInfo
-  isAdmin?: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -317,8 +315,7 @@ function FileRow({
           </button>
 
           {/* Portal visibility toggle — shown for all files, processes unprocessed ones on click */}
-          {isAdmin && (
-            <button
+          <button
               onClick={handleTogglePortalVisibility}
               disabled={togglingVisibility}
               title={portalVisible ? 'Visible to client — click to hide' : 'Hidden from client — click to show'}
@@ -337,7 +334,6 @@ function FileRow({
                 <EyeOff className="h-4 w-4" />
               )}
             </button>
-          )}
 
           {/* Context menu */}
           <div className="relative shrink-0" ref={menuRef}>
@@ -444,7 +440,6 @@ function FolderSection({
   onRefresh,
   onPreview,
   docMap,
-  isAdmin,
   defaultExpanded = true,
   depth = 0,
 }: {
@@ -454,7 +449,6 @@ function FolderSection({
   onRefresh: () => void
   onPreview: (file: DriveFile) => void
   docMap: Record<string, DocInfo>
-  isAdmin?: boolean
   defaultExpanded?: boolean
   depth?: number
 }) {
@@ -510,7 +504,6 @@ function FolderSection({
                     onRefresh={onRefresh}
                     onPreview={onPreview}
                     docInfo={docMap[file.id]}
-                    isAdmin={isAdmin}
                   />
                 ))}
                 {provided.placeholder}
@@ -528,7 +521,6 @@ function FolderSection({
               onRefresh={onRefresh}
               onPreview={onPreview}
               docMap={docMap}
-              isAdmin={isAdmin}
               defaultExpanded={false}
               depth={depth + 1}
             />
@@ -545,7 +537,7 @@ function FolderSection({
 
 // ─── Main FileManager Component ───────────────────────────
 
-export function FileManager({ accountId, driveFolderId, isAdmin }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
+export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
 
@@ -652,7 +644,6 @@ export function FileManager({ accountId, driveFolderId, isAdmin }: { accountId: 
               onRefresh={handleRefresh}
               onPreview={setPreviewFile}
               docMap={docMap}
-              isAdmin={isAdmin}
             />
           ))}
 
@@ -675,7 +666,6 @@ export function FileManager({ accountId, driveFolderId, isAdmin }: { accountId: 
                         onRefresh={handleRefresh}
                         onPreview={setPreviewFile}
                         docInfo={docMap[file.id]}
-                        isAdmin={isAdmin}
                       />
                     ))}
                     {provided.placeholder}
