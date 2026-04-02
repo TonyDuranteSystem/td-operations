@@ -78,6 +78,8 @@ import { registerBankStatementTools } from "@/lib/mcp/tools/bank-statements"
 import { registerSignatureTools } from "@/lib/mcp/tools/signature"
 import { registerTestingTools } from "@/lib/mcp/tools/testing"
 import { registerHarborComplianceTools } from "@/lib/mcp/tools/harbor-compliance"
+import { registerDevTaskTools } from "@/lib/mcp/tools/dev-tasks"
+import { registerCalendarTools } from "@/lib/mcp/tools/calendar"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -130,6 +132,8 @@ const handler = createMcpHandler(
     registerSignatureTools(server)
     registerTestingTools(server)
     registerHarborComplianceTools(server)
+    registerDevTaskTools(server)
+    registerCalendarTools(server)
   },
   {
     capabilities: {},
