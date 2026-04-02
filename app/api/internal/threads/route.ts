@@ -29,14 +29,29 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Enrich with company names, unread counts, source message text
+  // Enrich with company/contact names, unread counts, source message text
   const enriched = await Promise.all((threads ?? []).map(async (thread) => {
-    // Company name
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('company_name')
-      .eq('id', thread.account_id)
-      .single()
+    // Company name or contact name
+    let accountName: string | null = null
+    let contactName: string | null = null
+
+    if (thread.account_id) {
+      const { data: account } = await supabaseAdmin
+        .from('accounts')
+        .select('company_name')
+        .eq('id', thread.account_id)
+        .single()
+      accountName = account?.company_name ?? null
+    }
+
+    if (thread.contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('full_name')
+        .eq('id', thread.contact_id)
+        .single()
+      contactName = contact?.full_name ?? null
+    }
 
     // Unread count (messages not sent by current user and not read)
     const { count: unreadCount } = await supabaseAdmin
@@ -68,7 +83,8 @@ export async function GET() {
 
     return {
       ...thread,
-      company_name: account?.company_name ?? 'Unknown',
+      company_name: accountName ?? contactName ?? 'Unknown',
+      contact_name: contactName,
       unread_count: unreadCount ?? 0,
       last_message_at: lastMsg?.created_at ?? thread.created_at,
       last_message_preview: lastMsg?.message?.slice(0, 80) ?? null,
@@ -90,21 +106,27 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json()
-  const { account_id, source_message_id, title } = body
+  const { account_id, contact_id, source_message_id, title } = body
 
-  if (!account_id) {
-    return NextResponse.json({ error: 'account_id is required' }, { status: 400 })
+  if (!account_id && !contact_id) {
+    return NextResponse.json({ error: 'At least one of account_id or contact_id is required' }, { status: 400 })
   }
 
-  // Check for existing unresolved thread for this account — reuse it instead of creating a duplicate
-  const { data: existingThread } = await supabaseAdmin
+  // Check for existing unresolved thread — reuse it instead of creating a duplicate
+  let existingQuery = supabaseAdmin
     .from('internal_threads')
     .select('*')
-    .eq('account_id', account_id)
     .is('resolved_at', null)
     .order('created_at', { ascending: false })
     .limit(1)
-    .single()
+
+  if (account_id) {
+    existingQuery = existingQuery.eq('account_id', account_id)
+  } else {
+    existingQuery = existingQuery.eq('contact_id', contact_id)
+  }
+
+  const { data: existingThread } = await existingQuery.single()
 
   if (existingThread) {
     // Add a message to the existing thread instead of creating a new one
@@ -137,7 +159,8 @@ export async function POST(request: NextRequest) {
   const { data: thread, error } = await supabaseAdmin
     .from('internal_threads')
     .insert({
-      account_id,
+      account_id: account_id || null,
+      contact_id: contact_id || null,
       source_message_id: source_message_id || null,
       created_by: user.id,
       title: title || null,
@@ -179,15 +202,26 @@ export async function POST(request: NextRequest) {
 
     if (subs?.length) {
       const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-      // Get company name for notification
-      const { data: account } = await supabaseAdmin
-        .from('accounts')
-        .select('company_name')
-        .eq('id', account_id)
-        .single()
+      // Get company or contact name for notification
+      let notifName = 'Client'
+      if (account_id) {
+        const { data: account } = await supabaseAdmin
+          .from('accounts')
+          .select('company_name')
+          .eq('id', account_id)
+          .single()
+        notifName = account?.company_name ?? 'Client'
+      } else if (contact_id) {
+        const { data: contact } = await supabaseAdmin
+          .from('contacts')
+          .select('full_name')
+          .eq('id', contact_id)
+          .single()
+        notifName = contact?.full_name ?? 'Client'
+      }
 
       await sendPushToAdmin({
-        title: `Team: ${account?.company_name ?? 'Client'}`,
+        title: `Team: ${notifName}`,
         body: title || firstMessage.slice(0, 100),
         url: `/portal-chats?view=internal`,
         tag: `internal-thread-${thread.id}`,

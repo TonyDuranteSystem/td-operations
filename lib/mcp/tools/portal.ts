@@ -1055,4 +1055,142 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
       }
     }
   )
+
+  // ─── portal_team_send ─────────────────────────────────────────────────
+
+  server.tool(
+    "portal_team_send",
+    `Send an internal team message visible ONLY to staff (Antonio, Luca, Claude). NOT visible to clients.
+
+Creates or reuses an internal discussion thread linked to a client account or contact. The message appears in the CRM dashboard under Portal Chats > Team tab. Staff receive real-time toast notifications + push notifications.
+
+Use this for:
+- Flagging something for Luca to check (e.g., "Check Delaware SOS for this company")
+- Internal notes about a client situation
+- Team coordination on a client case
+
+NEVER use portal_chat_send for team-only messages — clients can see those.
+
+Supports both:
+- **Account-level** (pass account_id): Discussion about a specific LLC
+- **Contact-level** (pass contact_id): Discussion about a person (may not have an LLC yet)`,
+    {
+      account_id: z.string().uuid().optional().describe("Account UUID for LLC-related discussions. At least one of account_id or contact_id required."),
+      contact_id: z.string().uuid().optional().describe("Contact UUID for person-level discussions. At least one of account_id or contact_id required."),
+      message: z.string().describe("Team message text"),
+      source_message_id: z.string().uuid().optional().describe("Portal message ID that triggered this discussion (optional, for context)"),
+    },
+    async ({ account_id, contact_id, message: msgText, source_message_id }) => {
+      try {
+        if (!account_id && !contact_id) {
+          return { content: [{ type: "text" as const, text: "Error: At least one of account_id or contact_id is required." }] }
+        }
+
+        // Resolve context name for thread title
+        let contextName = "Client"
+        if (account_id) {
+          const { data: acct } = await supabaseAdmin.from("accounts").select("company_name").eq("id", account_id).single()
+          contextName = acct?.company_name || account_id
+        } else if (contact_id) {
+          const { data: cnt } = await supabaseAdmin.from("contacts").select("full_name").eq("id", contact_id).single()
+          contextName = cnt?.full_name || contact_id
+        }
+
+        // Check for existing unresolved thread — reuse it
+        let query = supabaseAdmin
+          .from("internal_threads")
+          .select("*")
+          .is("resolved_at", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+
+        if (account_id) {
+          query = query.eq("account_id", account_id)
+        } else {
+          query = query.eq("contact_id", contact_id!)
+        }
+
+        const { data: existingThread } = await query.single()
+
+        // Admin sender ID (Claude uses Antonio's admin ID as sender context)
+        const senderId = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+        const senderName = "Claude"
+
+        let threadId: string
+        let reused = false
+
+        if (existingThread) {
+          threadId = existingThread.id
+          reused = true
+        } else {
+          // Create new thread
+          const { data: newThread, error: threadErr } = await supabaseAdmin
+            .from("internal_threads")
+            .insert({
+              account_id: account_id || null,
+              contact_id: contact_id || null,
+              source_message_id: source_message_id || null,
+              created_by: senderId,
+              title: contextName,
+            })
+            .select("id")
+            .single()
+
+          if (threadErr) return { content: [{ type: "text" as const, text: `Failed to create thread: ${threadErr.message}` }] }
+          threadId = newThread.id
+        }
+
+        // Insert the message
+        const { data: msg, error: msgErr } = await supabaseAdmin
+          .from("internal_messages")
+          .insert({
+            thread_id: threadId,
+            sender_id: senderId,
+            sender_name: senderName,
+            message: msgText,
+          })
+          .select("id, created_at")
+          .single()
+
+        if (msgErr) return { content: [{ type: "text" as const, text: `Failed to send message: ${msgErr.message}` }] }
+
+        // Send push notification to all admins
+        try {
+          const { data: subs } = await supabaseAdmin
+            .from("admin_push_subscriptions")
+            .select("*")
+            .neq("user_id", senderId)
+
+          if (subs?.length) {
+            const { sendPushToAdmin } = await import("@/lib/portal/web-push")
+            await sendPushToAdmin({
+              title: `Team: ${contextName}`,
+              body: msgText.slice(0, 100),
+              url: "/portal-chats?view=internal",
+              tag: `internal-thread-${threadId}`,
+            })
+          }
+        } catch {
+          // Push notification failure is non-critical
+        }
+
+        await logAction({
+          action_type: "create",
+          table_name: "internal_messages",
+          record_id: msg.id,
+          account_id: account_id || undefined,
+          summary: `Team message sent re: ${contextName}: "${msgText.substring(0, 80)}${msgText.length > 80 ? "..." : ""}"`,
+        })
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Team message sent re: ${contextName}${reused ? " (added to existing thread)" : " (new thread created)"}.\nThread ID: ${threadId}\nMessage ID: ${msg.id}\nTimestamp: ${msg.created_at}\n\nVisible in CRM > Portal Chats > Team tab.`,
+          }],
+        }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
 }

@@ -45,6 +45,7 @@ COMMUNICATION:
 - Official documents: gmail_send (email only -- rule M1)
 - Day-to-day with portal clients: portal_chat_send (staff -> client via portal chat)
 - Day-to-day without portal: gmail_send or WhatsApp (manual, outside system)
+- Team-to-team (internal): portal_team_send (internal thread, only visible to staff). NEVER use portal_chat_send for team-only messages -- clients can see those.
 
 OFFERS:
 - New leads: portal_create_user -> offer_create -> client sees offer in portal after login. Do NOT use offer_send
