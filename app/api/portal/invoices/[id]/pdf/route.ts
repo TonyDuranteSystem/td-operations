@@ -2,10 +2,12 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
+import { invoiceLabels, type InvoiceLang } from '@/lib/portal/invoice-labels'
 
 /**
  * GET /api/portal/invoices/[id]/pdf — Generate and stream invoice PDF
+ * Supports: ?lang=it for Italian labels (auto-detects from contact if omitted)
  */
 export async function GET(
   request: NextRequest,
@@ -60,6 +62,24 @@ export async function GET(
     .maybeSingle()
 
   const paymentLinkUrl = defaultLink?.url || null
+
+  // --- Language detection ---
+  const langParam = request.nextUrl.searchParams.get('lang')
+  let lang: InvoiceLang = 'en'
+  if (langParam === 'it') {
+    lang = 'it'
+  } else if (!langParam && invoice.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('language')
+      .eq('id', invoice.contact_id)
+      .single()
+    const rawLang = contact?.language
+    if (rawLang === 'Italian' || rawLang === 'it') {
+      lang = 'it'
+    }
+  }
+  const L = invoiceLabels[lang]
 
   // Generate PDF
   const pdfDoc = await PDFDocument.create()
@@ -117,7 +137,7 @@ export async function GET(
   }
 
   // Invoice number + status — right side
-  page.drawText(`INVOICE`, {
+  page.drawText(L.invoice, {
     x: 430, y: y + 2, size: 12, font: helveticaBold, color: gray,
   })
   y -= 24
@@ -125,7 +145,7 @@ export async function GET(
     x: 430, y, size: 14, font: helveticaBold, color: black,
   })
   y -= 16
-  page.drawText(`Status: ${invoice.status}`, {
+  page.drawText(`${L.status} ${invoice.status}`, {
     x: 430, y, size: 9, font: helvetica, color: gray,
   })
 
@@ -134,18 +154,18 @@ export async function GET(
   page.drawLine({ start: { x: 50, y }, end: { x: 545, y }, thickness: 0.5, color: lightGray })
   y -= 25
 
-  page.drawText('Issue Date:', { x: 50, y, size: 9, font: helvetica, color: gray })
+  page.drawText(L.issueDate, { x: 50, y, size: 9, font: helvetica, color: gray })
   page.drawText(invoice.issue_date ?? '—', { x: 120, y, size: 9, font: helveticaBold, color: black })
 
-  page.drawText('Due Date:', { x: 250, y, size: 9, font: helvetica, color: gray })
+  page.drawText(L.dueDate, { x: 250, y, size: 9, font: helvetica, color: gray })
   page.drawText(invoice.due_date ?? '—', { x: 310, y, size: 9, font: helveticaBold, color: black })
 
-  page.drawText('Currency:', { x: 430, y, size: 9, font: helvetica, color: gray })
+  page.drawText(L.currency, { x: 430, y, size: 9, font: helvetica, color: gray })
   page.drawText(sym, { x: 485, y, size: 9, font: helveticaBold, color: black })
 
   // Bill To
   y -= 35
-  page.drawText('BILL TO', { x: 50, y, size: 9, font: helveticaBold, color: gray })
+  page.drawText(L.billTo, { x: 50, y, size: 9, font: helveticaBold, color: gray })
   y -= 16
   if (customer) {
     page.drawText(customer.name, { x: 50, y, size: 11, font: helveticaBold, color: black })
@@ -158,15 +178,14 @@ export async function GET(
   // Table header
   y -= 20
   page.drawRectangle({ x: 50, y: y - 4, width: 495, height: 20, color: rgb(0.96, 0.96, 0.98) })
-  page.drawText('Description', { x: 55, y, size: 8, font: helveticaBold, color: gray })
-  page.drawText('Qty', { x: 340, y, size: 8, font: helveticaBold, color: gray })
-  page.drawText('Price', { x: 400, y, size: 8, font: helveticaBold, color: gray })
-  page.drawText('Amount', { x: 480, y, size: 8, font: helveticaBold, color: gray })
+  page.drawText(L.description, { x: 55, y, size: 8, font: helveticaBold, color: gray })
+  page.drawText(L.qty, { x: 340, y, size: 8, font: helveticaBold, color: gray })
+  page.drawText(L.price, { x: 400, y, size: 8, font: helveticaBold, color: gray })
+  page.drawText(L.amount, { x: 480, y, size: 8, font: helveticaBold, color: gray })
 
-  // Table rows
+  // Table rows (descriptions are NEVER translated)
   y -= 22
   for (const item of (items ?? [])) {
-    // Truncate long descriptions
     const desc = item.description.length > 55 ? item.description.slice(0, 55) + '...' : item.description
     page.drawText(desc, { x: 55, y, size: 9, font: helvetica, color: black })
     page.drawText(String(item.quantity), { x: 345, y, size: 9, font: helvetica, color: black })
@@ -178,26 +197,25 @@ export async function GET(
 
   // Totals
   y -= 15
-  page.drawText('Subtotal', { x: 400, y, size: 9, font: helvetica, color: gray })
+  page.drawText(L.subtotal, { x: 400, y, size: 9, font: helvetica, color: gray })
   page.drawText(`${csym}${(invoice.subtotal ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
 
   if ((invoice.discount ?? 0) > 0) {
     y -= 16
-    page.drawText('Discount', { x: 400, y, size: 9, font: helvetica, color: gray })
+    page.drawText(L.discount, { x: 400, y, size: 9, font: helvetica, color: gray })
     page.drawText(`-${csym}${(invoice.discount ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.8, 0.2, 0.2) })
   }
 
   y -= 20
   page.drawLine({ start: { x: 395, y: y + 8 }, end: { x: 545, y: y + 8 }, thickness: 1, color: blue })
-  page.drawText('TOTAL', { x: 400, y, size: 11, font: helveticaBold, color: blue })
+  page.drawText(L.total, { x: 400, y, size: 11, font: helveticaBold, color: blue })
   page.drawText(`${csym}${(invoice.total ?? 0).toFixed(2)}`, { x: 470, y, size: 11, font: helveticaBold, color: blue })
 
-  // Message / payment terms
+  // Message / payment terms (message content is NOT translated)
   if (invoice.message) {
     y -= 40
-    page.drawText('Payment Terms', { x: 50, y, size: 9, font: helveticaBold, color: gray })
+    page.drawText(L.paymentTerms, { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
-    // Simple word wrap
     const words = invoice.message.split(' ')
     let line = ''
     for (const word of words) {
@@ -235,20 +253,20 @@ export async function GET(
 
   if (bankAccount) {
     y -= 30
-    page.drawText(`Bank Details — ${bankAccount.label}`, { x: 50, y, size: 9, font: helveticaBold, color: gray })
+    page.drawText(`${L.bankDetails} — ${bankAccount.label}`, { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
-    const bankFields = [
-      ['Account Holder', bankAccount.account_holder],
-      ['Bank', bankAccount.bank_name],
-      ['IBAN', bankAccount.iban],
-      ['SWIFT/BIC', bankAccount.swift_bic],
-      ['Account No.', bankAccount.account_number],
-      ['Routing No.', bankAccount.routing_number],
+    // Bank field labels are translated, but values (IBAN, numbers, names) are NOT
+    const bankFields: [string, unknown][] = [
+      [L.accountHolder, bankAccount.account_holder],
+      [L.bank, bankAccount.bank_name],
+      [L.iban, bankAccount.iban],
+      [L.swiftBic, bankAccount.swift_bic],
+      [L.accountNo, bankAccount.account_number],
+      [L.routingNo, bankAccount.routing_number],
     ]
     for (const [label, value] of bankFields) {
       if (value) {
         const fullText = `${label}: ${value}`
-        // Wrap if too long for page width (max ~490pt)
         if (helvetica.widthOfTextAtSize(fullText, 8) > 490) {
           page.drawText(`${label}:`, { x: 50, y, size: 8, font: helvetica, color: gray })
           y -= 11
@@ -261,7 +279,6 @@ export async function GET(
       }
     }
     if (bankAccount.notes) {
-      // Word-wrap bank notes
       const noteWords = String(bankAccount.notes).split(' ')
       let noteLine = ''
       for (const word of noteWords) {
@@ -281,9 +298,8 @@ export async function GET(
   // Payment link
   if (paymentLinkUrl && invoice.status !== 'Paid') {
     y -= 20
-    page.drawText('Pay online:', { x: 50, y, size: 9, font: helveticaBold, color: blue })
+    page.drawText(L.payOnline, { x: 50, y, size: 9, font: helveticaBold, color: blue })
     y -= 14
-    // Truncate very long URLs to prevent overflow
     const maxUrlWidth = 490
     let displayUrl = paymentLinkUrl
     while (displayUrl.length > 10 && helvetica.widthOfTextAtSize(displayUrl, 9) > maxUrlWidth) {
@@ -294,9 +310,36 @@ export async function GET(
   }
 
   // Footer
-  page.drawText(`Generated by TD Portal`, {
+  page.drawText(L.footer, {
     x: 50, y: 30, size: 7, font: helvetica, color: rgb(0.7, 0.7, 0.7),
   })
+
+  // --- Watermark (after all content, before save) ---
+  const watermarks: Record<string, { text: string; color: [number, number, number] }> = {
+    Paid:      { text: 'PAID',      color: [0.2, 0.8, 0.2] },
+    Draft:     { text: 'DRAFT',     color: [0.7, 0.7, 0.7] },
+    Overdue:   { text: 'OVERDUE',   color: [0.9, 0.2, 0.2] },
+    Cancelled: { text: 'CANCELLED', color: [0.7, 0.7, 0.7] },
+    Partial:   { text: 'PARTIAL',   color: [0.9, 0.6, 0.1] },
+  }
+  // 'Sent' status = NO watermark (clean invoice for client)
+  const wm = watermarks[invoice.status]
+  if (wm) {
+    const pages = pdfDoc.getPages()
+    for (const p of pages) {
+      const { width, height } = p.getSize()
+      const textWidth = helveticaBold.widthOfTextAtSize(wm.text, 72)
+      p.drawText(wm.text, {
+        x: width / 2 - textWidth / 2,
+        y: height / 2 - 30,
+        size: 72,
+        font: helveticaBold,
+        color: rgb(wm.color[0], wm.color[1], wm.color[2]),
+        opacity: 0.12,
+        rotate: degrees(45),
+      })
+    }
+  }
 
   // Serialize
   const pdfBytes = await pdfDoc.save()

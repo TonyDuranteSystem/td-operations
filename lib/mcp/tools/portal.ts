@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { PORTAL_BASE_URL } from "@/lib/config"
+import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
@@ -929,6 +929,11 @@ Prerequisite: Invoice must exist (created via portal_invoice_create or portal da
           </div>
         `
 
+        // Generate tracking ID and inject pixel
+        const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
+        const trackedHtml = html + `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+
         // Send via Gmail
         const { gmailPost } = await import("@/lib/gmail")
         const boundary = `boundary_${Date.now()}`
@@ -944,11 +949,23 @@ Prerequisite: Invoice must exist (created via portal_invoice_create or portal da
           "Content-Type: text/html; charset=UTF-8",
           "Content-Transfer-Encoding: base64",
           "",
-          Buffer.from(html).toString("base64"),
+          Buffer.from(trackedHtml).toString("base64"),
           `--${boundary}--`,
         ]
         const raw = Buffer.from(parts.join("\r\n")).toString("base64url")
-        await gmailPost("/messages/send", { raw })
+        const sendResult = await gmailPost("/messages/send", { raw }) as { id?: string; threadId?: string }
+
+        // Store email tracking record
+        await supabaseAdmin.from("email_tracking").insert({
+          tracking_id: trackingId,
+          gmail_message_id: sendResult?.id || null,
+          gmail_thread_id: sendResult?.threadId || null,
+          recipient: recipientEmail,
+          subject,
+          from_email: "support@tonydurante.us",
+          account_id: invoice.account_id || null,
+          contact_id: invoice.contact_id || null,
+        })
 
         // Mark as Sent
         await supabaseAdmin

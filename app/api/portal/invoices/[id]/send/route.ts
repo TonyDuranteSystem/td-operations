@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { gmailPost } from '@/lib/gmail'
+import { APP_BASE_URL } from '@/lib/config'
 
 /**
  * POST /api/portal/invoices/[id]/send — Send invoice via email to customer
@@ -83,13 +84,6 @@ export async function POST(
 
   const paymentLinkUrl = defaultLink?.url || null
 
-  // Generate PDF inline (call own endpoint)
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : 'http://localhost:3000'
-
-  // Instead of calling own endpoint, generate PDF directly
-  // Import would be circular, so we build a simple email without PDF attachment first
   const csym = invoice.currency === 'EUR' ? '\u20AC' : '$'
   const companyName = account?.company_name ?? 'Our Company'
 
@@ -159,11 +153,16 @@ export async function POST(
   `
 
   try {
+    // Generate tracking ID and inject pixel into HTML
+    const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
+    const trackedHtml = html + `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+
     // Generate PDF for attachment
     let pdfBase64: string | null = null
     try {
-      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
-      const pdfRes = await fetch(`${baseUrl}/api/portal/invoices/${id}/pdf`, {
+      const pdfBaseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
+      const pdfRes = await fetch(`${pdfBaseUrl}/api/portal/invoices/${id}/pdf`, {
         headers: { Cookie: request.headers.get('cookie') || '' },
       })
       if (pdfRes.ok) {
@@ -179,11 +178,23 @@ export async function POST(
       from: `${companyName} <support@tonydurante.us>`,
       to: customer.email,
       subject,
-      html,
+      html: trackedHtml,
       attachment: pdfBase64 ? { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` } : undefined,
     })
 
-    await gmailPost('/messages/send', { raw: rawEmail })
+    const sendResult = await gmailPost('/messages/send', { raw: rawEmail }) as { id?: string; threadId?: string }
+
+    // Store email tracking record
+    await supabaseAdmin.from('email_tracking').insert({
+      tracking_id: trackingId,
+      gmail_message_id: sendResult?.id || null,
+      gmail_thread_id: sendResult?.threadId || null,
+      recipient: customer.email,
+      subject,
+      from_email: 'support@tonydurante.us',
+      account_id: invoice.account_id || null,
+      contact_id: invoice.contact_id || null,
+    })
 
     // Update invoice status to Sent
     await supabaseAdmin
