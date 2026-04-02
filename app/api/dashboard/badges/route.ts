@@ -22,12 +22,18 @@ function getDb() {
 export async function GET() {
   try {
     // Run all queries in parallel
-    const [portalResult, gmailSupportResult, gmailAntonioResult, tasksResult] = await Promise.allSettled([
+    const [portalResult, internalResult, gmailSupportResult, gmailAntonioResult, tasksResult] = await Promise.allSettled([
       // Portal chats: count unread client messages using select('id') instead of head:true
       getDb()
         .from('portal_messages')
         .select('id')
         .eq('sender_type', 'client')
+        .is('read_at', null)
+        .limit(500),
+      // Internal team messages: count unread from other team members
+      getDb()
+        .from('internal_messages')
+        .select('id')
         .is('read_at', null)
         .limit(500),
       // Gmail: support@ unread
@@ -42,15 +48,24 @@ export async function GET() {
         .limit(1000),
     ])
 
-    // Portal chats count
-    let portalChats = 0
+    // Portal chats count (client messages + internal team messages)
+    let portalClientCount = 0
     if (portalResult.status === 'fulfilled') {
       if (portalResult.value.error) {
         console.error('[badges] portal_messages error:', JSON.stringify(portalResult.value.error))
       } else {
-        portalChats = portalResult.value.data?.length ?? 0
+        portalClientCount = portalResult.value.data?.length ?? 0
       }
     }
+
+    let internalCount = 0
+    if (internalResult.status === 'fulfilled') {
+      if (!internalResult.value.error) {
+        internalCount = internalResult.value.data?.length ?? 0
+      }
+    }
+
+    const portalChats = portalClientCount + internalCount
 
     // Gmail unread
     const supportUnread = gmailSupportResult.status === 'fulfilled'

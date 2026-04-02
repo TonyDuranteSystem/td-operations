@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 
 async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
   try {
-    const [tasksResult, portalChatsResult] = await Promise.allSettled([
+    const [tasksResult, portalChatsResult, internalResult] = await Promise.allSettled([
       supabase
         .from('tasks')
         .select('id', { count: 'exact', head: true })
@@ -27,6 +27,10 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
         .from('portal_messages')
         .select('id', { count: 'exact', head: true })
         .eq('sender_type', 'client')
+        .is('read_at', null),
+      supabaseAdmin
+        .from('internal_messages')
+        .select('id', { count: 'exact', head: true })
         .is('read_at', null),
     ])
 
@@ -41,6 +45,11 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       }
     } else {
       console.error('[getBadgeCounts] portal_messages rejected:', portalChatsResult.reason)
+    }
+
+    // Add internal team unread messages to portal chats badge
+    if (internalResult.status === 'fulfilled' && !internalResult.value.error) {
+      portalChatsCount += internalResult.value.count ?? 0
     }
 
     // Inbox unread count — WhatsApp/Telegram from Supabase view

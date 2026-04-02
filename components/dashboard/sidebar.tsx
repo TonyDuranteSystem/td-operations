@@ -249,7 +249,7 @@ export function Sidebar({
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  // Subscribe to new client messages for real-time badge updates
+  // Subscribe to new client messages + internal team messages for real-time badge updates
   useEffect(() => {
     const supabase = createClient()
     const channel = supabase
@@ -261,6 +261,19 @@ export function Sidebar({
           schema: 'public',
           table: 'portal_messages',
           filter: 'sender_type=eq.client',
+        },
+        () => {
+          if (pathnameRef.current !== '/portal-chats') {
+            setLivePortalChats(prev => prev + 1)
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'internal_messages',
         },
         () => {
           if (pathnameRef.current !== '/portal-chats') {
