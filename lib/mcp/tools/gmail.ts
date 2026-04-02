@@ -376,7 +376,11 @@ export function registerGmailTools(server: McpServer) {
         const cc = getHeader(msg.payload.headers, "Cc")
         const subject = getHeader(msg.payload.headers, "Subject")
         const date = getHeader(msg.payload.headers, "Date")
-        const body = extractBody(msg.payload)
+        let body = extractBody(msg.payload)
+        // Safety net: if extractBody returned HTML, strip it
+        if (body.trimStart().startsWith("<!") || body.trimStart().startsWith("<html") || /<[a-z][\s\S]*>/i.test(body.slice(0, 500))) {
+          body = stripHtml(body)
+        }
 
         // Find attachments
         const findAttachmentsMeta = (parts: GmailPart[] | undefined): Array<{ filename: string; mimeType: string; size: number; attachmentId: string }> => {
@@ -461,7 +465,10 @@ export function registerGmailTools(server: McpServer) {
           const from = getHeader(msg.payload.headers, "From")
           const date = getHeader(msg.payload.headers, "Date")
           const subject = getHeader(msg.payload.headers, "Subject")
-          const body = extractBody(msg.payload)
+          let body = extractBody(msg.payload)
+          if (body.trimStart().startsWith("<!") || body.trimStart().startsWith("<html") || /<[a-z][\s\S]*>/i.test(body.slice(0, 500))) {
+            body = stripHtml(body)
+          }
 
           lines.push(`── ${date} ──`)
           lines.push(`👤 ${from}`)
