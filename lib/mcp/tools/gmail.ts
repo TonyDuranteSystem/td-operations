@@ -227,9 +227,13 @@ function stripHtml(html: string): string {
 }
 
 function extractBody(payload: GmailMessage["payload"]): string {
-  // Try to get plain text body first (top-level, no parts)
+  // Top-level body with no parts — check if it's HTML and strip
   if (payload.body?.data && !payload.parts) {
-    return decodeBase64Url(payload.body.data)
+    const decoded = decodeBase64Url(payload.body.data)
+    if (payload.mimeType === "text/html" || decoded.trimStart().startsWith("<!") || decoded.trimStart().startsWith("<html")) {
+      return stripHtml(decoded)
+    }
+    return decoded
   }
 
   if (payload.parts) {
@@ -276,7 +280,11 @@ function extractBody(payload: GmailMessage["payload"]): string {
 
   // Last resort: if top-level has data (even with parts), decode it
   if (payload.body?.data) {
-    return decodeBase64Url(payload.body.data)
+    const decoded = decodeBase64Url(payload.body.data)
+    if (payload.mimeType === "text/html" || decoded.trimStart().startsWith("<!") || decoded.trimStart().startsWith("<html")) {
+      return stripHtml(decoded)
+    }
+    return decoded
   }
 
   return "(no readable body)"
