@@ -44,6 +44,7 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       status: 'classified',
       confidence: 1.0,
       processed_at: new Date().toISOString(),
+      portal_visible: true, // Signed documents are always visible to the client
     }
 
     const { data, error } = await supabaseAdmin
