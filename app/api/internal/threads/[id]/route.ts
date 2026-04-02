@@ -114,3 +114,34 @@ export async function PATCH(
 
   return NextResponse.json({ thread })
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+  }
+
+  const { id } = await params
+
+  // Delete all messages in the thread first (FK constraint)
+  await supabaseAdmin
+    .from('internal_messages')
+    .delete()
+    .eq('thread_id', id)
+
+  // Delete the thread
+  const { error } = await supabaseAdmin
+    .from('internal_threads')
+    .delete()
+    .eq('id', id)
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ deleted: true })
+}

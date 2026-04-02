@@ -417,6 +417,19 @@ export default function PortalChatsPage() {
     }
   }
 
+  const deleteThread = async (threadId: string) => {
+    if (!confirm('Delete this thread and all its messages? This cannot be undone.')) return
+    try {
+      const res = await fetch(`/api/internal/threads/${threadId}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete thread')
+      setSelectedThreadId(null)
+      queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
+      toast.success('Thread deleted')
+    } catch {
+      toast.error('Failed to delete thread')
+    }
+  }
+
   // AI assistant: send question
   const sendAiQuestion = async () => {
     if (!aiPanelInput.trim()) return
@@ -971,6 +984,28 @@ export default function PortalChatsPage() {
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 {internalMessages?.thread?.resolved_at ? 'Resolved' : 'Resolve'}
               </button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 transition-colors">
+                    <MoreVertical className="h-4 w-4" />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className="min-w-[160px] rounded-lg bg-white shadow-lg border border-zinc-200 py-1 z-50"
+                    align="end"
+                    sideOffset={4}
+                  >
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+                      onClick={() => deleteThread(selectedThreadId)}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Delete Thread
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </div>
           </div>
 
