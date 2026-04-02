@@ -83,7 +83,7 @@ export async function GET() {
 
     return {
       ...thread,
-      company_name: accountName ?? contactName ?? 'Unknown',
+      company_name: accountName ?? contactName ?? thread.title ?? 'Team Thread',
       contact_name: contactName,
       unread_count: unreadCount ?? 0,
       last_message_at: lastMsg?.created_at ?? thread.created_at,
@@ -108,25 +108,30 @@ export async function POST(request: NextRequest) {
   const body = await request.json()
   const { account_id, contact_id, source_message_id, title } = body
 
-  if (!account_id && !contact_id) {
-    return NextResponse.json({ error: 'At least one of account_id or contact_id is required' }, { status: 400 })
+  // Ad-hoc team threads (no client) require a title
+  if (!account_id && !contact_id && !title) {
+    return NextResponse.json({ error: 'Team threads without a client require a title' }, { status: 400 })
   }
 
-  // Check for existing unresolved thread — reuse it instead of creating a duplicate
-  let existingQuery = supabaseAdmin
-    .from('internal_threads')
-    .select('*')
-    .is('resolved_at', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
+  // Check for existing unresolved thread — reuse it (only for client-linked threads)
+  let existingThread = null
+  if (account_id || contact_id) {
+    let existingQuery = supabaseAdmin
+      .from('internal_threads')
+      .select('*')
+      .is('resolved_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
 
-  if (account_id) {
-    existingQuery = existingQuery.eq('account_id', account_id)
-  } else {
-    existingQuery = existingQuery.eq('contact_id', contact_id)
+    if (account_id) {
+      existingQuery = existingQuery.eq('account_id', account_id)
+    } else {
+      existingQuery = existingQuery.eq('contact_id', contact_id)
+    }
+
+    const { data } = await existingQuery.single()
+    existingThread = data
   }
-
-  const { data: existingThread } = await existingQuery.single()
 
   if (existingThread) {
     // Add a message to the existing thread instead of creating a new one
@@ -202,22 +207,22 @@ export async function POST(request: NextRequest) {
 
     if (subs?.length) {
       const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-      // Get company or contact name for notification
-      let notifName = 'Client'
+      // Get name for notification
+      let notifName = title || 'Team'
       if (account_id) {
         const { data: account } = await supabaseAdmin
           .from('accounts')
           .select('company_name')
           .eq('id', account_id)
           .single()
-        notifName = account?.company_name ?? 'Client'
+        notifName = account?.company_name ?? 'Team'
       } else if (contact_id) {
         const { data: contact } = await supabaseAdmin
           .from('contacts')
           .select('full_name')
           .eq('id', contact_id)
           .single()
-        notifName = contact?.full_name ?? 'Client'
+        notifName = contact?.full_name ?? 'Team'
       }
 
       await sendPushToAdmin({

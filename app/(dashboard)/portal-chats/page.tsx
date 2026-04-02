@@ -74,6 +74,9 @@ export default function PortalChatsPage() {
   const [newChatSearch, setNewChatSearch] = useState('')
   const [newChatResults, setNewChatResults] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [newChatSearching, setNewChatSearching] = useState(false)
+  const [newThreadMode, setNewThreadMode] = useState<'client' | 'team'>('client')
+  const [newThreadTitle, setNewThreadTitle] = useState('')
+  const [creatingThread, setCreatingThread] = useState(false)
   // Extra accounts found by search that aren't in existing threads
   const [searchExtraAccounts, setSearchExtraAccounts] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
@@ -259,7 +262,8 @@ export default function PortalChatsPage() {
   // Internal team threads
   interface InternalThread {
     id: string
-    account_id: string
+    account_id: string | null
+    contact_id: string | null
     source_message_id: string | null
     created_by: string
     title: string | null
@@ -304,6 +308,33 @@ export default function PortalChatsPage() {
   }, [internalMessages?.messages])
 
   const internalTotalUnread = internalThreads?.reduce((sum, t) => sum + (t.unread_count ?? 0), 0) ?? 0
+
+  const createTeamThread = async (title: string) => {
+    if (!title.trim()) return
+    setCreatingThread(true)
+    try {
+      const res = await fetch('/api/internal/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim() }),
+      })
+      if (!res.ok) throw new Error('Failed to create thread')
+      const data = await res.json()
+      setSidebarView('internal')
+      setSelectedThreadId(data.thread.id)
+      setSelectedAccountId(null)
+      setSelectedContactId(null)
+      queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
+      toast.success('Team thread created')
+      setNewChatOpen(false)
+      setNewThreadTitle('')
+      setNewThreadMode('client')
+    } catch {
+      toast.error('Failed to create team thread')
+    } finally {
+      setCreatingThread(false)
+    }
+  }
 
   const createInternalThread = async (accountId: string, sourceMessageId: string, sourceText: string) => {
     try {
@@ -868,7 +899,11 @@ export default function PortalChatsPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 min-w-0">
-                    <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
+                    {thread.account_id || thread.contact_id ? (
+                      <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
+                    ) : (
+                      <Users className="h-4 w-4 text-orange-400 shrink-0" />
+                    )}
                     <span className="text-sm font-medium text-zinc-900 truncate">{thread.company_name}</span>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
@@ -1598,58 +1633,114 @@ export default function PortalChatsPage() {
                   </>
                 )}
               </div>
-              <button onClick={() => setNewChatOpen(false)} className="p-1 rounded hover:bg-zinc-100 text-zinc-500">
+              <button onClick={() => { setNewChatOpen(false); setNewThreadMode('client'); setNewThreadTitle('') }} className="p-1 rounded hover:bg-zinc-100 text-zinc-500">
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="flex items-center gap-2 px-4 py-3 border-b">
-              <Search className="h-4 w-4 text-zinc-400" />
-              <input
-                type="text"
-                value={newChatSearch}
-                onChange={(e) => setNewChatSearch(e.target.value)}
-                placeholder={sidebarView === 'internal' ? 'Search client to discuss...' : 'Search client by name or company...'}
-                className="flex-1 text-sm outline-none bg-transparent"
-                autoFocus
-              />
-              {newChatSearching && <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />}
-            </div>
-            <div className="flex-1 overflow-y-auto divide-y">
-              {newChatResults.length === 0 && newChatSearch.length >= 2 && !newChatSearching && (
-                <div className="px-4 py-8 text-center text-sm text-zinc-400">
-                  No active clients found
-                </div>
-              )}
-              {newChatResults.map((acct) => (
+
+            {/* Mode toggle — only in internal/team view */}
+            {sidebarView === 'internal' && (
+              <div className="flex gap-1 px-4 pt-3 pb-1">
                 <button
-                  key={acct.id}
-                  onClick={() => {
-                    if (sidebarView === 'internal') {
-                      createInternalThread(acct.id, '', `Discussion about ${acct.company_name}`)
-                    } else {
-                      setSelectedAccountId(acct.id)
-                      setSelectedContactId(null)
-                      setSelectedName({ company: acct.company_name, contact: acct.contact_name || undefined })
-                    }
-                    setNewChatOpen(false)
-                  }}
-                  className="w-full flex items-start gap-3 px-4 py-3 hover:bg-zinc-50 transition-colors text-left"
+                  onClick={() => setNewThreadMode('client')}
+                  className={cn(
+                    'flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                    newThreadMode === 'client' ? 'bg-orange-100 text-orange-700' : 'text-zinc-500 hover:bg-zinc-100'
+                  )}
                 >
-                  <div className={cn('p-1.5 rounded-full shrink-0 mt-0.5', sidebarView === 'internal' ? 'bg-orange-50' : 'bg-blue-50')}>
-                    <Building2 className={cn('h-3.5 w-3.5', sidebarView === 'internal' ? 'text-orange-500' : 'text-blue-500')} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-zinc-900">{acct.company_name}</p>
-                    {acct.contact_name && (
-                      <div className="flex items-center gap-1 text-xs text-zinc-500 mt-0.5">
-                        <User className="h-3 w-3" />
-                        <span>{acct.contact_name}</span>
-                      </div>
-                    )}
-                  </div>
+                  <Building2 className="h-3 w-3 inline mr-1" />
+                  Discuss a Client
                 </button>
-              ))}
-            </div>
+                <button
+                  onClick={() => setNewThreadMode('team')}
+                  className={cn(
+                    'flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                    newThreadMode === 'team' ? 'bg-orange-100 text-orange-700' : 'text-zinc-500 hover:bg-zinc-100'
+                  )}
+                >
+                  <Users className="h-3 w-3 inline mr-1" />
+                  Team Thread
+                </button>
+              </div>
+            )}
+
+            {/* Team thread mode — title input */}
+            {sidebarView === 'internal' && newThreadMode === 'team' ? (
+              <div className="px-4 py-3 flex flex-col gap-3">
+                <div className="flex items-center gap-2 border rounded-lg px-3 py-2">
+                  <FileText className="h-4 w-4 text-zinc-400" />
+                  <input
+                    type="text"
+                    value={newThreadTitle}
+                    onChange={(e) => setNewThreadTitle(e.target.value)}
+                    placeholder="Thread title (e.g. Tax Season Planning)"
+                    className="flex-1 text-sm outline-none bg-transparent"
+                    autoFocus
+                    onKeyDown={(e) => { if (e.key === 'Enter' && newThreadTitle.trim()) createTeamThread(newThreadTitle) }}
+                  />
+                </div>
+                <button
+                  onClick={() => createTeamThread(newThreadTitle)}
+                  disabled={!newThreadTitle.trim() || creatingThread}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {creatingThread ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  Create Thread
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Client search mode (existing behavior) */}
+                <div className="flex items-center gap-2 px-4 py-3 border-b">
+                  <Search className="h-4 w-4 text-zinc-400" />
+                  <input
+                    type="text"
+                    value={newChatSearch}
+                    onChange={(e) => setNewChatSearch(e.target.value)}
+                    placeholder={sidebarView === 'internal' ? 'Search client to discuss...' : 'Search client by name or company...'}
+                    className="flex-1 text-sm outline-none bg-transparent"
+                    autoFocus
+                  />
+                  {newChatSearching && <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />}
+                </div>
+                <div className="flex-1 overflow-y-auto divide-y">
+                  {newChatResults.length === 0 && newChatSearch.length >= 2 && !newChatSearching && (
+                    <div className="px-4 py-8 text-center text-sm text-zinc-400">
+                      No active clients found
+                    </div>
+                  )}
+                  {newChatResults.map((acct) => (
+                    <button
+                      key={acct.id}
+                      onClick={() => {
+                        if (sidebarView === 'internal') {
+                          createInternalThread(acct.id, '', `Discussion about ${acct.company_name}`)
+                        } else {
+                          setSelectedAccountId(acct.id)
+                          setSelectedContactId(null)
+                          setSelectedName({ company: acct.company_name, contact: acct.contact_name || undefined })
+                        }
+                        setNewChatOpen(false)
+                      }}
+                      className="w-full flex items-start gap-3 px-4 py-3 hover:bg-zinc-50 transition-colors text-left"
+                    >
+                      <div className={cn('p-1.5 rounded-full shrink-0 mt-0.5', sidebarView === 'internal' ? 'bg-orange-50' : 'bg-blue-50')}>
+                        <Building2 className={cn('h-3.5 w-3.5', sidebarView === 'internal' ? 'text-orange-500' : 'text-blue-500')} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-zinc-900">{acct.company_name}</p>
+                        {acct.contact_name && (
+                          <div className="flex items-center gap-1 text-xs text-zinc-500 mt-0.5">
+                            <User className="h-3 w-3" />
+                            <span>{acct.contact_name}</span>
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
