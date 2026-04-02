@@ -1,6 +1,10 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 /**
+ * @deprecated Use `generateInvoiceNumber` from `@/lib/portal/invoice-number` instead.
+ * The canonical format is INV-YYYY-SEQ (portal billing). This TD-YYYY-SEQ format
+ * is kept only for backwards compatibility with existing payment records.
+ *
  * Generate next TD LLC invoice number.
  * Format: TD-{YEAR}-{SEQ} (e.g., TD-2026-001)
  * Global sequence (not per-account) — all TD LLC invoices share one counter.

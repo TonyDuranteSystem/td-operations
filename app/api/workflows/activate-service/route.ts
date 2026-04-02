@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
-import { generateInvoiceNumber } from "@/lib/invoice-number"
+import { createUnifiedInvoice } from "@/lib/portal/unified-invoice"
 import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 import { createPortalNotification } from "@/lib/portal/notifications"
 
@@ -424,63 +424,45 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "portal_user", status: "skipped", detail: "No contact_id available" })
     }
 
-    // ─── STEP 3: CRM Invoice + QB Sync (AUTO) ──────────────
-    // Create invoice in CRM (SOT), mark as paid, sync to QB
+    // ─── STEP 3: Unified Invoice + QB Sync (AUTO) ──────────
+    // Creates in BOTH client_invoices (portal) and payments (CRM), linked by FK
     if (autoAccountId && activation.amount) {
       try {
-        const invoiceNumber = await generateInvoiceNumber()
         const today = new Date().toISOString().split("T")[0]
         const amount = Number(activation.amount)
+        const serviceLabel = contractType === "formation" ? "LLC Formation"
+          : contractType === "onboarding" ? "LLC Onboarding"
+          : contractType === "tax_return" ? "Tax Return"
+          : contractType === "itin" ? "ITIN Application"
+          : "Service"
 
-        // Create CRM invoice (directly via supabase, not server action which needs browser session)
-        const { data: invoice, error: invErr } = await supabase
-          .from("payments")
-          .insert({
-            account_id: autoAccountId,
-            description: `${contractType === "formation" ? "LLC Formation" : contractType === "onboarding" ? "LLC Onboarding" : contractType === "tax_return" ? "Tax Return" : contractType === "itin" ? "ITIN Application" : "Service"} - ${activation.client_name}`,
-            amount,
-            amount_currency: activation.currency || "USD",
-            status: "Paid",
-            invoice_number: invoiceNumber,
-            invoice_status: "Paid",
-            issue_date: today,
-            paid_date: today,
-            subtotal: amount,
-            discount: 0,
-            total: amount,
-            payment_method: activation.payment_method || "Whop",
-            whop_payment_id: activation.whop_payment_id || null,
-            qb_sync_status: "pending",
-            message: `Payment received via ${activation.payment_method || "card"}`,
-          })
-          .select("id")
-          .single()
-
-        if (invErr || !invoice) {
-          steps.push({ step: "crm_invoice", status: "error", detail: invErr?.message || "Failed to create" })
-        } else {
-          // Add line item
-          await supabase.from("payment_items").insert({
-            payment_id: invoice.id,
-            description: `${contractType === "formation" ? "LLC Formation" : contractType === "onboarding" ? "LLC Onboarding" : contractType === "tax_return" ? "Tax Return" : "Service"} Package`,
-            quantity: 1,
+        const invoiceResult = await createUnifiedInvoice({
+          account_id: autoAccountId,
+          contact_id: contactId || undefined,
+          line_items: [{
+            description: `${serviceLabel} Package - ${activation.client_name}`,
             unit_price: amount,
-            amount,
-            sort_order: 0,
-          })
+            quantity: 1,
+          }],
+          currency: (activation.currency || "USD") as 'USD' | 'EUR',
+          mark_as_paid: true,
+          paid_date: today,
+          payment_method: activation.payment_method || "Whop",
+          whop_payment_id: activation.whop_payment_id || null,
+        })
 
-          steps.push({
-            step: "crm_invoice",
-            status: "created",
-            detail: `${invoiceNumber} — ${activation.currency} ${amount} (Paid)`,
-          })
+        steps.push({
+          step: "crm_invoice",
+          status: "created",
+          detail: `${invoiceResult.invoiceNumber} — ${activation.currency} ${amount} (Paid)`,
+        })
 
-          // QB sync (best-effort, non-blocking)
-          syncInvoiceToQB(invoice.id)
+        // QB sync (best-effort, non-blocking) — uses payment ID
+        if (invoiceResult.paymentId) {
+          syncInvoiceToQB(invoiceResult.paymentId)
             .then((r) => {
               if (r.success && r.qb_invoice_id) {
-                // Invoice synced — now record payment in QB too
-                syncPaymentToQB(invoice.id, {
+                syncPaymentToQB(invoiceResult.paymentId, {
                   paymentDate: today,
                   paymentMethod: activation.payment_method || "Whop",
                 }).catch(() => {})

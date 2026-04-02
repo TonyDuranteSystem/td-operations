@@ -99,7 +99,7 @@ async function verifyStandardWebhook(
 
 async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   const paymentId = payment.id as string
-  const status = payment.status as string
+  const _status = payment.status as string
   const total = payment.total as number
   const currency = (payment.currency as string || "usd").toUpperCase()
   const paidAt = payment.paid_at as string
@@ -112,13 +112,13 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   // Extract product info
   const product = payment.product as Record<string, unknown> | undefined
   const productTitle = product?.title as string | undefined
-  const productId = product?.id as string | undefined
+  const _productId = product?.id as string | undefined
 
   // Extract billing info
   const billing = payment.billing_address as Record<string, unknown> | undefined
   const clientName = billing?.name as string | undefined
 
-  console.log(`[whop-webhook] payment.succeeded: ${paymentId} — ${clientName || username || email} — $${total} ${currency} — ${productTitle}`)
+  console.warn(`[whop-webhook] payment.succeeded: ${paymentId} — ${clientName || username || email} — $${total} ${currency} — ${productTitle}`)
 
   // 1. Log webhook event
   await getSupabase().from("webhook_events").insert({
@@ -170,7 +170,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
       .eq("whop_payment_id", paymentId)
       .limit(1)
     if (existingPayment && existingPayment.length > 0) {
-      console.log(`[whop-webhook] Payment ${paymentId} already processed — skipping duplicate`)
+      console.warn(`[whop-webhook] Payment ${paymentId} already processed — skipping duplicate`)
       return NextResponse.json({ ok: true, message: "Duplicate webhook, already processed" })
     }
   }
@@ -195,11 +195,12 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   }
 
   // 3b. Check if this Whop payment matches an open CRM invoice (auto-reconcile)
+  // Uses syncInvoiceStatus for bidirectional sync (payments ↔ client_invoices)
   if (accountId && total > 0) {
     try {
       const { data: openInvoices } = await getSupabase()
         .from("payments")
-        .select("id, invoice_number, total, amount, invoice_status")
+        .select("id, invoice_number, total, amount, invoice_status, portal_invoice_id")
         .eq("account_id", accountId)
         .in("invoice_status", ["Sent", "Overdue"])
 
@@ -211,17 +212,17 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         })
 
         if (match) {
-          console.log(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
+          console.warn(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
           const today = new Date().toISOString().split("T")[0]
+
+          // Use syncInvoiceStatus for bidirectional update
+          const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
+          await syncInvoiceStatus("payment", match.id, "Paid", today)
+
+          // Also set payment method on the payment record
           await getSupabase()
             .from("payments")
-            .update({
-              status: "Paid",
-              invoice_status: "Paid",
-              paid_date: today,
-              payment_method: "Whop",
-              updated_at: new Date().toISOString(),
-            })
+            .update({ payment_method: "Whop" })
             .eq("id", match.id)
 
           // QB sync (non-blocking)
@@ -300,11 +301,11 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         .select("id")
 
       if (!updated || updated.length === 0) {
-        console.log(`[whop-webhook] pending_activation ${pending.id} already processed — skipping`)
+        console.warn(`[whop-webhook] pending_activation ${pending.id} already processed — skipping`)
         return NextResponse.json({ ok: true, message: "Already processed" })
       }
 
-      console.log(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
+      console.warn(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
 
       // Trigger Stage 0 activation via internal endpoint
       try {
@@ -346,7 +347,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     })
   }
 
-  console.log(`[whop-webhook] Payment processed. Account: ${accountId || "none"}, Lead: ${leadId || "none"}`)
+  console.warn(`[whop-webhook] Payment processed. Account: ${accountId || "none"}, Lead: ${leadId || "none"}`)
 }
 
 async function handleMembershipEvent(
@@ -356,7 +357,7 @@ async function handleMembershipEvent(
   const membershipId = membership.id as string
   const status = membership.status as string
 
-  console.log(`[whop-webhook] ${eventType}: ${membershipId} — status: ${status}`)
+  console.warn(`[whop-webhook] ${eventType}: ${membershipId} — status: ${status}`)
 
   // Log webhook event
   await getSupabase().from("webhook_events").insert({
@@ -397,7 +398,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, warning: "no event type" })
     }
 
-    console.log(`[whop-webhook] Received event: ${rawEventType} (normalized: ${eventType})`)
+    console.warn(`[whop-webhook] Received event: ${rawEventType} (normalized: ${eventType})`)
 
     switch (eventType) {
       case "payment_succeeded":
@@ -405,7 +406,7 @@ export async function POST(req: NextRequest) {
         break
 
       case "payment_failed":
-        console.log("[whop-webhook] Payment failed:", data)
+        console.warn("[whop-webhook] Payment failed:", data)
         await getSupabase().from("webhook_events").insert({
           source: "whop",
           event_type: "payment_failed",
@@ -416,7 +417,7 @@ export async function POST(req: NextRequest) {
 
       case "payment_created":
       case "payment_pending":
-        console.log(`[whop-webhook] ${eventType}:`, data)
+        console.warn(`[whop-webhook] ${eventType}:`, data)
         await getSupabase().from("webhook_events").insert({
           source: "whop",
           event_type: eventType,
@@ -438,7 +439,7 @@ export async function POST(req: NextRequest) {
         break
 
       default:
-        console.log(`[whop-webhook] Unhandled event: ${eventType}`)
+        console.warn(`[whop-webhook] Unhandled event: ${eventType}`)
         await getSupabase().from("webhook_events").insert({
           source: "whop",
           event_type: eventType || "unknown",

@@ -54,24 +54,46 @@ export async function syncInvoiceToQB(paymentId: string): Promise<QbSyncResult> 
       .single()
 
     const customerName = account?.company_name ?? "Unknown Client"
-    const items = (payment.payment_items ?? []) as Array<{
-      description: string
-      quantity: number
-      unit_price: number
-    }>
 
-    // If no items, create a single line item from payment description + amount
-    const lineItems = items.length > 0
-      ? items.map((item) => ({
+    // Prefer client_invoice_items when linked via portal_invoice_id (richer data)
+    let lineItems: Array<{ description: string; amount: number; quantity: number }> = []
+
+    if (payment.portal_invoice_id) {
+      const { data: portalItems } = await supabaseAdmin
+        .from("client_invoice_items")
+        .select("description, quantity, unit_price")
+        .eq("invoice_id", payment.portal_invoice_id)
+        .order("sort_order")
+
+      if (portalItems && portalItems.length > 0) {
+        lineItems = portalItems.map((item) => ({
           description: item.description,
           amount: Number(item.unit_price),
           quantity: Number(item.quantity),
         }))
-      : [{
-          description: payment.description ?? "Invoice",
-          amount: Number(payment.total ?? payment.amount ?? 0),
-          quantity: 1,
-        }]
+      }
+    }
+
+    // Fallback to payment_items if no portal invoice linked or no items found
+    if (lineItems.length === 0) {
+      const items = (payment.payment_items ?? []) as Array<{
+        description: string
+        quantity: number
+        unit_price: number
+      }>
+
+      lineItems = items.length > 0
+        ? items.map((item) => ({
+            description: item.description,
+            amount: Number(item.unit_price),
+            quantity: Number(item.quantity),
+          }))
+        : [{
+            description: payment.description ?? "Invoice",
+            amount: Number(payment.total ?? payment.amount ?? 0),
+            quantity: 1,
+          }]
+    }
 
     // Get contact email for QB customer
     const { data: contactLink } = await supabaseAdmin

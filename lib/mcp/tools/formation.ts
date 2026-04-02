@@ -409,7 +409,7 @@ export function registerFormationTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "formation_confirm",
-    `Review and confirm supervised service activation steps. When a new client pays, activate-service prepares steps (QB invoice, data collection form) but waits for confirmation before executing. Works for ALL contract types: formation, onboarding, tax_return, itin. Use this tool to:
+    `Review and confirm supervised service activation steps. When a new client pays, activate-service prepares steps (data collection form) and waits for confirmation before executing. Invoices are created automatically by activate-service Step 3 (portal invoice). Works for ALL contract types: formation, onboarding, tax_return, itin. Use this tool to:
 1. View prepared steps (without execute=true)
 2. Confirm and execute all steps (with execute=true)
 
@@ -484,20 +484,9 @@ Prerequisite: pending_activation must be in status 'pending_confirmation'.`,
 
           // For now, create CRM tasks with full context
           // These will be replaced with direct API calls as we build confidence
-          if (ps.step === "0.3") {
-            await supabaseAdmin.from("tasks").insert({
-              task_title: `[AUTO] QB Invoice: ${activation.client_name}`,
-              description: `CONFIRMED by Claude.\n\n${ps.description}\n\nParams: ${JSON.stringify(ps.params, null, 2)}`,
-              assigned_to: "Antonio",
-              priority: "High",
-              category: "Payment",
-              status: "todo",
-            })
-            ps.status = "executed"
-            executionResults.push({ step: ps.step, status: "ok", detail: "QB invoice task created (confirmed)" })
-          }
+          // Step 0.3 (QB Invoice) removed — invoices now created automatically by activate-service Step 3
 
-          if (ps.step === "0.6") {
+          if (ps.step === "0.6" || ps.step === "data_form") {
             const params = ps.params as Record<string, string>
             // Create formation form directly
             const slug = (params.client_name || "form")

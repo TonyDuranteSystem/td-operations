@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { generateInvoiceNumber } from '@/lib/portal/invoice-number'
+import { createUnifiedInvoice } from '@/lib/portal/unified-invoice'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { NextResponse } from 'next/server'
 
@@ -30,11 +30,8 @@ export async function GET() {
 
   for (const template of recurring) {
     try {
-      const invoiceNumber = await generateInvoiceNumber(template.account_id)
-
-      // Calculate new dates
-      const issueDate = today
-      let dueDate: string | null = null
+      // Calculate due date from template's issue→due offset
+      let dueDate: string | undefined
       if (template.due_date && template.issue_date) {
         const daysDiff = Math.round(
           (new Date(template.due_date).getTime() - new Date(template.issue_date).getTime()) / 86400000
@@ -42,44 +39,26 @@ export async function GET() {
         dueDate = new Date(Date.now() + daysDiff * 86400000).toISOString().split('T')[0]
       }
 
-      // Create new invoice
-      const { data: newInvoice, error } = await supabaseAdmin
-        .from('client_invoices')
-        .insert({
-          account_id: template.account_id,
-          customer_id: template.customer_id,
-          invoice_number: invoiceNumber,
-          status: 'Draft',
-          currency: template.currency,
-          subtotal: template.subtotal,
-          discount: template.discount,
-          total: template.total,
-          issue_date: issueDate,
-          due_date: dueDate,
-          notes: template.notes,
-          message: template.message,
-          recurring_parent_id: template.id,
-        })
-        .select('id')
-        .single()
-
-      if (error || !newInvoice) continue
-
-      // Copy line items
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const items = (template.client_invoice_items as any[]) ?? []
-      if (items.length > 0) {
-        await supabaseAdmin.from('client_invoice_items').insert(
-          items.map((item: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }) => ({
-            invoice_id: newInvoice.id,
-            description: item.description,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            amount: item.amount,
-            sort_order: item.sort_order,
-          }))
-        )
-      }
+      if (items.length === 0) continue
+
+      // Create unified invoice (writes to BOTH client_invoices + payments with FK link)
+      const result = await createUnifiedInvoice({
+        account_id: template.account_id || undefined,
+        contact_id: template.contact_id || undefined,
+        customer_id: template.customer_id || undefined,
+        line_items: items.map((item: { description: string; quantity: number; unit_price: number }) => ({
+          description: item.description,
+          unit_price: item.unit_price,
+          quantity: item.quantity,
+        })),
+        currency: (template.currency || 'USD') as 'USD' | 'EUR',
+        due_date: dueDate,
+        notes: template.notes || undefined,
+        message: template.message || undefined,
+        recurring_parent_id: template.id,
+      })
 
       // Advance recurring_next_date
       const nextDate = calculateNextDate(template.recurring_next_date, template.recurring_frequency)
@@ -92,7 +71,7 @@ export async function GET() {
       await createPortalNotification({
         account_id: template.account_id,
         type: 'invoice',
-        title: `Recurring invoice generated: ${invoiceNumber}`,
+        title: `Recurring invoice generated: ${result.invoiceNumber}`,
         body: 'A new invoice has been automatically created from your recurring template.',
         link: '/portal/invoices',
       })

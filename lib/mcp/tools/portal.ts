@@ -695,7 +695,6 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
 
         // Resolve customer info
         let customerName = ""
-        let customerEmail = ""
         let resolvedContactId = contact_id
         const resolvedAccountId = account_id
 
@@ -707,7 +706,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             .single()
           if (!contact) return { content: [{ type: "text" as const, text: `Contact ${contact_id} not found` }] }
           customerName = contact.full_name
-          customerEmail = contact.email || ""
+          // email resolved internally by createUnifiedInvoice
         }
 
         if (account_id) {
@@ -730,7 +729,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
               const c = link.contacts as unknown as { full_name: string; email: string }
               resolvedContactId = link.contact_id
               customerName = c.full_name
-              customerEmail = c.email || ""
+              // email resolved internally by createUnifiedInvoice
             }
           }
 
@@ -742,105 +741,30 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
           return { content: [{ type: "text" as const, text: "Could not resolve customer name from contact or account" }] }
         }
 
-        // Find or create client_customer
-        let customerId: string
-        const matchCol = resolvedAccountId ? "account_id" : "contact_id"
-        const matchVal = resolvedAccountId || resolvedContactId
-
-        const { data: existing } = await supabaseAdmin
-          .from("client_customers")
-          .select("id")
-          .eq(matchCol, matchVal!)
-          .limit(1)
-          .maybeSingle()
-
-        if (existing) {
-          customerId = existing.id
-        } else {
-          const { data: created, error: custErr } = await supabaseAdmin
-            .from("client_customers")
-            .insert({
-              account_id: resolvedAccountId || null,
-              contact_id: resolvedContactId || null,
-              name: customerName,
-              email: customerEmail,
-            })
-            .select("id")
-            .single()
-          if (custErr) return { content: [{ type: "text" as const, text: `Failed to create customer: ${custErr.message}` }] }
-          customerId = created.id
+        // Create unified invoice (writes to BOTH client_invoices + payments with FK link)
+        const { createUnifiedInvoice } = await import("@/lib/portal/unified-invoice")
+        let result: Awaited<ReturnType<typeof createUnifiedInvoice>>
+        try {
+          result = await createUnifiedInvoice({
+            account_id: resolvedAccountId || undefined,
+            contact_id: resolvedContactId || undefined,
+            line_items,
+            currency: cur as 'USD' | 'EUR',
+            due_date: due_date || undefined,
+            notes: notes || undefined,
+            message: message || undefined,
+            mark_as_paid: mark_as_paid || false,
+            paid_date: paid_date || undefined,
+          })
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: `Failed to create invoice: ${err instanceof Error ? err.message : String(err)}` }] }
         }
 
-        // Generate invoice number
-        const { generateInvoiceNumber } = await import("@/lib/portal/invoice-number")
-        const ownerType = resolvedAccountId ? "account" as const : "contact" as const
-        const ownerId = resolvedAccountId || resolvedContactId!
-        const invoiceNumber = await generateInvoiceNumber(ownerId, ownerType)
-
-        // Calculate totals
-        const items = line_items.map((item) => ({
-          description: item.description,
-          unit_price: item.unit_price,
-          quantity: item.quantity || 1,
-          amount: item.unit_price * (item.quantity || 1),
-        }))
-        const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
-        const total = subtotal
-
-        const status = mark_as_paid ? "Paid" : "Draft"
-        const paidDateVal = mark_as_paid ? (paid_date || new Date().toISOString().split("T")[0]) : null
-
-        // Insert invoice
-        const { data: invoice, error: invErr } = await supabaseAdmin
-          .from("client_invoices")
-          .insert({
-            account_id: resolvedAccountId || null,
-            contact_id: resolvedContactId || null,
-            customer_id: customerId,
-            invoice_number: invoiceNumber,
-            status,
-            currency: cur,
-            subtotal,
-            discount: 0,
-            total,
-            issue_date: new Date().toISOString().split("T")[0],
-            due_date: due_date || null,
-            paid_date: paidDateVal,
-            notes: notes || null,
-            message: message || null,
-          })
-          .select("id, invoice_number")
-          .single()
-
-        if (invErr) return { content: [{ type: "text" as const, text: `Failed to create invoice: ${invErr.message}` }] }
-
-        // Insert line items
-        const itemRows = items.map((item, i) => ({
-          invoice_id: invoice.id,
-          description: item.description,
-          unit_price: item.unit_price,
-          quantity: item.quantity,
-          amount: item.amount,
-          sort_order: i,
-        }))
-
-        await supabaseAdmin.from("client_invoice_items").insert(itemRows)
-
-        // Create CRM payment record to keep SOT in sync
-        const { data: payment } = await supabaseAdmin
-          .from("payments")
-          .insert({
-            account_id: resolvedAccountId || null,
-            contact_id: resolvedContactId || null,
-            amount: total,
-            currency: cur,
-            payment_date: paidDateVal || new Date().toISOString().split("T")[0],
-            payment_type: "Invoice",
-            status: mark_as_paid ? "Paid" : "Pending",
-            notes: `Portal invoice ${invoiceNumber}`,
-          })
-          .select("id")
-          .single()
+        const invoice = { id: result.invoiceId, invoice_number: result.invoiceNumber }
+        const payment = result.paymentId ? { id: result.paymentId } : null
+        const total = result.total
+        const status = result.status
+        const invoiceNumber = result.invoiceNumber
 
         // Auto-create Whop checkout plan for card payment (+5%)
         let whopUrl: string | null = null
