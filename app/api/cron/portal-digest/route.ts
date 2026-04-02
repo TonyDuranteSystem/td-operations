@@ -74,11 +74,14 @@ export async function GET(request: NextRequest) {
       if (type === 'contact') {
         const { data: contact } = await supabaseAdmin
           .from('contacts')
-          .select('email, full_name, gender, language')
+          .select('email, full_name, gender, language, portal_tier')
           .eq('id', id)
           .single()
 
         if (!contact?.email) continue
+        // Skip if contact has no portal access
+        if (!contact.portal_tier || contact.portal_tier === 'none') continue
+
         contactEmail = contact.email
         _contactName = contact.full_name
         firstName = contact.full_name?.split(' ')[0] || null
@@ -96,7 +99,15 @@ export async function GET(request: NextRequest) {
           companyName = acct?.company_name || null
         }
       } else {
-        // account-based: get primary contact
+        // account-based: check if account has portal access
+        const { data: acctCheck } = await supabaseAdmin
+          .from('accounts')
+          .select('portal_account')
+          .eq('id', id)
+          .single()
+        if (!acctCheck?.portal_account) continue
+
+        // Get primary contact
         const { data: links } = await supabaseAdmin
           .from('account_contacts')
           .select('contact_id')
