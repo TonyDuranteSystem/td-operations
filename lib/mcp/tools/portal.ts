@@ -113,10 +113,10 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
           return { content: [{ type: "text" as const, text: `${account.company_name}\n\nBLOCKER: Contact ${contact?.full_name || "unknown"} has no email. Cannot create portal account.` }] }
         }
 
-        // Determine language: check ALL contacts, prefer English if any contact has it
+        // Determine language: default English, only use Italian if explicitly set
         const allContacts = contactLinks.map(cl => cl.contact as unknown as { language: string | null })
-        const hasEnglish = allContacts.some(c => c?.language?.toLowerCase().startsWith("en"))
-        const lang: "en" | "it" = hasEnglish ? "en" : "it"
+        const hasItalian = allContacts.some(c => c?.language?.toLowerCase().startsWith("it") || c?.language === "Italian")
+        const lang: "en" | "it" = hasItalian ? "it" : "en"
 
         // ─── 4. CHECK IF ALREADY DONE ───
         if (account.portal_account) {
