@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       .limit(1)
 
     if (existing && existing.length > 0) {
-      console.log("[offer-signed] Pending activation already exists for:", offer_token)
+      console.warn("[offer-signed] Pending activation already exists for:", offer_token)
       return NextResponse.json({ ok: true, message: "Already pending" })
     }
 
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Failed to create activation" }, { status: 500 })
     }
 
-    console.log(`[offer-signed] Created pending_activation ${activation.id} for ${offer.client_name} (${paymentMethod})`)
+    console.warn(`[offer-signed] Created pending_activation ${activation.id} for ${offer.client_name} (${paymentMethod})`)
 
     // Update bundled_pipelines based on selected_services (remove deselected optional service pipelines)
     if (offer.selected_services && Array.isArray(offer.selected_services) && offer.bundled_pipelines) {
@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
       if (deselectedPipelines.size > 0) {
         const finalPipelines = (offer.bundled_pipelines as string[]).filter(p => !deselectedPipelines.has(p))
         await supabase.from("offers").update({ bundled_pipelines: finalPipelines }).eq("token", offer_token)
-        console.log(`[offer-signed] Updated bundled_pipelines: removed ${Array.from(deselectedPipelines).join(", ")}`)
+        console.warn(`[offer-signed] Updated bundled_pipelines: removed ${Array.from(deselectedPipelines).join(", ")}`)
       }
     }
 
@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
 
           const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
           driveUploadResult = `ok: ${driveResult.id}`
-          console.log(`[offer-signed] Uploaded contract PDF to Drive: ${driveResult.id}`)
+          console.warn(`[offer-signed] Uploaded contract PDF to Drive: ${driveResult.id}`)
 
           // Auto-save to documents table for portal visibility
           if (offer.lead_id) {
@@ -200,6 +200,7 @@ export async function POST(req: NextRequest) {
                 documentType: 'Signed Contract',
                 category: 5, // Correspondence
                 driveFileId: driveResult.id,
+                portalVisible: true,
               })
             }
           } else if (offer.account_id) {
@@ -209,6 +210,7 @@ export async function POST(req: NextRequest) {
               documentType: 'Signed Contract',
               category: 5,
               driveFileId: driveResult.id,
+              portalVisible: true,
             })
           }
         } else {

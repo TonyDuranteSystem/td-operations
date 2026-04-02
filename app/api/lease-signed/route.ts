@@ -212,6 +212,7 @@ export async function POST(req: NextRequest) {
               documentType: 'Lease Agreement',
               category: 1, // Company
               driveFileId: driveResult.id,
+              portalVisible: true,
             })
           } else {
             results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })

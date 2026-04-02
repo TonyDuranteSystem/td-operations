@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
 
     // ─── 2. UPLOAD SIGNED PDF TO DRIVE ───
     let attachmentBytes: Uint8Array | null = null
-    let attachmentName = `Form 8832 - ${form.company_name} - Signed.pdf`
+    const attachmentName = `Form 8832 - ${form.company_name} - Signed.pdf`
 
     if (form.account_id) {
       try {
@@ -109,6 +109,7 @@ export async function POST(req: NextRequest) {
                 documentType: "Form 8832",
                 category: 1,
                 driveFileId: driveResult.id,
+                portalVisible: true,
               })
             }
           }

@@ -15,6 +15,7 @@ interface AutoSaveDocumentParams {
   documentType: string  // e.g. 'Signed Contract', 'Operating Agreement', 'Lease Agreement'
   category: number      // 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence
   driveFileId?: string
+  portalVisible?: boolean  // true = visible to client in portal Documents page
 }
 
 export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<{ id?: string; error?: string }> {
@@ -44,7 +45,7 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       status: 'classified',
       confidence: 1.0,
       processed_at: new Date().toISOString(),
-      portal_visible: true, // Signed documents are always visible to the client
+      portal_visible: params.portalVisible ?? false,
     }
 
     const { data, error } = await supabaseAdmin
