@@ -118,14 +118,16 @@ export async function toggleDocumentPortalVisibility(
   visible: boolean
 ): Promise<ActionResult> {
   return safeAction(async () => {
-    const supabase = createClient()
-    const { data: doc } = await supabase
+    // Use supabaseAdmin for both read and write — the documents table has no
+    // UPDATE RLS policy for staff users (only SELECT + service_role ALL).
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { data: doc } = await supabaseAdmin
       .from('documents')
       .select('id, file_name, account_id, contact_id')
       .eq('id', documentId)
       .single()
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('documents')
       .update({ portal_visible: visible })
       .eq('id', documentId)
