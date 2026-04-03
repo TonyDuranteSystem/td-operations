@@ -18,6 +18,8 @@ interface EditableFieldProps {
   options?: { label: string; value: string }[]
   readOnly?: boolean
   onSave: (value: string) => Promise<{ success: boolean; error?: string }>
+  /** Override className for the display value (e.g. heading style) */
+  className?: string
 }
 
 /**
@@ -33,6 +35,7 @@ export function EditableField({
   options,
   readOnly = false,
   onSave,
+  className,
 }: EditableFieldProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -84,8 +87,8 @@ export function EditableField({
     return (
       <div className="flex items-center gap-2 group">
         {Icon && <Icon className="h-4 w-4 text-muted-foreground shrink-0" />}
-        <span className="text-muted-foreground min-w-[100px] text-sm">{label}</span>
-        <span className="font-medium text-sm flex-1">{type === 'date' ? formatDisplayDate(value) : (value || '\u2014')}</span>
+        {label && <span className="text-muted-foreground min-w-[100px] text-sm">{label}</span>}
+        <span className={cn("font-medium text-sm flex-1", className)}>{type === 'date' ? formatDisplayDate(value) : (value || '\u2014')}</span>
         {!readOnly && (
           <button
             onClick={() => setEditing(true)}
@@ -103,7 +106,7 @@ export function EditableField({
   return (
     <div className="flex items-start gap-2">
       {Icon && <Icon className="h-4 w-4 text-muted-foreground shrink-0 mt-2.5" />}
-      <span className="text-muted-foreground min-w-[100px] text-sm mt-2">{label}</span>
+      {label && <span className="text-muted-foreground min-w-[100px] text-sm mt-2">{label}</span>}
       <div className="flex-1 space-y-1">
         <div className="flex items-center gap-1">
           {type === 'select' && options ? (

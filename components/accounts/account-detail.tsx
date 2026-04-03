@@ -305,7 +305,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         </Link>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-semibold tracking-tight">{account.company_name}</h1>
+            <EditableField label="" value={account.company_name} onSave={async (v) => { const r = await updateAccountField(account.id, 'company_name', v, account.updated_at); if (r.success) toast.success('Saved'); else toast.error(r.error ?? 'Failed'); return r }} className="text-2xl font-semibold tracking-tight" />
             {account.entity_type && (
               <span className="text-xs font-medium px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">
                 {ENTITY_LABELS[account.entity_type] ?? account.entity_type}
