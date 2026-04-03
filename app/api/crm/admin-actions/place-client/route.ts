@@ -279,7 +279,7 @@ async function createServiceDelivery(
 async function createOA(
   accountId: string,
   account: { company_name: string; state_of_formation: string | null; entity_type: string | null; formation_date: string | null; ein_number: string | null },
-  contact: { id: string; full_name: string; email: string | null; address: string | null },
+  contact: { id: string; full_name: string; email: string | null; residency: string | null },
 ): Promise<StepResult> {
   // Check if OA exists
   const { data: existing } = await supabaseAdmin
@@ -315,7 +315,7 @@ async function createOA(
         entity_type: entityType,
         manager_name: contact.full_name,
         member_name: contact.full_name,
-        member_address: contact.address || null,
+        member_address: contact.residency || null,
         member_email: contact.email || null,
         effective_date: today,
         business_purpose: "any and all lawful business activities",
@@ -630,7 +630,7 @@ export async function POST(request: Request) {
 
     const { data: contact, error: ctErr } = await supabaseAdmin
       .from("contacts")
-      .select("id, full_name, email, phone, address, language")
+      .select("id, full_name, email, phone, residency, language")
       .eq("id", contactLinks[0].contact_id)
       .single()
 
