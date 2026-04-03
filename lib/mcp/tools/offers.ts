@@ -559,6 +559,7 @@ export function registerOfferTools(server: McpServer) {
       language: z.enum(["en", "it"]).describe("Offer language — MUST match client's language"),
       offer_date: z.string().optional().describe("Offer date (YYYY-MM-DD, defaults to today)"),
       payment_type: z.enum(["checkout", "bank_transfer", "none"]).describe("Payment method"),
+      payment_gateway: z.enum(["whop", "stripe"]).optional().describe("Payment gateway for checkout links. Default: 'whop'. Use 'stripe' for Stripe Checkout. Only applies when payment_type='checkout'."),
       // Content fields (JSONB — validated)
       services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], recommended?}]"),
       cost_summary: z.any().describe("Cost summary: [{label, total?, total_label?, items?[{name, price}], rate?}]"),
@@ -571,7 +572,7 @@ export function registerOfferTools(server: McpServer) {
       future_developments: z.any().optional().describe("Future developments: [{text}]"),
       intro_en: z.string().optional().describe("English intro (only if language=en)"),
       intro_it: z.string().optional().describe("Italian intro (only if language=it)"),
-      payment_links: z.any().optional().describe("Whop payment links: [{url, label, amount}]"),
+      payment_links: z.any().optional().describe("Payment checkout links: [{url, label, amount, gateway?}]. Auto-generated when payment_type='checkout'."),
       bank_details: z.any().optional().describe("Bank transfer details: {beneficiary, iban, bic, bank_name, amount, reference}"),
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
@@ -707,11 +708,10 @@ export function registerOfferTools(server: McpServer) {
 
         const accessCode = data.access_code || ""
 
-        // Auto-create Whop plan if payment_type is checkout and no payment_links provided
-        let autoWhopLine = ""
+        // Auto-create checkout plan if payment_type is checkout and no payment_links provided
+        let autoCheckoutLine = ""
         if (params.payment_type === "checkout" && (!params.payment_links || (params.payment_links as unknown[]).length === 0)) {
           try {
-            const { createWhopPlan } = await import("@/lib/whop-auto-plan")
             // Extract total amount from cost_summary
             const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
             const firstCost = costArr[0] as Record<string, unknown> | undefined
@@ -720,37 +720,71 @@ export function registerOfferTools(server: McpServer) {
             const isEUR = totalStr.includes("\u20AC") || totalStr.toUpperCase().includes("EUR")
 
             if (totalNum > 0) {
-              // Get primary service name
               const servArr = Array.isArray(params.services) ? params.services : []
               const primaryService = (servArr[0] as Record<string, unknown>)?.name as string || undefined
+              const gateway = params.payment_gateway || "whop"
+              const currencyVal: "usd" | "eur" = isEUR ? "eur" : "usd"
+              const cardAmount = Math.round(totalNum * 1.05)
 
-              const whopResult = await createWhopPlan({
-                clientName: params.client_name,
-                amount: totalNum,
-                currency: isEUR ? "eur" : "usd",
-                contractType: params.contract_type || "formation",
-                serviceName: primaryService,
-              })
+              if (gateway === "stripe") {
+                // Stripe Checkout
+                const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
+                const stripeResult = await createStripeCheckoutSession({
+                  clientName: params.client_name,
+                  amount: totalNum,
+                  currency: currencyVal,
+                  contractType: params.contract_type || "formation",
+                  serviceName: primaryService,
+                  clientEmail: params.client_email,
+                  offerToken: params.token,
+                  leadId: params.lead_id,
+                })
 
-              if (whopResult.success && whopResult.checkoutUrl) {
-                // Update the offer with the auto-generated payment link
-                const cardAmount = isEUR ? Math.round(totalNum * 1.05) : Math.round(totalNum * 1.05)
-                await supabaseAdmin
-                  .from("offers")
-                  .update({
-                    payment_links: [{
-                      url: whopResult.checkoutUrl,
-                      label: `Pay ${isEUR ? "\u20AC" : "$"}${totalNum.toLocaleString()} by Card`,
-                      amount: cardAmount,
-                    }],
-                  })
-                  .eq("token", params.token)
+                if (stripeResult.success && stripeResult.checkoutUrl) {
+                  await supabaseAdmin
+                    .from("offers")
+                    .update({
+                      payment_links: [{
+                        url: stripeResult.checkoutUrl,
+                        label: `Pay ${isEUR ? "\u20AC" : "$"}${totalNum.toLocaleString()} by Card`,
+                        amount: cardAmount,
+                        gateway: "stripe",
+                      }],
+                    })
+                    .eq("token", params.token)
 
-                autoWhopLine = `\n💳 Whop plan auto-created: ${whopResult.planId}\n   Checkout: ${whopResult.checkoutUrl}`
+                  autoCheckoutLine = `\n💳 Stripe session auto-created: ${stripeResult.sessionId}\n   Checkout: ${stripeResult.checkoutUrl}`
+                }
+              } else {
+                // Whop (default)
+                const { createWhopPlan } = await import("@/lib/whop-auto-plan")
+                const whopResult = await createWhopPlan({
+                  clientName: params.client_name,
+                  amount: totalNum,
+                  currency: currencyVal,
+                  contractType: params.contract_type || "formation",
+                  serviceName: primaryService,
+                })
+
+                if (whopResult.success && whopResult.checkoutUrl) {
+                  await supabaseAdmin
+                    .from("offers")
+                    .update({
+                      payment_links: [{
+                        url: whopResult.checkoutUrl,
+                        label: `Pay ${isEUR ? "\u20AC" : "$"}${totalNum.toLocaleString()} by Card`,
+                        amount: cardAmount,
+                        gateway: "whop",
+                      }],
+                    })
+                    .eq("token", params.token)
+
+                  autoCheckoutLine = `\n💳 Whop plan auto-created: ${whopResult.planId}\n   Checkout: ${whopResult.checkoutUrl}`
+                }
               }
             }
-          } catch (whopErr) {
-            autoWhopLine = `\n⚠️ Whop auto-plan failed: ${whopErr instanceof Error ? whopErr.message : String(whopErr)}`
+          } catch (checkoutErr) {
+            autoCheckoutLine = `\n⚠️ Checkout auto-plan failed: ${checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr)}`
           }
         }
 
@@ -778,7 +812,7 @@ export function registerOfferTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer created as DRAFT: ${params.token}\nURL: ${APP_BASE_URL}/offer/${params.token}/${accessCode}${referralLine}${autoWhopLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
+            text: `✅ Offer created as DRAFT: ${params.token}\nURL: ${APP_BASE_URL}/offer/${params.token}/${accessCode}${referralLine}${autoCheckoutLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
           }],
         }
       } catch (err: unknown) {

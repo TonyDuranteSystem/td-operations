@@ -45,9 +45,14 @@ export async function POST(req: NextRequest) {
     }
 
     // Determine payment method from offer
-    const hasWhop = offer.payment_links && offer.payment_links.length > 0
+    const links = Array.isArray(offer.payment_links) ? offer.payment_links : []
+    const hasCheckoutLink = links.length > 0
     const hasBank = !!offer.bank_details
-    const paymentMethod = hasWhop ? "whop" : hasBank ? "bank_transfer" : "unknown"
+    // Detect gateway from payment_links metadata or URL pattern
+    const gatewayType = hasCheckoutLink
+      ? (links[0]?.gateway || (links[0]?.url?.includes("stripe.com") ? "stripe" : "whop"))
+      : null
+    const paymentMethod = hasCheckoutLink ? gatewayType : hasBank ? "bank_transfer" : "unknown"
 
     // Calculate total from cost_summary (first section = setup/initial payment)
     let totalAmount = 0
