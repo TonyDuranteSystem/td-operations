@@ -33,12 +33,24 @@ export async function GET(
     return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
   }
 
-  // Get company name
-  const { data: account } = await supabaseAdmin
-    .from('accounts')
-    .select('company_name')
-    .eq('id', thread.account_id)
-    .single()
+  // Get company name (or contact name for contact-only threads)
+  let companyName: string | null = null
+  if (thread.account_id) {
+    const { data: account } = await supabaseAdmin
+      .from('accounts')
+      .select('company_name')
+      .eq('id', thread.account_id)
+      .single()
+    companyName = account?.company_name ?? null
+  }
+  if (!companyName && thread.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('full_name')
+      .eq('id', thread.contact_id)
+      .single()
+    companyName = contact?.full_name ?? null
+  }
 
   // Get source message text
   let sourceMessage: string | null = null
@@ -69,7 +81,7 @@ export async function GET(
   return NextResponse.json({
     thread: {
       ...thread,
-      company_name: account?.company_name ?? 'Unknown',
+      company_name: companyName ?? thread.title ?? 'Team Discussion',
       source_message: sourceMessage,
     },
     messages: messages ?? [],
