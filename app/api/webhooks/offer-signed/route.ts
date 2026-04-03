@@ -152,9 +152,16 @@ export async function POST(req: NextRequest) {
         .limit(1)
         .maybeSingle()
 
-      // Get account for drive_folder_id (via lead_id → accounts)
+      // Get account for drive_folder_id (via account_id directly, or lead_id → accounts)
       let driveFolderId: string | null = null
-      if (offer.lead_id) {
+      if (offer.account_id) {
+        const { data: acct } = await supabase
+          .from("accounts")
+          .select("drive_folder_id")
+          .eq("id", offer.account_id)
+          .single()
+        driveFolderId = acct?.drive_folder_id || null
+      } else if (offer.lead_id) {
         const { data: lead } = await supabase
           .from("leads")
           .select("account_id")
