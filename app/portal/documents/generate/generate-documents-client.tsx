@@ -200,7 +200,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       setIsGenerating(true)
       try {
         const html2pdf = (await import('html2pdf.js')).default
-        const filename = `Distribution_Resolution_SIGNED_${account.companyName.replace(/\s+/g, '_')}_${formData.fiscalYear}.pdf`
+        const prefix = selectedType === 'distribution_resolution' ? 'Distribution_Resolution' : 'Tax_Statement'
+        const filename = `${prefix}_SIGNED_${account.companyName.replace(/\s+/g, '_')}_${formData.fiscalYear}.pdf`
 
         await html2pdf()
           .set({
@@ -545,15 +546,13 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                 {isGenerating ? l('generating', lang) : l('downloadPdf', lang)}
               </button>
-              {selectedType === 'distribution_resolution' && (
-                <button
-                  onClick={handleSignAndDownload}
-                  className="px-6 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
-                >
-                  <PenLine size={16} />
-                  {l('signAndDownload', lang)}
-                </button>
-              )}
+              <button
+                onClick={handleSignAndDownload}
+                className="px-6 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium text-sm transition flex items-center gap-2"
+              >
+                <PenLine size={16} />
+                {l('signAndDownload', lang)}
+              </button>
             </div>
           )}
         </div>
