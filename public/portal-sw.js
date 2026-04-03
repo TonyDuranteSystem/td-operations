@@ -1,5 +1,5 @@
 // Portal Service Worker — push notifications + caching
-const CACHE_NAME = 'td-portal-v1'
+const CACHE_NAME = 'td-portal-20260403'
 
 // Static assets to cache on install
 const STATIC_ASSETS = [
@@ -14,7 +14,15 @@ self.addEventListener('install', function (event) {
       return cache.addAll(STATIC_ASSETS)
     })
   )
-  self.skipWaiting()
+  // Don't call skipWaiting here — wait for client to send SKIP_WAITING message
+  // so users see the "Update available" banner first
+})
+
+// Listen for SKIP_WAITING from client (user clicked "Update Now")
+self.addEventListener('message', function (event) {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
 })
 
 // Activate: clean up old caches

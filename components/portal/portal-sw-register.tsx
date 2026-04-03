@@ -1,19 +1,11 @@
 'use client'
 
-import { useEffect } from 'react'
+import { UpdateBanner } from '@/components/shared/update-banner'
 
 /**
- * Registers the portal service worker on page load.
- * Required for PWA installability (Badging API, push notifications, offline).
+ * Portal service worker registration + update banner.
+ * Replaces the old simple register-only component.
  */
 export function PortalSwRegister() {
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/portal-sw.js', { scope: '/portal/' }).catch(() => {
-        // SW registration failed — non-critical, app still works
-      })
-    }
-  }, [])
-
-  return null
+  return <UpdateBanner swPath="/portal-sw.js" scope="/portal/" />
 }

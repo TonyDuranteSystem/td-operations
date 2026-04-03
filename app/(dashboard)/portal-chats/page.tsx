@@ -1528,126 +1528,138 @@ export default function PortalChatsPage() {
               </div>
             )}
 
-            {/* Reply input */}
-            <div className={cn('p-4 border-t bg-white shrink-0', (replyToMsg || pendingAdminFile) && 'border-t-0')}>
+            {/* Reply input — WhatsApp-style pill + action button */}
+            <div className={cn('p-2 sm:p-3 border-t bg-white shrink-0', (replyToMsg || pendingAdminFile) && 'border-t-0')}>
               <div className="flex gap-2 items-end">
-                {/* Paperclip */}
-                <button
-                  onClick={() => adminFileRef.current?.click()}
-                  disabled={uploadingAdminFile}
-                  className={cn(
-                    'p-3 rounded-lg transition-colors shrink-0',
-                    pendingAdminFile
-                      ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
-                      : 'text-zinc-400 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-50'
-                  )}
-                  title="Attach file"
-                >
-                  {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
-                </button>
-                <input
-                  ref={adminFileRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
-                  onChange={e => { if (e.target.files?.[0]) handleAdminFileSelect(e.target.files[0]) }}
-                  className="hidden"
-                />
-                {/* Emoji picker */}
-                <div className="relative" ref={emojiPickerRef}>
+                {/* Pill container */}
+                <div className={cn(
+                  'flex items-end flex-1 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors',
+                  isRecording && 'border-red-300 bg-red-50/30'
+                )}>
+                  {/* Emoji */}
+                  <div className="relative shrink-0" ref={emojiPickerRef}>
+                    <button
+                      onClick={() => setShowEmojiPicker(v => !v)}
+                      className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                      title="Emoji"
+                    >
+                      <Smile className="h-5 w-5" />
+                    </button>
+                    {showEmojiPicker && (
+                      <div className="absolute bottom-12 left-0 z-30">
+                        <EmojiPicker
+                          onEmojiClick={(emojiData: { emoji: string }) => {
+                            const ref = inputRef.current
+                            if (ref) {
+                              const start = ref.selectionStart ?? replyText.length
+                              const end = ref.selectionEnd ?? start
+                              const newText = replyText.slice(0, start) + emojiData.emoji + replyText.slice(end)
+                              setReplyText(newText)
+                              setShowEmojiPicker(false)
+                              requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
+                            } else {
+                              setReplyText(prev => prev + emojiData.emoji)
+                              setShowEmojiPicker(false)
+                            }
+                          }}
+                          width={320}
+                          height={400}
+                          lazyLoadEmojis
+                          skinTonesDisabled
+                          previewConfig={{ showPreview: false }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {/* Paperclip */}
                   <button
-                    onClick={() => setShowEmojiPicker(v => !v)}
-                    className="p-3 rounded-lg text-zinc-400 bg-zinc-100 hover:bg-zinc-200 transition-colors shrink-0"
-                    title="Emoji"
+                    onClick={() => adminFileRef.current?.click()}
+                    disabled={uploadingAdminFile}
+                    className={cn(
+                      'p-2 rounded-full transition-colors shrink-0',
+                      pendingAdminFile
+                        ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
+                        : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
+                    )}
+                    title="Attach file"
                   >
-                    <Smile className="h-5 w-5" />
+                    {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
                   </button>
-                  {showEmojiPicker && (
-                    <div className="absolute bottom-14 left-0 z-30">
-                      <EmojiPicker
-                        onEmojiClick={(emojiData: { emoji: string }) => {
-                          const ref = inputRef.current
-                          if (ref) {
-                            const start = ref.selectionStart ?? replyText.length
-                            const end = ref.selectionEnd ?? start
-                            const newText = replyText.slice(0, start) + emojiData.emoji + replyText.slice(end)
-                            setReplyText(newText)
-                            setShowEmojiPicker(false)
-                            requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
-                          } else {
-                            setReplyText(prev => prev + emojiData.emoji)
-                            setShowEmojiPicker(false)
-                          }
-                        }}
-                        width={320}
-                        height={400}
-                        lazyLoadEmojis
-                        skinTonesDisabled
-                        previewConfig={{ showPreview: false }}
-                      />
-                    </div>
+                  <input
+                    ref={adminFileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+                    onChange={e => { if (e.target.files?.[0]) handleAdminFileSelect(e.target.files[0]) }}
+                    className="hidden"
+                  />
+                  {/* Textarea */}
+                  <textarea
+                    ref={inputRef}
+                    value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                    rows={1}
+                    placeholder={isRecording ? 'Recording...' : 'Type a message...'}
+                    className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
+                  />
+                  {/* Polish button — inside pill, shows when text */}
+                  {replyText.trim() && (
+                    <button
+                      onClick={handlePolish}
+                      disabled={polishing}
+                      className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
+                      title="AI Polish — clean up grammar and make it professional"
+                    >
+                      {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                    </button>
+                  )}
+                  {replyText.length > 4500 && (
+                    <span className={cn('text-xs self-center pr-1', replyText.length > 5000 ? 'text-red-500' : 'text-zinc-400')}>
+                      {replyText.length}/5000
+                    </span>
                   )}
                 </div>
-                <textarea
-                  ref={inputRef}
-                  value={replyText}
-                  onChange={e => setReplyText(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-                  rows={1}
-                  placeholder={isRecording ? 'Recording...' : 'Type a message...'}
-                  className={cn(
-                    "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto",
-                    isRecording && "ring-2 ring-red-300 bg-red-50/50"
-                  )}
-                />
-                {/* Polish button — shows when there's text */}
-                {replyText.trim() && (
-                  <button
-                    onClick={handlePolish}
-                    disabled={polishing}
-                    className="p-3 rounded-lg bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
-                    title="AI Polish — clean up grammar and make it professional"
-                  >
-                    {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                {/* Action button — Send or Mic */}
+                {sendMutation.isPending ? (
+                  <button disabled className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
+                    <Loader2 className="h-5 w-5 animate-spin" />
                   </button>
-                )}
-                {/* Mic — always visible (dictate into empty or append to existing text) */}
-                {micSupported && (
-                  isRecording ? (
-                    <button
-                      onClick={stopRecording}
-                      className="p-3 rounded-lg bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
-                      title="Stop recording"
-                      aria-label="Stop recording"
-                    >
-                      <Square className="h-5 w-5 fill-current" />
-                    </button>
-                  ) : isTranscribing ? (
-                    <button disabled className="p-3 rounded-lg bg-blue-100 text-blue-500 shrink-0" aria-label="Transcribing audio">
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={startRecording}
-                      className="p-3 rounded-lg bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
-                      title="Dictate — appends to current text"
-                      aria-label="Start voice recording"
-                    >
-                      <Mic className="h-5 w-5" />
-                    </button>
-                  )
-                )}
-                {/* Send */}
-                <button
-                  onClick={handleSend}
-                  disabled={(!replyText.trim() && !pendingAdminFile) || sendMutation.isPending || uploadingAdminFile}
-                  className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-                >
-                  {sendMutation.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                </button>
-                {replyText.length > 4500 && (
-                  <span className={cn('text-xs', replyText.length > 5000 ? 'text-red-500' : 'text-zinc-400')}>
-                    {replyText.length}/5000
-                  </span>
+                ) : (replyText.trim() || pendingAdminFile) ? (
+                  <button
+                    onClick={handleSend}
+                    disabled={uploadingAdminFile}
+                    className="w-12 h-12 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors"
+                  >
+                    <Send className="h-5 w-5" />
+                  </button>
+                ) : isRecording ? (
+                  <button
+                    onClick={stopRecording}
+                    className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
+                    title="Stop recording"
+                  >
+                    <Square className="h-5 w-5 fill-current" />
+                  </button>
+                ) : isTranscribing ? (
+                  <button disabled className="w-12 h-12 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center shrink-0">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </button>
+                ) : micSupported ? (
+                  <button
+                    onClick={startRecording}
+                    className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
+                    title="Voice input"
+                  >
+                    <Mic className="h-5 w-5" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSend}
+                    disabled
+                    className="w-12 h-12 rounded-full bg-blue-600 text-white opacity-50 flex items-center justify-center shrink-0"
+                  >
+                    <Send className="h-5 w-5" />
+                  </button>
                 )}
               </div>
             </div>

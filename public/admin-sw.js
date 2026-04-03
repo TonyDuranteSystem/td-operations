@@ -1,6 +1,12 @@
 // Admin Service Worker — push notifications only (no caching)
 self.addEventListener('install', function () {
-  self.skipWaiting()
+  // Don't call skipWaiting — wait for client SKIP_WAITING message
+})
+
+self.addEventListener('message', function (event) {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
 })
 
 self.addEventListener('activate', function () {

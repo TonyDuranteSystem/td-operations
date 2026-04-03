@@ -41,7 +41,13 @@ function formatTime(dateStr: string): string {
 
 export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { accountId?: string; contactId: string; userId: string; locale?: string }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore } = usePortalChat(accountId || null, contactId)
-  const [input, setInput] = useState('')
+  const draftKey = `chat_draft_${accountId || contactId}`
+  const [input, setInput] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    const draft = localStorage.getItem(draftKey)
+    if (draft) { localStorage.removeItem(draftKey); return draft }
+    return ''
+  })
   const [uploading, setUploading] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
@@ -98,6 +104,13 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
     const newHeight = Math.max(44, Math.min(el.scrollHeight, 300))
     el.style.height = newHeight + 'px'
   }, [input])
+
+  // Save draft to localStorage before unload (preserves text during PWA update reload)
+  useEffect(() => {
+    const handler = () => { if (input.trim()) localStorage.setItem(draftKey, input) }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [input, draftKey])
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -440,113 +453,128 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
         </div>
       )}
 
-      {/* Input */}
-      <div className={cn('border-t p-3', (replyTo || pendingFile) && 'border-t-0')}>
+      {/* Input — WhatsApp-style pill + action button */}
+      <div className={cn('border-t p-2 sm:p-3', (replyTo || pendingFile) && 'border-t-0')}>
         <div className="flex items-end gap-2">
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className={cn(
-              'p-2 rounded-full transition-colors shrink-0',
-              pendingFile
-                ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
-                : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
-            )}
-          >
-            {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
-            onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
-            className="hidden"
-          />
-          {/* Emoji picker */}
-          <div className="relative" ref={emojiPickerRef}>
+          {/* Pill container */}
+          <div className={cn(
+            'flex items-end flex-1 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors',
+            isRecording && 'border-red-300 bg-red-50/30'
+          )}>
+            {/* Emoji */}
+            <div className="relative shrink-0" ref={emojiPickerRef}>
+              <button
+                onClick={() => setShowEmojiPicker(v => !v)}
+                className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                title="Emoji"
+              >
+                <Smile className="h-5 w-5" />
+              </button>
+              {showEmojiPicker && (
+                <div className="absolute bottom-12 left-0 z-30">
+                  <EmojiPicker
+                    onEmojiClick={(emojiData: { emoji: string }) => {
+                      const ref = inputRef.current
+                      if (ref) {
+                        const start = ref.selectionStart ?? input.length
+                        const end = ref.selectionEnd ?? start
+                        const newText = input.slice(0, start) + emojiData.emoji + input.slice(end)
+                        setInput(newText)
+                        setShowEmojiPicker(false)
+                        requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
+                      } else {
+                        setInput(prev => prev + emojiData.emoji)
+                        setShowEmojiPicker(false)
+                      }
+                    }}
+                    width={320}
+                    height={400}
+                    lazyLoadEmojis
+                    skinTonesDisabled
+                    previewConfig={{ showPreview: false }}
+                  />
+                </div>
+              )}
+            </div>
+            {/* Paperclip */}
             <button
-              onClick={() => setShowEmojiPicker(v => !v)}
-              className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
-              title="Emoji"
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+              className={cn(
+                'p-2 rounded-full transition-colors shrink-0',
+                pendingFile
+                  ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
+                  : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
+              )}
             >
-              <Smile className="h-5 w-5" />
+              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
             </button>
-            {showEmojiPicker && (
-              <div className="absolute bottom-12 left-0 z-30">
-                <EmojiPicker
-                  onEmojiClick={(emojiData: { emoji: string }) => {
-                    const ref = inputRef.current
-                    if (ref) {
-                      const start = ref.selectionStart ?? input.length
-                      const end = ref.selectionEnd ?? start
-                      const newText = input.slice(0, start) + emojiData.emoji + input.slice(end)
-                      setInput(newText)
-                      setShowEmojiPicker(false)
-                      requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length) })
-                    } else {
-                      setInput(prev => prev + emojiData.emoji)
-                      setShowEmojiPicker(false)
-                    }
-                  }}
-                  width={320}
-                  height={400}
-                  lazyLoadEmojis
-                  skinTonesDisabled
-                  previewConfig={{ showPreview: false }}
-                />
-              </div>
-            )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+              onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
+              className="hidden"
+            />
+            {/* Textarea */}
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
+              className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
+            />
           </div>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
-            className={cn(
-              "flex-1 min-w-0 px-4 py-3 text-sm border rounded-2xl bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors resize-none overflow-y-auto",
-              isRecording && "ring-2 ring-red-300 bg-red-50/50"
-            )}
-          />
-          {/* Mic — always visible so user can dictate into existing text */}
-          {micSupported && (
-            isRecording ? (
-              <button
-                onClick={handleMicToggle}
-                className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse transition-all shrink-0"
-                title={t('chat.stopRecording') || 'Stop recording'}
-                aria-label={t('chat.stopRecording') || 'Stop recording'}
-              >
-                <Square className="h-5 w-5 fill-current" />
-              </button>
-            ) : isTranscribing ? (
-              <button
-                disabled
-                className="p-3 rounded-full bg-blue-100 text-blue-500 shrink-0"
-                aria-label="Transcribing audio"
-              >
-                <Loader2 className="h-5 w-5 animate-spin" />
-              </button>
-            ) : (
-              <button
-                onClick={handleMicToggle}
-                className="p-3 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 transition-colors shrink-0"
-                title={t('chat.startRecording') || 'Voice input'}
-                aria-label={t('chat.startRecording') || 'Start voice recording'}
-              >
-                <Mic className="h-5 w-5" />
-              </button>
-            )
+          {/* Action button — Send or Mic (WhatsApp style toggle) */}
+          {sending ? (
+            <button
+              disabled
+              className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0"
+            >
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </button>
+          ) : (input.trim() || pendingFile) ? (
+            <button
+              onClick={handleSend}
+              disabled={uploading}
+              className="w-12 h-12 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors"
+            >
+              <Send className="h-5 w-5" />
+            </button>
+          ) : isRecording ? (
+            <button
+              onClick={handleMicToggle}
+              className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
+              title={t('chat.stopRecording') || 'Stop recording'}
+            >
+              <Square className="h-5 w-5 fill-current" />
+            </button>
+          ) : isTranscribing ? (
+            <button
+              disabled
+              className="w-12 h-12 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center shrink-0"
+            >
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </button>
+          ) : micSupported ? (
+            <button
+              onClick={handleMicToggle}
+              className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
+              title={t('chat.startRecording') || 'Voice input'}
+            >
+              <Mic className="h-5 w-5" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled
+              className="w-12 h-12 rounded-full bg-blue-600 text-white opacity-50 flex items-center justify-center shrink-0"
+            >
+              <Send className="h-5 w-5" />
+            </button>
           )}
-          {/* Send */}
-          <button
-            onClick={handleSend}
-            disabled={(!input.trim() && !pendingFile) || sending || uploading}
-            className="p-3 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-          >
-            {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-          </button>
         </div>
       </div>
 
