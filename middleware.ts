@@ -32,6 +32,8 @@ const PUBLIC_PREFIXES = [
   '/api/oa-signed',
   '/api/ss4-signed',
   '/api/ss4',
+  // Referral link redirects
+  '/r/',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
