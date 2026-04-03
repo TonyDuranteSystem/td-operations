@@ -15,33 +15,52 @@ export default function ResetPasswordPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Exchange PKCE code for session on mount
   useEffect(() => {
+    const supabase = createClient()
     const code = searchParams.get('code')
-    if (!code) {
-      // No code — check if we already have a session (e.g. from hash fragment)
-      const supabase = createClient()
-      supabase.auth.getSession().then(({ data }) => {
-        if (data.session) {
-          setSessionReady(true)
+
+    // PKCE flow: exchange code for session
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (error) {
+          setSessionError('Reset link expired or already used. Please request a new one.')
         } else {
-          setSessionError('No reset code found. Please request a new password reset link.')
+          setSessionReady(true)
+          window.history.replaceState({}, '', '/portal/reset-password')
         }
       })
       return
     }
 
-    // Exchange the code for a session
-    const supabase = createClient()
-    supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-      if (error) {
-        setSessionError('Reset link expired or already used. Please request a new one.')
-      } else {
+    // Implicit flow: Supabase auto-processes #access_token hash fragment.
+    // Listen for auth state changes to detect when session is ready.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) {
         setSessionReady(true)
-        // Clean the code from the URL
-        window.history.replaceState({}, '', '/portal/reset-password')
       }
     })
+
+    // Also check if session already exists (e.g. hash already processed)
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        setSessionReady(true)
+      }
+    })
+
+    // Timeout: if no session after 5 seconds, show error
+    const timeout = setTimeout(() => {
+      setSessionReady(prev => {
+        if (!prev) {
+          setSessionError('No reset code found. Please request a new password reset link.')
+        }
+        return prev
+      })
+    }, 5000)
+
+    return () => {
+      subscription.unsubscribe()
+      clearTimeout(timeout)
+    }
   }, [searchParams])
 
   const handleSubmit = async (e: React.FormEvent) => {
