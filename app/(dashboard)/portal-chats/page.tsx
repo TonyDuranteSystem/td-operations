@@ -28,6 +28,7 @@ interface ChatMessage {
   id: string
   message: string
   sender_type: 'client' | 'admin'
+  sender_name?: string | null
   created_at: string
   attachment_url?: string
   attachment_name?: string
@@ -1347,6 +1348,10 @@ export default function PortalChatsPage() {
                             : 'bg-zinc-100 text-zinc-900'
                         )}
                       >
+                        {/* Sender name for client messages (shows member name in MMLLC) */}
+                        {!isAdmin && msg.sender_name && (
+                          <p className="text-[10px] font-semibold text-zinc-500 mb-0.5">{msg.sender_name}</p>
+                        )}
                         {/* Quoted reply */}
                         {replyRef && (
                           <div className={cn(
@@ -1356,7 +1361,7 @@ export default function PortalChatsPage() {
                               : 'bg-zinc-200 border-zinc-400 text-zinc-600'
                           )}>
                             <p className="font-medium text-[10px] mb-0.5">
-                              {replyRef.sender_type === 'admin' ? 'You' : 'Client'}
+                              {replyRef.sender_type === 'admin' ? 'You' : (replyRef.sender_name || 'Client')}
                             </p>
                             <p className="line-clamp-2">{replyRef.message || '[Attachment]'}</p>
                           </div>

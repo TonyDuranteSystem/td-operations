@@ -399,6 +399,8 @@ export interface PortalMessage {
   account_id: string
   sender_type: 'client' | 'admin'
   sender_id: string
+  sender_name: string | null
+  contact_id: string | null
   message: string
   attachment_url: string | null
   attachment_name: string | null

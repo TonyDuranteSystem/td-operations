@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabaseAdmin
     .from('portal_messages')
-    .select('*')
+    .select('*, contacts:contact_id(full_name)')
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -61,7 +61,17 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json({ messages: (data ?? []).reverse() })
+  // Flatten contact name into sender_name for display
+  const messages = (data ?? []).map(msg => {
+    const contact = msg.contacts as unknown as { full_name: string } | null
+    const { contacts: _contacts, ...rest } = msg
+    return {
+      ...rest,
+      sender_name: contact?.full_name || null,
+    }
+  }).reverse()
+
+  return NextResponse.json({ messages })
 }
 
 export async function POST(request: NextRequest) {
@@ -128,10 +138,15 @@ export async function POST(request: NextRequest) {
       attachment_name: attachment_name || null,
       reply_to_id: reply_to_id || null,
     })
-    .select()
+    .select('*, contacts:contact_id(full_name)')
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Flatten sender_name
+  const contact = data.contacts as unknown as { full_name: string } | null
+  const { contacts: _contacts, ...msgData } = data
+  const responseMsg = { ...msgData, sender_name: contact?.full_name || null }
 
   // Notify client when admin sends a message
   if (senderType === 'admin') {
@@ -161,7 +176,7 @@ export async function POST(request: NextRequest) {
     ip: request.headers.get('x-forwarded-for') || undefined,
   })
 
-  return NextResponse.json({ message: data })
+  return NextResponse.json({ message: responseMsg })
 }
 
 /**

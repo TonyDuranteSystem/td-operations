@@ -288,7 +288,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                   )}>
                     {!isOwn && (
                       <p className="text-[10px] font-medium text-zinc-500 mb-0.5">
-                        {msg.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
+                        {msg.sender_type === 'admin' ? t('chat.team') : (msg.sender_name || t('chat.you'))}
+                      </p>
+                    )}
+                    {isOwn && msg.sender_name && msg.sender_id !== userId && (
+                      <p className="text-[10px] font-medium text-blue-200 mb-0.5">
+                        {msg.sender_name}
                       </p>
                     )}
                     {/* Quoted reply */}
@@ -300,7 +305,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                           : 'bg-zinc-200 border-zinc-400 text-zinc-600'
                       )}>
                         <p className="font-medium text-[10px] mb-0.5">
-                          {replyMsg.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
+                          {replyMsg.sender_type === 'admin' ? t('chat.team') : (replyMsg.sender_name || t('chat.you'))}
                         </p>
                         <p className="line-clamp-2">{replyMsg.message || '[Attachment]'}</p>
                       </div>
