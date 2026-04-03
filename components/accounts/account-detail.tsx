@@ -6,7 +6,7 @@ import {
   ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Plus, Search, Loader2,
+  Plus, Search, Loader2, Stethoscope,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -16,6 +16,7 @@ import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/gen
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
+import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { cn } from '@/lib/utils'
@@ -288,6 +289,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
   const [showPlaceClient, setShowPlaceClient] = useState(false)
+  const [showDiagnostic, setShowDiagnostic] = useState(false)
 
   const primaryContact = contacts[0] || null
 
@@ -325,6 +327,15 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             </span>
             {isAdmin && (
               <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => setShowDiagnostic(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+              >
+                <Stethoscope className="h-3.5 w-3.5" />
+                Diagnose
+              </button>
             )}
             {isAdmin && (
               <button
@@ -403,6 +414,12 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         contactName={primaryContact?.full_name || ''}
         ein={account.ein_number}
         formationDate={account.formation_date}
+      />
+      <ClientDiagnosticDialog
+        open={showDiagnostic}
+        onClose={() => setShowDiagnostic(false)}
+        accountId={account.id}
+        companyName={account.company_name}
       />
 
       {/* Tabs */}
