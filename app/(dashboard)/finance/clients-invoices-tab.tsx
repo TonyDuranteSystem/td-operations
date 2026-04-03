@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
+import { createUnifiedInvoiceDraft } from './actions'
 
 interface ClientSummary {
   id: string
@@ -425,12 +426,23 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
           </div>
         )}
       </div>
-      {/* New Invoice Dialog */}
+      {/* New Invoice Dialog — uses unified system (writes to BOTH client_invoices + payments) */}
       <InvoiceDialog
         open={showNewInvoice}
         onClose={() => {
           setShowNewInvoice(false)
           router.refresh()
+        }}
+        onCreateInvoice={async (input) => {
+          const result = await createUnifiedInvoiceDraft({
+            account_id: input.account_id,
+            description: input.description,
+            currency: (input.amount_currency || 'USD') as 'USD' | 'EUR',
+            due_date: input.due_date,
+            message: input.message,
+            items: input.items,
+          })
+          return result
         }}
       />
     </div>

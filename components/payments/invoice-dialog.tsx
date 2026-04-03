@@ -12,6 +12,8 @@ interface InvoiceDialogProps {
   open: boolean
   onClose: () => void
   mode?: 'invoice' | 'credit'
+  /** Override the default createInvoice action (e.g. to use createUnifiedInvoice) */
+  onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string } }>
 }
 
 const emptyItem = (): InvoiceItem => ({
@@ -22,7 +24,7 @@ const emptyItem = (): InvoiceItem => ({
   sort_order: 0,
 })
 
-export function InvoiceDialog({ open, onClose, mode = 'invoice' }: InvoiceDialogProps) {
+export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice }: InvoiceDialogProps) {
   const [isPending, startTransition] = useTransition()
   const [accountId, setAccountId] = useState<string | undefined>()
   const [accountName, setAccountName] = useState<string | undefined>()
@@ -128,7 +130,9 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice' }: InvoiceDialog
           message: message.trim() || undefined,
           items: items.map((item, i) => ({ ...item, sort_order: i })),
         }
-        const result = await createInvoice(input)
+        const result = onCreateInvoice
+          ? await onCreateInvoice(input)
+          : await createInvoice(input)
         if (result.success) {
           toast.success(`Invoice ${result.data?.invoice_number} created as Draft`)
           resetForm()
