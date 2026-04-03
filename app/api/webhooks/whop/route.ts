@@ -317,6 +317,24 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         return NextResponse.json({ ok: true, message: "Already processed" })
       }
 
+      // Update offer status to 'completed' (unlocks portal step 4)
+      if (pending.offer_token) {
+        await getSupabase()
+          .from("offers")
+          .update({ status: "completed", updated_at: new Date().toISOString() })
+          .eq("token", pending.offer_token)
+          .eq("status", "signed")
+      }
+
+      // Also upgrade contact portal_tier (source of truth for portal UI)
+      if (contactId) {
+        await getSupabase()
+          .from("contacts")
+          .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
+          .eq("id", contactId)
+          .in("portal_tier", ["lead"])
+      }
+
       console.warn(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
 
       // Trigger Stage 0 activation via internal endpoint
