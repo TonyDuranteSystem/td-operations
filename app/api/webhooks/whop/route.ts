@@ -196,13 +196,21 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
   // 3b. Check if this Whop payment matches an open CRM invoice (auto-reconcile)
   // Uses syncInvoiceStatus for bidirectional sync (payments ↔ client_invoices)
-  if (accountId && total > 0) {
+  // Supports contact-only invoices (created at signing before account exists)
+  if ((accountId || contactId) && total > 0) {
     try {
-      const { data: openInvoices } = await getSupabase()
+      let openInvoiceQuery = getSupabase()
         .from("payments")
         .select("id, invoice_number, total, amount, invoice_status, portal_invoice_id")
-        .eq("account_id", accountId)
-        .in("invoice_status", ["Sent", "Overdue"])
+        .in("invoice_status", ["Sent", "Overdue", "Draft"])
+
+      if (accountId) {
+        openInvoiceQuery = openInvoiceQuery.eq("account_id", accountId)
+      } else {
+        openInvoiceQuery = openInvoiceQuery.eq("contact_id", contactId!)
+      }
+
+      const { data: openInvoices } = await openInvoiceQuery
 
       if (openInvoices?.length) {
         const today = new Date().toISOString().split("T")[0]
@@ -317,6 +325,24 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
       // Portal tier already upgraded in step 4b above (upgradePortalTier syncs both account + contacts)
 
       console.warn(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
+
+      // If pending_activation has a portal_invoice_id (created at signing), mark it Paid
+      const { data: activationWithInvoice } = await getSupabase()
+        .from("pending_activations")
+        .select("portal_invoice_id")
+        .eq("id", pending.id)
+        .single()
+
+      if (activationWithInvoice?.portal_invoice_id) {
+        try {
+          const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
+          const today = new Date().toISOString().split("T")[0]
+          await syncInvoiceStatus("invoice", activationWithInvoice.portal_invoice_id, "Paid", today, total)
+          console.warn(`[whop-webhook] Marked invoice ${activationWithInvoice.portal_invoice_id} as Paid`)
+        } catch (e) {
+          console.error("[whop-webhook] Failed to mark invoice as Paid:", e)
+        }
+      }
 
       // Trigger Stage 0 activation via internal endpoint
       try {

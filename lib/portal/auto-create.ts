@@ -241,6 +241,17 @@ export async function ensureMinimalAccount(params: {
     .maybeSingle()
 
   if (existingLink?.account_id) {
+    // Backfill account_id on contact-only invoices (created at signing, before account existed)
+    await supabaseAdmin
+      .from("client_invoices")
+      .update({ account_id: existingLink.account_id, updated_at: new Date().toISOString() })
+      .eq("contact_id", contactId)
+      .is("account_id", null)
+    await supabaseAdmin
+      .from("payments")
+      .update({ account_id: existingLink.account_id, updated_at: new Date().toISOString() })
+      .eq("contact_id", contactId)
+      .is("account_id", null)
     return { accountId: existingLink.account_id, created: false }
   }
 
@@ -292,6 +303,18 @@ export async function ensureMinimalAccount(params: {
     contact_id: contactId,
     role: 'Owner',
   })
+
+  // Backfill account_id on contact-only invoices (created at signing, before account existed)
+  await supabaseAdmin
+    .from("client_invoices")
+    .update({ account_id: account.id, updated_at: new Date().toISOString() })
+    .eq("contact_id", contactId)
+    .is("account_id", null)
+  await supabaseAdmin
+    .from("payments")
+    .update({ account_id: account.id, updated_at: new Date().toISOString() })
+    .eq("contact_id", contactId)
+    .is("account_id", null)
 
   // Update lead.account_id if lead exists
   if (leadId) {

@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
+import { createUnifiedInvoice } from "@/lib/portal/unified-invoice"
 
 export async function POST(req: NextRequest) {
   try {
@@ -108,6 +109,65 @@ export async function POST(req: NextRequest) {
     }
 
     console.warn(`[offer-signed] Created pending_activation ${activation.id} for ${offer.client_name} (${paymentMethod})`)
+
+    // ─── CREATE INVOICE AT SIGNING (contact-only, unpaid) ───
+    // Invoice is for the PERSON (contact_id). Account doesn't exist yet.
+    // When the account is created later (formation/onboarding wizard), account_id gets backfilled.
+    let invoiceId: string | null = null
+    try {
+      // Resolve contact_id from offer's client_email
+      let contactId: string | null = null
+      if (offer.client_email) {
+        const { data: existingContact } = await supabase
+          .from("contacts")
+          .select("id")
+          .ilike("email", offer.client_email)
+          .limit(1)
+          .maybeSingle()
+        contactId = existingContact?.id || null
+      }
+
+      if (contactId && totalAmount > 0) {
+        const contractType = offer.contract_type || "formation"
+        const serviceLabel = contractType === "formation" ? "LLC Formation"
+          : contractType === "onboarding" ? "LLC Onboarding"
+          : contractType === "tax_return" ? "Tax Return"
+          : contractType === "itin" ? "ITIN Application"
+          : "Service"
+
+        const currency = (() => {
+          const raw = summaryArr[0]?.total || summaryArr[0]?.total_label || ""
+          if (raw.includes("€") || raw.toUpperCase().includes("EUR")) return "EUR" as const
+          return "USD" as const
+        })()
+
+        const invoiceResult = await createUnifiedInvoice({
+          contact_id: contactId,
+          line_items: [{
+            description: `${serviceLabel} Package - ${offer.client_name}`,
+            unit_price: totalAmount,
+            quantity: 1,
+          }],
+          currency,
+          mark_as_paid: false,
+          notes: `Auto-created at contract signing. Offer: ${offer_token}`,
+        })
+
+        invoiceId = invoiceResult.invoiceId
+
+        // Store invoice reference on pending_activation for dedup
+        await supabase
+          .from("pending_activations")
+          .update({ portal_invoice_id: invoiceId })
+          .eq("id", activation.id)
+
+        console.warn(`[offer-signed] Invoice ${invoiceResult.invoiceNumber} created for ${offer.client_name} (contact-only, unpaid)`)
+      } else {
+        console.warn(`[offer-signed] Skipped invoice: contactId=${contactId}, amount=${totalAmount}`)
+      }
+    } catch (invErr) {
+      console.error("[offer-signed] Invoice creation failed:", invErr instanceof Error ? invErr.message : String(invErr))
+    }
 
     // Update bundled_pipelines based on selected_services (remove deselected optional service pipelines)
     if (offer.selected_services && Array.isArray(offer.selected_services) && offer.bundled_pipelines) {

@@ -409,13 +409,11 @@ export function registerFormationTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "formation_confirm",
-    `Review and confirm supervised service activation steps. When a new client pays, activate-service prepares steps (data collection form) and waits for confirmation before executing. Invoices are created automatically by activate-service Step 3 (portal invoice). Works for ALL contract types: formation, onboarding, tax_return, itin. Use this tool to:
+    `Review and execute service activation steps. activate-service now auto-executes all steps immediately (supervised mode removed — it caused silent failures). Invoices are created at contract signing and marked Paid on payment. Works for ALL contract types: formation, onboarding, tax_return, itin. Use this tool to:
 1. View prepared steps (without execute=true)
-2. Confirm and execute all steps (with execute=true)
+2. Execute any remaining steps (with execute=true)
 
-After 5 successful confirmations, the system switches to auto mode.
-
-Prerequisite: pending_activation must be in status 'pending_confirmation'.`,
+Note: Steps are now auto-executed at payment. This tool is for manual recovery only.`,
     {
       activation_id: z.string().uuid().describe("Pending activation UUID"),
       execute: z.boolean().optional().default(false).describe("If true, execute all prepared steps. If false (default), just show what will be done."),

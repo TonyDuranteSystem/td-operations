@@ -21,12 +21,15 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
-import { createUnifiedInvoice } from "@/lib/portal/unified-invoice"
+import { createUnifiedInvoice, syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
 
-const AUTO_THRESHOLD = 5
+// Auto-execute all steps immediately. Previous supervised mode with threshold
+// silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
+// at payment_confirmed with empty prepared_steps and no notification.
+const AUTO_MODE_ALWAYS = true
 
 interface PreparedStep {
   step: string
@@ -109,13 +112,8 @@ export async function POST(req: NextRequest) {
 
     const contractType = offer?.contract_type || "formation"
 
-    // Check auto mode threshold
-    const { count: successCount } = await supabase
-      .from("action_log")
-      .select("*", { count: "exact", head: true })
-      .eq("action_type", "service_activation_confirmed")
-
-    const isAutoMode = (successCount || 0) >= AUTO_THRESHOLD
+    // Always auto-execute — supervised mode removed (caused silent failures)
+    const isAutoMode = AUTO_MODE_ALWAYS
 
     const steps: Array<{ step: string; status: string; detail?: string }> = []
     const preparedSteps: PreparedStep[] = []
@@ -424,7 +422,73 @@ export async function POST(req: NextRequest) {
 
     // ─── STEP 3: Unified Invoice + QB Sync (AUTO) ──────────
     // Creates in BOTH client_invoices (portal) and payments (CRM), linked by FK
-    if (autoAccountId && activation.amount) {
+    // DEDUP: If offer-signed already created an invoice (portal_invoice_id on activation), skip creation and just mark it Paid
+    if (activation.portal_invoice_id) {
+      // Invoice already created at signing — just mark it Paid now
+      try {
+        const today = new Date().toISOString().split("T")[0]
+        await syncInvoiceStatus("invoice", activation.portal_invoice_id, "Paid", today, Number(activation.amount) || undefined)
+
+        // Backfill account_id on the existing invoice if we now have one
+        if (autoAccountId) {
+          await supabase
+            .from("client_invoices")
+            .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
+            .eq("id", activation.portal_invoice_id)
+            .is("account_id", null)
+
+          // Also update the linked payment record
+          const { data: linkedPay } = await supabase
+            .from("payments")
+            .select("id")
+            .eq("portal_invoice_id", activation.portal_invoice_id)
+            .limit(1)
+            .maybeSingle()
+          if (linkedPay) {
+            await supabase
+              .from("payments")
+              .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
+              .eq("id", linkedPay.id)
+              .is("account_id", null)
+          }
+        }
+
+        // Get invoice number for logging
+        const { data: existingInv } = await supabase
+          .from("client_invoices")
+          .select("invoice_number")
+          .eq("id", activation.portal_invoice_id)
+          .single()
+
+        steps.push({
+          step: "crm_invoice",
+          status: "marked_paid",
+          detail: `${existingInv?.invoice_number || activation.portal_invoice_id} — marked Paid (created at signing)`,
+        })
+
+        // QB sync (best-effort)
+        const { data: linkedPayForQB } = await supabase
+          .from("payments")
+          .select("id")
+          .eq("portal_invoice_id", activation.portal_invoice_id)
+          .limit(1)
+          .maybeSingle()
+        if (linkedPayForQB) {
+          syncInvoiceToQB(linkedPayForQB.id)
+            .then((r) => {
+              if (r.success && r.qb_invoice_id) {
+                syncPaymentToQB(linkedPayForQB.id, {
+                  paymentDate: today,
+                  paymentMethod: activation.payment_method || "Whop",
+                }).catch(() => {})
+              }
+            })
+            .catch(() => {})
+        }
+      } catch (e) {
+        steps.push({ step: "crm_invoice", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    } else if ((autoAccountId || contactId) && activation.amount) {
       try {
         const today = new Date().toISOString().split("T")[0]
         const amount = Number(activation.amount)
@@ -435,7 +499,7 @@ export async function POST(req: NextRequest) {
           : "Service"
 
         const invoiceResult = await createUnifiedInvoice({
-          account_id: autoAccountId,
+          account_id: autoAccountId || undefined,
           contact_id: contactId || undefined,
           line_items: [{
             description: `${serviceLabel} Package - ${activation.client_name}`,
@@ -448,6 +512,12 @@ export async function POST(req: NextRequest) {
           payment_method: activation.payment_method || "Whop",
           whop_payment_id: activation.whop_payment_id || null,
         })
+
+        // Store invoice reference on activation for traceability
+        await supabase
+          .from("pending_activations")
+          .update({ portal_invoice_id: invoiceResult.invoiceId })
+          .eq("id", pending_activation_id)
 
         steps.push({
           step: "crm_invoice",
@@ -471,8 +541,8 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         steps.push({ step: "crm_invoice", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
-    } else if (!autoAccountId) {
-      steps.push({ step: "crm_invoice", status: "skipped", detail: "No account to link invoice to" })
+    } else if (!autoAccountId && !contactId) {
+      steps.push({ step: "crm_invoice", status: "skipped", detail: "No account or contact to link invoice to" })
     } else {
       steps.push({ step: "crm_invoice", status: "skipped", detail: "No amount on activation" })
     }
@@ -631,49 +701,24 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "data_form", status: "skipped", detail: "No lead_id available" })
     }
 
-    // ─── Decide: supervised or auto ──────────────────────────
-    if (isAutoMode && preparedSteps.length > 0) {
+    // ─── Always auto-execute all prepared steps ──────────────
+    if (preparedSteps.length > 0) {
       for (const ps of preparedSteps) {
         steps.push({ step: ps.step, status: "auto_queued", detail: `Auto mode: ${ps.description}` })
         ps.status = "confirmed"
       }
-
-      await supabase
-        .from("pending_activations")
-        .update({
-          status: "activated",
-          prepared_steps: preparedSteps,
-          confirmation_mode: "auto",
-          activated_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", pending_activation_id)
-    } else if (preparedSteps.length > 0) {
-      await supabase
-        .from("pending_activations")
-        .update({
-          status: "pending_confirmation",
-          prepared_steps: preparedSteps,
-          confirmation_mode: "supervised",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", pending_activation_id)
-
-      steps.push({
-        step: "supervision",
-        status: "awaiting_confirmation",
-        detail: `${preparedSteps.length} step(s) prepared. Use formation_confirm(activation_id) via MCP to review and execute.`,
-      })
-    } else {
-      await supabase
-        .from("pending_activations")
-        .update({
-          status: "activated",
-          activated_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", pending_activation_id)
     }
+
+    await supabase
+      .from("pending_activations")
+      .update({
+        status: "activated",
+        prepared_steps: preparedSteps.length > 0 ? preparedSteps : null,
+        confirmation_mode: "auto",
+        activated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", pending_activation_id)
 
     // ─── STEP 5: Notify Luca + Antonio via email ──────────
     try {

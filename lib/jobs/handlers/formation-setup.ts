@@ -168,6 +168,25 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           .from("formation_submissions")
           .update({ account_id: accountId })
           .eq("id", p.submission_id)
+
+        // Backfill account_id on contact-only invoices (created at signing, before account existed)
+        if (p.contact_id) {
+          const { count: backfilledInv } = await supabaseAdmin
+            .from("client_invoices")
+            .update({ account_id: accountId, updated_at: new Date().toISOString() })
+            .eq("contact_id", p.contact_id)
+            .is("account_id", null)
+
+          const { count: backfilledPay } = await supabaseAdmin
+            .from("payments")
+            .update({ account_id: accountId, updated_at: new Date().toISOString() })
+            .eq("contact_id", p.contact_id)
+            .is("account_id", null)
+
+          if ((backfilledInv ?? 0) > 0 || (backfilledPay ?? 0) > 0) {
+            result.steps.push(step("invoice_backfill", "ok", `Backfilled account_id on ${backfilledInv ?? 0} invoices, ${backfilledPay ?? 0} payments`))
+          }
+        }
       }
     } catch (e) {
       result.steps.push(step("account_create", "error", e instanceof Error ? e.message : String(e)))

@@ -194,14 +194,21 @@ async function handleCheckoutCompleted(session: StripeSession) {
     console.error("[stripe-webhook] Failed to create payment:", payErr.message)
   }
 
-  // 5. Auto-reconcile with open CRM invoices
-  if (accountId && total > 0) {
+  // 5. Auto-reconcile with open CRM invoices (supports contact-only invoices)
+  if ((accountId || contactId) && total > 0) {
     try {
-      const { data: openInvoices } = await getSupabase()
+      let openInvoiceQuery = getSupabase()
         .from("payments")
         .select("id, invoice_number, total, amount, invoice_status, portal_invoice_id")
-        .eq("account_id", accountId)
-        .in("invoice_status", ["Sent", "Overdue"])
+        .in("invoice_status", ["Sent", "Overdue", "Draft"])
+
+      if (accountId) {
+        openInvoiceQuery = openInvoiceQuery.eq("account_id", accountId)
+      } else {
+        openInvoiceQuery = openInvoiceQuery.eq("contact_id", contactId!)
+      }
+
+      const { data: openInvoices } = await openInvoiceQuery
 
       if (openInvoices?.length) {
         const today = new Date().toISOString().split("T")[0]
@@ -324,6 +331,24 @@ async function handleCheckoutCompleted(session: StripeSession) {
       // Portal tier already upgraded in step 7 above (upgradePortalTier syncs both account + contacts)
 
       console.warn(`[stripe-webhook] Matched pending_activation ${pending.id} — triggering activation`)
+
+      // If pending_activation has a portal_invoice_id (created at signing), mark it Paid
+      const { data: activationWithInvoice } = await getSupabase()
+        .from("pending_activations")
+        .select("portal_invoice_id")
+        .eq("id", pending.id)
+        .single()
+
+      if (activationWithInvoice?.portal_invoice_id) {
+        try {
+          const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
+          const today = new Date().toISOString().split("T")[0]
+          await syncInvoiceStatus("invoice", activationWithInvoice.portal_invoice_id, "Paid", today, total)
+          console.warn(`[stripe-webhook] Marked invoice ${activationWithInvoice.portal_invoice_id} as Paid`)
+        } catch (e) {
+          console.error("[stripe-webhook] Failed to mark invoice as Paid:", e)
+        }
+      }
 
       // Trigger activate-service workflow
       try {

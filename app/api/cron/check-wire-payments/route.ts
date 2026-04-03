@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       .in("invoice_status", ["Sent", "Overdue"])
       .or("is_test.is.null,is_test.eq.false")
 
-    console.log(`[check-wire] ${pendingList?.length ?? 0} pending activations, ${openInvoices?.length ?? 0} open invoices`)
+    console.warn(`[check-wire] ${pendingList?.length ?? 0} pending activations, ${openInvoices?.length ?? 0} open invoices`)
 
     // ─── Step 3: Query QB for recent deposits (last 14 days) ─────────
 
@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    console.log(`[check-wire] Found ${deposits.length} recent QB deposits/payments`)
+    console.warn(`[check-wire] Found ${deposits.length} recent QB deposits/payments`)
 
     // ─── Step 4: Store QB deposits in td_bank_feeds (dedup by external_id) ───
 
@@ -222,7 +222,7 @@ export async function GET(req: NextRequest) {
           const exactAmountMatch = amountDiff < 1
 
           if (exactAmountMatch || (amountMatch && (nameMatch || tokenMatch))) {
-            console.log(`[check-wire] MATCH: ${pending.client_name} — $${pendingAmount} ≈ QB $${depositAmount} (${txnDate})`)
+            console.warn(`[check-wire] MATCH: ${pending.client_name} — $${pendingAmount} ≈ QB $${depositAmount} (${txnDate})`)
 
             const { data: wireUpdated } = await supabase
               .from("pending_activations")
@@ -244,6 +244,21 @@ export async function GET(req: NextRequest) {
                 .from("leads")
                 .update({ status: "Converted", updated_at: new Date().toISOString() })
                 .eq("id", wireUpdated[0].lead_id)
+            }
+
+            // If pending_activation has a portal_invoice_id (created at signing), mark it Paid
+            const { data: actWithInv } = await supabase
+              .from("pending_activations")
+              .select("portal_invoice_id")
+              .eq("id", pending.id)
+              .single()
+
+            if (actWithInv?.portal_invoice_id) {
+              try {
+                const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
+                const today = new Date().toISOString().split("T")[0]
+                await syncInvoiceStatus("invoice", actWithInv.portal_invoice_id, "Paid", today, depositAmount)
+              } catch { /* non-blocking */ }
             }
 
             const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`
@@ -269,7 +284,7 @@ export async function GET(req: NextRequest) {
 
     const totalMatched = invoiceMatched + activationMatched
 
-    console.log(`[check-wire] Done. Feeds: ${newFeedCount + airwallexFeedCount} new. Invoices matched: ${invoiceMatched}. Activations matched: ${activationMatched}.`)
+    console.warn(`[check-wire] Done. Feeds: ${newFeedCount + airwallexFeedCount} new. Invoices matched: ${invoiceMatched}. Activations matched: ${activationMatched}.`)
 
     await supabase.from("cron_log").insert({
       endpoint: "/api/cron/check-wire-payments",

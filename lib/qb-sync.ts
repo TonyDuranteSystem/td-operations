@@ -47,13 +47,24 @@ export async function syncInvoiceToQB(paymentId: string): Promise<QbSyncResult> 
       return { success: true, qb_invoice_id: payment.qb_invoice_id }
     }
 
-    const { data: account } = await supabaseAdmin
-      .from("accounts")
-      .select("company_name")
-      .eq("id", payment.account_id)
-      .single()
-
-    const customerName = account?.company_name ?? "Unknown Client"
+    let customerName = "Unknown Client"
+    if (payment.account_id) {
+      const { data: account } = await supabaseAdmin
+        .from("accounts")
+        .select("company_name")
+        .eq("id", payment.account_id)
+        .single()
+      customerName = account?.company_name ?? "Unknown Client"
+    }
+    // Fallback: use contact name when no account (contact-only invoices)
+    if (customerName === "Unknown Client" && payment.contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from("contacts")
+        .select("full_name")
+        .eq("id", payment.contact_id)
+        .single()
+      if (contact?.full_name) customerName = contact.full_name
+    }
 
     // Prefer client_invoice_items when linked via portal_invoice_id (richer data)
     let lineItems: Array<{ description: string; amount: number; quantity: number }> = []
@@ -96,15 +107,26 @@ export async function syncInvoiceToQB(paymentId: string): Promise<QbSyncResult> 
     }
 
     // Get contact email for QB customer
-    const { data: contactLink } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contacts(email)")
-      .eq("account_id", payment.account_id)
-      .eq("role", "Owner")
-      .limit(1)
-      .maybeSingle()
-
-    const contactEmail = (contactLink as unknown as { contacts: { email: string } })?.contacts?.email
+    let contactEmail: string | undefined
+    if (payment.account_id) {
+      const { data: contactLink } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contacts(email)")
+        .eq("account_id", payment.account_id)
+        .eq("role", "Owner")
+        .limit(1)
+        .maybeSingle()
+      contactEmail = (contactLink as unknown as { contacts: { email: string } })?.contacts?.email
+    }
+    // Fallback: direct contact lookup for contact-only invoices
+    if (!contactEmail && payment.contact_id) {
+      const { data: directContact } = await supabaseAdmin
+        .from("contacts")
+        .select("email")
+        .eq("id", payment.contact_id)
+        .single()
+      contactEmail = directContact?.email || undefined
+    }
 
     // Create QB invoice
     const result = await createInvoice({
