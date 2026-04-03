@@ -611,7 +611,7 @@ export async function POST(request: Request) {
     // Fetch account + primary contact
     const { data: account, error: accErr } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, ein_number, entity_type, state_of_formation, formation_date, drive_folder_id, portal_tier")
+      .select("id, company_name, status, ein_number, entity_type, state_of_formation, formation_date, drive_folder_id, portal_tier")
       .eq("id", account_id)
       .single()
 
@@ -707,6 +707,16 @@ export async function POST(request: Request) {
     if (actions.portal_tier) {
       const r = await setPortalTier(account_id, preset.portal_tier)
       results.push(r)
+    }
+
+    // 9. Account status — set to Active if LLC is formed (stage 3+) or onboarding
+    const activeStages = ["llc_formed", "ein_received", "everything_done", "onboarding_data_collection", "onboarding_review", "onboarding_complete"]
+    if (activeStages.includes(stage) && account.status !== "Active") {
+      await supabaseAdmin
+        .from("accounts")
+        .update({ status: "Active", updated_at: new Date().toISOString() })
+        .eq("id", account_id)
+      results.push({ name: "account_status", status: "ok", detail: `${account.status} → Active` })
     }
 
     // Summarize
