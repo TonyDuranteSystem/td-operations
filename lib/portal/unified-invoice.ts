@@ -15,6 +15,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateInvoiceNumber } from '@/lib/portal/invoice-number'
+import { logInvoiceAudit } from '@/lib/portal/invoice-audit'
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -26,6 +27,7 @@ export interface UnifiedInvoiceInput {
     description: string
     unit_price: number
     quantity?: number
+    tax_rate?: number  // e.g. 0.22 for 22% VAT — display only
   }>
   currency?: 'USD' | 'EUR'
   due_date?: string
@@ -92,15 +94,24 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
   const ownerId = (account_id || contact_id)!
   const invoiceNumber = await generateInvoiceNumber(ownerId, ownerType)
 
-  // 3. Calculate totals
-  const items = line_items.map((item) => ({
-    description: item.description,
-    unit_price: item.unit_price,
-    quantity: item.quantity || 1,
-    amount: item.unit_price * (item.quantity || 1),
-  }))
+  // 3. Calculate totals (with optional tax)
+  const items = line_items.map((item) => {
+    const qty = item.quantity || 1
+    const amount = item.unit_price * qty
+    const taxRate = item.tax_rate || 0
+    const taxAmount = Math.round(amount * taxRate * 100) / 100
+    return {
+      description: item.description,
+      unit_price: item.unit_price,
+      quantity: qty,
+      amount,
+      tax_rate: taxRate,
+      tax_amount: taxAmount,
+    }
+  })
   const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
-  const total = subtotal
+  const taxTotal = items.reduce((sum, i) => sum + i.tax_amount, 0)
+  const total = subtotal + taxTotal
 
   const effectiveAmountPaid = input.amount_paid ?? (mark_as_paid ? total : 0)
   const effectiveAmountDue = Math.max(total - effectiveAmountPaid, 0)
@@ -129,6 +140,7 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       currency,
       subtotal,
       discount: 0,
+      tax_total: taxTotal,
       total,
       amount_paid: effectiveAmountPaid,
       amount_due: effectiveAmountDue,
@@ -156,6 +168,8 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
     unit_price: item.unit_price,
     quantity: item.quantity,
     amount: item.amount,
+    tax_rate: item.tax_rate,
+    tax_amount: item.tax_amount,
     sort_order: i,
   }))
   await supabaseAdmin.from('client_invoice_items').insert(itemRows)
@@ -212,6 +226,14 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       sort_order: i,
     }))
   )
+
+  // 8. Audit trail
+  logInvoiceAudit({
+    invoice_id: invoice.id,
+    action: 'created',
+    new_values: { invoice_number: invoiceNumber, total, status, currency, tax_total: taxTotal },
+    performed_by: 'system',
+  })
 
   return {
     invoiceId: invoice.id,
@@ -297,6 +319,15 @@ export async function syncInvoiceStatus(
         if (paidDate) invUpdates.paid_date = paidDate
         await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', invoiceId)
 
+        // Audit trail
+        logInvoiceAudit({
+          invoice_id: invoiceId,
+          action: newStatus === 'Paid' ? 'paid' : 'partial_payment',
+          previous_values: { amount_paid: currentAmountPaid, status: currentAmountPaid > 0 ? 'Partial' : 'Sent' },
+          new_values: { amount_paid: newAmountPaid, amount_due: newAmountDue, status: newStatus },
+          performed_by: source === 'invoice' ? 'system' : 'auto-reconcile',
+        })
+
         // Update linked payment record
         const paymentStatus = statusMap[newStatus] || newStatus
         if (source === 'invoice') {
@@ -358,6 +389,14 @@ export async function syncInvoiceStatus(
       .update(updates)
       .eq('id', id)
 
+    // Audit trail
+    logInvoiceAudit({
+      invoice_id: id,
+      action: newStatus === 'Paid' ? 'paid' : 'status_changed',
+      new_values: { status: newStatus, ...(paidDate ? { paid_date: paidDate } : {}) },
+      performed_by: 'system',
+    })
+
     // Find linked payment via portal_invoice_id
     const { data: payment } = await supabaseAdmin
       .from('payments')
@@ -407,6 +446,14 @@ export async function syncInvoiceStatus(
       }
       if (paidDate) invUpdates.paid_date = paidDate
       await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', payment.portal_invoice_id)
+
+      // Audit trail
+      logInvoiceAudit({
+        invoice_id: payment.portal_invoice_id,
+        action: invoiceStatus === 'Paid' ? 'paid' : 'status_changed',
+        new_values: { status: invoiceStatus, ...(paidDate ? { paid_date: paidDate } : {}) },
+        performed_by: 'auto-reconcile',
+      })
 
       // Check if this is a child of a split invoice
       if (newStatus === 'Paid') await checkParentCompletion(payment.portal_invoice_id)

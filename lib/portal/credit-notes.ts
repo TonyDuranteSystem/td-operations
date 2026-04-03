@@ -10,6 +10,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { syncInvoiceStatus } from '@/lib/portal/unified-invoice'
+import { logInvoiceAudit } from '@/lib/portal/invoice-audit'
 
 /**
  * Generate credit note number: CN-2026-001 (sequential per owner)
@@ -93,6 +94,14 @@ export async function createCreditNote(input: {
   if (cnErr || !creditNote) {
     throw new Error(`Failed to create credit note: ${cnErr?.message}`)
   }
+
+  // Audit trail
+  logInvoiceAudit({
+    invoice_id: input.original_invoice_id,
+    action: 'credit_applied',
+    new_values: { credit_note_id: creditNote.id, credit_note_number: creditNote.credit_note_number, amount: input.amount, reason: input.reason },
+    performed_by: 'system',
+  })
 
   return { id: creditNote.id, credit_note_number: creditNote.credit_note_number }
 }

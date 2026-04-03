@@ -25,16 +25,29 @@ export async function GET(req: NextRequest) {
     const today = new Date().toISOString().split('T')[0]
     const results = { marked_overdue: 0, reminders_sent: 0, errors: [] as string[] }
 
-    // 1. Mark Sent invoices as Overdue when due_date < today
-    const { data: newOverdue, error: markErr } = await supabaseAdmin
+    // 1. Mark Sent/Partial invoices as Overdue when due_date < today
+    // Skip accounts with dunning_pause = true
+    const { data: pausedAccounts } = await supabaseAdmin
+      .from('accounts')
+      .select('id')
+      .eq('dunning_pause', true)
+    const pausedIds = (pausedAccounts ?? []).map(a => a.id)
+
+    let overdueQuery = supabaseAdmin
       .from('payments')
       .update({
         invoice_status: 'Overdue',
         updated_at: new Date().toISOString(),
       })
-      .eq('invoice_status', 'Sent')
+      .in('invoice_status', ['Sent', 'Partial'])
       .lt('due_date', today)
       .select('id, invoice_number, account_id, amount, currency, due_date')
+
+    if (pausedIds.length > 0) {
+      overdueQuery = overdueQuery.not('account_id', 'in', `(${pausedIds.join(',')})`)
+    }
+
+    const { data: newOverdue, error: markErr } = await overdueQuery
 
     if (markErr) {
       console.error('[invoice-overdue] Mark overdue error:', markErr.message)
@@ -42,18 +55,29 @@ export async function GET(req: NextRequest) {
     } else {
       results.marked_overdue = newOverdue?.length ?? 0
       if (newOverdue && newOverdue.length > 0) {
-        console.log(`[invoice-overdue] Marked ${newOverdue.length} invoices as Overdue:`,
+        console.warn(`[invoice-overdue] Marked ${newOverdue.length} invoices as Overdue:`,
           newOverdue.map(i => i.invoice_number).join(', '))
       }
     }
 
     // 2. Auto-send reminders for overdue invoices
-    // 7+ days overdue with 0 reminders → 1st reminder
-    // 14+ days overdue with 1 reminder → 2nd reminder
-    const sevenDaysAgo = new Date()
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-    const fourteenDaysAgo = new Date()
-    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
+    // Uses per-account dunning config (dunning_reminder_1_days, dunning_reminder_2_days)
+    // Defaults: 7 days for 1st reminder, 14 days for 2nd
+
+    // Fetch dunning config for all accounts
+    const { data: accountConfigs } = await supabaseAdmin
+      .from('accounts')
+      .select('id, dunning_reminder_1_days, dunning_reminder_2_days, dunning_escalation_email, dunning_pause')
+
+    const dunningMap: Record<string, { r1: number; r2: number; escalation: string | null; paused: boolean }> = {}
+    for (const ac of (accountConfigs ?? [])) {
+      dunningMap[ac.id] = {
+        r1: ac.dunning_reminder_1_days ?? 7,
+        r2: ac.dunning_reminder_2_days ?? 14,
+        escalation: ac.dunning_escalation_email ?? null,
+        paused: ac.dunning_pause ?? false,
+      }
+    }
 
     const { data: overdueInvoices } = await supabaseAdmin
       .from('payments')
@@ -63,13 +87,20 @@ export async function GET(req: NextRequest) {
 
     if (overdueInvoices) {
       for (const inv of overdueInvoices) {
+        // Check if account has dunning paused
+        const config = inv.account_id ? dunningMap[inv.account_id] : null
+        if (config?.paused) continue
+
+        const reminder1Days = config?.r1 ?? 7
+        const reminder2Days = config?.r2 ?? 14
+
         const dueDate = new Date(inv.due_date + 'T00:00:00')
         const daysOverdue = Math.floor((Date.now() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
         const reminderCount = inv.reminder_count ?? 0
 
         let shouldRemind = false
-        if (daysOverdue >= 14 && reminderCount < 2) shouldRemind = true
-        else if (daysOverdue >= 7 && reminderCount < 1) shouldRemind = true
+        if (daysOverdue >= reminder2Days && reminderCount < 2) shouldRemind = true
+        else if (daysOverdue >= reminder1Days && reminderCount < 1) shouldRemind = true
 
         if (shouldRemind) {
           try {
@@ -88,7 +119,7 @@ export async function GET(req: NextRequest) {
 
             if (remindRes.ok) {
               results.reminders_sent++
-              console.log(`[invoice-overdue] Sent reminder for ${inv.invoice_number} (${daysOverdue}d overdue, reminder #${reminderCount + 1})`)
+              console.warn(`[invoice-overdue] Sent reminder for ${inv.invoice_number} (${daysOverdue}d overdue, reminder #${reminderCount + 1}, config: r1=${reminder1Days}d r2=${reminder2Days}d)`)
             } else {
               const errBody = await remindRes.text()
               results.errors.push(`Remind ${inv.invoice_number}: ${errBody}`)
@@ -100,7 +131,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    console.log(`[invoice-overdue] Done: ${results.marked_overdue} marked overdue, ${results.reminders_sent} reminders sent`)
+    console.warn(`[invoice-overdue] Done: ${results.marked_overdue} marked overdue, ${results.reminders_sent} reminders sent`)
 
     return NextResponse.json({
       message: 'Invoice overdue check complete',

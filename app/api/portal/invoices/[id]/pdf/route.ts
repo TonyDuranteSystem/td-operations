@@ -43,7 +43,7 @@ export async function GET(
 
   const { data: items } = await supabaseAdmin
     .from('client_invoice_items')
-    .select('description, quantity, unit_price, amount, sort_order')
+    .select('description, quantity, unit_price, amount, tax_rate, tax_amount, sort_order')
     .eq('invoice_id', id)
     .order('sort_order')
 
@@ -175,22 +175,33 @@ export async function GET(
     if (customer.vat_number) { page.drawText(`VAT: ${customer.vat_number}`, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
   }
 
+  // Check if any items have tax
+  const hasTax = (items ?? []).some(item => Number(item.tax_rate ?? 0) > 0)
+
   // Table header
   y -= 20
   page.drawRectangle({ x: 50, y: y - 4, width: 495, height: 20, color: rgb(0.96, 0.96, 0.98) })
   page.drawText(L.description, { x: 55, y, size: 8, font: helveticaBold, color: gray })
-  page.drawText(L.qty, { x: 340, y, size: 8, font: helveticaBold, color: gray })
-  page.drawText(L.price, { x: 400, y, size: 8, font: helveticaBold, color: gray })
+  page.drawText(L.qty, { x: 300, y, size: 8, font: helveticaBold, color: gray })
+  page.drawText(L.price, { x: 345, y, size: 8, font: helveticaBold, color: gray })
+  if (hasTax) {
+    page.drawText(L.tax, { x: 410, y, size: 8, font: helveticaBold, color: gray })
+  }
   page.drawText(L.amount, { x: 480, y, size: 8, font: helveticaBold, color: gray })
 
   // Table rows (descriptions are NEVER translated)
   y -= 22
   for (const item of (items ?? [])) {
-    const desc = item.description.length > 55 ? item.description.slice(0, 55) + '...' : item.description
+    const desc = item.description.length > 50 ? item.description.slice(0, 50) + '...' : item.description
     page.drawText(desc, { x: 55, y, size: 9, font: helvetica, color: black })
-    page.drawText(String(item.quantity), { x: 345, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 395, y, size: 9, font: helvetica, color: black })
-    page.drawText(`${csym}${(item.amount ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
+    page.drawText(String(item.quantity), { x: 305, y, size: 9, font: helvetica, color: black })
+    page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 340, y, size: 9, font: helvetica, color: black })
+    if (hasTax) {
+      const taxPct = Number(item.tax_rate ?? 0) * 100
+      page.drawText(taxPct > 0 ? `${taxPct}%` : '—', { x: 415, y, size: 9, font: helvetica, color: gray })
+    }
+    const lineTotal = Number(item.amount ?? 0) + Number(item.tax_amount ?? 0)
+    page.drawText(`${csym}${lineTotal.toFixed(2)}`, { x: 475, y, size: 9, font: helveticaBold, color: black })
     y -= 18
     page.drawLine({ start: { x: 50, y: y + 6 }, end: { x: 545, y: y + 6 }, thickness: 0.3, color: lightGray })
   }
@@ -204,6 +215,13 @@ export async function GET(
     y -= 16
     page.drawText(L.discount, { x: 400, y, size: 9, font: helvetica, color: gray })
     page.drawText(`-${csym}${(invoice.discount ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.8, 0.2, 0.2) })
+  }
+
+  const taxTotalVal = Number(invoice.tax_total ?? 0)
+  if (taxTotalVal > 0) {
+    y -= 16
+    page.drawText(L.tax, { x: 400, y, size: 9, font: helvetica, color: gray })
+    page.drawText(`${csym}${taxTotalVal.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
   }
 
   y -= 20

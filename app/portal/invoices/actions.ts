@@ -84,6 +84,16 @@ export async function updateInvoice(input: UpdateInvoiceInput): Promise<ActionRe
       .eq('id', id)
 
     if (error) throw new Error(error.message)
+
+    // Audit trail
+    const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
+    logInvoiceAudit({
+      invoice_id: id,
+      action: 'edited',
+      changed_fields: updates,
+      performed_by: 'system',
+    })
+
     revalidatePath('/portal/invoices')
   }, {
     action_type: 'update', table_name: 'client_invoices', record_id: parsed.data.id,
@@ -150,6 +160,15 @@ export async function splitInvoice(
       .from('client_invoices')
       .update({ status: 'Split', updated_at: new Date().toISOString() })
       .eq('id', invoiceId)
+
+    // Audit trail
+    const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
+    logInvoiceAudit({
+      invoice_id: invoiceId,
+      action: 'split',
+      new_values: { status: 'Split', installments: installments.length },
+      performed_by: 'system',
+    })
 
     // Also update linked payment
     const { data: linkedPay } = await supabaseAdmin

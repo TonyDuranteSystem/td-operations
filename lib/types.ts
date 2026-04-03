@@ -352,6 +352,7 @@ export interface ClientInvoice {
   subtotal: number
   discount: number
   total: number
+  tax_total: number
   amount_paid: number
   amount_due: number
   issue_date: string
@@ -391,6 +392,8 @@ export interface ClientInvoiceItem {
   quantity: number
   unit_price: number
   amount: number
+  tax_rate: number
+  tax_amount: number
   sort_order: number
 }
 
