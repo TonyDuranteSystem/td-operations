@@ -53,7 +53,7 @@ function getStripe(): StripeInstance {
 
 // ─── Signature Verification ──────────────────────────────────────
 
-function verifyStripeSignature(body: string, signature: string): StripeEvent | null {
+async function verifyStripeSignature(body: string, signature: string): Promise<StripeEvent | null> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET
   if (!secret) {
     console.warn("[stripe-webhook] STRIPE_WEBHOOK_SECRET not set — skipping verification")
@@ -61,9 +61,13 @@ function verifyStripeSignature(body: string, signature: string): StripeEvent | n
   }
 
   try {
-    return getStripe().webhooks.constructEvent(body, signature, secret) as unknown as StripeEvent
+    // Use async variant for better compatibility with Stripe v22+
+    const event = await getStripe().webhooks.constructEventAsync(body, signature, secret)
+    return event as unknown as StripeEvent
   } catch (err) {
     console.error("[stripe-webhook] Signature verification failed:", err instanceof Error ? err.message : err)
+    console.error("[stripe-webhook] Secret prefix:", secret.slice(0, 10) + "...")
+    console.error("[stripe-webhook] Signature header:", signature.slice(0, 30) + "...")
     return null
   }
 }
@@ -366,8 +370,10 @@ export async function POST(req: NextRequest) {
     const body = await req.text()
     const signature = req.headers.get("stripe-signature") || ""
 
+    console.warn("[stripe-webhook] Incoming request, signature present:", !!signature)
+
     // Verify signature
-    const event = verifyStripeSignature(body, signature)
+    const event = await verifyStripeSignature(body, signature)
     if (!event) {
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 })
     }
