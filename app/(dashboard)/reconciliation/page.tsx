@@ -21,7 +21,7 @@ export default async function ReconciliationPage() {
     supabaseAdmin
       .from('payments')
       .select('id, invoice_number, description, total, amount, amount_currency, invoice_status, account_id, accounts:account_id(company_name)')
-      .in('invoice_status', ['Sent', 'Overdue'])
+      .in('invoice_status', ['Sent', 'Overdue', 'Partial'])
       .order('created_at', { ascending: false }),
   ])
 
