@@ -219,6 +219,7 @@ export interface PortalNavVisibility {
   documents: boolean      // always true (every client can upload docs)
   customers: boolean      // same as invoices
   pendingSignatures: boolean  // has unsigned OA or Lease agreements
+  documentGenerator: boolean  // can generate distribution resolutions and tax statements
 }
 
 export async function getPortalNavVisibility(accountId: string): Promise<PortalNavVisibility> {
@@ -306,6 +307,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     documents: true,      // always available
     customers: true,      // always visible — tier-config gates access (active/full only)
     pendingSignatures: unsignedDocCount > 0,
+    documentGenerator: true, // always visible — tier-config gates access (active/full only)
   }
 }
 
@@ -362,6 +364,7 @@ export function getContactOnlyNavVisibility(): PortalNavVisibility {
     documents: true,
     customers: false,
     pendingSignatures: false,
+    documentGenerator: false,
   }
 }
 

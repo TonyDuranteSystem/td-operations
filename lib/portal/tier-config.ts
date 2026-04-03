@@ -51,6 +51,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'activity',
     'customers',
     'referralManagement',
+    'documentGenerator',
   ],
   full: [
     'dashboard',
@@ -68,6 +69,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'bankAccounts',
     'taxDocuments',
     'referralManagement',
+    'documentGenerator',
   ],
 }
 

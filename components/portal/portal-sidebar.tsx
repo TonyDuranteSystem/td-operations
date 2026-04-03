@@ -23,6 +23,7 @@ import {
   PenSquare,
   PenLine,
   Share2,
+  FileSignature,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -80,6 +81,7 @@ const navGroups: NavGroup[] = [
       { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
       { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays, visibilityKey: 'deadlines' },
       { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload, visibilityKey: 'taxDocuments' },
+      { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FileSignature, visibilityKey: 'documentGenerator' },
     ],
     defaultOpen: true,
   },
