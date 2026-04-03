@@ -559,7 +559,7 @@ export function registerOfferTools(server: McpServer) {
       language: z.enum(["en", "it"]).describe("Offer language — MUST match client's language"),
       offer_date: z.string().optional().describe("Offer date (YYYY-MM-DD, defaults to today)"),
       payment_type: z.enum(["checkout", "bank_transfer", "none"]).describe("Payment method"),
-      payment_gateway: z.enum(["whop", "stripe"]).optional().describe("Payment gateway for checkout links. Default: 'whop'. Use 'stripe' for Stripe Checkout. Only applies when payment_type='checkout'."),
+      payment_gateway: z.enum(["whop", "stripe"]).optional().describe("Payment gateway for checkout links. Default: 'stripe'. Use 'whop' only if specifically needed. Only applies when payment_type='checkout'."),
       // Content fields (JSONB — validated)
       services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], recommended?}]"),
       cost_summary: z.any().describe("Cost summary: [{label, total?, total_label?, items?[{name, price}], rate?}]"),
@@ -722,7 +722,7 @@ export function registerOfferTools(server: McpServer) {
             if (totalNum > 0) {
               const servArr = Array.isArray(params.services) ? params.services : []
               const primaryService = (servArr[0] as Record<string, unknown>)?.name as string || undefined
-              const gateway = params.payment_gateway || "whop"
+              const gateway = params.payment_gateway || "stripe"
               const currencyVal: "usd" | "eur" = isEUR ? "eur" : "usd"
               const cardAmount = Math.round(totalNum * 1.05)
 
