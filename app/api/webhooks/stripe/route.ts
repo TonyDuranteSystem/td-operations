@@ -12,9 +12,6 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
-import Stripe from "stripe"
-
-type StripeInstance = ReturnType<typeof Stripe>
 
 // Lightweight types for Stripe objects (v22 has different namespace pattern)
 interface StripeEvent {
@@ -43,33 +40,64 @@ function getSupabase() {
   return _supabase
 }
 
-let _stripe: StripeInstance | null = null
-function getStripe(): StripeInstance {
-  if (!_stripe) {
-    _stripe = Stripe(process.env.STRIPE_SECRET_KEY!)
-  }
-  return _stripe
-}
-
 // ─── Signature Verification ──────────────────────────────────────
 
 async function verifyStripeSignature(body: string, signature: string): Promise<StripeEvent | null> {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET
+  const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim()
   if (!secret) {
     console.warn("[stripe-webhook] STRIPE_WEBHOOK_SECRET not set — skipping verification")
     return JSON.parse(body) as StripeEvent
   }
 
-  try {
-    // Use async variant for better compatibility with Stripe v22+
-    const event = await getStripe().webhooks.constructEventAsync(body, signature, secret)
-    return event as unknown as StripeEvent
-  } catch (err) {
-    console.error("[stripe-webhook] Signature verification failed:", err instanceof Error ? err.message : err)
-    console.error("[stripe-webhook] Secret prefix:", secret.slice(0, 10) + "...")
-    console.error("[stripe-webhook] Signature header:", signature.slice(0, 30) + "...")
+  // Parse Stripe signature header: t=timestamp,v1=signature
+  const parts = signature.split(",")
+  const tsEntry = parts.find(p => p.startsWith("t="))
+  const sigEntry = parts.find(p => p.startsWith("v1="))
+
+  if (!tsEntry || !sigEntry) {
+    console.error("[stripe-webhook] Malformed signature header:", signature.slice(0, 50))
     return null
   }
+
+  const timestamp = tsEntry.slice(2)
+  const expectedSig = sigEntry.slice(3)
+
+  // Reject old timestamps (5 min tolerance)
+  const ts = parseInt(timestamp, 10)
+  const now = Math.floor(Date.now() / 1000)
+  if (Math.abs(now - ts) > 300) {
+    console.error("[stripe-webhook] Timestamp too old:", ts, "now:", now)
+    return null
+  }
+
+  // Compute HMAC-SHA256 of "timestamp.body" using the webhook secret
+  const signedPayload = `${timestamp}.${body}`
+  const encoder = new TextEncoder()
+
+  // Stripe uses the full secret string as HMAC key (including whsec_ prefix if present)
+  const keyBytes = encoder.encode(secret).buffer as ArrayBuffer
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  )
+
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(signedPayload))
+  const computedHex = Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("")
+
+  if (computedHex !== expectedSig) {
+    console.error("[stripe-webhook] Signature mismatch")
+    console.error("[stripe-webhook] Expected:", expectedSig.slice(0, 20) + "...")
+    console.error("[stripe-webhook] Computed:", computedHex.slice(0, 20) + "...")
+    return null
+  }
+
+  return JSON.parse(body) as StripeEvent
 }
 
 // ─── Event Handlers ──────────────────────────────────────────────
