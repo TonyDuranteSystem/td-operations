@@ -96,6 +96,6 @@ export async function GET() {
     return NextResponse.json({ portalChats, inbox, tasks, overdueInvoices, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
-    return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0 })
+    return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0 })
   }
 }
