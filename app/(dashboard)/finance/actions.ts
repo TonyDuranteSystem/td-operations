@@ -40,3 +40,55 @@ export async function createUnifiedInvoiceDraft(input: {
     summary: `Invoice created (Draft) via unified system`,
   })
 }
+
+// ── Bank Feed actions ──
+
+export async function matchBankFeedToInvoice(
+  feedId: string,
+  paymentId: string
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { manualMatch } = await import('@/lib/bank-feed-matcher')
+    const result = await manualMatch(feedId, paymentId)
+    if (!result.matched) throw new Error(result.error ?? 'Match failed')
+    revalidatePath('/finance')
+    revalidatePath('/reconciliation')
+  }, {
+    action_type: 'update',
+    table_name: 'td_bank_feeds',
+    record_id: feedId,
+    summary: `Manual match: feed → payment ${paymentId}`,
+  })
+}
+
+export async function ignoreBankFeed(feedId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    await supabaseAdmin
+      .from('td_bank_feeds')
+      .update({ status: 'ignored', updated_at: new Date().toISOString() })
+      .eq('id', feedId)
+    revalidatePath('/finance')
+    revalidatePath('/reconciliation')
+  }, {
+    action_type: 'update',
+    table_name: 'td_bank_feeds',
+    record_id: feedId,
+    summary: 'Bank feed ignored',
+  })
+}
+
+export async function syncBankFeeds(): Promise<ActionResult> {
+  return safeAction(async () => {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/plaid/accounts`, {
+      method: 'GET',
+      cache: 'no-store',
+    })
+    if (!res.ok) throw new Error('Plaid sync failed')
+    revalidatePath('/finance')
+  }, {
+    action_type: 'update',
+    table_name: 'td_bank_feeds',
+    summary: 'Triggered bank feed sync via Plaid',
+  })
+}

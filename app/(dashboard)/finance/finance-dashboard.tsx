@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Users, Landmark, BarChart3 } from 'lucide-react'
 import { ClientsInvoicesTab } from './clients-invoices-tab'
 import { OverviewTab } from './overview-tab'
+import { BankFeedTab, type BankFeedRecord, type OpenInvoice } from './bank-feed-tab'
 
 interface ClientSummary {
   id: string
@@ -27,6 +28,9 @@ interface Props {
   clientAuditLog: Array<Record<string, unknown>>
   clientPaymentHistory: Array<Record<string, unknown>>
   stats: { totalOutstanding: number; totalOverdue: number; overdueCount: number; clientCount: number }
+  bankFeeds: BankFeedRecord[]
+  bankOpenInvoices: OpenInvoice[]
+  bankFeedTotalCount: number
 }
 
 const tabs = [
@@ -38,7 +42,7 @@ const tabs = [
 export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
-  stats,
+  stats, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -100,11 +104,11 @@ export function FinanceDashboard({
           />
         )}
         {tab === 'bank' && (
-          <div className="p-6 text-muted-foreground text-center">
-            <Landmark className="w-12 h-12 mx-auto mb-3 opacity-40" />
-            <p className="text-lg font-medium">Bank Feed</p>
-            <p className="text-sm">Coming in Sprint B</p>
-          </div>
+          <BankFeedTab
+            bankFeeds={bankFeeds}
+            openInvoices={bankOpenInvoices}
+            totalCount={bankFeedTotalCount}
+          />
         )}
         {tab === 'overview' && (
           <OverviewTab stats={stats} clientList={clientList} />

@@ -114,6 +114,27 @@ export default async function FinancePage({
     clientPaymentHistory = payRes.data ?? []
   }
 
+  // ── Fetch bank feeds + open invoices for Bank Feed tab ──
+  const [bankFeedsRes, bankFeedCountRes, bankOpenInvoicesRes] = await Promise.all([
+    supabaseAdmin
+      .from('td_bank_feeds')
+      .select('*, payments:matched_payment_id(invoice_number, description, account_id, accounts:account_id(company_name))')
+      .order('transaction_date', { ascending: false })
+      .limit(200),
+    supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id', { count: 'exact', head: true }),
+    supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, account_id, accounts:account_id(company_name)')
+      .in('invoice_status', ['Sent', 'Overdue', 'Partial'])
+      .order('created_at', { ascending: false }),
+  ])
+
+  const bankFeeds = bankFeedsRes.data ?? []
+  const bankFeedTotalCount = bankFeedCountRes.count ?? bankFeeds.length
+  const bankOpenInvoices = bankOpenInvoicesRes.data ?? []
+
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
   const totalOutstanding = allInvoices
@@ -135,6 +156,9 @@ export default async function FinancePage({
         clientAuditLog={clientAuditLog}
         clientPaymentHistory={clientPaymentHistory}
         stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientList.filter(c => c.invoice_count > 0).length }}
+        bankFeeds={bankFeeds}
+        bankOpenInvoices={bankOpenInvoices}
+        bankFeedTotalCount={bankFeedTotalCount}
       />
     </div>
   )
