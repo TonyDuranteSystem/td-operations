@@ -1533,7 +1533,7 @@ export default function PortalChatsPage() {
               <div className="flex gap-2 items-end">
                 {/* Pill container */}
                 <div className={cn(
-                  'flex items-end flex-1 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors',
+                  'flex items-end flex-1 min-w-0 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors',
                   isRecording && 'border-red-300 bg-red-50/30'
                 )}>
                   {/* Emoji */}

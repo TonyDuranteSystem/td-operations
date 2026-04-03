@@ -11,13 +11,13 @@ import { RefreshCw } from 'lucide-react'
  *   swPath — path to the service worker file (e.g., '/portal-sw.js')
  *   scope  — optional SW scope (e.g., '/portal/')
  */
-export function UpdateBanner({ swPath, scope }: { swPath: string; scope?: string }) {
+export function UpdateBanner({ swPath, scope, locale }: { swPath: string; scope?: string; locale?: string }) {
   const { updateAvailable, applyUpdate } = useSwUpdate(swPath, scope)
 
   if (!updateAvailable) return null
 
-  // Detect language from html lang attribute
-  const isItalian = typeof document !== 'undefined' && document.documentElement.lang === 'it'
+  // Use explicit locale prop, or default to English (root layout has lang="it" which is wrong for CRM)
+  const isItalian = locale === 'it'
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white px-4 py-2.5 flex items-center justify-center gap-3 text-sm shadow-lg animate-in slide-in-from-top-2 duration-300">

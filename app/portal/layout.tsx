@@ -85,7 +85,7 @@ export default async function PortalLayout({
 
   return (
     <Providers>
-      <PortalSwRegister />
+      <PortalSwRegister locale={locale} />
       <LocaleProvider locale={locale}>
         <PasswordGate mustChangePassword={mustChangePassword} />
         {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
