@@ -551,7 +551,21 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_create",
-    `Create a new client offer/proposal in Supabase. Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email — no lead required). Token must be unique (format: firstname-lastname-year). IMPORTANT: Set language to match the client's language (en or it). Status starts as 'draft' — use offer_send to approve, create Gmail draft, and set status='sent'. JSONB fields are validated — use correct field names. Returns the public URL with access code. Workflow: create (draft) → review via offer_get → offer_send → client views → signs → pays. IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English, regardless of the offer language. The offer intro and UI follow the offer language, but contract content is always English. Contract types: 'formation' (default, LLC to create), 'onboarding' (LLC already exists), 'tax_return' (standalone tax filing), 'itin' (standalone ITIN application). IMPORTANT: Always set bundled_pipelines to list which service deliveries to create when the client pays. Each pipeline type becomes a separate tracked delivery. Example: formation + ITIN = ['Company Formation', 'ITIN'].`,
+    `Prepare a client offer/proposal as part of the portal onboarding experience. The client will see this offer inside their portal, review it, sign the contract, and pay — all in one flow.
+
+Works for ANY client type: new leads (pass lead_id), existing clients/accounts (pass account_id), or standalone (just client_name + client_email).
+
+Token must be unique (format: firstname-lastname-year). Set language to match the client's language (en or it).
+
+Status starts as 'draft'. Use offer_send to approve and deliver — offer_send automatically creates portal access for the client, sends them login credentials via email, and activates the full portal onboarding experience.
+
+When payment_type='checkout', a Stripe Checkout page is auto-generated with the service name and amount. Default gateway is Stripe.
+
+IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English. The offer intro and UI follow the offer language, but contract content is always English.
+
+Contract types: 'formation' (LLC to create), 'onboarding' (LLC already exists), 'tax_return' (standalone tax filing), 'itin' (standalone ITIN application).
+
+IMPORTANT: Always set bundled_pipelines to list which service deliveries to create when the client pays. Each pipeline type becomes a separate tracked delivery. Example: formation + ITIN = ['Company Formation', 'ITIN'].`,
     {
       token: z.string().describe("Unique token (e.g. 'mario-rossi-2026')"),
       client_name: z.string().describe("Client full name"),
@@ -869,7 +883,16 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_send",
-    `Approve an offer and send the link to the client via Gmail with open tracking. Sets status to 'sent'. Email is sent immediately (NOT a draft). Requires client_email to be set on the offer. Use offer_get to review content before calling this.`,
+    `Approve an offer and deliver it to the client via the portal. This is the final step that activates the client's portal onboarding experience.
+
+What happens automatically:
+1. Creates portal access for the client (tier='lead') with login credentials
+2. Sends email with portal login URL and temporary password
+3. Sets offer status to 'sent' with open tracking
+
+Once the client receives the email, they log into the portal where they can review the offer, sign the contract, and pay via Stripe Checkout — all in one flow.
+
+Requires client_email on the offer. Use offer_get to review content before calling this.`,
     {
       token: z.string().describe("Offer token to send"),
     },

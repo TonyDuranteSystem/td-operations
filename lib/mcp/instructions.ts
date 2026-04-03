@@ -47,10 +47,15 @@ COMMUNICATION:
 - Day-to-day without portal: gmail_send or WhatsApp (manual, outside system)
 - Team-to-team (internal): portal_team_send (internal thread, only visible to staff). NEVER use portal_chat_send for team-only messages -- clients can see those.
 
-OFFERS:
-- New leads: portal_create_user -> offer_create -> client sees offer in portal after login. Do NOT use offer_send
-- Leads without portal access: offer_create -> offer_send (email delivery)
-- ALWAYS include both payment methods (rule P12)
+OFFERS — Client Portal Flow:
+The offer system is portal-centric. The client experiences everything through the portal:
+1. After consultation, use offer_create to prepare the offer (status=draft). Stripe Checkout link is auto-generated with the service name and amount.
+2. Use offer_send to approve and deliver. offer_send automatically creates portal access (tier=lead), sends the client an email with portal login credentials, and sets status=sent.
+3. Client logs into portal → sees the offer → reviews → accepts and signs the contract → pays via Stripe Checkout (or bank transfer).
+4. Payment webhook fires → full activation pipeline runs automatically (service delivery, formation wizard, etc.).
+Do NOT describe this as "creating an offer" to the user — the offer is part of the portal onboarding experience the client receives.
+- ALWAYS include both payment methods: Stripe checkout AND bank transfer (rule P12)
+- Default payment gateway is Stripe. Use payment_gateway="whop" only if explicitly requested.
 
 - ZERO INVENTION RULE: NEVER invent, assume, or guess ANY factual data. This includes: company names, entity types, states of formation, EIN numbers, addresses, amounts, dates, contact details, service descriptions, or any other client/business data. ALWAYS look up the actual value from the source system (CRM, QuickBooks, Drive, Gmail) BEFORE using it in any output — emails, invoices, documents, templates, forms, or conversation. If a value is not found in the system, ASK Antonio. Do NOT fill in blanks with plausible-sounding data. A wrong company name on an invoice or email is a professional embarrassment. This rule has ZERO exceptions.
 - ENCODING: Use ONLY ASCII characters in ALL text output (emails, templates, documents, form labels). No em/en dashes, curly quotes, bullets, arrows, or other Unicode symbols. Use -- for dashes, straight quotes, * or - for lists, -> for arrows. The system auto-sanitizes outbound emails, but generate clean text from the start.
