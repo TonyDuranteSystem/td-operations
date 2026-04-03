@@ -8,7 +8,7 @@ export function PasswordGate({ mustChangePassword }: { mustChangePassword: boole
   const router = useRouter()
 
   useEffect(() => {
-    if (mustChangePassword && pathname !== '/portal/change-password') {
+    if (mustChangePassword && pathname !== '/portal/change-password' && pathname !== '/portal/reset-password') {
       router.replace('/portal/change-password')
     }
   }, [mustChangePassword, pathname, router])

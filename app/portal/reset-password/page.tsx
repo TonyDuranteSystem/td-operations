@@ -30,6 +30,12 @@ export default function ResetPasswordPage() {
     if (error) {
       toast.error(error.message)
     } else {
+      // Clear must_change_password flag if it was set
+      await fetch('/api/portal/onboarding-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear_password_flag: true }),
+      })
       toast.success('Password updated successfully')
       router.push('/portal')
     }
