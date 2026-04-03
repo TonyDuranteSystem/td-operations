@@ -123,15 +123,24 @@ export async function GET(req: NextRequest) {
         ? supabaseAdmin.from("banking_submissions").select("id, token, status, provider, submitted_data")
           .eq("contact_id", contactId)
         : { data: [] },
-      // Auth user — check if portal login exists via SQL on auth.users
-      contactEmail
-        ? Promise.resolve(supabaseAdmin.rpc("exec_sql", {
-            query: `SELECT id, email FROM auth.users WHERE email = '${contactEmail.replace(/'/g, "''")}' LIMIT 1`
-          })).then(r => {
-            const rows = Array.isArray(r.data) ? r.data : (r.data as { rows?: unknown[] })?.rows || []
-            return { data: rows as { id: string; email: string }[] }
-          }).catch(() => ({ data: [] as { id: string; email: string }[] }))
-        : Promise.resolve({ data: [] as { id: string; email: string }[] }),
+      // Auth user — check portal_account flag + verify in auth.users
+      Promise.resolve().then(async () => {
+        if (!contactEmail) return { data: [] as { id: string; email: string }[] }
+        // First check account.portal_account flag (reliable)
+        if (account.portal_account) {
+          return { data: [{ id: "from-flag", email: contactEmail }] }
+        }
+        // Fallback: check auth.users directly
+        try {
+          const { data } = await supabaseAdmin.rpc("exec_sql", {
+            query: `SELECT id::text, email FROM auth.users WHERE LOWER(email) = LOWER('${contactEmail.replace(/'/g, "''")}') LIMIT 1`
+          })
+          const rows = Array.isArray(data) ? data : (data as { rows?: unknown[] })?.rows || []
+          return { data: rows as { id: string; email: string }[] }
+        } catch {
+          return { data: [] as { id: string; email: string }[] }
+        }
+      }),
       // Tax return record
       supabaseAdmin.from("tax_returns").select("id, tax_year, status")
         .eq("account_id", accountId).order("tax_year", { ascending: false }).limit(1),
