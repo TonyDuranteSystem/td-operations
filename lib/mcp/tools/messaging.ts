@@ -18,7 +18,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_inbox",
-    "Get the WhatsApp/Telegram inbox overview: groups sorted by last message, with unread counts and message preview. Use this to see what conversations need attention. Filter by channel, unread status, or linked CRM account.",
+    "LEGACY — WhatsApp/Telegram inbox ONLY. NOT for portal chat messages. For portal messages, use portal_chat_inbox instead. This tool shows legacy WhatsApp/Telegram groups with unread counts. Only use when explicitly asked about WhatsApp or Telegram.",
     {
       channel_id: z.string().uuid().optional().describe("Filter by messaging channel UUID"),
       unread_only: z.boolean().optional().default(false).describe("Only show groups with unread messages"),
@@ -64,7 +64,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_read_group",
-    "Read the full message thread for a WhatsApp or Telegram group by group_id. Returns messages in chronological order with sender info. Use msg_inbox first to find the group_id.",
+    "LEGACY — Read a WhatsApp/Telegram group thread by group_id. NOT for portal chat. For portal messages, use portal_chat_read instead. Only use when explicitly asked about WhatsApp or Telegram history.",
     {
       group_id: z.string().uuid().describe("Messaging group UUID"),
       limit: z.number().optional().default(50).describe("Max messages (default 50, max 200)"),
@@ -113,7 +113,7 @@ export function registerMessagingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "msg_search",
-    "Search across all WhatsApp/Telegram messages by text content, sender phone, or sender name. Returns matching messages with group context. Use this to find specific conversations across all channels.",
+    "LEGACY — Search WhatsApp/Telegram message history only. NOT for portal chat. For portal messages, use portal_chat_read or execute_sql on portal_messages. Only use when explicitly asked about WhatsApp or Telegram.",
     {
       text: z.string().optional().describe("Search in message content (case-insensitive)"),
       sender_phone: z.string().optional().describe("Filter by sender phone number (partial match)"),

@@ -160,12 +160,21 @@ You have **147 tools** organized into functional groups. Read each tool's descri
 - `gmail_labels`: List Gmail labels with unread counts.
 - **RULE**: For client emails, ALWAYS use `gmail_send` (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
 
+### Portal Chat (5 tools: portal_chat_* + portal_team_send)
+- `portal_chat_inbox`: **START HERE** for reading messages. Shows all portal chat threads with unread counts, last message preview, client names. Supports filtering by account_id, contact_id, or unread_only.
+- `portal_chat_read`: Read full message history for a specific thread (by account_id or contact_id). Shows messages chronologically with sender info, timestamps, attachments.
+- `portal_chat_mark_read`: Mark client messages as read. Call ONLY after Antonio has reviewed the messages.
+- `portal_chat_send`: Send a message to a client via portal chat. ALWAYS show draft to Antonio before sending.
+- `portal_team_send`: Internal team message (staff only, NOT visible to clients).
+- **RULE**: "Read the message" → `portal_chat_inbox` FIRST. NEVER `msg_inbox`.
+
 ### Messaging — Legacy WhatsApp & Telegram (6 tools: msg_*)
-- **NOTE**: The CRM inbox is now Gmail-based (support@ + antonio.durante@). WhatsApp and Telegram tabs were removed from the CRM UI. The msg_* tools still access the legacy WhatsApp/Telegram backend data but are NOT the current inbox.
-- `msg_inbox`: Legacy WhatsApp/Telegram groups with unread counts.
-- `msg_read_group`: Read messages from a specific conversation (legacy).
+- ⚠️ **LEGACY ONLY** — Do NOT use these tools unless Antonio explicitly asks for WhatsApp or Telegram.
+- The CRM inbox is Gmail-based (support@ + antonio.durante@). WhatsApp and Telegram tabs were removed from the CRM UI.
+- `msg_inbox`: Legacy WhatsApp/Telegram groups. NOT the current inbox. For portal messages use `portal_chat_inbox`.
+- `msg_read_group`: Read messages from a legacy conversation.
 - `msg_search`: Search message content across legacy channels.
-- `msg_send`: Send a message to a WhatsApp or Telegram group (legacy).
+- `msg_send`: Send to WhatsApp or Telegram group (legacy). NOT for normal client communication.
 - `msg_mark_read`: Mark messages as read (legacy).
 - `msg_list_channels`: List available messaging channels (legacy).
 

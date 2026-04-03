@@ -47,6 +47,16 @@ COMMUNICATION:
 - Day-to-day without portal: gmail_send or WhatsApp (manual, outside system)
 - Team-to-team (internal): portal_team_send (internal thread, only visible to staff). NEVER use portal_chat_send for team-only messages -- clients can see those.
 
+READING MESSAGES — The portal chat is our primary messaging system. When asked to "read the message", "check messages", "any messages?", "vedi messaggi", or similar:
+1. portal_chat_inbox(unread_only=true) — see which threads have unread messages
+2. portal_chat_read(account_id or contact_id) — read the specific conversation
+3. Analyze the message: what is the client asking? What context is needed? Load via crm_get_client_summary if relevant.
+4. Propose a response or action to Antonio. Show the draft in chat.
+5. WAIT for Antonio's approval before sending via portal_chat_send.
+6. After Antonio confirms he's seen the messages: portal_chat_mark_read to clear the unread badge.
+NEVER use msg_inbox (legacy WhatsApp/Telegram) unless explicitly asked for WhatsApp or Telegram.
+Default priority when "read the message" is ambiguous: portal chat FIRST → Gmail SECOND → WhatsApp/Telegram ONLY if explicitly asked.
+
 OFFERS — Client Portal Flow:
 The offer system is portal-centric. The client experiences everything through the portal:
 1. After consultation, use offer_create to prepare the offer (status=draft). Stripe Checkout link is auto-generated with the service name and amount.
@@ -231,10 +241,19 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - gmail_labels: List Gmail labels with unread counts.
 - RULE: For client emails, ALWAYS use gmail_send (Gmail). This ensures threading, Gmail Sent folder visibility, and unified inbox.
 
+### Portal Chat (5 tools: portal_chat_* + portal_team_send)
+- portal_chat_inbox: **START HERE** for reading messages. Shows all portal chat threads with unread counts, last message preview, client names. Supports filtering by account_id, contact_id, or unread_only.
+- portal_chat_read: Read full message history for a specific thread (by account_id or contact_id). Shows messages chronologically with sender info, timestamps, attachments.
+- portal_chat_mark_read: Mark client messages as read. Call ONLY after Antonio has reviewed the messages. Does NOT auto-trigger.
+- portal_chat_send: Send a message to a client via portal chat. ALWAYS show draft to Antonio before sending.
+- portal_team_send: Internal team message (staff only, NOT visible to clients).
+- RULE: "Read the message" → portal_chat_inbox FIRST. NEVER msg_inbox.
+
 ### Messaging — Legacy WhatsApp & Telegram (6 tools: msg_*)
-- NOTE: The CRM inbox is now Gmail-based (support@ + antonio.durante@). WhatsApp and Telegram tabs were removed from the CRM UI. The msg_* tools still access the legacy WhatsApp/Telegram backend data but are NOT the current inbox.
-- msg_inbox: Legacy WhatsApp/Telegram groups with unread counts.
-- msg_send: Send to WhatsApp or Telegram group (legacy).
+- ⚠️ LEGACY ONLY — Do NOT use these tools unless Antonio explicitly asks for WhatsApp or Telegram.
+- The CRM inbox is Gmail-based (support@ + antonio.durante@). WhatsApp and Telegram tabs were removed from the CRM UI.
+- msg_inbox: Legacy WhatsApp/Telegram groups. NOT the current inbox. For portal messages use portal_chat_inbox.
+- msg_send: Send to WhatsApp or Telegram group (legacy). NOT for normal client communication.
 
 ### QuickBooks (9 tools: qb_*)
 - **NOTE: QB is for ACCOUNTING sync only. For client invoicing, use portal_invoice_create.**
