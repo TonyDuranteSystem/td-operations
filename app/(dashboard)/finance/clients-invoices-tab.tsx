@@ -8,6 +8,7 @@ import {
   DollarSign, AlertTriangle, SplitSquareHorizontal, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 
 interface ClientSummary {
   id: string
@@ -63,6 +64,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [showSection, setShowSection] = useState<'invoices' | 'credits' | 'payments' | 'audit'>('invoices')
+  const [showNewInvoice, setShowNewInvoice] = useState(false)
 
   const filteredClients = useMemo(() => {
     if (!search) return clientList.filter(c => c.invoice_count > 0 || c.outstanding > 0).sort((a, b) => b.outstanding - a.outstanding)
@@ -176,13 +178,13 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                   {selectedClient.overdue_count > 0 && <span className="text-red-600"> &middot; {selectedClient.overdue_count} overdue</span>}
                 </p>
               </div>
-              <a
-                href={`/finance?tab=clients&client=${selectedClientId}`}
+              <button
+                onClick={() => setShowNewInvoice(true)}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
               >
                 <Plus className="w-4 h-4" />
                 New Invoice
-              </a>
+              </button>
             </div>
 
             {/* Summary cards */}
@@ -423,6 +425,14 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
           </div>
         )}
       </div>
+      {/* New Invoice Dialog */}
+      <InvoiceDialog
+        open={showNewInvoice}
+        onClose={() => {
+          setShowNewInvoice(false)
+          router.refresh()
+        }}
+      />
     </div>
   )
 }
