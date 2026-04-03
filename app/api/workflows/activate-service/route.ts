@@ -24,6 +24,7 @@ import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } fr
 import { createUnifiedInvoice } from "@/lib/portal/unified-invoice"
 import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 import { createPortalNotification } from "@/lib/portal/notifications"
+import { calculateCommission } from "@/lib/referral-utils"
 
 const AUTO_THRESHOLD = 5
 
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
     // Get the offer to determine contract_type and bundled_pipelines
     const { data: offer } = await supabase
       .from("offers")
-      .select("contract_type, bundled_pipelines, account_id, selected_services, services")
+      .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id")
       .eq("token", activation.offer_token)
       .single()
 
@@ -479,6 +480,115 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "crm_invoice", status: "skipped", detail: "No amount on activation" })
     }
 
+    // ─── STEP 3.5: Referral Record (AUTO, non-blocking) ──────
+    let referralNoteLine = ""
+    try {
+      if (offer?.referrer_name) {
+        // a. Find or create referrer contact
+        let referrerContactId: string | null = null
+        const { data: referrerContacts } = await supabase
+          .from("contacts")
+          .select("id")
+          .ilike("full_name", offer.referrer_name)
+          .limit(1)
+
+        if (referrerContacts && referrerContacts.length > 0) {
+          referrerContactId = referrerContacts[0].id
+        } else {
+          // Create minimal contact for the referrer
+          const { data: newReferrer } = await supabase
+            .from("contacts")
+            .insert({
+              full_name: offer.referrer_name,
+              email: offer.referrer_email || null,
+              referrer_type: offer.referrer_type || null,
+            })
+            .select("id")
+            .single()
+          referrerContactId = newReferrer?.id || null
+        }
+
+        if (referrerContactId) {
+          // b. Parse setup fee from cost_summary
+          let setupFeeTotal = 0
+          try {
+            const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
+            if (costSummary.length > 0) {
+              const firstSection = costSummary[0] as { total?: string }
+              if (firstSection.total) {
+                setupFeeTotal = Number(String(firstSection.total).replace(/[€$,.\s]/g, (m) => m === "," ? "" : m === "." ? "." : "")) || 0
+                // Handle European format: €2.500 or €2,500
+                if (setupFeeTotal > 100000) setupFeeTotal = setupFeeTotal / 100
+              }
+            }
+          } catch { /* cost_summary parse failed, setupFeeTotal stays 0 */ }
+
+          // c. Determine commission type and calculate
+          const commissionType = offer.referrer_commission_type
+            || (offer.referrer_type === "partner" ? "price_difference" : "credit_note")
+          const commissionPct = offer.referrer_commission_pct ?? (commissionType !== "price_difference" ? 10 : null)
+          const commissionAmount = calculateCommission(
+            commissionType,
+            commissionPct,
+            offer.referrer_agreed_price || null,
+            setupFeeTotal,
+            setupFeeTotal, // basePriceForState = full setup fee for price_difference calc
+          )
+          const commissionCurrency = "EUR"
+
+          // d. Insert referral record
+          const { data: referral, error: refErr } = await supabase
+            .from("referrals")
+            .insert({
+              referrer_contact_id: referrerContactId,
+              referrer_account_id: offer.referrer_account_id || null,
+              referred_contact_id: contactId || null,
+              referred_account_id: autoAccountId || null,
+              referred_lead_id: leadId || null,
+              referred_name: offer.client_name || activation.client_name,
+              offer_token: activation.offer_token,
+              status: "converted",
+              commission_type: commissionType,
+              commission_pct: commissionPct,
+              commission_amount: commissionAmount || null,
+              commission_currency: commissionCurrency,
+            })
+            .select("id")
+            .single()
+
+          if (refErr) {
+            steps.push({ step: "referral", status: "error", detail: `Insert failed: ${refErr.message}` })
+          } else {
+            // e. Create follow-up task
+            await supabase.from("tasks").insert({
+              task_title: `Process referral commission — ${offer.referrer_name} → ${activation.client_name} (${commissionAmount ? `${commissionAmount} ${commissionCurrency}` : "TBD"})`,
+              assigned_to: "Antonio",
+              category: "Payment",
+              priority: "Normal",
+              status: "To Do",
+              account_id: autoAccountId || null,
+              description: `Referral by ${offer.referrer_name} (${offer.referrer_type || "client"}). Commission: ${commissionType} — ${commissionAmount || "TBD"} ${commissionCurrency}. Offer: ${activation.offer_token}.`,
+            })
+
+            // f. Info line for team notification email
+            referralNoteLine = `📎 Referral: ${offer.referrer_name} (${offer.referrer_type || "client"}) — commission ${commissionAmount || "TBD"} ${commissionCurrency}`
+
+            steps.push({
+              step: "referral",
+              status: "created",
+              detail: `Referral ${referral?.id?.slice(0, 8)}: ${offer.referrer_name} → ${activation.client_name} | ${commissionType} ${commissionAmount || "TBD"} ${commissionCurrency}`,
+            })
+          }
+        } else {
+          steps.push({ step: "referral", status: "error", detail: "Could not find or create referrer contact" })
+        }
+      } else {
+        steps.push({ step: "referral", status: "skipped", detail: "No referral on this offer" })
+      }
+    } catch (e) {
+      steps.push({ step: "referral", status: "error", detail: `Referral step failed: ${e instanceof Error ? e.message : String(e)}` })
+    }
+
     // ─── STEP 4: Data Collection Form (SUPERVISED) ──────────
     const formConfig = FORM_CONFIG[contractType]
     if (formConfig && leadId) {
@@ -586,6 +696,8 @@ export async function POST(req: NextRequest) {
 
 <h3>Service Deliveries Created</h3>
 <pre style="background:#f3f4f6;padding:12px;border-radius:6px">${sdList || "None"}</pre>
+
+${referralNoteLine ? `<h3>Referral</h3><p>${referralNoteLine}</p>` : ""}
 
 ${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
 <pre style="background:#fef3c7;padding:12px;border-radius:6px">${supervisedList}</pre>
