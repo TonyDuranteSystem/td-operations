@@ -62,7 +62,7 @@ async function fetchAccountAndContact(accountId: string) {
 
   const { data: contact, error: ctErr } = await supabaseAdmin
     .from("contacts")
-    .select("id, full_name, email, phone, address, language, itin_number")
+    .select("id, full_name, email, phone, residency, language, itin_number")
     .eq("id", contactLinks[0].contact_id)
     .single()
 
@@ -114,7 +114,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
     const contactIds = contactLinks!.map(cl => cl.contact_id)
     const { data: allContacts } = await supabaseAdmin
       .from("contacts")
-      .select("id, full_name, email, address")
+      .select("id, full_name, email, residency")
       .in("id", contactIds)
 
     if (allContacts) {
@@ -123,7 +123,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       membersJson = allContacts.map((c, i) => ({
         name: c.full_name,
         email: c.email || null,
-        address: c.address || null,
+        address: c.residency || null,
         ownership_pct: i === 0 ? pct + remainder : pct,
         initial_contribution: "$0.00",
       }))
@@ -143,7 +143,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       entity_type: entityType,
       manager_name: (params.manager_name as string) || contact.full_name,
       member_name: contact.full_name,
-      member_address: contact.address || null,
+      member_address: contact.residency || null,
       member_email: contact.email || null,
       members: membersJson,
       effective_date: (params.effective_date as string) || today,
