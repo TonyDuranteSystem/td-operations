@@ -363,14 +363,11 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
-    // Upgrade portal tier from lead → onboarding after payment
+    // Upgrade portal tier from lead → onboarding after payment (syncs account + contacts)
     if (autoAccountId) {
-      await supabase
-        .from("accounts")
-        .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
-        .eq("id", autoAccountId)
-        .in("portal_tier", ["lead"])
-      steps.push({ step: "portal_tier_upgrade", status: "done", detail: `lead → onboarding` })
+      const { upgradePortalTier } = await import("@/lib/portal/auto-create")
+      const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
+      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? `${tierResult.previousTier || "lead"} → onboarding` : (tierResult.error || "Unknown error") })
     } else {
       steps.push({ step: "portal_tier_upgrade", status: "skipped", detail: "No account linked" })
     }

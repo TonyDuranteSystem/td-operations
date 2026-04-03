@@ -561,22 +561,18 @@ async function setPortalTier(
   tier: string,
 ): Promise<StepResult> {
   try {
-    const { data: acct } = await supabaseAdmin
-      .from("accounts")
-      .select("portal_tier")
-      .eq("id", accountId)
-      .single()
+    const { upgradePortalTier } = await import("@/lib/portal/auto-create")
+    const result = await upgradePortalTier(accountId, tier as import("@/lib/portal/tier-config").PortalTier)
 
-    if (acct?.portal_tier === tier) {
-      return { name: "portal_tier", status: "skipped", detail: `Already set to "${tier}"` }
+    if (!result.success) {
+      return { name: "portal_tier", status: "error", detail: result.error || "Unknown error" }
     }
 
-    await supabaseAdmin
-      .from("accounts")
-      .update({ portal_tier: tier })
-      .eq("id", accountId)
+    if (result.previousTier === tier) {
+      return { name: "portal_tier", status: "skipped", detail: `Already at "${tier}" or higher` }
+    }
 
-    return { name: "portal_tier", status: "ok", detail: `Set portal tier to "${tier}"` }
+    return { name: "portal_tier", status: "ok", detail: `Set portal tier to "${tier}" (account + contacts synced)` }
   } catch (err) {
     return { name: "portal_tier", status: "error", detail: err instanceof Error ? err.message : "Unknown error" }
   }

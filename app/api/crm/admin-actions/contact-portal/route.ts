@@ -56,6 +56,18 @@ export async function POST(request: NextRequest) {
       .update({ portal_tier: tier, updated_at: new Date().toISOString() })
       .eq('id', contact_id)
 
+    // Also sync tier to all linked accounts
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id')
+      .eq('contact_id', contact_id)
+    for (const link of links ?? []) {
+      await supabaseAdmin
+        .from('accounts')
+        .update({ portal_tier: tier, updated_at: new Date().toISOString() })
+        .eq('id', link.account_id)
+    }
+
     // Update auth app_metadata
     const authUser = await findAuthUser()
     if (authUser) {
@@ -185,19 +197,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: createError.message }, { status: 500 })
     }
 
-    // Update portal_tier if not set
+    // Update portal_tier on contact if not set
+    const effectiveTier = contact.portal_tier || 'active'
     if (!contact.portal_tier) {
       await supabaseAdmin
         .from('contacts')
-        .update({ portal_tier: 'active', updated_at: new Date().toISOString() })
+        .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
         .eq('id', contact_id)
     }
 
-    // Update linked accounts portal flags
+    // Update linked accounts portal flags + sync tier
     if (accountIds.length > 0) {
       await supabaseAdmin
         .from('accounts')
-        .update({ portal_account: true, portal_created_date: new Date().toISOString().split('T')[0] })
+        .update({
+          portal_account: true,
+          portal_tier: effectiveTier,
+          portal_created_date: new Date().toISOString().split('T')[0],
+        })
         .in('id', accountIds)
     }
 

@@ -255,32 +255,23 @@ async function handleCheckoutCompleted(session: StripeSession) {
       .eq("id", leadId)
   }
 
-  // 7. Upgrade portal tier: lead → onboarding
-  if (accountId) {
-    await getSupabase()
-      .from("accounts")
-      .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
-      .eq("id", accountId)
-      .not("portal_tier", "in", '("onboarding","active","full")')
-  }
-  // Also upgrade via contact's linked accounts
-  if (!accountId && email) {
+  // 7. Upgrade portal tier: lead → onboarding (syncs account + contacts)
+  let resolvedAccountId = accountId
+  if (!resolvedAccountId && email) {
+    // Resolve account via contact's linked accounts
     const { data: contactAccounts } = await getSupabase()
       .from("contacts")
       .select("account_contacts(account_id)")
       .ilike("email", email)
       .limit(1)
-
     if (contactAccounts?.length) {
       const ac = contactAccounts[0].account_contacts as Array<{ account_id: string }> | null
-      if (ac?.length) {
-        await getSupabase()
-          .from("accounts")
-          .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
-          .eq("id", ac[0].account_id)
-          .in("portal_tier", ["lead"])
-      }
+      if (ac?.length) resolvedAccountId = ac[0].account_id
     }
+  }
+  if (resolvedAccountId) {
+    const { upgradePortalTier } = await import("@/lib/portal/auto-create")
+    await upgradePortalTier(resolvedAccountId, "onboarding")
   }
 
   // 8. Match pending_activation — use offer_token (exact) OR email (fallback)
@@ -330,14 +321,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
           .eq("status", "signed")
       }
 
-      // Also upgrade contact portal_tier (source of truth for portal UI)
-      if (contactId) {
-        await getSupabase()
-          .from("contacts")
-          .update({ portal_tier: "onboarding", updated_at: new Date().toISOString() })
-          .eq("id", contactId)
-          .in("portal_tier", ["lead"])
-      }
+      // Portal tier already upgraded in step 7 above (upgradePortalTier syncs both account + contacts)
 
       console.warn(`[stripe-webhook] Matched pending_activation ${pending.id} — triggering activation`)
 

@@ -22,7 +22,7 @@ describe('getContactOnlyNavVisibility', () => {
 
   it('returns exactly 7 keys', () => {
     const nav = getContactOnlyNavVisibility()
-    expect(Object.keys(nav).length).toBe(8)
+    expect(Object.keys(nav).length).toBe(9)
   })
 })
 

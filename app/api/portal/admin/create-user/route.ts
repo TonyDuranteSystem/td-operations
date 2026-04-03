@@ -3,11 +3,17 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
+import { autoCreatePortalUser, sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
 
 /**
  * POST /api/portal/admin/create-user
  * Admin-only: creates a Supabase Auth user with client role for the portal.
- * Body: { account_id, contact_id? }
+ * Body: { account_id, contact_id?, resend?: boolean }
+ *
+ * If user already exists:
+ *   - Verifies/fixes app_metadata (contact_id, role)
+ *   - If resend=true, generates new temp password and re-sends welcome email
+ *   - Returns success instead of 409
  */
 export async function POST(request: NextRequest) {
   // Admin auth check
@@ -18,13 +24,13 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json()
-  const { account_id, contact_id } = body
+  const { account_id, contact_id, resend } = body
 
   if (!account_id) {
     return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   }
 
-  // Get the contact (primary if not specified)
+  // Resolve contact
   let targetContactId = contact_id
   if (!targetContactId) {
     const { data: links } = await supabaseAdmin
@@ -42,7 +48,7 @@ export async function POST(request: NextRequest) {
   // Get contact details
   const { data: contact } = await supabaseAdmin
     .from('contacts')
-    .select('full_name, email')
+    .select('full_name, email, language')
     .eq('id', targetContactId)
     .single()
 
@@ -50,95 +56,107 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Contact has no email address' }, { status: 400 })
   }
 
-  // Check if user already exists (search by email)
+  const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
+
+  // Check if user already exists
   const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
   const existingUser = (existingList?.users ?? []).find(u => u.email === contact.email)
 
   if (existingUser) {
-    return NextResponse.json({ error: `User already exists: ${contact.email}` }, { status: 409 })
+    // User already exists — verify/fix metadata and optionally resend credentials
+    const meta = existingUser.app_metadata || {}
+    const needsFix = meta.contact_id !== targetContactId || meta.role !== 'client'
+
+    if (needsFix) {
+      await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+        app_metadata: {
+          ...meta,
+          role: 'client',
+          contact_id: targetContactId,
+        },
+      })
+    }
+
+    // Ensure portal flags are set on account
+    await supabaseAdmin
+      .from('accounts')
+      .update({
+        portal_account: true,
+        portal_created_date: new Date().toISOString().split('T')[0],
+      })
+      .eq('id', account_id)
+
+    if (resend) {
+      // Generate new temp password and resend welcome email
+      const newTempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+      await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+        password: newTempPassword,
+        user_metadata: {
+          ...existingUser.user_metadata,
+          must_change_password: true,
+        },
+      })
+
+      const emailResult = await sendPortalWelcomeEmail({
+        email: contact.email,
+        fullName: contact.full_name,
+        tempPassword: newTempPassword,
+        language: contactLang,
+      })
+
+      return NextResponse.json({
+        success: true,
+        already_existed: true,
+        metadata_fixed: needsFix,
+        credentials_resent: emailResult.success,
+        user_id: existingUser.id,
+        email: contact.email,
+        login_url: `${PORTAL_BASE_URL}/portal/login`,
+        message: emailResult.success
+          ? `User already existed. New credentials sent to ${contact.email}.`
+          : `User already existed. Credentials reset but email failed: ${emailResult.error}`,
+      })
+    }
+
+    return NextResponse.json({
+      success: true,
+      already_existed: true,
+      metadata_fixed: needsFix,
+      user_id: existingUser.id,
+      email: contact.email,
+      login_url: `${PORTAL_BASE_URL}/portal/login`,
+      message: `User already exists (${contact.email}). ${needsFix ? 'Metadata was fixed.' : 'No changes needed.'} Pass resend=true to send new credentials.`,
+    })
   }
 
-  // Generate temporary password
-  const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
-
-  // Create auth user with app_metadata (tamper-proof)
-  const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-    email: contact.email,
-    password: tempPassword,
-    email_confirm: true, // Auto-confirm — we send our own welcome email
-    app_metadata: {
-      role: 'client',
-      contact_id: targetContactId,
-    },
-    user_metadata: {
-      full_name: contact.full_name,
-      must_change_password: true,
-    },
+  // New user — use autoCreatePortalUser for consistent creation
+  const result = await autoCreatePortalUser({
+    accountId: account_id,
+    contactId: targetContactId,
+    tier: 'active', // CRM manual creation = full active client
   })
 
-  if (createError) {
-    return NextResponse.json({ error: createError.message }, { status: 500 })
+  if (!result.success) {
+    return NextResponse.json({ error: result.error }, { status: 500 })
   }
 
-  // Update account portal flags
-  await supabaseAdmin
-    .from('accounts')
-    .update({
-      portal_account: true,
-      portal_created_date: new Date().toISOString().split('T')[0],
+  // Send welcome email (autoCreatePortalUser doesn't send email itself)
+  if (result.tempPassword) {
+    const emailResult = await sendPortalWelcomeEmail({
+      email: contact.email,
+      fullName: contact.full_name,
+      tempPassword: result.tempPassword,
+      language: contactLang,
     })
-    .eq('id', account_id)
 
-  // Send welcome email with temp password (never expose in API response)
-  try {
-    const { gmailPost } = await import('@/lib/gmail')
-    const loginUrl = `${PORTAL_BASE_URL}/portal/login`
-    const welcomeHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background: #18181b; padding: 20px; border-radius: 12px 12px 0 0;">
-          <h1 style="color: white; margin: 0; font-size: 18px;">Welcome to Tony Durante Portal</h1>
-        </div>
-        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-          <p>Hi ${contact.full_name || 'there'},</p>
-          <p>Your portal account has been created. Here are your login credentials:</p>
-          <div style="background: #f4f4f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="margin: 0 0 8px;"><strong>Email:</strong> ${contact.email}</p>
-            <p style="margin: 0;"><strong>Temporary Password:</strong> ${tempPassword}</p>
-          </div>
-          <p>You will be asked to change your password on first login.</p>
-          <a href="${loginUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 8px;">
-            Login to Portal
-          </a>
-        </div>
-      </div>
-    `
-    const subject = 'Your Tony Durante Portal Account'
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-    const boundary = `boundary_${Date.now()}`
-    const rawEmail = [
-      `From: Tony Durante <support@tonydurante.us>`,
-      `To: ${contact.email}`,
-      `Subject: ${encodedSubject}`,
-      `MIME-Version: 1.0`,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      Buffer.from(welcomeHtml).toString('base64'),
-      `--${boundary}--`,
-    ].join('\r\n')
-    await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
-  } catch (emailErr) {
-    console.error('Welcome email failed:', emailErr)
-    // Don't fail the whole operation — user is created, password can be sent manually
+    if (!emailResult.success) {
+      console.error('Welcome email failed:', emailResult.error)
+    }
   }
 
-  // NEVER return temp_password in API response — it was sent via email
   return NextResponse.json({
     success: true,
-    user_id: newUser.user.id,
+    user_id: result.userId,
     email: contact.email,
     login_url: `${PORTAL_BASE_URL}/portal/login`,
     message: `Portal account created for ${contact.full_name || contact.email}. Login credentials sent via email.`,
