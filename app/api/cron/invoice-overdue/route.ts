@@ -12,6 +12,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { syncInvoiceStatus } from '@/lib/portal/unified-invoice'
 
 export async function GET(req: NextRequest) {
   try {
@@ -26,6 +27,7 @@ export async function GET(req: NextRequest) {
     const results = { marked_overdue: 0, reminders_sent: 0, errors: [] as string[] }
 
     // 1. Mark Sent/Partial invoices as Overdue when due_date < today
+    // Uses syncInvoiceStatus for bidirectional sync (updates BOTH payments + client_invoices)
     // Skip accounts with dunning_pause = true
     const { data: pausedAccounts } = await supabaseAdmin
       .from('accounts')
@@ -33,30 +35,35 @@ export async function GET(req: NextRequest) {
       .eq('dunning_pause', true)
     const pausedIds = (pausedAccounts ?? []).map(a => a.id)
 
-    let overdueQuery = supabaseAdmin
+    // Query payments that need to become Overdue (read, not update)
+    let candidateQuery = supabaseAdmin
       .from('payments')
-      .update({
-        invoice_status: 'Overdue',
-        updated_at: new Date().toISOString(),
-      })
+      .select('id, invoice_number, account_id')
       .in('invoice_status', ['Sent', 'Partial'])
       .lt('due_date', today)
-      .select('id, invoice_number, account_id, amount, currency, due_date')
 
     if (pausedIds.length > 0) {
-      overdueQuery = overdueQuery.not('account_id', 'in', `(${pausedIds.join(',')})`)
+      candidateQuery = candidateQuery.not('account_id', 'in', `(${pausedIds.join(',')})`)
     }
 
-    const { data: newOverdue, error: markErr } = await overdueQuery
+    const { data: candidates, error: queryErr } = await candidateQuery
 
-    if (markErr) {
-      console.error('[invoice-overdue] Mark overdue error:', markErr.message)
-      results.errors.push(`Mark overdue: ${markErr.message}`)
-    } else {
-      results.marked_overdue = newOverdue?.length ?? 0
-      if (newOverdue && newOverdue.length > 0) {
-        console.warn(`[invoice-overdue] Marked ${newOverdue.length} invoices as Overdue:`,
-          newOverdue.map(i => i.invoice_number).join(', '))
+    if (queryErr) {
+      console.error('[invoice-overdue] Query error:', queryErr.message)
+      results.errors.push(`Query overdue candidates: ${queryErr.message}`)
+    } else if (candidates && candidates.length > 0) {
+      // Use syncInvoiceStatus for each — updates BOTH tables
+      for (const inv of candidates) {
+        try {
+          await syncInvoiceStatus('payment', inv.id, 'Overdue')
+          results.marked_overdue++
+        } catch (err) {
+          results.errors.push(`Mark overdue ${inv.invoice_number}: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      if (results.marked_overdue > 0) {
+        console.warn(`[invoice-overdue] Marked ${results.marked_overdue} invoices as Overdue:`,
+          candidates.map(i => i.invoice_number).join(', '))
       }
     }
 

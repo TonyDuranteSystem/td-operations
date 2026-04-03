@@ -184,11 +184,13 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       invoice_number: invoiceNumber,    // Same INV number (not TD-YYYY)
       description: items[0]?.description || 'Invoice',
       amount: total,
+      amount_paid: effectiveAmountPaid,
+      amount_due: effectiveAmountDue,
       amount_currency: currency,
       subtotal,
       discount: 0,
       total,
-      status: mark_as_paid ? 'Paid' : 'Pending',
+      status: mark_as_paid ? 'Paid' : (effectiveAmountPaid > 0 && effectiveAmountPaid < total ? 'Partial' : 'Pending'),
       invoice_status: status,
       issue_date: today,
       due_date: due_date || null,
@@ -487,9 +489,20 @@ async function checkParentCompletion(invoiceId: string): Promise<void> {
 
   if (children?.length && children.every(c => c.status === 'Paid')) {
     const today = new Date().toISOString().split('T')[0]
-    // All children paid — mark parent as Paid (without amountPaid to avoid recursion)
+
+    // Fetch parent total so we can set amount_paid = total, amount_due = 0
+    const { data: parentInv } = await supabaseAdmin
+      .from('client_invoices')
+      .select('total')
+      .eq('id', inv.parent_invoice_id)
+      .single()
+    const parentTotal = parentInv ? Number(parentInv.total) : 0
+
+    // All children paid — mark parent as Paid with correct amounts
     const parentUpdates: Record<string, unknown> = {
       status: 'Paid',
+      amount_paid: parentTotal,
+      amount_due: 0,
       paid_date: today,
       updated_at: new Date().toISOString(),
     }
@@ -506,6 +519,8 @@ async function checkParentCompletion(invoiceId: string): Promise<void> {
       await supabaseAdmin.from('payments').update({
         status: 'Paid',
         invoice_status: 'Paid',
+        amount_paid: parentTotal,
+        amount_due: 0,
         paid_date: today,
         updated_at: new Date().toISOString(),
       }).eq('id', linkedPay.id)

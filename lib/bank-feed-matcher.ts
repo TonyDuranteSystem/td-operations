@@ -50,8 +50,8 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     // Get all open invoices (Sent or Overdue) in matching currency
     const { data: openInvoices } = await supabaseAdmin
       .from("payments")
-      .select("id, account_id, invoice_number, invoice_status, total, amount, amount_currency, description, accounts:account_id(company_name)")
-      .in("invoice_status", ["Sent", "Overdue"])
+      .select("id, account_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name)")
+      .in("invoice_status", ["Sent", "Overdue", "Partial"])
       .eq("amount_currency", feedCurrency)
 
     if (!openInvoices || openInvoices.length === 0) {
@@ -69,7 +69,10 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const candidates: ScoredInvoice[] = []
 
     for (const inv of openInvoices) {
-      const invAmount = Number(inv.total ?? inv.amount ?? 0)
+      // For Partial invoices, match against remaining balance (amount_due)
+      const invAmount = inv.invoice_status === 'Partial'
+        ? Number(inv.amount_due ?? inv.total ?? 0)
+        : Number(inv.total ?? inv.amount ?? 0)
       const amountDiff = Math.abs(feedAmount - invAmount)
       const tolerance = invAmount * 0.05
 
@@ -145,10 +148,13 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const today = new Date().toISOString().split("T")[0]
     const paymentMethod = feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire"
 
-    // Check if this is a partial payment (feed amount < invoice amount)
+    // Check if this is a partial payment (feed amount < invoice remaining balance)
     const bestInvoice = openInvoices.find(inv => inv.id === best.id)
-    const bestInvoiceAmount = Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
-    const isPartialPayment = feedAmount < bestInvoiceAmount && feedAmount >= bestInvoiceAmount * 0.2 && Math.abs(feedAmount - bestInvoiceAmount) >= 1
+    const bestInvoiceBalance = bestInvoice?.invoice_status === 'Partial'
+      ? Number(bestInvoice?.amount_due ?? bestInvoice?.total ?? 0)
+      : Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
+    const bestInvoiceTotal = Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
+    const isPartialPayment = feedAmount < bestInvoiceBalance && feedAmount >= bestInvoiceTotal * 0.2 && Math.abs(feedAmount - bestInvoiceBalance) >= 1
 
     if (isPartialPayment) {
       // Partial payment — mark as Partial, not Paid

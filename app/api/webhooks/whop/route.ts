@@ -201,8 +201,8 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     try {
       let openInvoiceQuery = getSupabase()
         .from("payments")
-        .select("id, invoice_number, total, amount, invoice_status, portal_invoice_id")
-        .in("invoice_status", ["Sent", "Overdue", "Draft"])
+        .select("id, invoice_number, total, amount, amount_due, invoice_status, portal_invoice_id")
+        .in("invoice_status", ["Sent", "Overdue", "Partial", "Draft"])
 
       if (accountId) {
         openInvoiceQuery = openInvoiceQuery.eq("account_id", accountId)
@@ -217,19 +217,25 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
 
         // Try exact match first (±$1 tolerance)
+        // For Partial invoices, compare against amount_due (remaining balance)
         let match = openInvoices.find(inv => {
-          const invAmount = Number(inv.total ?? inv.amount ?? 0)
-          return Math.abs(invAmount - total) < 1
+          const matchAmount = inv.invoice_status === 'Partial'
+            ? Number(inv.amount_due ?? inv.total ?? 0)
+            : Number(inv.total ?? inv.amount ?? 0)
+          return Math.abs(matchAmount - total) < 1
         })
 
         if (match) {
           console.warn(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
           await syncInvoiceStatus("payment", match.id, "Paid", today, total)
         } else {
-          // Fallback: partial match (Whop amount < invoice, at least 20% of invoice)
+          // Fallback: partial match (Whop amount < invoice balance, at least 20% of total)
           const partialMatch = openInvoices.find(inv => {
-            const invAmount = Number(inv.total ?? inv.amount ?? 0)
-            return total < invAmount && total >= invAmount * 0.2
+            const matchAmount = inv.invoice_status === 'Partial'
+              ? Number(inv.amount_due ?? inv.total ?? 0)
+              : Number(inv.total ?? inv.amount ?? 0)
+            const invTotal = Number(inv.total ?? inv.amount ?? 0)
+            return total < matchAmount && total >= invTotal * 0.2
           })
           if (partialMatch) {
             console.warn(`[whop-webhook] Partial-matched Whop payment to invoice ${partialMatch.invoice_number}`)

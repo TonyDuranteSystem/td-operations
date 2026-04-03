@@ -95,11 +95,11 @@ export async function createCreditNote(input: {
     throw new Error(`Failed to create credit note: ${cnErr?.message}`)
   }
 
-  // Audit trail
+  // Audit trail — credit note issued (not yet applied)
   logInvoiceAudit({
     invoice_id: input.original_invoice_id,
-    action: 'credit_applied',
-    new_values: { credit_note_id: creditNote.id, credit_note_number: creditNote.credit_note_number, amount: input.amount, reason: input.reason },
+    action: 'status_changed',
+    new_values: { event: 'credit_note_issued', credit_note_id: creditNote.id, credit_note_number: creditNote.credit_note_number, amount: input.amount, reason: input.reason },
     performed_by: 'system',
   })
 
@@ -164,4 +164,13 @@ export async function applyCreditNote(
       updated_at: new Date().toISOString(),
     })
     .eq('id', creditNoteId)
+
+  // Audit trail — credit applied to target invoice
+  logInvoiceAudit({
+    invoice_id: targetInvoiceId,
+    action: 'credit_applied',
+    previous_values: { amount_paid: currentPaid, amount_due: Number(targetInv.amount_due) },
+    new_values: { amount_paid: newAmountPaid, amount_due: newAmountDue, credit_note_id: creditNoteId, credit_amount: creditAmount },
+    performed_by: 'system',
+  })
 }

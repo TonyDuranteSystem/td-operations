@@ -189,19 +189,13 @@ export async function splitInvoice(
     const childIds: string[] = []
     const childStatus = parent.status === 'Sent' ? 'Sent' : 'Draft'
 
-    for (const inst of installments) {
-      // Proportionally distribute line items
-      const ratio = inst.amount / Number(parent.total)
-      const items = (parent.client_invoice_items as Array<{ description: string; unit_price: number; quantity: number }> || [])
-      const childItems = items.map(item => ({
-        description: item.description,
-        unit_price: Number((item.unit_price * ratio).toFixed(2)),
-        quantity: item.quantity,
-      }))
+    for (let idx = 0; idx < installments.length; idx++) {
+      const inst = installments[idx]
 
-      // If no items, create a single item for the installment
-      const lineItems = childItems.length > 0 ? childItems : [{
-        description: `Installment — ${parent.invoice_number || 'Split'}`,
+      // Use a single line item per child with exact installment amount
+      // This avoids rounding drift from proportionally scaling multiple items
+      const lineItems = [{
+        description: `Installment ${idx + 1}/${installments.length} — ${parent.invoice_number || 'Split'}`,
         unit_price: inst.amount,
         quantity: 1,
       }]
