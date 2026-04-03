@@ -199,8 +199,8 @@ async function handleCheckoutCompleted(session: StripeSession) {
     try {
       let openInvoiceQuery = getSupabase()
         .from("payments")
-        .select("id, invoice_number, total, amount, invoice_status, portal_invoice_id")
-        .in("invoice_status", ["Sent", "Overdue", "Draft"])
+        .select("id, invoice_number, total, amount, amount_due, invoice_status, portal_invoice_id")
+        .in("invoice_status", ["Sent", "Overdue", "Partial", "Draft"])
 
       if (accountId) {
         openInvoiceQuery = openInvoiceQuery.eq("account_id", accountId)
@@ -215,19 +215,25 @@ async function handleCheckoutCompleted(session: StripeSession) {
         const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
 
         // Exact match (±$1 tolerance)
+        // For Partial invoices, compare against amount_due (remaining balance)
         let match = openInvoices.find(inv => {
-          const invAmount = Number(inv.total ?? inv.amount ?? 0)
-          return Math.abs(invAmount - total) < 1
+          const matchAmount = inv.invoice_status === 'Partial'
+            ? Number(inv.amount_due ?? inv.total ?? 0)
+            : Number(inv.total ?? inv.amount ?? 0)
+          return Math.abs(matchAmount - total) < 1
         })
 
         if (match) {
           console.warn(`[stripe-webhook] Auto-matched payment to invoice ${match.invoice_number}`)
           await syncInvoiceStatus("payment", match.id, "Paid", today, total)
         } else {
-          // Partial match (≥20% of invoice)
+          // Partial match (amount < remaining balance, ≥20% of total)
           const partialMatch = openInvoices.find(inv => {
-            const invAmount = Number(inv.total ?? inv.amount ?? 0)
-            return total < invAmount && total >= invAmount * 0.2
+            const matchAmount = inv.invoice_status === 'Partial'
+              ? Number(inv.amount_due ?? inv.total ?? 0)
+              : Number(inv.total ?? inv.amount ?? 0)
+            const invTotal = Number(inv.total ?? inv.amount ?? 0)
+            return total < matchAmount && total >= invTotal * 0.2
           })
           if (partialMatch) {
             console.warn(`[stripe-webhook] Partial-matched payment to invoice ${partialMatch.invoice_number}`)
