@@ -134,6 +134,7 @@ export async function POST(request: NextRequest) {
     accountId: account_id,
     contactId: targetContactId,
     tier: 'active', // CRM manual creation = full active client
+    autoCreated: false, // Manual CRM action, not auto-created
   })
 
   if (!result.success) {

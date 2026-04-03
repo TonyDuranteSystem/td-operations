@@ -29,10 +29,12 @@ interface AutoCreateParams {
   tier: PortalTier
   /** If true, skip if portal user already exists (no error) */
   skipIfExists?: boolean
+  /** If true (default), marks account as auto-created. Set false for manual CRM actions. */
+  autoCreated?: boolean
 }
 
 export async function autoCreatePortalUser(params: AutoCreateParams): Promise<AutoCreateResult> {
-  const { accountId, contactId, leadId, tier, skipIfExists: _skipIfExists = true } = params
+  const { accountId, contactId, leadId, tier, skipIfExists: _skipIfExists = true, autoCreated = true } = params
 
   try {
     // 1. Resolve contact
@@ -70,7 +72,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
         }
         // If no contact exists yet, we can still create a portal user from the lead email
         if (!targetContactId) {
-          return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en')
+          return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en', autoCreated)
         }
       }
     }
@@ -91,7 +93,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
     }
 
     const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
-    return await createFromEmail(contact.email, contact.full_name, accountId, tier, contactLang)
+    return await createFromEmail(contact.email, contact.full_name, accountId, tier, contactLang, autoCreated)
   } catch (err) {
     return {
       success: false,
@@ -106,7 +108,8 @@ async function createFromEmail(
   fullName: string,
   accountId: string | undefined,
   tier: PortalTier,
-  language?: string
+  language?: string,
+  autoCreated = true,
 ): Promise<AutoCreateResult> {
   // Check if user already exists
   const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
@@ -189,7 +192,7 @@ async function createFromEmail(
       .update({
         portal_account: true,
         portal_tier: tier,
-        portal_auto_created: true,
+        portal_auto_created: autoCreated,
         portal_created_date: new Date().toISOString().split('T')[0],
       })
       .eq('id', accountId)
