@@ -423,7 +423,7 @@ export interface PortalNotification {
 
 // ─── Inbox Types ─────────────────────────────────────────
 
-export type InboxChannel = 'whatsapp' | 'telegram' | 'gmail'
+export type InboxChannel = 'whatsapp' | 'telegram' | 'gmail' | 'portal'
 
 export interface InboxConversation {
   id: string

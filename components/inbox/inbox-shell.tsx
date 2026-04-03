@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -19,12 +19,14 @@ const channelIcons: Record<InboxChannel, React.ElementType> = {
   whatsapp: MessageSquare,
   telegram: Send,
   gmail: Mail,
+  portal: MessagesSquare,
 }
 
 const channelLabels: Record<InboxChannel, string> = {
   whatsapp: 'WhatsApp',
   telegram: 'Telegram',
   gmail: 'Gmail',
+  portal: 'Portal',
 }
 
 interface GmailLabel {

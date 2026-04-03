@@ -20,7 +20,6 @@ export async function GET(
 
     if (jErr) throw jErr
 
-    // Collect unique emails from contacts
     const emails = new Set<string>()
     for (const j of junctions || []) {
       const c = j.contact as unknown as { id: string; email: string | null; email_2: string | null }
@@ -28,27 +27,43 @@ export async function GET(
       if (c?.email_2) emails.add(c.email_2.toLowerCase())
     }
 
-    // 2) Fetch WA/TG conversations from messaging_groups
+    const conversations: InboxConversation[] = []
+
+    // 2) Fetch WA/TG from messaging_groups directly (not the view — it lacks account_id)
     const { data: groups, error: gErr } = await supabaseAdmin
-      .from("v_messaging_inbox")
-      .select(
-        "group_id, group_name, unread_count, last_message_at, platform, last_message_preview, last_message_sender, account_name, contact_name"
-      )
+      .from("messaging_groups")
+      .select(`
+        id, group_name, unread_count, last_message_at, group_type,
+        channel:messaging_channels(platform),
+        account:accounts(company_name),
+        contact:contacts(full_name)
+      `)
       .eq("account_id", accountId)
+      .eq("is_active", true)
       .order("last_message_at", { ascending: false, nullsFirst: false })
 
     if (gErr) throw gErr
 
-    const conversations: InboxConversation[] = []
-
-    // Add WA/TG conversations
     for (const g of groups || []) {
+      const platform = (g.channel as unknown as { platform: string } | null)?.platform || "whatsapp"
+      const accountName = (g.account as unknown as { company_name: string } | null)?.company_name || ""
+      const contactName = (g.contact as unknown as { full_name: string } | null)?.full_name || ""
+
+      // Fetch last message preview
+      const { data: lastMsg } = await supabaseAdmin
+        .from("messages")
+        .select("content_text, sender_name")
+        .eq("group_id", g.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
       conversations.push({
-        id: g.group_id,
-        channel: g.platform === "telegram" ? "telegram" : "whatsapp",
-        name: g.group_name || g.contact_name || g.account_name || "Unknown",
-        preview: g.last_message_preview
-          ? `${g.last_message_sender ? g.last_message_sender + ": " : ""}${g.last_message_preview}`
+        id: g.id,
+        channel: platform === "telegram" ? "telegram" : "whatsapp",
+        name: g.group_name || contactName || accountName || "Unknown",
+        preview: lastMsg
+          ? `${lastMsg.sender_name ? lastMsg.sender_name + ": " : ""}${lastMsg.content_text || ""}`
           : "",
         unread: g.unread_count || 0,
         lastMessageAt: g.last_message_at || "",
@@ -56,10 +71,34 @@ export async function GET(
       })
     }
 
-    // 3) Fetch Gmail threads for each contact email
+    // 3) Fetch portal messages for this account
+    const { data: portalMsgs, error: pErr } = await supabaseAdmin
+      .from("portal_messages")
+      .select("id, sender_type, message, created_at, read_at, contact:contacts(full_name)")
+      .eq("account_id", accountId)
+      .order("created_at", { ascending: false })
+      .limit(50)
+
+    if (!pErr && portalMsgs && portalMsgs.length > 0) {
+      // Group portal messages as a single "conversation"
+      const lastMsg = portalMsgs[0]
+      const unreadCount = portalMsgs.filter(m => m.sender_type === "client" && !m.read_at).length
+      const contactName = (lastMsg.contact as unknown as { full_name: string } | null)?.full_name || "Client"
+
+      conversations.push({
+        id: `portal:${accountId}`,
+        channel: "portal",
+        name: contactName,
+        preview: lastMsg.message?.substring(0, 120) || "",
+        unread: unreadCount,
+        lastMessageAt: lastMsg.created_at || "",
+        accountId,
+      })
+    }
+
+    // 4) Fetch Gmail threads for each contact email
     if (emails.size > 0) {
       try {
-        // Build OR query: from:email1 OR to:email1 OR from:email2 ...
         const emailArr = Array.from(emails)
         const queryParts = emailArr.flatMap((e) => [`from:${e}`, `to:${e}`])
         const q = queryParts.join(" OR ")
@@ -129,6 +168,7 @@ export async function GET(
       whatsapp: conversations.filter((c) => c.channel === "whatsapp").length,
       telegram: conversations.filter((c) => c.channel === "telegram").length,
       gmail: conversations.filter((c) => c.channel === "gmail").length,
+      portal: conversations.filter((c) => c.channel === "portal").length,
       total: conversations.length,
     }
 

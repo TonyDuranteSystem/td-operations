@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { MessageSquare, Mail, Send, Loader2 } from 'lucide-react'
+import { MessageSquare, Mail, Send, Loader2, MessagesSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import type { InboxConversation } from '@/lib/types'
@@ -13,13 +13,13 @@ function relativeTime(dateStr: string): string {
     const now = new Date()
     const diffMs = now.getTime() - d.getTime()
     const diffMin = Math.floor(diffMs / 60000)
-    if (diffMin < 1) return 'ora'
-    if (diffMin < 60) return `${diffMin}m fa`
+    if (diffMin < 1) return 'now'
+    if (diffMin < 60) return `${diffMin}m ago`
     const diffH = Math.floor(diffMin / 60)
-    if (diffH < 24) return `${diffH}h fa`
+    if (diffH < 24) return `${diffH}h ago`
     const diffD = Math.floor(diffH / 24)
-    if (diffD < 7) return `${diffD}g fa`
-    return format(d, 'dd/MM/yy')
+    if (diffD < 7) return `${diffD}d ago`
+    return format(d, 'MM/dd/yy')
   } catch {
     return ''
   }
@@ -33,6 +33,7 @@ const CHANNEL_CONFIG = {
   whatsapp: { label: 'WhatsApp', color: 'bg-green-100 text-green-700', icon: MessageSquare },
   telegram: { label: 'Telegram', color: 'bg-blue-100 text-blue-700', icon: Send },
   gmail: { label: 'Email', color: 'bg-red-100 text-red-700', icon: Mail },
+  portal: { label: 'Portal', color: 'bg-purple-100 text-purple-700', icon: MessagesSquare },
 } as const
 
 export function AccountCommunications({ accountId }: AccountCommunicationsProps) {
@@ -43,17 +44,17 @@ export function AccountCommunications({ accountId }: AccountCommunicationsProps)
       if (!res.ok) throw new Error('Failed to fetch')
       return res.json() as Promise<{
         conversations: InboxConversation[]
-        stats: { whatsapp: number; telegram: number; gmail: number; total: number }
+        stats: { whatsapp: number; telegram: number; gmail: number; portal: number; total: number }
       }>
     },
-    staleTime: 60_000, // 1 min
+    staleTime: 60_000,
   })
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
-        Caricamento comunicazioni...
+        Loading communications...
       </div>
     )
   }
@@ -61,17 +62,29 @@ export function AccountCommunications({ accountId }: AccountCommunicationsProps)
   if (error) {
     return (
       <p className="text-sm text-red-500 py-4">
-        Errore nel caricamento delle comunicazioni
+        Error loading communications
       </p>
     )
   }
 
-  const { conversations, stats } = data || { conversations: [], stats: { whatsapp: 0, telegram: 0, gmail: 0, total: 0 } }
+  const { conversations, stats } = data || { conversations: [], stats: { whatsapp: 0, telegram: 0, gmail: 0, portal: 0, total: 0 } }
 
   return (
     <div className="space-y-4">
       {/* Stats bar */}
       <div className="flex items-center gap-3 flex-wrap">
+        {stats.gmail > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-red-100 text-red-700">
+            <Mail className="h-3 w-3" />
+            {stats.gmail} Email
+          </span>
+        )}
+        {stats.portal > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-purple-100 text-purple-700">
+            <MessagesSquare className="h-3 w-3" />
+            {stats.portal} Portal
+          </span>
+        )}
         {stats.whatsapp > 0 && (
           <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-700">
             <MessageSquare className="h-3 w-3" />
@@ -84,14 +97,8 @@ export function AccountCommunications({ accountId }: AccountCommunicationsProps)
             {stats.telegram} Telegram
           </span>
         )}
-        {stats.gmail > 0 && (
-          <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-red-100 text-red-700">
-            <Mail className="h-3 w-3" />
-            {stats.gmail} Email
-          </span>
-        )}
         {stats.total === 0 && (
-          <span className="text-sm text-muted-foreground">Nessuna conversazione trovata</span>
+          <span className="text-sm text-muted-foreground">No conversations found</span>
         )}
       </div>
 
@@ -106,7 +113,7 @@ export function AccountCommunications({ accountId }: AccountCommunicationsProps)
             return (
               <a
                 key={conv.id}
-                href={`/inbox?conversation=${conv.id}`}
+                href={conv.channel === 'portal' ? `/portal/admin/${conv.accountId}` : `/inbox?conversation=${conv.id}`}
                 className={cn(
                   'flex items-start gap-3 px-4 py-3 hover:bg-zinc-50 transition-colors',
                   conv.unread > 0 && 'bg-blue-50/50'
