@@ -2,11 +2,10 @@
  * POST /api/oa-signed
  *
  * Called by the OA frontend after the client signs.
- * 1. Sends email notification to support@
- * 2. Advances service delivery stage (if applicable)
- * 3. Creates task for next step
+ * For SMLLC: same as before (email + SD history + Drive upload)
+ * For MMLLC: handles partial (member_index present) vs complete signing
  *
- * Body: { oa_id: string, token: string }
+ * Body: { oa_id: string, token: string, member_index?: number }
  * No auth required (public endpoint — only triggers internal notifications)
  */
 
@@ -18,7 +17,7 @@ import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { oa_id, token } = body as { oa_id?: string; token?: string }
+    const { oa_id, token, member_index } = body as { oa_id?: string; token?: string; member_index?: number }
 
     if (!oa_id || !token) {
       return NextResponse.json({ error: "oa_id and token required" }, { status: 400 })
@@ -27,7 +26,7 @@ export async function POST(req: NextRequest) {
     // Fetch OA record
     const { data: oa, error: oaErr } = await supabaseAdmin
       .from("oa_agreements")
-      .select("id, token, company_name, account_id, contact_id, entity_type, manager_name, status")
+      .select("id, token, company_name, account_id, contact_id, entity_type, manager_name, status, total_signers, signed_count")
       .eq("id", oa_id)
       .eq("token", token)
       .single()
@@ -36,27 +35,55 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "OA not found" }, { status: 404 })
     }
 
-    if (oa.status !== "signed") {
-      return NextResponse.json({ error: "OA not signed" }, { status: 400 })
-    }
-
     const results: { step: string; status: string; detail?: string }[] = []
+    const isMMLC = (oa.entity_type === "MMLLC") && (oa.total_signers || 1) > 1
+    const isFullySigned = oa.status === "signed"
+    const isPartial = isMMLC && !isFullySigned
+
+    // Get signer name for notifications
+    let signerName = "Member"
+    if (typeof member_index === "number" && isMMLC) {
+      const { data: sig } = await supabaseAdmin
+        .from("oa_signatures")
+        .select("member_name")
+        .eq("oa_id", oa.id)
+        .eq("member_index", member_index)
+        .single()
+      if (sig) signerName = sig.member_name
+    }
 
     // ─── 1. EMAIL NOTIFICATION TO SUPPORT ───
     try {
       const { gmailPost } = await import("@/lib/gmail")
 
-      const subject = `OA Signed: ${oa.company_name}`
-      const body = [
-        `The Operating Agreement for ${oa.company_name} has been signed.`,
-        ``,
-        `Entity Type: ${oa.entity_type || "SMLLC"}`,
-        `Manager: ${oa.manager_name || "N/A"}`,
-        `Token: ${oa.token}`,
-        ``,
-        `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}?preview=td`,
-      ].join("\n")
+      const subject = isPartial
+        ? `OA Partial Sign: ${oa.company_name} (${oa.signed_count}/${oa.total_signers})`
+        : `OA Signed: ${oa.company_name}`
 
+      const bodyLines = isPartial
+        ? [
+            `${signerName} has signed the Operating Agreement for ${oa.company_name}.`,
+            ``,
+            `Progress: ${oa.signed_count}/${oa.total_signers} members signed`,
+            `Entity Type: ${oa.entity_type || "SMLLC"}`,
+            `Token: ${oa.token}`,
+            ``,
+            `The agreement is NOT yet fully executed. Remaining members must still sign.`,
+            ``,
+            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}?preview=td`,
+          ]
+        : [
+            `The Operating Agreement for ${oa.company_name} has been ${isMMLC ? "fully " : ""}signed.`,
+            ``,
+            `Entity Type: ${oa.entity_type || "SMLLC"}`,
+            `Manager: ${oa.manager_name || "N/A"}`,
+            isMMLC ? `All ${oa.total_signers} members have signed.` : null,
+            `Token: ${oa.token}`,
+            ``,
+            `Admin Preview: ${APP_BASE_URL}/operating-agreement/${oa.token}?preview=td`,
+          ].filter(Boolean)
+
+      const emailBody = bodyLines.join("\n")
       const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
       const mimeHeaders = [
         `From: Tony Durante LLC <support@tonydurante.us>`,
@@ -66,17 +93,18 @@ export async function POST(req: NextRequest) {
         `Content-Type: text/plain; charset=utf-8`,
         "Content-Transfer-Encoding: base64",
       ]
-      const rawEmail = [...mimeHeaders, "", Buffer.from(body).toString("base64")].join("\r\n")
+      const rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
       const encodedRaw = Buffer.from(rawEmail).toString("base64url")
 
       await gmailPost("/messages/send", { raw: encodedRaw })
-      results.push({ step: "email_notification", status: "ok", detail: "Notified support@" })
+      results.push({ step: "email_notification", status: "ok", detail: isPartial ? `Partial sign (${signerName})` : "Notified support@" })
     } catch (e) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // ─── 2. ADVANCE SERVICE DELIVERY STAGE (if Company Formation pipeline) ───
-    if (oa.account_id) {
+    // ─── ONLY DO DRIVE UPLOAD + SD HISTORY WHEN FULLY SIGNED ───
+    if (isFullySigned && oa.account_id) {
+      // ─── 2. ADVANCE SERVICE DELIVERY STAGE ───
       try {
         const { data: sd } = await supabaseAdmin
           .from("service_deliveries")
@@ -88,17 +116,13 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
 
         if (sd) {
-          // OA signed typically happens during Post-Formation stage
-          // Log OA signed event in stage_history but don't auto-advance
-          // (stage advancement is managed by sd_advance_stage tool)
           const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
           history.push({
             event: "oa_signed",
             at: new Date().toISOString(),
-            note: `Operating Agreement signed for ${oa.company_name}`,
+            note: `Operating Agreement ${isMMLC ? "fully " : ""}signed for ${oa.company_name}${isMMLC ? ` (all ${oa.total_signers} members)` : ""}`,
           })
 
-          // If we're at a post-formation stage, add a note that OA is complete
           const postFormationStages = ["Post-Formation", "EIN Received", "Welcome Package", "Client Onboarding"]
           const isPostFormation = postFormationStages.some(s => sd.stage?.includes(s))
           if (isPostFormation) {
@@ -114,13 +138,14 @@ export async function POST(req: NextRequest) {
             .update({ stage_history: history, updated_at: new Date().toISOString() })
             .eq("id", sd.id)
 
-          results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history (stage: ${sd.stage})${isPostFormation ? " + post-formation milestone" : ""}` })
+          results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history` })
         } else {
           results.push({ step: "sd_history", status: "skipped", detail: "No active Company Formation SD found" })
         }
       } catch (e) {
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
+
       // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
       try {
         const { data: acct } = await supabaseAdmin
@@ -130,7 +155,6 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (acct?.drive_folder_id) {
-          // Find the "1. Company" subfolder
           const { listFolder, uploadBinaryToDrive } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
@@ -138,41 +162,43 @@ export async function POST(req: NextRequest) {
           )
           const targetFolderId = companyFolder?.id || acct.drive_folder_id
 
-          // Find latest signed PDF in Storage
           const { data: files } = await supabaseAdmin.storage
             .from("signed-oa")
             .list(oa.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
 
           if (files?.length) {
-            const pdfFile = files[0]
-            const { data: blob } = await supabaseAdmin.storage
-              .from("signed-oa")
-              .download(`${oa.token}/${pdfFile.name}`)
+            const pdfFile = files.find(f => f.name.endsWith('.pdf'))
+            if (pdfFile) {
+              const { data: blob } = await supabaseAdmin.storage
+                .from("signed-oa")
+                .download(`${oa.token}/${pdfFile.name}`)
 
-            if (blob) {
-              const arrayBuffer = await blob.arrayBuffer()
-              const fileData = Buffer.from(arrayBuffer)
-              const fileName = `Operating Agreement - ${oa.company_name} (Signed).pdf`
+              if (blob) {
+                const arrayBuffer = await blob.arrayBuffer()
+                const fileData = Buffer.from(arrayBuffer)
+                const fileName = `Operating Agreement - ${oa.company_name} (Signed).pdf`
 
-              const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
-              results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+                const driveResult = await uploadBinaryToDrive(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
-              // Auto-save to documents table for portal
-              if (oa.account_id) {
-                await autoSaveDocument({
-                  accountId: oa.account_id,
-                  fileName,
-                  documentType: 'Operating Agreement',
-                  category: 1, // Company
-                  driveFileId: driveResult.id,
-                  portalVisible: true,
-                })
+                if (oa.account_id) {
+                  await autoSaveDocument({
+                    accountId: oa.account_id,
+                    fileName,
+                    documentType: 'Operating Agreement',
+                    category: 1,
+                    driveFileId: driveResult.id,
+                    portalVisible: true,
+                  })
+                }
+              } else {
+                results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
               }
             } else {
-              results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
+              results.push({ step: "drive_upload", status: "skipped", detail: "No PDF found in Storage" })
             }
           } else {
-            results.push({ step: "drive_upload", status: "skipped", detail: "No PDF found in Storage" })
+            results.push({ step: "drive_upload", status: "skipped", detail: "No files in Storage" })
           }
         } else {
           results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
@@ -180,6 +206,8 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
+    } else if (isPartial) {
+      results.push({ step: "drive_upload", status: "skipped", detail: `Partial signing (${oa.signed_count}/${oa.total_signers}) — Drive upload deferred until all sign` })
     }
 
     return NextResponse.json({ ok: true, results })

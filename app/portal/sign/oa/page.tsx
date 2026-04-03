@@ -4,12 +4,14 @@
  * Server component that:
  * 1. Gets the logged-in user's contact ID and selected account
  * 2. Finds the OA linked to that account
- * 3. Embeds the existing OA page in an iframe with auto-verification
+ * 3. For MMLLC: resolves the current user's oa_signatures record
+ * 4. Embeds the existing OA page in an iframe with auto-verification
  *
  * The iframe reuses the existing OA signing page without duplication.
  * Access code is passed directly — no email gate needed.
  * ?portal=true tells the embedded page to hide external chrome and
  * send postMessage on sign completion.
+ * ?signer={access_code} identifies which MMLLC member is signing.
  */
 
 export const dynamic = 'force-dynamic'
@@ -62,10 +64,10 @@ export default async function PortalSignOAPage() {
     )
   }
 
-  // Find the OA for this account (most recent, not expired)
+  // Find the OA for this account (most recent)
   const { data: oa } = await supabaseAdmin
     .from('oa_agreements')
-    .select('token, access_code, status, company_name, language')
+    .select('token, access_code, status, company_name, language, entity_type, total_signers, signed_count, id')
     .eq('account_id', selectedAccountId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -82,15 +84,80 @@ export default async function PortalSignOAPage() {
     )
   }
 
-  // Construct URL with portal=true to trigger portal-aware mode
-  const oaUrl = `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?portal=true`
+  const isMultiSigner = oa.entity_type === 'MMLLC' && (oa.total_signers || 1) > 1
+
+  // For MMLLC: find this user's signature record
+  let signerParam = ''
+  let memberStatus: string | null = null
+  let signedCount = oa.signed_count || 0
+  const totalSigners = oa.total_signers || 1
+
+  if (isMultiSigner) {
+    const { data: memberSig } = await supabaseAdmin
+      .from('oa_signatures')
+      .select('access_code, status, member_name')
+      .eq('oa_id', oa.id)
+      .eq('contact_id', contactId)
+      .maybeSingle()
+
+    if (memberSig) {
+      signerParam = `&signer=${memberSig.access_code}`
+      memberStatus = memberSig.status
+    }
+
+    // Get up-to-date signed count
+    const { data: sigs } = await supabaseAdmin
+      .from('oa_signatures')
+      .select('status')
+      .eq('oa_id', oa.id)
+    signedCount = sigs?.filter(s => s.status === 'signed').length ?? 0
+  }
+
+  // If member already signed and OA not fully signed, show progress
+  if (isMultiSigner && memberStatus === 'signed' && oa.status !== 'signed') {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-center space-y-3 max-w-md">
+          <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
+            <svg className="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <p className="text-zinc-700 text-lg font-medium">You Have Already Signed</p>
+          <p className="text-zinc-500 text-sm">
+            {signedCount} of {totalSigners} members have signed the Operating Agreement for {oa.company_name}.
+            It will be finalized once all members sign.
+          </p>
+          <div className="w-full bg-zinc-200 rounded-full h-2 mt-4">
+            <div
+              className="bg-emerald-500 h-2 rounded-full transition-all"
+              style={{ width: `${(signedCount / totalSigners) * 100}%` }}
+            />
+          </div>
+          <p className="text-zinc-400 text-xs">{signedCount}/{totalSigners} signed</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Construct URL with portal=true (and signer param for MMLLC)
+  const oaUrl = `${APP_BASE_URL}/operating-agreement/${oa.token}/${oa.access_code}?portal=true${signerParam}`
 
   return (
-    <PortalOAClient
-      oaUrl={oaUrl}
-      status={oa.status}
-      companyName={oa.company_name}
-      language={oa.language}
-    />
+    <div>
+      {/* Progress banner for MMLLC */}
+      {isMultiSigner && oa.status !== 'signed' && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 text-center text-sm text-blue-700">
+          <strong>{signedCount} of {totalSigners}</strong> members have signed
+          {memberStatus !== 'signed' && ' — your signature is needed'}
+        </div>
+      )}
+      <PortalOAClient
+        oaUrl={oaUrl}
+        status={oa.status}
+        companyName={oa.company_name}
+        language={oa.language}
+      />
+    </div>
   )
 }

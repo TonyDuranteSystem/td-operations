@@ -42,6 +42,23 @@ interface OAAgreement {
   signed_at: string | null
   signature_data: Record<string, unknown> | null
   pdf_storage_path: string | null
+  total_signers: number
+  signed_count: number
+}
+
+interface OASignature {
+  id: string
+  oa_id: string
+  member_index: number
+  member_name: string
+  member_email: string | null
+  contact_id: string | null
+  access_code: string
+  status: string
+  signed_at: string | null
+  signature_image_path: string | null
+  signed_by_name: string | null
+  view_count: number
 }
 
 // --- Helpers ---------------------------------------------
@@ -69,6 +86,10 @@ function OperatingAgreementCodeContent() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  // Multi-signer state
+  const [signatures, setSignatures] = useState<OASignature[]>([])
+  const [currentSignerIndex, setCurrentSignerIndex] = useState<number | null>(null) // null = SMLLC or no signer param
+
   // Email gate
   const [verified, setVerified] = useState(false)
   const [emailInput, setEmailInput] = useState('')
@@ -77,16 +98,28 @@ function OperatingAgreementCodeContent() {
   // Signing
   const [signing, setSigning] = useState(false)
   const [signed, setSigned] = useState(false)
+  const [allSigned, setAllSigned] = useState(false)
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
-  const sigPadRef = useRef<any>(null)
+  const sigPadRef = useRef<any>(null) // eslint-disable-line @typescript-eslint/no-explicit-any
   const oaBodyRef = useRef<HTMLDivElement>(null)
   const pdfBlobRef = useRef<Blob | null>(null)
+
+  // Signature images fetched from storage (for already-signed members)
+  const [sigImages, setSigImages] = useState<Record<number, string>>({})
 
   // Derived
   const entityType = oa?.entity_type || 'SMLLC'
   const isMMLLC = entityType === 'MMLLC'
   const members: OAMember[] = (isMMLLC && oa?.members) ? oa.members : []
   const managerName = oa?.manager_name || oa?.member_name || ''
+  const totalSigners = oa?.total_signers || 1
+  const isMultiSigner = isMMLLC && totalSigners > 1
+
+  // Current signer's signature record
+  const currentSig = isMultiSigner && currentSignerIndex !== null
+    ? signatures.find(s => s.member_index === currentSignerIndex)
+    : null
+  const currentSignerAlreadySigned = currentSig?.status === 'signed'
 
   // --- LOAD OA ---
   const loadOA = useCallback(async () => {
@@ -94,14 +127,17 @@ function OperatingAgreementCodeContent() {
 
     const adminMode = searchParams.get('preview') === 'td'
     const portalMode = searchParams.get('portal') === 'true'
+    const signerCode = searchParams.get('signer')
+
     if (adminMode) {
       setIsAdmin(true)
       setVerified(true)
     }
     if (portalMode) {
       setIsPortal(true)
-      setVerified(true) // Skip email gate when embedded in portal (already authenticated)
+      setVerified(true)
     }
+    // signerCode is used below to resolve the member from oa_signatures
 
     const { data, error: err } = await supabasePublic
       .from('oa_agreements')
@@ -122,17 +158,84 @@ function OperatingAgreementCodeContent() {
     }
 
     setOa(data)
-    setSigned(!!data.signed_at)
+    const isFullySigned = data.status === 'signed' && data.signed_at
+    setAllSigned(!!isFullySigned)
+
+    // Load signatures for MMLLC
+    const isMulti = (data.entity_type === 'MMLLC') && (data.total_signers || 1) > 1
+    if (isMulti) {
+      const { data: sigs } = await supabasePublic
+        .from('oa_signatures')
+        .select('*')
+        .eq('oa_id', data.id)
+        .order('member_index')
+
+      if (sigs) {
+        setSignatures(sigs)
+
+        // Determine current signer from ?signer= access code
+        if (signerCode) {
+          const match = sigs.find(s => s.access_code === signerCode)
+          if (match) {
+            setCurrentSignerIndex(match.member_index)
+            setSigned(match.status === 'signed')
+          } else {
+            setError('Invalid signing link.')
+            setLoading(false)
+            return
+          }
+        }
+
+        // Fetch signature images for already-signed members
+        const signedSigs = sigs.filter(s => s.status === 'signed' && s.signature_image_path)
+        const images: Record<number, string> = {}
+        for (const s of signedSigs) {
+          try {
+            const { data: blob } = await supabasePublic.storage
+              .from('signed-oa')
+              .download(s.signature_image_path!)
+            if (blob) {
+              images[s.member_index] = URL.createObjectURL(blob)
+            }
+          } catch {
+            // Skip failed image loads
+          }
+        }
+        setSigImages(images)
+      }
+    } else {
+      // SMLLC
+      setSigned(!!data.signed_at)
+    }
+
     setLoading(false)
 
     if (adminMode) return
 
     // Check email gate cookie
-    if (!data.member_email) {
-      setVerified(true)
+    if (isMulti && signerCode) {
+      // Per-member email gate for MMLLC
+      const matchSig = (await supabasePublic
+        .from('oa_signatures')
+        .select('member_email, member_index')
+        .eq('oa_id', data.id)
+        .eq('access_code', signerCode)
+        .single()).data
+
+      if (!matchSig?.member_email) {
+        setVerified(true)
+      } else if (!portalMode) {
+        const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`oa_verified_${token}_${matchSig.member_index}=`))
+        if (cookie) setVerified(true)
+      }
     } else {
-      const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`oa_verified_${token}=`))
-      if (cookie) setVerified(true)
+      // SMLLC email gate
+      if (!data.member_email) {
+        setVerified(true)
+      } else if (!portalMode) {
+        const cookie = document.cookie.split(';').find(c => c.trim().startsWith(`oa_verified_${token}=`))
+        if (cookie) setVerified(true)
+      }
     }
   }, [token, accessCode, searchParams])
 
@@ -140,7 +243,9 @@ function OperatingAgreementCodeContent() {
 
   // Track view
   useEffect(() => {
-    if (!oa || !verified || signed) return
+    if (!oa || !verified || allSigned) return
+
+    // Update OA view count
     supabasePublic
       .from('oa_agreements')
       .update({
@@ -150,11 +255,27 @@ function OperatingAgreementCodeContent() {
       })
       .eq('id', oa.id)
       .then(() => {})
+
+    // Update per-member view for MMLLC
+    if (currentSig && currentSig.status !== 'signed') {
+      supabasePublic
+        .from('oa_signatures')
+        .update({
+          view_count: (currentSig.view_count || 0) + 1,
+          viewed_at: new Date().toISOString(),
+          status: ['pending', 'sent'].includes(currentSig.status) ? 'viewed' : currentSig.status,
+        })
+        .eq('id', currentSig.id)
+        .then(() => {})
+    }
   }, [oa?.id, verified]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Init signature pad
   useEffect(() => {
-    if (!verified || !oa || signed) return
+    if (!verified || !oa || signed || currentSignerAlreadySigned) return
+    // For MMLLC without signer param, don't show signature pad
+    if (isMultiSigner && currentSignerIndex === null) return
+
     const initSig = async () => {
       const SignaturePad = (await import('signature_pad')).default
       const canvas = sigCanvasRef.current
@@ -166,14 +287,23 @@ function OperatingAgreementCodeContent() {
       sigPadRef.current = new SignaturePad(canvas, { backgroundColor: 'rgb(255,255,255)' })
     }
     setTimeout(initSig, 300)
-  }, [verified, oa, signed])
+  }, [verified, oa, signed, currentSignerAlreadySigned, isMultiSigner, currentSignerIndex])
 
   // --- EMAIL GATE ---
   function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!oa?.member_email) return
-    if (emailInput.trim().toLowerCase() === oa.member_email.toLowerCase()) {
-      document.cookie = `oa_verified_${token}=1; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
+
+    const expectedEmail = isMultiSigner && currentSig
+      ? currentSig.member_email
+      : oa?.member_email
+
+    if (!expectedEmail) return
+
+    if (emailInput.trim().toLowerCase() === expectedEmail.toLowerCase()) {
+      const cookieKey = isMultiSigner && currentSignerIndex !== null
+        ? `oa_verified_${token}_${currentSignerIndex}`
+        : `oa_verified_${token}`
+      document.cookie = `${cookieKey}=1; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
       setVerified(true)
       setEmailError('')
     } else {
@@ -191,92 +321,208 @@ function OperatingAgreementCodeContent() {
 
     setSigning(true)
     try {
-      // 1. Get signature as image
       const sigDataUrl = sigPadRef.current.toDataURL('image/png')
 
-      // 2. Freeze signature canvas -> image
-      const canvas = sigCanvasRef.current
-      if (canvas) {
-        const img = document.createElement('img')
-        img.src = sigDataUrl
-        img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
-        img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
-        canvas.parentNode?.replaceChild(img, canvas)
-      }
+      if (isMultiSigner && currentSignerIndex !== null && currentSig) {
+        // ─── MMLLC: Save signature PNG to storage ───
+        const sigPngPath = `${token}/sig-${currentSignerIndex}.png`
+        const sigBlob = await (await fetch(sigDataUrl)).blob()
 
-      // 3. Hide action bar
-      const actionBar = document.getElementById('oa-action-bar')
-      if (actionBar) actionBar.style.display = 'none'
-
-      // 4. Generate PDF from HTML
-      const html2pdf = (await import('html2pdf.js')).default
-      const element = oaBodyRef.current
-      if (!element) throw new Error('OA body not found')
-
-      const pdfBlob: Blob = await html2pdf()
-        .set({
-          margin: [0.5, 0.6, 0.7, 0.6],
-          filename: `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`,
-          image: { type: 'jpeg', quality: 0.95 },
-          html2canvas: { scale: 2, useCORS: true },
-          jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-        })
-        .from(element)
-        .outputPdf('blob')
-
-      // 4b. Save blob for client download
-      pdfBlobRef.current = pdfBlob
-
-      // 5. Upload to Supabase Storage
-      const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
-      const uploadRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
-        method: 'POST',
-        headers: {
-          'apikey': SB_ANON,
-          'Authorization': `Bearer ${SB_ANON}`,
-          'Content-Type': 'application/pdf',
-        },
-        body: pdfBlob,
-      })
-      if (!uploadRes.ok) throw new Error('PDF upload failed')
-
-      // 6. Update OA record
-      const sigData: Record<string, unknown> = {
-        manager_name: managerName,
-        signed_date: today(),
-      }
-      if (isMMLLC) {
-        sigData.members = members.map(m => m.name)
-      } else {
-        sigData.member_name = oa.member_name
-      }
-
-      await supabasePublic
-        .from('oa_agreements')
-        .update({
-          status: 'signed',
-          signed_at: new Date().toISOString(),
-          signature_data: sigData,
-          pdf_storage_path: pdfPath,
-        })
-        .eq('id', oa.id)
-
-      // Notify backend (email to support@, SD history update, task creation)
-      try {
-        await fetch('/api/oa-signed', {
+        await fetch(`${SB_URL}/storage/v1/object/signed-oa/${sigPngPath}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ oa_id: oa.id, token }),
+          headers: {
+            'apikey': SB_ANON,
+            'Authorization': `Bearer ${SB_ANON}`,
+            'Content-Type': 'image/png',
+          },
+          body: sigBlob,
         })
-      } catch {
-        // Non-blocking — signature is already saved
-      }
 
-      setSigned(true)
+        // Update oa_signatures row
+        await supabasePublic
+          .from('oa_signatures')
+          .update({
+            status: 'signed',
+            signed_at: new Date().toISOString(),
+            signature_image_path: sigPngPath,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', currentSig.id)
 
-      // Notify portal parent when embedded in iframe
-      if (isPortal && window.parent !== window) {
-        window.parent.postMessage({ type: 'oa-signed', token }, '*')
+        // Atomic increment signed_count
+        const { data: updatedOa } = await supabasePublic.rpc('increment_oa_signed_count', { oa_uuid: oa.id })
+
+        // Check if we're the last signer
+        const newSignedCount = updatedOa ?? ((oa.signed_count || 0) + 1)
+        const isLastSigner = newSignedCount >= totalSigners
+
+        if (isLastSigner) {
+          // ─── Last signer: generate combined PDF ───
+          // Replace canvas with image
+          const canvas = sigCanvasRef.current
+          if (canvas) {
+            const img = document.createElement('img')
+            img.src = sigDataUrl
+            img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
+            img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
+            canvas.parentNode?.replaceChild(img, canvas)
+          }
+
+          // Hide action bar
+          const actionBar = document.getElementById('oa-action-bar')
+          if (actionBar) actionBar.style.display = 'none'
+
+          // Generate PDF with ALL signatures
+          const html2pdf = (await import('html2pdf.js')).default
+          const element = oaBodyRef.current
+          if (element) {
+            const pdfBlob: Blob = await html2pdf()
+              .set({
+                margin: [0.5, 0.6, 0.7, 0.6],
+                filename: `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`,
+                image: { type: 'jpeg', quality: 0.95 },
+                html2canvas: { scale: 2, useCORS: true },
+                jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+              })
+              .from(element)
+              .outputPdf('blob')
+
+            pdfBlobRef.current = pdfBlob
+
+            // Upload combined PDF
+            const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
+            await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
+              method: 'POST',
+              headers: {
+                'apikey': SB_ANON,
+                'Authorization': `Bearer ${SB_ANON}`,
+                'Content-Type': 'application/pdf',
+              },
+              body: pdfBlob,
+            })
+
+            // Update OA record to fully signed
+            await supabasePublic
+              .from('oa_agreements')
+              .update({
+                status: 'signed',
+                signed_at: new Date().toISOString(),
+                pdf_storage_path: pdfPath,
+                signature_data: {
+                  members: members.map(m => m.name),
+                  signed_date: today(),
+                  multi_signer: true,
+                },
+              })
+              .eq('id', oa.id)
+          }
+
+          setAllSigned(true)
+        } else {
+          // Not last signer — update OA to partially_signed
+          await supabasePublic
+            .from('oa_agreements')
+            .update({
+              status: 'partially_signed',
+            })
+            .eq('id', oa.id)
+        }
+
+        // Notify backend
+        try {
+          await fetch('/api/oa-signed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oa_id: oa.id, token, member_index: currentSignerIndex }),
+          })
+        } catch {
+          // Non-blocking
+        }
+
+        setSigned(true)
+
+        if (isPortal && window.parent !== window) {
+          window.parent.postMessage({ type: 'oa-signed', token, member_index: currentSignerIndex }, '*')
+        }
+      } else {
+        // ─── SMLLC: existing flow ───
+        const canvas = sigCanvasRef.current
+        if (canvas) {
+          const img = document.createElement('img')
+          img.src = sigDataUrl
+          img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
+          img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
+          canvas.parentNode?.replaceChild(img, canvas)
+        }
+
+        const actionBar = document.getElementById('oa-action-bar')
+        if (actionBar) actionBar.style.display = 'none'
+
+        const html2pdf = (await import('html2pdf.js')).default
+        const element = oaBodyRef.current
+        if (!element) throw new Error('OA body not found')
+
+        const pdfBlob: Blob = await html2pdf()
+          .set({
+            margin: [0.5, 0.6, 0.7, 0.6],
+            filename: `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`,
+            image: { type: 'jpeg', quality: 0.95 },
+            html2canvas: { scale: 2, useCORS: true },
+            jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+          })
+          .from(element)
+          .outputPdf('blob')
+
+        pdfBlobRef.current = pdfBlob
+
+        const pdfPath = `${token}/oa-signed-${Date.now()}.pdf`
+        const uploadRes = await fetch(`${SB_URL}/storage/v1/object/signed-oa/${pdfPath}`, {
+          method: 'POST',
+          headers: {
+            'apikey': SB_ANON,
+            'Authorization': `Bearer ${SB_ANON}`,
+            'Content-Type': 'application/pdf',
+          },
+          body: pdfBlob,
+        })
+        if (!uploadRes.ok) throw new Error('PDF upload failed')
+
+        const sigData: Record<string, unknown> = {
+          manager_name: managerName,
+          signed_date: today(),
+        }
+        if (isMMLLC) {
+          sigData.members = members.map(m => m.name)
+        } else {
+          sigData.member_name = oa.member_name
+        }
+
+        await supabasePublic
+          .from('oa_agreements')
+          .update({
+            status: 'signed',
+            signed_at: new Date().toISOString(),
+            signature_data: sigData,
+            pdf_storage_path: pdfPath,
+            signed_count: 1,
+          })
+          .eq('id', oa.id)
+
+        try {
+          await fetch('/api/oa-signed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oa_id: oa.id, token }),
+          })
+        } catch {
+          // Non-blocking
+        }
+
+        setSigned(true)
+
+        if (isPortal && window.parent !== window) {
+          window.parent.postMessage({ type: 'oa-signed', token }, '*')
+        }
       }
     } catch (err) {
       console.error('Signing failed:', err)
@@ -338,6 +584,11 @@ function OperatingAgreementCodeContent() {
     )
   }
 
+  // Can this user sign? (MMLLC: only if they have a signer param and haven't signed yet)
+  const canSign = isMultiSigner
+    ? (currentSignerIndex !== null && !currentSignerAlreadySigned && !signed)
+    : (!signed && !allSigned)
+
   // Generate OA sections from template
   const oaData: OAData = {
     company_name: oa.company_name,
@@ -368,6 +619,17 @@ function OperatingAgreementCodeContent() {
 
   return (
     <div style={{ background: isPortal ? '#fff' : '#f5f5f0', minHeight: '100vh', padding: isPortal ? '8px 0' : '24px 16px', fontFamily: 'Georgia, "Times New Roman", serif' }}>
+
+      {/* Multi-signer progress banner */}
+      {isMultiSigner && verified && !allSigned && (
+        <div style={{ maxWidth: 800, margin: '0 auto 16px', background: '#f0f4ff', border: '1px solid #c7d4f0', borderRadius: 8, padding: '12px 20px', textAlign: 'center' }}>
+          <p style={{ margin: 0, fontSize: 14, color: '#1a3b6d' }}>
+            <strong>Signatures: {signatures.filter(s => s.status === 'signed').length} of {totalSigners}</strong>
+            {' — '}All members must sign for the agreement to be effective.
+          </p>
+        </div>
+      )}
+
       <div
         ref={oaBodyRef}
         style={{ maxWidth: 800, margin: '0 auto', background: '#fff', padding: isPortal ? '32px 40px' : '48px 56px', boxShadow: isPortal ? 'none' : '0 1px 12px rgba(0,0,0,0.08)', lineHeight: 1.7, fontSize: 14, color: '#222' }}
@@ -424,50 +686,100 @@ function OperatingAgreementCodeContent() {
           <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{managerName}</strong></p>
           <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: Manager</p>
           <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
-
-          {/* Signature canvas — Manager signs */}
-          {!signed && (
-            <div style={{ marginTop: 16 }}>
-              <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Manager Signature:</p>
-              <canvas
-                ref={sigCanvasRef}
-                style={{ width: '100%', height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
-              />
-              <button
-                onClick={() => sigPadRef.current?.clear()}
-                style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-              >
-                Clear signature
-              </button>
-            </div>
-          )}
         </div>
 
-        {/* MMLLC: Member Signature Blocks (read-only — acknowledged by Manager signing) */}
+        {/* MMLLC: Per-Member Signature Blocks */}
         {isMMLLC && members.length > 0 && (
           <div style={{ marginTop: 16 }}>
             <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 12, textTransform: 'uppercase', color: '#555' }}>MEMBERS</p>
-            {members.map((m, idx) => (
-              <div key={idx} style={{ marginBottom: 20, paddingLeft: 16, borderLeft: '2px solid #eee' }}>
-                <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{m.name}</strong></p>
-                <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Ownership: {m.ownership_pct}%</p>
-                <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
-              </div>
-            ))}
+            {members.map((m, idx) => {
+              const sig = signatures.find(s => s.member_index === idx)
+              const isCurrent = currentSignerIndex === idx
+              const isSigned = sig?.status === 'signed'
+              const hasImage = sigImages[idx]
+
+              return (
+                <div key={idx} style={{ marginBottom: 24, paddingLeft: 16, borderLeft: `3px solid ${isSigned ? '#22c55e' : isCurrent ? '#0A3161' : '#eee'}` }}>
+                  <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{m.name}</strong></p>
+                  <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Ownership: {m.ownership_pct}%</p>
+                  <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
+
+                  {/* Already signed — show signature image */}
+                  {isSigned && hasImage && (
+                    <div style={{ marginTop: 8 }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element -- signature blob URL, not optimizable */}
+                      <img src={hasImage} alt={`Signature of ${m.name}`} style={{ maxWidth: '100%', height: 60, objectFit: 'contain' }} />
+                      <p style={{ fontSize: 11, color: '#22c55e', marginTop: 4 }}>Signed{sig?.signed_at ? ` on ${new Date(sig.signed_at).toLocaleDateString()}` : ''}</p>
+                    </div>
+                  )}
+
+                  {/* Already signed but no image loaded */}
+                  {isSigned && !hasImage && (
+                    <p style={{ fontSize: 12, color: '#22c55e', marginTop: 8, fontStyle: 'italic' }}>Signed{sig?.signed_at ? ` on ${new Date(sig.signed_at).toLocaleDateString()}` : ''}</p>
+                  )}
+
+                  {/* Current signer — active signature pad */}
+                  {isCurrent && !isSigned && !signed && (
+                    <div style={{ marginTop: 12 }}>
+                      <p style={{ fontSize: 12, color: '#0A3161', fontWeight: 600, marginBottom: 6 }}>Your Signature:</p>
+                      <canvas
+                        ref={sigCanvasRef}
+                        style={{ width: '100%', height: 100, border: '2px solid #0A3161', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
+                      />
+                      <button
+                        onClick={() => sigPadRef.current?.clear()}
+                        style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                      >
+                        Clear signature
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Current signer just signed */}
+                  {isCurrent && signed && (
+                    <p style={{ fontSize: 12, color: '#22c55e', marginTop: 8, fontStyle: 'italic' }}>Signed just now</p>
+                  )}
+
+                  {/* Other unsigned member — awaiting */}
+                  {!isCurrent && !isSigned && (
+                    <p style={{ fontSize: 12, color: '#999', marginTop: 8, fontStyle: 'italic' }}>Awaiting signature</p>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 
-        {/* SMLLC: Member line under manager */}
+        {/* SMLLC: Single signature block */}
         {!isMMLLC && (
-          <div style={{ marginTop: 8 }}>
-            <p style={{ fontSize: 13, color: '#555', fontStyle: 'italic' }}>Sole Member / Manager</p>
-          </div>
+          <>
+            {!signed && (
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Member / Manager Signature:</p>
+                <canvas
+                  ref={sigCanvasRef}
+                  style={{ width: '100%', maxWidth: 400, height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
+                />
+                <button
+                  onClick={() => sigPadRef.current?.clear()}
+                  style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  Clear signature
+                </button>
+              </div>
+            )}
+            <div style={{ marginTop: 8 }}>
+              <p style={{ fontSize: 13, color: '#555', fontStyle: 'italic' }}>Sole Member / Manager</p>
+            </div>
+          </>
         )}
 
         {/* Signed confirmation */}
-        {signed && (
+        {(allSigned || (!isMultiSigner && signed)) && (
           <div style={{ background: '#f0f7f0', border: '1px solid #b8d4b8', borderRadius: 6, padding: 20, textAlign: 'center', marginTop: 24 }}>
-            <p style={{ color: '#2d6a2d', fontWeight: 700, fontSize: 16, margin: 0 }}>Operating Agreement Signed Successfully</p>
+            <p style={{ color: '#2d6a2d', fontWeight: 700, fontSize: 16, margin: 0 }}>
+              {allSigned ? 'Operating Agreement — All Members Have Signed' : 'Operating Agreement Signed Successfully'}
+            </p>
             <p style={{ color: '#4a8a4a', fontSize: 14, marginTop: 8 }}>
               A copy has been saved. Tony Durante LLC will be in touch shortly.
             </p>
@@ -475,21 +787,21 @@ function OperatingAgreementCodeContent() {
               onClick={async () => {
                 try {
                   let blob = pdfBlobRef.current
-                  if (!blob && oa.signed_at) {
+                  if (!blob && (oa.signed_at || allSigned)) {
                     const { data } = await supabasePublic.storage.from('signed-oa').list(token)
-                    const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
+                    const pdfFile = data?.filter(f => f.name.endsWith('.pdf')).sort((a, b) => b.name.localeCompare(a.name))[0]
                     if (pdfFile) {
                       const { data: downloaded } = await supabasePublic.storage.from('signed-oa').download(`${token}/${pdfFile.name}`)
                       if (downloaded) blob = downloaded
                     }
                   }
-                  if (!blob) { alert('PDF not available. Please contact support.'); return }
-                  const url = URL.createObjectURL(blob)
+                  if (!blob) { alert('PDF not available yet. It will be ready once all members sign.'); return }
+                  const dlUrl = URL.createObjectURL(blob)
                   const a = document.createElement('a')
-                  a.href = url
+                  a.href = dlUrl
                   a.download = `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`
                   a.click()
-                  URL.revokeObjectURL(url)
+                  URL.revokeObjectURL(dlUrl)
                 } catch { alert('Download failed. Please contact support.') }
               }}
               style={{ marginTop: 16, padding: '10px 32px', fontSize: 14, fontWeight: 600, background: '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontFamily: 'Georgia, serif' }}
@@ -498,10 +810,23 @@ function OperatingAgreementCodeContent() {
             </button>
           </div>
         )}
+
+        {/* Partial sign confirmation (MMLLC, current member just signed but not all done) */}
+        {isMultiSigner && signed && !allSigned && (
+          <div style={{ background: '#f0f4ff', border: '1px solid #c7d4f0', borderRadius: 6, padding: 20, textAlign: 'center', marginTop: 24 }}>
+            <p style={{ color: '#1a3b6d', fontWeight: 700, fontSize: 16, margin: 0 }}>
+              Thank You — Your Signature Has Been Recorded
+            </p>
+            <p style={{ color: '#4a6da0', fontSize: 14, marginTop: 8 }}>
+              {signatures.filter(s => s.status === 'signed').length + 1} of {totalSigners} members have signed.
+              The Operating Agreement will be finalized once all members have signed.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Action bar — outside the PDF capture area */}
-      {!signed && (
+      {canSign && (
         <div id="oa-action-bar" style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
           <button
             onClick={handleSign}
@@ -518,10 +843,19 @@ function OperatingAgreementCodeContent() {
               fontFamily: 'Georgia, serif',
             }}
           >
-            {signing ? 'Generating PDF...' : 'Sign Operating Agreement'}
+            {signing ? 'Generating...' : 'Sign Operating Agreement'}
           </button>
           <p style={{ fontSize: 13, color: '#888', marginTop: 8 }}>
             By clicking, you confirm that you have read and agree to the terms above.
+          </p>
+        </div>
+      )}
+
+      {/* MMLLC: read-only view without signer param */}
+      {isMultiSigner && currentSignerIndex === null && !allSigned && verified && (
+        <div style={{ maxWidth: 800, margin: '24px auto', textAlign: 'center' }}>
+          <p style={{ color: '#666', fontSize: 14 }}>
+            This is a read-only view. Each member must use their personal signing link to sign.
           </p>
         </div>
       )}

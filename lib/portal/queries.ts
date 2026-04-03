@@ -461,12 +461,12 @@ export async function getPortalActionItems(
       .order('due_date', { ascending: true })
       .limit(10),
 
-    // 3. Unsigned OA
+    // 3. Unsigned OA (includes partially_signed for MMLLC)
     supabaseAdmin
       .from('oa_agreements')
-      .select('id, token, status, created_at')
+      .select('id, token, status, created_at, total_signers, signed_count, entity_type')
       .eq('account_id', accountId)
-      .in('status', ['sent', 'viewed', 'awaiting_signature'])
+      .in('status', ['sent', 'viewed', 'awaiting_signature', 'partially_signed'])
       .limit(5),
 
     // 4. Unsigned Lease
@@ -565,14 +565,14 @@ export async function getPortalActionItems(
   }
 
   // ── Unsigned documents ──
-  const signDocs = [
+  // ── Unsigned documents (non-OA) ──
+  const signDocsNonOA = [
     ...(msaRes.data ?? []).map(d => ({ ...d, docType: 'Annual Service Agreement', docTypeIt: 'Contratto di Servizio Annuale' })),
-    ...(oaRes.data ?? []).map(d => ({ ...d, docType: 'Operating Agreement', docTypeIt: 'Accordo Operativo' })),
     ...(leaseRes.data ?? []).map(d => ({ ...d, docType: 'Lease Agreement', docTypeIt: 'Contratto di Locazione' })),
     ...(ss4Res.data ?? []).map(d => ({ ...d, docType: 'SS-4 (EIN Application)', docTypeIt: 'SS-4 (Richiesta EIN)' })),
   ]
 
-  for (const doc of signDocs) {
+  for (const doc of signDocsNonOA) {
     const age = daysSince(doc.created_at)
     const priority: ActionItem['priority'] = age > 14 ? 'red' : age > 7 ? 'orange' : 'blue'
     items.push({
@@ -584,6 +584,42 @@ export async function getPortalActionItems(
       href: '/portal/sign',
       priority,
       createdAt: doc.created_at,
+    })
+  }
+
+  // ── Unsigned OA (per-member aware for MMLLC) ──
+  for (const oaDoc of oaRes.data ?? []) {
+    const oaAny = oaDoc as typeof oaDoc & { total_signers?: number; signed_count?: number; entity_type?: string }
+    const isMultiSigner = (oaAny.entity_type === 'MMLLC') && (oaAny.total_signers || 1) > 1
+
+    if (isMultiSigner && contactId) {
+      // Check if THIS member has already signed
+      const { data: memberSig } = await supabaseAdmin
+        .from('oa_signatures')
+        .select('status')
+        .eq('oa_id', oaDoc.id)
+        .eq('contact_id', contactId)
+        .maybeSingle()
+
+      // If this member already signed, don't show the action item
+      if (memberSig?.status === 'signed') continue
+    }
+
+    const age = daysSince(oaDoc.created_at)
+    const priority: ActionItem['priority'] = age > 14 ? 'red' : age > 7 ? 'orange' : 'blue'
+    items.push({
+      type: 'signature',
+      title: 'Sign Operating Agreement',
+      titleIt: 'Firma Accordo Operativo',
+      description: isMultiSigner
+        ? `${oaAny.signed_count || 0} of ${oaAny.total_signers} members have signed. Your signature is needed.`
+        : 'Document awaiting your signature.',
+      descriptionIt: isMultiSigner
+        ? `${oaAny.signed_count || 0} di ${oaAny.total_signers} membri hanno firmato. La tua firma è necessaria.`
+        : 'Documento in attesa della tua firma.',
+      href: '/portal/sign',
+      priority,
+      createdAt: oaDoc.created_at,
     })
   }
 

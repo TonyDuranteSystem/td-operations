@@ -167,6 +167,8 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           : null
 
         // ─── 7. INSERT ───
+        const totalSigners = entityType === "MMLLC" && params.members ? params.members.length : 1
+
         const { data: oa, error: insertErr } = await supabaseAdmin
           .from("oa_agreements")
           .insert({
@@ -194,6 +196,8 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             principal_address: params.principal_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
             language: params.language || "en",
             status: "draft",
+            total_signers: totalSigners,
+            signed_count: 0,
           })
           .select("id, token, access_code")
           .single()
@@ -202,13 +206,61 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ Insert failed: ${insertErr?.message || "no data"}` }] }
         }
 
+        // ─── 8. INSERT OA_SIGNATURES FOR MMLLC ───
+        const signerLines: string[] = []
+        if (entityType === "MMLLC" && params.members && params.members.length > 0) {
+          // Auto-match contact_id by looking up member emails in account_contacts + contacts
+          const { data: allContacts } = await supabaseAdmin
+            .from("account_contacts")
+            .select("contact_id, contacts(id, full_name, email)")
+            .eq("account_id", params.account_id)
+
+          const contactsByEmail = new Map<string, string>()
+          const contactsByName = new Map<string, string>()
+          for (const link of allContacts || []) {
+            const c = link.contacts as unknown as { id: string; full_name: string; email: string } | null
+            if (c?.email) contactsByEmail.set(c.email.toLowerCase(), c.id)
+            if (c?.full_name) contactsByName.set(c.full_name.toLowerCase(), c.id)
+          }
+
+          const sigRows = params.members.map((m, idx) => {
+            const matchedContactId = (m.email && contactsByEmail.get(m.email.toLowerCase()))
+              || contactsByName.get(m.name.toLowerCase())
+              || null
+            return {
+              oa_id: oa.id,
+              member_index: idx,
+              member_name: m.name,
+              member_email: m.email || null,
+              contact_id: matchedContactId,
+            }
+          })
+
+          const { data: insertedSigs, error: sigErr } = await supabaseAdmin
+            .from("oa_signatures")
+            .insert(sigRows)
+            .select("member_index, member_name, member_email, contact_id, access_code")
+
+          if (sigErr) {
+            // Non-blocking — OA is created, signatures failed
+            signerLines.push(`⚠️ Failed to create signature rows: ${sigErr.message}`)
+          } else if (insertedSigs) {
+            for (const sig of insertedSigs) {
+              const sigUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}?signer=${sig.access_code}`
+              const linked = sig.contact_id ? "✅ linked" : "⚠️ no contact"
+              signerLines.push(`  ${sig.member_index + 1}. ${sig.member_name} (${sig.member_email || "no email"}) — ${linked}`)
+              signerLines.push(`     🔗 ${sigUrl}`)
+            }
+          }
+        }
+
         logAction({
           action_type: "create",
           table_name: "oa_agreements",
           record_id: oa.id,
           account_id: params.account_id,
-          summary: `Created ${entityType} Operating Agreement for ${account.company_name} (${state})`,
-          details: { token: oa.token, state, entity_type: entityType, manager: managerName, member: contact.full_name },
+          summary: `Created ${entityType} Operating Agreement for ${account.company_name} (${state})${totalSigners > 1 ? ` — ${totalSigners} signers` : ""}`,
+          details: { token: oa.token, state, entity_type: entityType, manager: managerName, member: contact.full_name, total_signers: totalSigners },
         })
 
         const oaUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}`
@@ -224,15 +276,17 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           entityType === "SMLLC"
             ? `Member: ${contact.full_name} (100%)`
             : `Members: ${params.members!.map(m => `${m.name} (${m.ownership_pct}%)`).join(", ")}`,
+          totalSigners > 1 ? `Signers: ${totalSigners} (each member must sign)` : null,
           `Effective: ${effectiveDate}`,
           `Formation: ${formationDate}`,
           ein ? `EIN: ${ein}` : null,
           `Status: draft`,
           ``,
           `👁️ Admin Preview: ${adminPreviewUrl}`,
-          `🔗 Client URL: ${oaUrl}`,
+          entityType === "SMLLC" ? `🔗 Client URL: ${oaUrl}` : null,
+          ...(signerLines.length > 0 ? [``, `📝 **Per-Member Signing Links:**`, ...signerLines] : []),
           ``,
-          `⚠️ Review the admin preview FIRST, then use **oa_send** to send to the client.`,
+          `⚠️ Review the admin preview FIRST, then use **oa_send** to send to ${totalSigners > 1 ? "each member" : "the client"}.`,
         ].filter(Boolean)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -274,12 +328,40 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         const adminPreviewUrl = `${OA_BASE_URL}/${data.token}?preview=td`
         const entityType = data.entity_type || "SMLLC"
         const members = data.members as Array<{ name: string; ownership_pct: number }> | null
+        const totalSigners = data.total_signers || 1
+        const signedCount = data.signed_count || 0
+
+        // Fetch per-member signature status for MMLLC
+        const signerLines: string[] = []
+        if (entityType === "MMLLC" && totalSigners > 1) {
+          const { data: sigs } = await supabaseAdmin
+            .from("oa_signatures")
+            .select("member_index, member_name, member_email, contact_id, access_code, status, signed_at")
+            .eq("oa_id", data.id)
+            .order("member_index")
+
+          if (sigs && sigs.length > 0) {
+            signerLines.push(``, `📝 **Signatures: ${signedCount}/${totalSigners}**`)
+            for (const sig of sigs) {
+              const icon = sig.status === "signed" ? "✅" : sig.status === "viewed" ? "👁️" : sig.status === "sent" ? "📧" : "⏳"
+              const sigUrl = `${OA_BASE_URL}/${data.token}/${data.access_code}?signer=${sig.access_code}`
+              signerLines.push(`  ${icon} ${sig.member_name} (${sig.member_email || "no email"}) — ${sig.status}${sig.signed_at ? ` (${sig.signed_at})` : ""}`)
+              if (sig.status !== "signed") {
+                signerLines.push(`     🔗 ${sigUrl}`)
+              }
+            }
+          }
+        }
+
+        const statusDisplay = data.status === "partially_signed"
+          ? `partially_signed (${signedCount}/${totalSigners})`
+          : data.status
 
         const lines = [
           `📄 **Operating Agreement**`,
           ``,
           `Token: ${data.token}`,
-          `Status: ${data.status}`,
+          `Status: ${statusDisplay}`,
           `Entity Type: ${entityType}`,
           ``,
           `**Company:** ${data.company_name}`,
@@ -307,9 +389,10 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           `Views: ${data.view_count}${data.viewed_at ? ` (last: ${data.viewed_at})` : ""}`,
           data.signed_at ? `✅ Signed: ${data.signed_at}` : "⏳ Not signed yet",
           data.pdf_storage_path ? `PDF: ${data.pdf_storage_path}` : null,
+          ...signerLines,
           ``,
           `👁️ Admin Preview: ${adminPreviewUrl}`,
-          `🔗 Client URL: ${url}`,
+          entityType === "SMLLC" ? `🔗 Client URL: ${url}` : null,
         ].filter(Boolean)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -324,7 +407,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
   // ───────────────────────────────────────────────────────────
   server.tool(
     "oa_send",
-    `Send the Operating Agreement link to the member via Gmail with open tracking. Sets status to 'sent'. Email is sent immediately (NOT a draft). Requires member_email to be set on the OA. Use gmail_track_status to check if the client opened the email.`,
+    `Send the Operating Agreement link to the member via Gmail with open tracking. Sets status to 'sent'. Email is sent immediately (NOT a draft). For MMLLC: sends individual personalized emails to each unsigned member with their specific signing link. Requires member_email to be set. Use gmail_track_status to check if the client opened the email.`,
     {
       token: z.string().describe("OA token to send"),
     },
@@ -341,15 +424,170 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ OA not found: ${err?.message || "no data"}` }] }
         }
 
+        const entityType = oa.entity_type || "SMLLC"
+        const totalSigners = oa.total_signers || 1
+        const isMMLC = entityType === "MMLLC" && totalSigners > 1
+
+        // ─── MMLLC: send per-member emails ───
+        if (isMMLC) {
+          const { data: sigs } = await supabaseAdmin
+            .from("oa_signatures")
+            .select("*")
+            .eq("oa_id", oa.id)
+            .order("member_index")
+
+          if (!sigs || sigs.length === 0) {
+            return { content: [{ type: "text" as const, text: `❌ No signature rows found for MMLLC OA "${params.token}". Re-create the OA.` }] }
+          }
+
+          const unsignedMembers = sigs.filter(s => s.status !== "signed")
+          if (unsignedMembers.length === 0) {
+            return { content: [{ type: "text" as const, text: `✅ All ${totalSigners} members have already signed OA "${params.token}".` }] }
+          }
+
+          const { gmailPost } = await import("@/lib/gmail")
+          const entityLabel = "Multi-Member"
+          const fromEmail = "support@tonydurante.us"
+          const subject = `Operating Agreement — ${oa.company_name}`
+          const resultLines: string[] = []
+          const warnings: string[] = []
+
+          for (const sig of unsignedMembers) {
+            if (!sig.member_email) {
+              warnings.push(`⚠️ ${sig.member_name}: no email — must sign via portal`)
+              continue
+            }
+
+            // Look up contact for greeting
+            const { data: contactRow } = await supabaseAdmin
+              .from("contacts")
+              .select("gender, last_name, language, full_name")
+              .eq("id", sig.contact_id!)
+              .maybeSingle()
+
+            const firstName = contactRow?.full_name?.split(" ")[0] || sig.member_name.split(" ")[0]
+            const greeting = getGreeting({
+              firstName,
+              lastName: contactRow?.last_name,
+              gender: contactRow?.gender,
+              language: contactRow?.language,
+            })
+
+            const sigUrl = `${OA_BASE_URL}/${oa.token}/${oa.access_code}?signer=${sig.access_code}`
+            const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+            const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
+
+            const htmlBody = `
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+  <p>${greeting},</p>
+  <p>Your Operating Agreement for <strong>${oa.company_name}</strong> is ready for your review and signature.</p>
+  <p style="margin: 24px 0;">
+    <a href="${sigUrl}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+      Review &amp; Sign Operating Agreement
+    </a>
+  </p>
+  <p>You will be asked to verify your email address (<strong>${sig.member_email}</strong>) to access the document.</p>
+  <p>The Operating Agreement covers the formation and governance of your ${oa.state_of_formation} ${entityLabel} LLC, including:</p>
+  <ul style="line-height: 1.8;">
+    <li>Management structure (Manager-Managed)</li>
+    <li>Member rights and responsibilities</li>
+    <li>Capital contributions and distributions</li>
+    <li>State-specific provisions for ${oa.state_of_formation}</li>
+  </ul>
+  <p>All ${totalSigners} members must sign for the agreement to be effective.</p>
+  <p>If you have any questions, please reply to this email or contact us on WhatsApp.</p>
+  <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
+</div>
+<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+
+            const plainText = `${greeting},
+
+Your Operating Agreement for ${oa.company_name} is ready for your review and signature.
+
+Review and sign: ${sigUrl}
+
+You will be asked to verify your email address (${sig.member_email}).
+
+All ${totalSigners} members must sign for the agreement to be effective.
+
+Best regards,
+Tony Durante LLC`
+
+            const boundary = `boundary_${Date.now()}_${sig.member_index}`
+            const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+            const encodedSubject = hasNonAscii
+              ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+              : subject
+
+            const mimeParts = [
+              [`From: Tony Durante LLC <${fromEmail}>`, `To: ${sig.member_email}`, `Subject: ${encodedSubject}`, "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`].join("\r\n"),
+              "", `--${boundary}`, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", Buffer.from(plainText).toString("base64"),
+              "", `--${boundary}`, "Content-Type: text/html; charset=utf-8", "Content-Transfer-Encoding: base64", "", Buffer.from(htmlBody).toString("base64"),
+              "", `--${boundary}--`,
+            ]
+            const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
+
+            try {
+              const gmailResult = await gmailPost("/messages/send", { raw: encodedRaw }) as { id: string; threadId: string }
+
+              // Save tracking
+              await supabaseAdmin.from("email_tracking").insert({
+                tracking_id: trackingId,
+                gmail_message_id: gmailResult.id,
+                gmail_thread_id: gmailResult.threadId,
+                recipient: sig.member_email,
+                subject,
+                from_email: fromEmail,
+                account_id: oa.account_id || null,
+              })
+
+              // Update signature row
+              await supabaseAdmin
+                .from("oa_signatures")
+                .update({ status: "sent", sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+                .eq("id", sig.id)
+
+              resultLines.push(`✅ ${sig.member_name} (${sig.member_email}) — sent (${gmailResult.id})`)
+            } catch (sendErr) {
+              resultLines.push(`❌ ${sig.member_name} (${sig.member_email}) — failed: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`)
+            }
+          }
+
+          // Update OA status to 'sent' if it was 'draft'
+          if (["draft", "viewed"].includes(oa.status)) {
+            await supabaseAdmin
+              .from("oa_agreements")
+              .update({ status: "sent", updated_at: new Date().toISOString() })
+              .eq("id", oa.id)
+          }
+
+          logAction({
+            action_type: "send",
+            table_name: "oa_agreements",
+            record_id: oa.id,
+            account_id: oa.account_id,
+            summary: `Sent MMLLC OA emails for ${oa.company_name} to ${unsignedMembers.filter(s => s.member_email).length} members`,
+            details: { token: params.token, members_sent: resultLines.length },
+          })
+
+          return { content: [{ type: "text" as const, text: [
+            `📧 **OA emails sent for ${oa.company_name}** (${unsignedMembers.length} unsigned members)`,
+            ``,
+            ...resultLines,
+            ...warnings,
+            ``,
+            `Use gmail_track_status to check if members opened the emails.`,
+          ].join("\n") }] }
+        }
+
+        // ─── SMLLC: existing single-member flow ───
         if (!oa.member_email) {
           return { content: [{ type: "text" as const, text: `❌ No member_email set on OA "${params.token}". Update the contact record first.` }] }
         }
 
-        // Build URL
         const url = `${OA_BASE_URL}/${oa.token}/${oa.access_code}`
         const { gmailPost } = await import("@/lib/gmail")
 
-        // Look up contact gender
         const { data: contactRow } = await supabaseAdmin
           .from("contacts")
           .select("gender, last_name, language")
@@ -362,29 +600,22 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           language: contactRow?.language,
         })
 
-        const entityLabel = (oa.entity_type || "SMLLC") === "MMLLC" ? "Multi-Member" : "Single Member"
+        const entityLabel = "Single Member"
         const subject = `Operating Agreement — ${oa.company_name}`
         const fromEmail = "support@tonydurante.us"
-
-        // Generate tracking ID
         const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
         const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
 
-        // HTML email body
         const htmlBody = `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <p>${greeting},</p>
-
   <p>Your Operating Agreement for <strong>${oa.company_name}</strong> is ready for your review and signature.</p>
-
   <p style="margin: 24px 0;">
     <a href="${url}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
       Review &amp; Sign Operating Agreement
     </a>
   </p>
-
   <p>You will be asked to verify your email address (<strong>${oa.member_email}</strong>) to access the document.</p>
-
   <p>The Operating Agreement covers the formation and governance of your ${oa.state_of_formation} ${entityLabel} LLC, including:</p>
   <ul style="line-height: 1.8;">
     <li>Management structure (Manager-Managed)</li>
@@ -392,9 +623,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
     <li>Capital contributions and distributions</li>
     <li>State-specific provisions for ${oa.state_of_formation}</li>
   </ul>
-
   <p>If you have any questions, please reply to this email or contact us on WhatsApp.</p>
-
   <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
 </div>
 <img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
@@ -408,56 +637,25 @@ ${url}
 
 You will be asked to verify your email address (${oa.member_email}) to access the document.
 
-The Operating Agreement covers the formation and governance of your ${oa.state_of_formation} ${entityLabel} LLC, including:
-- Management structure (Manager-Managed)
-- Member rights and responsibilities
-- Capital contributions and distributions
-- State-specific provisions for ${oa.state_of_formation}
-
-If you have any questions, please reply to this email or contact us on WhatsApp.
-
 Best regards,
 Tony Durante LLC
 support@tonydurante.us`
 
-        // Build MIME multipart/alternative
         const boundary = `boundary_${Date.now()}`
         const hasNonAscii = /[^\x00-\x7F]/.test(subject)
         const encodedSubject = hasNonAscii
           ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
           : subject
 
-        const mimeHeaders = [
-          `From: Tony Durante LLC <${fromEmail}>`,
-          `To: ${oa.member_email}`,
-          `Subject: ${encodedSubject}`,
-          "MIME-Version: 1.0",
-          `Content-Type: multipart/alternative; boundary="${boundary}"`,
-        ]
-
         const mimeParts = [
-          mimeHeaders.join("\r\n"),
-          "",
-          `--${boundary}`,
-          "Content-Type: text/plain; charset=utf-8",
-          "Content-Transfer-Encoding: base64",
-          "",
-          Buffer.from(plainText).toString("base64"),
-          "",
-          `--${boundary}`,
-          "Content-Type: text/html; charset=utf-8",
-          "Content-Transfer-Encoding: base64",
-          "",
-          Buffer.from(htmlBody).toString("base64"),
-          "",
-          `--${boundary}--`,
+          [`From: Tony Durante LLC <${fromEmail}>`, `To: ${oa.member_email}`, `Subject: ${encodedSubject}`, "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`].join("\r\n"),
+          "", `--${boundary}`, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", Buffer.from(plainText).toString("base64"),
+          "", `--${boundary}`, "Content-Type: text/html; charset=utf-8", "Content-Transfer-Encoding: base64", "", Buffer.from(htmlBody).toString("base64"),
+          "", `--${boundary}--`,
         ]
-
         const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
 
-        // ─── safeSend: email FIRST, status updates AFTER ───
         const result = await safeSend<{ id: string; threadId: string }>({
-          // Idempotency: don't send if already sent
           idempotencyCheck: async () => {
             if (oa.status === "sent") {
               const { data: existing } = await supabaseAdmin
@@ -469,28 +667,15 @@ support@tonydurante.us`
               if (existing?.length) {
                 return {
                   alreadySent: true,
-                  message: [
-                    `⚠️ OA email already sent for "${params.token}"`,
-                    ``,
-                    `Tracking: ${existing[0].tracking_id}`,
-                    `Sent at: ${existing[0].created_at}`,
-                    ``,
-                    `Use gmail_track_status to check if the client opened it.`,
-                  ].join("\n"),
+                  message: `⚠️ OA email already sent for "${params.token}"\n\nTracking: ${existing[0].tracking_id}\nSent at: ${existing[0].created_at}\n\nUse gmail_track_status to check if the client opened it.`,
                 }
               }
             }
             return null
           },
-
-          // SEND FIRST — actual Gmail send
           sendFn: async () => {
-            return await gmailPost("/messages/send", {
-              raw: encodedRaw,
-            }) as { id: string; threadId: string }
+            return await gmailPost("/messages/send", { raw: encodedRaw }) as { id: string; threadId: string }
           },
-
-          // POST-SEND: status updates + tracking (only after send succeeds)
           postSendSteps: [
             {
               name: "save_tracking",
@@ -518,7 +703,6 @@ support@tonydurante.us`
           ],
         })
 
-        // Handle idempotency
         if (result.alreadySent) {
           return { content: [{ type: "text" as const, text: result.idempotencyMessage! }] }
         }

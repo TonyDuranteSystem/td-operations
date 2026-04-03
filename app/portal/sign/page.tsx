@@ -70,7 +70,7 @@ export default async function PortalSignPage() {
   const [oaResult, leaseResult, ss4Result, msaResult, form8832Result, sigReqResult] = await Promise.all([
     supabaseAdmin
       .from('oa_agreements')
-      .select('token, status, company_name, signed_at')
+      .select('id, token, status, company_name, signed_at, entity_type, total_signers, signed_count')
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -132,10 +132,27 @@ export default async function PortalSignPage() {
   }
 
   if (oaResult.data) {
-    const oa = oaResult.data
+    const oa = oaResult.data as typeof oaResult.data & { total_signers?: number; signed_count?: number; entity_type?: string; id?: string }
+    const isMultiSigner = oa.entity_type === 'MMLLC' && (oa.total_signers || 1) > 1
+    let oaStatus: SignableDocument['status'] = oa.status === 'signed' ? 'signed' : 'awaiting'
+
+    // For MMLLC: check if the current user has already signed
+    if (isMultiSigner && oa.status !== 'signed' && oa.id) {
+      const { data: memberSig } = await supabaseAdmin
+        .from('oa_signatures')
+        .select('status')
+        .eq('oa_id', oa.id)
+        .eq('contact_id', contactId)
+        .maybeSingle()
+
+      if (memberSig?.status === 'signed') {
+        oaStatus = 'signed' // This member signed, show as signed for them
+      }
+    }
+
     documents.push({
       type: 'oa',
-      status: oa.status === 'signed' ? 'signed' : 'awaiting',
+      status: oaStatus,
       href: '/portal/sign/oa',
       companyName: oa.company_name,
       signedAt: oa.signed_at,
