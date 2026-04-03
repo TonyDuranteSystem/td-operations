@@ -334,7 +334,8 @@ export async function ensureMinimalAccount(params: {
 
 /**
  * Send portal welcome email with temporary password.
- * Bilingual: Italian + English.
+ * Single-language: Italian OR English based on client preference (never mixed).
+ * Includes full portal feature overview, PWA install instructions, and chat value proposition.
  * Called after autoCreatePortalUser() when a new user is created.
  */
 export async function sendPortalWelcomeEmail(params: {
@@ -349,45 +350,11 @@ export async function sendPortalWelcomeEmail(params: {
 
   try {
     const { gmailPost } = await import('@/lib/gmail')
-
-    const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-  <div style="background:#18181b;padding:20px;border-radius:12px 12px 0 0">
-    <h1 style="color:white;margin:0;font-size:18px">
-      ${isIt ? 'Benvenuto nel Portale Tony Durante' : 'Welcome to Tony Durante Portal'}
-    </h1>
-  </div>
-  <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px">
-    <p>${isIt ? `Ciao ${fullName || ''},` : `Hi ${fullName || 'there'},`}</p>
-    <p>${isIt
-      ? 'Il tuo account sul portale clienti è stato creato. Ecco le tue credenziali di accesso:'
-      : 'Your client portal account has been created. Here are your login credentials:'}</p>
-    <div style="background:#f4f4f5;padding:16px;border-radius:8px;margin:16px 0">
-      <p style="margin:0 0 8px"><strong>Email:</strong> ${email}</p>
-      <p style="margin:0"><strong>${isIt ? 'Password temporanea' : 'Temporary Password'}:</strong> ${tempPassword}</p>
-    </div>
-    <p>${isIt
-      ? 'Al primo accesso ti verrà chiesto di cambiare la password.'
-      : 'You will be asked to change your password on first login.'}</p>
-    <a href="${loginUrl}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:white;text-decoration:none;border-radius:8px;font-weight:bold;margin-top:8px">
-      ${isIt ? 'Accedi al Portale' : 'Login to Portal'}
-    </a>
-    ${!isIt ? '' : `
-    <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-    <p style="color:#6b7280;font-size:13px">
-      Hi ${fullName || 'there'}, your client portal account has been created.<br>
-      <strong>Email:</strong> ${email}<br>
-      <strong>Temporary Password:</strong> ${tempPassword}<br>
-      You will be asked to change your password on first login.
-    </p>
-    <a href="${loginUrl}" style="display:inline-block;padding:8px 16px;background:#2563eb;color:white;text-decoration:none;border-radius:6px;font-size:13px">
-      Login to Portal
-    </a>`}
-  </div>
-</div>`
+    const html = buildWelcomeHtml({ email, fullName, tempPassword, loginUrl, isIt })
 
     const subject = isIt
-      ? 'Il tuo accesso al Portale Tony Durante'
-      : 'Your Tony Durante Portal Account'
+      ? 'Il tuo nuovo Portale Clienti \u2014 Tony Durante LLC'
+      : 'Your New Client Portal \u2014 Tony Durante LLC'
     const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
     const boundary = `boundary_${Date.now()}`
     const rawEmail = [
@@ -412,6 +379,154 @@ export async function sendPortalWelcomeEmail(params: {
     console.error('[auto-portal] Welcome email failed:', error)
     return { success: false, error }
   }
+}
+
+function buildWelcomeHtml(p: {
+  email: string; fullName: string; tempPassword: string; loginUrl: string; isIt: boolean
+}): string {
+  const { email, fullName, tempPassword, loginUrl, isIt } = p
+  const name = fullName || (isIt ? '' : 'there')
+
+  // Reusable row builder
+  const row = (icon: string, label: string, desc: string) =>
+    `<tr><td style="padding:6px 0;font-size:14px;color:#3f3f46;vertical-align:top;width:24px">${icon}</td><td style="padding:6px 0;font-size:14px;color:#3f3f46"><strong>${label}</strong> \u2014 ${desc}</td></tr>`
+  const smallRow = (icon: string, label: string, desc: string) =>
+    `<tr><td style="padding:5px 0;font-size:13px;color:#3f3f46;vertical-align:top;width:24px">${icon}</td><td style="padding:5px 0;font-size:13px;color:#3f3f46"><strong>${label}</strong> \u2014 ${desc}</td></tr>`
+
+  if (isIt) {
+    return `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+<div style="background:#18181b;padding:24px 28px;border-radius:12px 12px 0 0">
+  <h1 style="color:white;margin:0;font-size:20px">Tony Durante LLC</h1>
+  <p style="color:#a1a1aa;margin:6px 0 0;font-size:14px">Il tuo nuovo Portale Clienti</p>
+</div>
+<div style="background:white;border:1px solid #e5e7eb;border-top:none;padding:28px;border-radius:0 0 12px 12px">
+  <p style="font-size:15px;color:#18181b">Ciao ${name},</p>
+  <p style="font-size:15px;color:#3f3f46;line-height:1.6">Abbiamo creato una piattaforma professionale e sicura dedicata alla gestione della tua LLC. Non dovrai pi\u00f9 cercare documenti tra le email o aspettare risposte su WhatsApp \u2014 tutto \u00e8 in un unico posto, sempre disponibile.</p>
+
+  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#166534">\ud83d\udccb Gestione LLC</h3>
+    <table style="width:100%;border-collapse:collapse">
+      ${row('\u2705', 'Documenti aziendali', 'Articles of Organization, Operating Agreement, EIN Letter, Lease sempre disponibili')}
+      ${row('\u2705', 'Stato servizi', "Segui l'avanzamento di ogni pratica in tempo reale")}
+      ${row('\u2705', 'Firma documenti', 'Firma Operating Agreement, Lease, SS-4 e altri direttamente online')}
+      ${row('\u2705', 'Scadenze', 'Calendario con Annual Report, Rinnovo Registered Agent e Tax Filing')}
+      ${row('\u2705', 'Documenti fiscali', 'Carica estratti conto e visualizza le dichiarazioni')}
+      ${row('\u2705', 'Genera documenti', 'Crea Distribution Resolutions e Tax Statements per la tua LLC')}
+    </table>
+  </div>
+
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#1e40af">\ud83d\udcbc Strumenti Business</h3>
+    <table style="width:100%;border-collapse:collapse">
+      ${row('\u2705', 'Fatturazione', 'Crea e invia fatture ai clienti della tua LLC direttamente dal portale')}
+      ${row('\u2705', 'Gestione clienti', 'Un mini-CRM per organizzare i clienti della tua LLC')}
+      ${row('\u2705', 'Pagamenti', 'Visualizza le nostre fatture e lo storico dei pagamenti')}
+      ${row('\u2705', 'Richiedi servizi', 'Ordina nuovi servizi con un click')}
+    </table>
+  </div>
+
+  <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#5b21b6">\ud83d\udcf1 Installa come App</h3>
+    <p style="font-size:14px;color:#3f3f46;line-height:1.5;margin:0">Il portale pu\u00f2 essere installato come app sul tuo <strong>telefono</strong> e sul tuo <strong>computer</strong>, proprio come WhatsApp o Telegram. Riceverai notifiche push e potrai accedere con un tocco, senza aprire il browser.</p>
+    <p style="font-size:13px;color:#71717a;margin:10px 0 0;line-height:1.5"><strong>iPhone/iPad:</strong> Apri il portale in Safari \u2192 tocca il pulsante Condividi \u2192 "Aggiungi alla schermata Home"<br><strong>Android:</strong> Apri il portale in Chrome \u2192 tocca il menu \u22ee \u2192 "Installa app"<br><strong>Computer:</strong> Apri il portale in Chrome \u2192 clicca l'icona di installazione nella barra degli indirizzi</p>
+  </div>
+
+  <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 8px;font-size:15px;color:#92400e">\ud83d\udcac Perch\u00e9 la chat del portale?</h3>
+    <p style="font-size:14px;color:#78350f;margin:0 0 12px;line-height:1.5">Ti chiediamo di utilizzare la chat del portale per tutte le comunicazioni con noi, al posto di Telegram o WhatsApp.</p>
+    <table style="width:100%;border-collapse:collapse">
+      ${smallRow('\ud83d\udd12', 'Sicurezza', 'WhatsApp condivide i tuoi metadati con Meta (Facebook). Il portale \u00e8 un ambiente privato e protetto, dedicato esclusivamente a te.')}
+      ${smallRow('\ud83d\udccb', 'Conformit\u00e0', 'Come studio professionale, siamo tenuti a tracciare e archiviare correttamente tutte le comunicazioni con i clienti.')}
+      ${smallRow('\ud83d\udcc1', 'Tutto in un posto', 'Documenti, messaggi, firme e moduli sono collegati al tuo profilo. Niente pi\u00f9 file persi tra chat diverse.')}
+      ${smallRow('\u26a1', 'Risposte pi\u00f9 rapide', 'Il nostro team vede subito a quale pratica si riferisce il tuo messaggio e pu\u00f2 risponderti pi\u00f9 velocemente.')}
+      ${smallRow('\ud83c\udfa4', 'Dettatura vocale', 'Non devi nemmeno scrivere: premi il microfono e detta il messaggio con la voce. Il portale trascrive automaticamente.')}
+    </table>
+  </div>
+
+  <div style="background:#f4f4f5;border:1px solid #d4d4d8;border-radius:10px;padding:20px;margin:24px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#18181b">\ud83d\udd10 Le tue credenziali di accesso</h3>
+    <p style="margin:0 0 6px;font-size:14px;color:#3f3f46"><strong>Email:</strong> ${email}</p>
+    <p style="margin:0 0 12px;font-size:14px;color:#3f3f46"><strong>Password temporanea:</strong> ${tempPassword}</p>
+    <p style="margin:0;font-size:13px;color:#71717a">Al primo accesso ti verr\u00e0 chiesto di cambiare la password.</p>
+  </div>
+
+  <div style="text-align:center;margin:24px 0">
+    <a href="${loginUrl}" style="display:inline-block;padding:14px 32px;background:#2563eb;color:white;text-decoration:none;border-radius:10px;font-weight:bold;font-size:15px">Accedi al Portale</a>
+  </div>
+
+  <div style="border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px">
+    <p style="font-size:13px;color:#a1a1aa;margin:0">Grazie per la fiducia,<br><strong>Tony Durante LLC</strong></p>
+  </div>
+</div>
+</div>`
+  }
+
+  // English version
+  return `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+<div style="background:#18181b;padding:24px 28px;border-radius:12px 12px 0 0">
+  <h1 style="color:white;margin:0;font-size:20px">Tony Durante LLC</h1>
+  <p style="color:#a1a1aa;margin:6px 0 0;font-size:14px">Your New Client Portal</p>
+</div>
+<div style="background:white;border:1px solid #e5e7eb;border-top:none;padding:28px;border-radius:0 0 12px 12px">
+  <p style="font-size:15px;color:#18181b">Hi ${name},</p>
+  <p style="font-size:15px;color:#3f3f46;line-height:1.6">We've built a professional, secure platform dedicated to managing your LLC. No more searching for documents in emails or waiting for replies on WhatsApp \u2014 everything is in one place, always available.</p>
+
+  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#166534">\ud83d\udccb LLC Management</h3>
+    <table style="width:100%;border-collapse:collapse">
+      ${row('\u2705', 'Company Documents', 'Articles of Organization, Operating Agreement, EIN Letter, Lease \u2014 always available')}
+      ${row('\u2705', 'Service Tracking', 'Follow the progress of every service in real time')}
+      ${row('\u2705', 'Sign Documents', 'Sign your Operating Agreement, Lease, SS-4 and more directly online')}
+      ${row('\u2705', 'Deadlines', 'Calendar with Annual Report, Registered Agent Renewal, and Tax Filing due dates')}
+      ${row('\u2705', 'Tax Documents', 'Upload bank statements and view your tax returns')}
+      ${row('\u2705', 'Generate Documents', 'Create Distribution Resolutions and Tax Statements for your LLC')}
+    </table>
+  </div>
+
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#1e40af">\ud83d\udcbc Business Tools</h3>
+    <table style="width:100%;border-collapse:collapse">
+      ${row('\u2705', 'Invoicing', "Create and send invoices to your LLC's clients directly from the portal")}
+      ${row('\u2705', 'Customer Management', "A mini-CRM to organize your LLC's clients")}
+      ${row('\u2705', 'Payments', 'View our invoices and your full payment history')}
+      ${row('\u2705', 'Request Services', 'Order additional services with one click')}
+    </table>
+  </div>
+
+  <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#5b21b6">\ud83d\udcf1 Install as App</h3>
+    <p style="font-size:14px;color:#3f3f46;line-height:1.5;margin:0">The portal can be installed as an app on your <strong>phone</strong> and <strong>computer</strong>, just like WhatsApp or Telegram. You'll receive push notifications and can access it with one tap, without opening a browser.</p>
+    <p style="font-size:13px;color:#71717a;margin:10px 0 0;line-height:1.5"><strong>iPhone/iPad:</strong> Open the portal in Safari \u2192 tap the Share button \u2192 "Add to Home Screen"<br><strong>Android:</strong> Open the portal in Chrome \u2192 tap the menu \u22ee \u2192 "Install app"<br><strong>Computer:</strong> Open the portal in Chrome \u2192 click the install icon in the address bar</p>
+  </div>
+
+  <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:20px;margin:20px 0">
+    <h3 style="margin:0 0 8px;font-size:15px;color:#92400e">\ud83d\udcac Why portal chat?</h3>
+    <p style="font-size:14px;color:#78350f;margin:0 0 12px;line-height:1.5">We strongly recommend using the portal chat for all communications with us, instead of Telegram or WhatsApp.</p>
+    <table style="width:100%;border-collapse:collapse">
+      ${smallRow('\ud83d\udd12', 'Privacy', 'WhatsApp shares your metadata with Meta (Facebook). Our portal is a private, secure environment dedicated exclusively to your account.')}
+      ${smallRow('\ud83d\udccb', 'Compliance', 'As a professional services firm, we are required to track and archive all client communications properly.')}
+      ${smallRow('\ud83d\udcc1', 'Everything in one place', 'Documents, messages, signatures, and forms are all linked to your profile. No more files lost across different chat apps.')}
+      ${smallRow('\u26a1', 'Faster responses', 'Our team immediately sees which account your message is about and can respond faster.')}
+      ${smallRow('\ud83c\udfa4', 'Voice dictation', "You don't even have to type: press the microphone button and dictate your message. The portal transcribes it automatically.")}
+    </table>
+  </div>
+
+  <div style="background:#f4f4f5;border:1px solid #d4d4d8;border-radius:10px;padding:20px;margin:24px 0">
+    <h3 style="margin:0 0 12px;font-size:15px;color:#18181b">\ud83d\udd10 Your login credentials</h3>
+    <p style="margin:0 0 6px;font-size:14px;color:#3f3f46"><strong>Email:</strong> ${email}</p>
+    <p style="margin:0 0 12px;font-size:14px;color:#3f3f46"><strong>Temporary Password:</strong> ${tempPassword}</p>
+    <p style="margin:0;font-size:13px;color:#71717a">You will be asked to change your password on first login.</p>
+  </div>
+
+  <div style="text-align:center;margin:24px 0">
+    <a href="${loginUrl}" style="display:inline-block;padding:14px 32px;background:#2563eb;color:white;text-decoration:none;border-radius:10px;font-weight:bold;font-size:15px">Login to Portal</a>
+  </div>
+
+  <div style="border-top:1px solid #e5e7eb;padding-top:16px;margin-top:24px">
+    <p style="font-size:13px;color:#a1a1aa;margin:0">Thank you for your trust,<br><strong>Tony Durante LLC</strong></p>
+  </div>
+</div>
+</div>`
 }
 
 // ─── Portal Tier Upgrade ───────────────────────────────
