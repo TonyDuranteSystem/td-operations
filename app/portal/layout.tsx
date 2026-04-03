@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount } from '@/lib/portal/queries'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { LocaleProvider } from '@/components/portal/locale-provider'
@@ -83,6 +84,20 @@ export default async function PortalLayout({
       ])
     : [[] as string[], getContactOnlyNavVisibility(), contactId ? await getUnreadChatCount(null, contactId) : 0]
 
+  // Check if there are pending wizard-eligible service deliveries (Banking, ITIN, Tax, Formation, Closure)
+  const WIZARD_SERVICE_TYPES = ['Company Formation', 'Banking Fintech', 'Company Closure', 'ITIN', 'ITIN Renewal', 'Tax Return']
+  let hasWizardPending = false
+  if (selectedAccountId) {
+    const { data: wizardSds } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('service_type')
+      .eq('account_id', selectedAccountId)
+      .in('status', ['active'])
+      .in('service_type', WIZARD_SERVICE_TYPES)
+      .limit(1)
+    hasWizardPending = (wizardSds?.length ?? 0) > 0
+  }
+
   return (
     <Providers>
       <PortalSwRegister locale={locale} />
@@ -101,6 +116,7 @@ export default async function PortalLayout({
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
             portalRole={portalRole}
+            hasWizardPending={hasWizardPending}
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />

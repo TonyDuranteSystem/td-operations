@@ -42,6 +42,7 @@ interface PortalSidebarProps {
   navVisibility?: PortalNavVisibility
   portalTier?: string
   unreadChatCount?: number
+  hasWizardPending?: boolean
   accountType?: string | null
   contactId?: string
   portalRole?: string | null
@@ -54,6 +55,7 @@ interface NavItem {
   icon: typeof LayoutDashboard
   visibilityKey?: keyof PortalNavVisibility // if set, item only shows when this flag is true
   tierOnly?: string[] // if set, only show for these tiers
+  wizardDynamic?: boolean // if true, also show when hasWizardPending is true
 }
 
 interface NavGroup {
@@ -66,7 +68,7 @@ interface NavGroup {
 const topItems: NavItem[] = [
   { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
-  { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'] },
+  { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
 ]
@@ -107,7 +109,7 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -293,6 +295,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
               return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
             }
             if (!item.tierOnly) return true
+            // Wizard link: show for tier match OR when there are pending wizard-eligible services
+            if (item.wizardDynamic && hasWizardPending) return true
             return item.tierOnly.includes(portalTier || 'lead')
           }).map(renderNavItem)}
 
