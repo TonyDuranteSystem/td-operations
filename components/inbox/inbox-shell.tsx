@@ -33,7 +33,7 @@ interface GmailLabel {
   type: 'system' | 'user'
 }
 
-export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
+export function InboxShell() {
   const [activeChannel, setActiveChannel] = useState<InboxChannel | null>('gmail')
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
@@ -338,26 +338,24 @@ export function InboxShell({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
       </div>
 
-      {/* Mailbox selector (admin only — shows both mailboxes) */}
-      {isAdmin && (
-        <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
-          <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
-          {(['support', 'antonio'] as const).map(mb => (
-            <button
-              key={mb}
-              onClick={() => { setActiveMailbox(mb); setSelected(null) }}
-              className={cn(
-                'px-2.5 py-1 rounded text-xs font-medium transition-colors',
-                activeMailbox === mb
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'text-zinc-500 hover:bg-zinc-100'
-              )}
-            >
-              {mb === 'support' ? 'support@' : 'antonio@'}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Mailbox selector — shows both mailboxes */}
+      <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
+        <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
+        {(['support', 'antonio'] as const).map(mb => (
+          <button
+            key={mb}
+            onClick={() => { setActiveMailbox(mb); setSelected(null) }}
+            className={cn(
+              'px-2.5 py-1 rounded text-xs font-medium transition-colors',
+              activeMailbox === mb
+                ? 'bg-blue-100 text-blue-700'
+                : 'text-zinc-500 hover:bg-zinc-100'
+            )}
+          >
+            {mb === 'support' ? 'support@' : 'antonio@'}
+          </button>
+        ))}
+      </div>
 
       {/* Search bar + Read/Unread filter */}
       <div className="flex items-center gap-2 px-4 py-2 border-b bg-zinc-50">

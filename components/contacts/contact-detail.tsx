@@ -143,7 +143,6 @@ interface ContactDetailProps {
   lead: LeadOrigin | null
   portalAuth: PortalAuth
   today: string
-  isAdmin?: boolean
 }
 
 // ─── Main Component ───
@@ -156,7 +155,6 @@ export function ContactDetail({
   documents = [],
   lead,
   portalAuth,
-  isAdmin = false,
 }: ContactDetailProps) {
   const [activeTab, setActiveTab] = useState('overview')
 
@@ -240,7 +238,6 @@ export function ContactDetail({
           contact={contact}
           accounts={accounts}
           lead={lead}
-          isAdmin={isAdmin}
           makeContactSaver={makeContactSaver}
         />
       )}
@@ -251,7 +248,7 @@ export function ContactDetail({
         <ContactDocumentsTab documents={documents} accounts={accounts} />
       )}
       {activeTab === 'portal' && (
-        <PortalTab contact={contact} portalAuth={portalAuth} isAdmin={isAdmin} />
+        <PortalTab contact={contact} portalAuth={portalAuth} />
       )}
       {activeTab === 'activity' && (
         <ActivityTab conversations={conversations} />
@@ -266,13 +263,11 @@ function OverviewTab({
   contact,
   accounts,
   lead,
-  isAdmin,
   makeContactSaver,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
   lead: LeadOrigin | null
-  isAdmin: boolean
   makeContactSaver: (field: string) => (value: string) => Promise<{ success: boolean; error?: string }>
 }) {
   const [note, setNote] = useState('')
@@ -296,21 +291,21 @@ function OverviewTab({
       {/* Contact Info */}
       <div className="bg-white rounded-lg border p-5 space-y-3">
         <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Contact Info</h3>
-        <EditableField icon={Mail} label="Email" value={contact.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('email')} />
-        <EditableField icon={Mail} label="Email 2" value={contact.email_2 ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('email_2')} />
-        <EditableField icon={Phone} label="Phone" value={contact.phone ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('phone')} />
-        <EditableField icon={Phone} label="Phone 2" value={contact.phone_2 ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('phone_2')} />
-        <EditableField icon={Globe} label="Language" value={contact.language ?? ''} type="select" options={LANGUAGE_OPTIONS} readOnly={!isAdmin} onSave={makeContactSaver('language')} />
-        <EditableField icon={Globe} label="Citizenship" value={contact.citizenship ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('citizenship')} />
-        <EditableField icon={MapPin} label="Residency" value={contact.residency ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('residency')} />
-        <EditableField icon={Calendar} label="Date of Birth" value={contact.date_of_birth ?? ''} type="date" readOnly={!isAdmin} onSave={makeContactSaver('date_of_birth')} />
+        <EditableField icon={Mail} label="Email" value={contact.email ?? ''} onSave={makeContactSaver('email')} />
+        <EditableField icon={Mail} label="Email 2" value={contact.email_2 ?? ''} onSave={makeContactSaver('email_2')} />
+        <EditableField icon={Phone} label="Phone" value={contact.phone ?? ''} onSave={makeContactSaver('phone')} />
+        <EditableField icon={Phone} label="Phone 2" value={contact.phone_2 ?? ''} onSave={makeContactSaver('phone_2')} />
+        <EditableField icon={Globe} label="Language" value={contact.language ?? ''} type="select" options={LANGUAGE_OPTIONS} onSave={makeContactSaver('language')} />
+        <EditableField icon={Globe} label="Citizenship" value={contact.citizenship ?? ''} onSave={makeContactSaver('citizenship')} />
+        <EditableField icon={MapPin} label="Residency" value={contact.residency ?? ''} onSave={makeContactSaver('residency')} />
+        <EditableField icon={Calendar} label="Date of Birth" value={contact.date_of_birth ?? ''} type="date" onSave={makeContactSaver('date_of_birth')} />
       </div>
 
       {/* Identity Documents */}
       <div className="bg-white rounded-lg border p-5 space-y-3">
         <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Identity & Tax</h3>
-        <EditableField icon={Shield} label="Passport Number" value={contact.passport_number ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('passport_number')} />
-        <EditableField icon={Calendar} label="Passport Expiry" value={contact.passport_expiry_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeContactSaver('passport_expiry_date')} />
+        <EditableField icon={Shield} label="Passport Number" value={contact.passport_number ?? ''} onSave={makeContactSaver('passport_number')} />
+        <EditableField icon={Calendar} label="Passport Expiry" value={contact.passport_expiry_date ?? ''} type="date" onSave={makeContactSaver('passport_expiry_date')} />
         <div className="flex items-center gap-3 py-2">
           <Shield className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">Passport on File</span>
@@ -318,8 +313,8 @@ function OverviewTab({
             {contact.passport_on_file ? 'Yes' : 'No'}
           </span>
         </div>
-        <EditableField icon={FileText} label="ITIN" value={contact.itin_number ?? ''} readOnly={!isAdmin} onSave={makeContactSaver('itin_number')} />
-        <EditableField icon={Calendar} label="ITIN Issue Date" value={contact.itin_issue_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeContactSaver('itin_issue_date')} />
+        <EditableField icon={FileText} label="ITIN" value={contact.itin_number ?? ''} onSave={makeContactSaver('itin_number')} />
+        <EditableField icon={Calendar} label="ITIN Issue Date" value={contact.itin_issue_date ?? ''} type="date" onSave={makeContactSaver('itin_issue_date')} />
         {contact.itin_renewal_date && (
           <div className="flex items-center gap-3 py-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
@@ -383,24 +378,22 @@ function OverviewTab({
           ) : (
             <p className="text-sm text-muted-foreground">No notes</p>
           )}
-          {isAdmin && (
-            <div className="pt-2 space-y-2">
-              <textarea
-                value={note}
-                onChange={e => setNote(e.target.value)}
-                placeholder="Add a note..."
-                rows={2}
-                className="w-full px-3 py-2 rounded-lg border text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                onClick={handleAddNote}
-                disabled={!note.trim() || addingNote}
-                className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 transition-colors"
-              >
-                {addingNote ? 'Adding...' : 'Add Note'}
-              </button>
-            </div>
-          )}
+          <div className="pt-2 space-y-2">
+            <textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="Add a note..."
+              rows={2}
+              className="w-full px-3 py-2 rounded-lg border text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleAddNote}
+              disabled={!note.trim() || addingNote}
+              className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+            >
+              {addingNote ? 'Adding...' : 'Add Note'}
+            </button>
+          </div>
         </div>
 
         {/* Lead Origin */}
@@ -517,11 +510,9 @@ function ServicesTab({
 function PortalTab({
   contact,
   portalAuth,
-  isAdmin,
 }: {
   contact: ContactRecord
   portalAuth: PortalAuth
-  isAdmin: boolean
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [tier, setTier] = useState(contact.portal_tier ?? '')
@@ -599,9 +590,8 @@ function PortalTab({
       </div>
 
       {/* Admin Actions */}
-      {isAdmin && (
-        <div className="bg-white rounded-lg border p-5 space-y-4">
-          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Admin Actions</h3>
+      <div className="bg-white rounded-lg border p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Admin Actions</h3>
 
           {!portalExists ? (
             <button
@@ -656,7 +646,6 @@ function PortalTab({
             </div>
           )}
         </div>
-      )}
     </div>
   )
 }

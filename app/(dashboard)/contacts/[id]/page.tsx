@@ -1,14 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
-import { isAdmin } from '@/lib/auth'
 import { ContactDetail } from '@/components/contacts/contact-detail'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
 
 export default async function ContactDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  const admin = user ? isAdmin(user) : false
+  await supabase.auth.getUser()
   const today = new Date().toISOString().split('T')[0]
 
   // Fetch contact
@@ -133,7 +131,6 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         lead={leadResult.data}
         portalAuth={portalAuth}
         today={today}
-        isAdmin={admin}
       />
     </div>
   )

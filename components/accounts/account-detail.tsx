@@ -105,12 +105,10 @@ interface AccountDetailProps {
 function ContactsSection({
   contacts,
   account,
-  isAdmin,
   makeContactSaver,
 }: {
   contacts: Contact[]
   account: Account
-  isAdmin: boolean
   makeContactSaver: (contactId: string, field: string, updatedAt: string) => (value: string) => Promise<{ success: boolean; error?: string }>
 }) {
   const [showSearch, setShowSearch] = useState(false)
@@ -164,15 +162,13 @@ function ContactsSection({
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
           Contacts ({contacts.length})
         </h3>
-        {isAdmin && (
-          <button
+        <button
             onClick={() => setShowSearch(!showSearch)}
             className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
           >
             <Plus className="h-3.5 w-3.5" />
             Link Contact
           </button>
-        )}
       </div>
 
       {/* Link contact search */}
@@ -250,30 +246,28 @@ function ContactsSection({
                   {c.full_name}
                 </Link>
                 {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
-                {isAdmin && (
-                  <button
-                    onClick={async () => {
-                      if (!confirm(`Remove ${c.full_name} from this company?`)) return
-                      const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
-                      const result = await unlinkContactFromAccount(account.id, c.id)
-                      if (result.success) {
-                        toast.success(`${c.full_name} unlinked`)
-                        window.location.reload()
-                      } else {
-                        toast.error('Failed to unlink contact')
-                      }
-                    }}
-                    className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
-                    title={`Remove ${c.full_name} from this company`}
-                  >
-                    <Unlink className="h-3.5 w-3.5" />
-                  </button>
-                )}
+                <button
+                  onClick={async () => {
+                    if (!confirm(`Remove ${c.full_name} from this company?`)) return
+                    const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
+                    const result = await unlinkContactFromAccount(account.id, c.id)
+                    if (result.success) {
+                      toast.success(`${c.full_name} unlinked`)
+                      window.location.reload()
+                    } else {
+                      toast.error('Failed to unlink contact')
+                    }
+                  }}
+                  className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
+                  title={`Remove ${c.full_name} from this company`}
+                >
+                  <Unlink className="h-3.5 w-3.5" />
+                </button>
               </div>
               <div className="pl-9 grid gap-1.5">
-                <EditableField icon={Mail} label="Email" value={c.email ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
-                <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
-                <EditableField icon={Globe} label="Language" type="select" options={[{ label: '', value: '' }, { label: 'English', value: 'English' }, { label: 'Italian', value: 'Italian' }]} value={c.language ?? ''} readOnly={!isAdmin} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
+                <EditableField icon={Mail} label="Email" value={c.email ?? ''} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
+                <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
+                <EditableField icon={Globe} label="Language" type="select" options={[{ label: '', value: '' }, { label: 'English', value: 'English' }, { label: 'Italian', value: 'Italian' }]} value={c.language ?? ''} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />
               </div>
             </div>
           ))}
@@ -325,27 +319,21 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             )}>
               {account.status}
             </span>
-            {isAdmin && (
-              <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
-            )}
-            {isAdmin && (
-              <button
-                onClick={() => setShowDiagnostic(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
-              >
-                <Stethoscope className="h-3.5 w-3.5" />
-                Diagnose
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                onClick={() => setShowPlaceClient(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
-              >
-                <Building2 className="h-3.5 w-3.5" />
-                Place Client
-              </button>
-            )}
+            <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
+            <button
+              onClick={() => setShowDiagnostic(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+            >
+              <Stethoscope className="h-3.5 w-3.5" />
+              Diagnose
+            </button>
+            <button
+              onClick={() => setShowPlaceClient(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
+            >
+              <Building2 className="h-3.5 w-3.5" />
+              Place Client
+            </button>
           </div>
           <p className="text-muted-foreground text-sm mt-1">
             {account.state_of_formation && `${account.state_of_formation} · `}
@@ -365,16 +353,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         </div>
       )}
 
-      {/* Documents to Sign Panel (admin only) */}
-      {isAdmin && (
-        <DocumentsPanel
-          accountId={account.id}
-          isAdmin={isAdmin}
-          onGenerateOA={() => setShowOADialog(true)}
-          onGenerateLease={() => setShowLeaseDialog(true)}
-          onGenerateSS4={() => setShowSS4Dialog(true)}
-        />
-      )}
+      {/* Documents to Sign Panel */}
+      <DocumentsPanel
+        accountId={account.id}
+        isAdmin={true}
+        onGenerateOA={() => setShowOADialog(true)}
+        onGenerateLease={() => setShowLeaseDialog(true)}
+        onGenerateSS4={() => setShowSS4Dialog(true)}
+      />
 
       {/* Generate Document Dialogs */}
       <GenerateOADialog
@@ -469,7 +455,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <TaxTab taxReturns={taxReturns} today={today} />
       )}
       {activeTab === 'documenti' && (
-        <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={isAdmin} />
+        <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
       )}
       {activeTab === 'corrispondenza' && (
         <div className="p-4">
@@ -542,15 +528,15 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
         <div className="grid gap-3 text-sm">
-          <EditableField icon={Briefcase} label="Account Type" value={account.account_type ?? ''} type="select" options={ACCOUNT_TYPE_OPTIONS} readOnly={!isAdmin} onSave={makeAccountSaver('account_type')} />
-          <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} readOnly={!isAdmin} onSave={makeAccountSaver('entity_type')} />
-          <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('state_of_formation')} />
-          <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeAccountSaver('formation_date')} />
-          <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('ein_number')} />
-          <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('filing_id')} />
-          <EditableField icon={Shield} label="Registered Agent" value={account.registered_agent ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('registered_agent')} />
-          <EditableField icon={Calendar} label="RA Renewal" value={account.ra_renewal_date ?? ''} type="date" readOnly={!isAdmin} onSave={makeAccountSaver('ra_renewal_date')} />
-          <EditableField icon={MapPin} label="Address" value={account.physical_address ?? ''} type="textarea" readOnly={!isAdmin} onSave={makeAccountSaver('physical_address')} />
+          <EditableField icon={Briefcase} label="Account Type" value={account.account_type ?? ''} type="select" options={ACCOUNT_TYPE_OPTIONS} onSave={makeAccountSaver('account_type')} />
+          <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} onSave={makeAccountSaver('entity_type')} />
+          <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
+          <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
+          <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
+          <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
+          <EditableField icon={Shield} label="Registered Agent" value={account.registered_agent ?? ''} onSave={makeAccountSaver('registered_agent')} />
+          <EditableField icon={Calendar} label="RA Renewal" value={account.ra_renewal_date ?? ''} type="date" onSave={makeAccountSaver('ra_renewal_date')} />
+          <EditableField icon={MapPin} label="Address" value={account.physical_address ?? ''} type="textarea" onSave={makeAccountSaver('physical_address')} />
           {account.gdrive_folder_url && (
             <div className="flex items-center gap-2">
               <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -566,10 +552,10 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
         <div className="grid gap-3 text-sm">
-          <EditableField icon={CreditCard} label="1st Installment" value={account.installment_1_amount?.toString() ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('installment_1_amount')} />
-          <EditableField icon={Globe} label="1st Currency" value={account.installment_1_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} readOnly={!isAdmin} onSave={makeAccountSaver('installment_1_currency')} />
-          <EditableField icon={CreditCard} label="2nd Installment" value={account.installment_2_amount?.toString() ?? ''} readOnly={!isAdmin} onSave={makeAccountSaver('installment_2_amount')} />
-          <EditableField icon={Globe} label="2nd Currency" value={account.installment_2_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} readOnly={!isAdmin} onSave={makeAccountSaver('installment_2_currency')} />
+          <EditableField icon={CreditCard} label="1st Installment" value={account.installment_1_amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
+          <EditableField icon={Globe} label="1st Currency" value={account.installment_1_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
+          <EditableField icon={CreditCard} label="2nd Installment" value={account.installment_2_amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
+          <EditableField icon={Globe} label="2nd Currency" value={account.installment_2_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
         </div>
       </div>
 
@@ -577,7 +563,6 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
       <ContactsSection
         contacts={contacts}
         account={account}
-        isAdmin={isAdmin}
         makeContactSaver={makeContactSaver}
       />
 
@@ -587,25 +572,23 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
         {account.notes && (
           <p className="text-sm whitespace-pre-wrap bg-zinc-50 p-3 rounded-md">{account.notes}</p>
         )}
-        {isAdmin && (
-          <div className="flex gap-2">
-            <textarea
-              value={noteText}
-              onChange={e => setNoteText(e.target.value)}
-              placeholder="Add a note..."
-              rows={2}
-              className="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-            />
-            <button
-              onClick={handleAddNote}
-              disabled={addingNote || !noteText.trim()}
-              className="px-3 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 self-end"
-            >
-              {addingNote ? 'Adding...' : 'Add'}
-            </button>
-          </div>
-        )}
-        {!account.notes && !isAdmin && (
+        <div className="flex gap-2">
+          <textarea
+            value={noteText}
+            onChange={e => setNoteText(e.target.value)}
+            placeholder="Add a note..."
+            rows={2}
+            className="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          />
+          <button
+            onClick={handleAddNote}
+            disabled={addingNote || !noteText.trim()}
+            className="px-3 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 self-end"
+          >
+            {addingNote ? 'Adding...' : 'Add'}
+          </button>
+        </div>
+        {!account.notes && (
           <p className="text-sm text-muted-foreground">No notes</p>
         )}
       </div>

@@ -3,7 +3,6 @@ import { LeadsTable } from '@/components/leads/leads-table'
 import { LeadsKanban } from './components/leads-kanban'
 import { LeadsViewToggle } from './components/leads-view-toggle'
 import { CreateLeadButton } from './components/create-lead-button'
-import { isAdmin } from '@/lib/auth'
 import type { LeadListItem } from '@/lib/types'
 
 const PAGE_SIZE = 50
@@ -14,8 +13,6 @@ export default async function LeadsPage({
   searchParams: { q?: string; status?: string; page?: string; view?: string }
 }) {
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  const admin = user ? isAdmin(user) : false
   const query = searchParams.q?.trim() ?? ''
   const statusFilter = searchParams.status ?? 'all'
   const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
@@ -86,7 +83,7 @@ export default async function LeadsPage({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {admin && <CreateLeadButton />}
+          <CreateLeadButton />
           <LeadsViewToggle currentView={viewMode} />
         </div>
       </div>
