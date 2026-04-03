@@ -135,6 +135,69 @@ export default async function FinancePage({
   const bankFeedTotalCount = bankFeedCountRes.count ?? bankFeeds.length
   const bankOpenInvoices = bankOpenInvoicesRes.data ?? []
 
+  // ── Overview: aging, cash received, avg days, audit log ──
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+
+  const [agingRes, cashRes, paidInvoicesRes, recentAuditRes] = await Promise.all([
+    // Open invoices with due_date for aging buckets
+    supabaseAdmin
+      .from('client_invoices')
+      .select('id, status, total, amount_due, due_date, account_id')
+      .in('status', ['Sent', 'Overdue', 'Partial'])
+      .not('status', 'in', '("Cancelled","Split")'),
+    // Cash received this month
+    supabaseAdmin
+      .from('client_invoices')
+      .select('amount_paid')
+      .eq('status', 'Paid')
+      .gte('paid_date', monthStart),
+    // Paid invoices for avg days to pay
+    supabaseAdmin
+      .from('client_invoices')
+      .select('issue_date, paid_date')
+      .eq('status', 'Paid')
+      .not('paid_date', 'is', null)
+      .not('issue_date', 'is', null)
+      .order('paid_date', { ascending: false })
+      .limit(100),
+    // Recent audit log for activity feed
+    supabaseAdmin
+      .from('invoice_audit_log')
+      .select('*, client_invoices!invoice_id(invoice_number, accounts:account_id(company_name))')
+      .order('performed_at', { ascending: false })
+      .limit(20),
+  ])
+
+  // Aging buckets
+  const today = new Date()
+  const agingBuckets = { current: { amount: 0, count: 0 }, d1_30: { amount: 0, count: 0 }, d31_60: { amount: 0, count: 0 }, d60plus: { amount: 0, count: 0 } }
+  for (const inv of (agingRes.data ?? [])) {
+    const amt = Number(inv.amount_due ?? inv.total ?? 0)
+    if (!inv.due_date) { agingBuckets.current.amount += amt; agingBuckets.current.count++; continue }
+    const dueDate = new Date(inv.due_date)
+    const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
+    if (daysOverdue <= 0) { agingBuckets.current.amount += amt; agingBuckets.current.count++ }
+    else if (daysOverdue <= 30) { agingBuckets.d1_30.amount += amt; agingBuckets.d1_30.count++ }
+    else if (daysOverdue <= 60) { agingBuckets.d31_60.amount += amt; agingBuckets.d31_60.count++ }
+    else { agingBuckets.d60plus.amount += amt; agingBuckets.d60plus.count++ }
+  }
+
+  // Cash received this month
+  const cashThisMonth = (cashRes.data ?? []).reduce((s, i) => s + Number(i.amount_paid ?? 0), 0)
+
+  // Avg days to pay (from last 100 paid invoices)
+  const daysList = (paidInvoicesRes.data ?? [])
+    .map(i => {
+      const issue = new Date(i.issue_date as string)
+      const paid = new Date(i.paid_date as string)
+      return Math.floor((paid.getTime() - issue.getTime()) / (1000 * 60 * 60 * 24))
+    })
+    .filter(d => d >= 0 && d < 365)
+  const avgDaysToPay = daysList.length > 0 ? Math.round(daysList.reduce((a, b) => a + b, 0) / daysList.length) : 0
+
+  const recentAuditLog = recentAuditRes.data ?? []
+
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
   const totalOutstanding = allInvoices
@@ -155,7 +218,9 @@ export default async function FinancePage({
         clientCreditNotes={clientCreditNotes}
         clientAuditLog={clientAuditLog}
         clientPaymentHistory={clientPaymentHistory}
-        stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientList.filter(c => c.invoice_count > 0).length }}
+        stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientList.filter(c => c.invoice_count > 0).length, cashThisMonth, avgDaysToPay }}
+        agingBuckets={agingBuckets}
+        recentAuditLog={recentAuditLog}
         bankFeeds={bankFeeds}
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}

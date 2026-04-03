@@ -27,7 +27,9 @@ interface Props {
   clientCreditNotes: Array<Record<string, unknown>>
   clientAuditLog: Array<Record<string, unknown>>
   clientPaymentHistory: Array<Record<string, unknown>>
-  stats: { totalOutstanding: number; totalOverdue: number; overdueCount: number; clientCount: number }
+  stats: { totalOutstanding: number; totalOverdue: number; overdueCount: number; clientCount: number; cashThisMonth: number; avgDaysToPay: number }
+  agingBuckets: { current: { amount: number; count: number }; d1_30: { amount: number; count: number }; d31_60: { amount: number; count: number }; d60plus: { amount: number; count: number } }
+  recentAuditLog: Array<Record<string, unknown>>
   bankFeeds: BankFeedRecord[]
   bankOpenInvoices: OpenInvoice[]
   bankFeedTotalCount: number
@@ -42,7 +44,7 @@ const tabs = [
 export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
-  stats, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
+  stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -111,7 +113,7 @@ export function FinanceDashboard({
           />
         )}
         {tab === 'overview' && (
-          <OverviewTab stats={stats} clientList={clientList} />
+          <OverviewTab stats={stats} clientList={clientList} agingBuckets={agingBuckets} recentAuditLog={recentAuditLog} />
         )}
       </div>
     </div>

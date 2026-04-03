@@ -66,7 +66,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; overdueInvoices?: number }
   enabledFeatures?: string[]
 }
 
@@ -170,6 +170,7 @@ export function Sidebar({
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
   const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
+  const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const pathnameRef = useRef(pathname)
 
   // Keep pathname ref in sync for use inside realtime callback
@@ -192,6 +193,9 @@ export function Sidebar({
           }
           if (typeof data.inbox === 'number' && pathnameRef.current !== '/inbox') {
             setLiveInbox(data.inbox)
+          }
+          if (typeof data.overdueInvoices === 'number') {
+            setLiveOverdue(data.overdueInvoices)
           }
         })
         .catch(() => {})
@@ -311,6 +315,7 @@ export function Sidebar({
       if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
       if (item.id === 'tasks' && badgeCounts?.tasks) return { ...item, badge: badgeCounts.tasks }
       if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
+      if (item.id === 'finance' && liveOverdue > 0) return { ...item, badge: liveOverdue }
       return item
     })
     .filter((item): item is NavItem => {

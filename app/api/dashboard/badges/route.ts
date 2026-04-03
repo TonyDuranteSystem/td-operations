@@ -22,7 +22,7 @@ function getDb() {
 export async function GET() {
   try {
     // Run all queries in parallel
-    const [portalResult, internalResult, gmailSupportResult, gmailAntonioResult, tasksResult] = await Promise.allSettled([
+    const [portalResult, internalResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult] = await Promise.allSettled([
       // Portal chats: count unread client messages using select('id') instead of head:true
       getDb()
         .from('portal_messages')
@@ -46,6 +46,11 @@ export async function GET() {
         .select('id')
         .in('status', ['To Do', 'In Progress', 'Waiting'])
         .limit(1000),
+      // Overdue invoices for Finance badge
+      getDb()
+        .from('client_invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'Overdue'),
     ])
 
     // Portal chats count (client messages + internal team messages)
@@ -82,7 +87,13 @@ export async function GET() {
       tasks = tasksResult.value.data?.length ?? 0
     }
 
-    return NextResponse.json({ portalChats, inbox, tasks, _debug: { supportUnread, antonioUnread } })
+    // Overdue invoices count
+    let overdueInvoices = 0
+    if (overdueResult.status === 'fulfilled' && !overdueResult.value.error) {
+      overdueInvoices = overdueResult.value.count ?? 0
+    }
+
+    return NextResponse.json({ portalChats, inbox, tasks, overdueInvoices, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0 })

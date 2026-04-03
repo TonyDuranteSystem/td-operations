@@ -63,7 +63,17 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       }
     } catch { /* ignore */ }
 
-    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount }
+    // Overdue invoices count for Finance badge
+    let overdueInvoices = 0
+    try {
+      const { count } = await supabaseAdmin
+        .from('client_invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'Overdue')
+      overdueInvoices = count ?? 0
+    } catch { /* ignore */ }
+
+    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, overdueInvoices }
   } catch {
     return { inbox: 0, tasks: 0, portalChats: 0 }
   }
