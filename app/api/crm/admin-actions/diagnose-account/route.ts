@@ -145,7 +145,7 @@ export async function GET(req: NextRequest) {
       supabaseAdmin.from("tax_returns").select("id, tax_year, status")
         .eq("account_id", accountId).order("tax_year", { ascending: false }).limit(1),
       // Deadlines
-      supabaseAdmin.from("deadlines").select("id, type, due_date, status")
+      supabaseAdmin.from("deadlines").select("id, deadline_type, due_date, status")
         .eq("account_id", accountId),
     ])
 
@@ -163,7 +163,7 @@ export async function GET(req: NextRequest) {
     const bankingForms = (bankingResult.data || []) as { id: string; token: string; status: string; provider: string; submitted_data: Record<string, unknown> }[]
     const authUsers = (authUsersResult.data || []) as { id: string; email: string }[]
     const taxReturn = (taxReturnResult.data as unknown[])?.[0] as { id: string; tax_year: number; status: string } | undefined
-    const deadlines = (deadlinesResult.data || []) as { id: string; type: string; due_date: string; status: string }[]
+    const deadlines = (deadlinesResult.data || []) as { id: string; deadline_type: string; due_date: string; status: string }[]
 
     // ═══════════════════════════════
     // CATEGORY: Contact
@@ -287,16 +287,20 @@ export async function GET(req: NextRequest) {
     // CATEGORY: Service Delivery
     // ═══════════════════════════════
     const bundledPipelines = offer?.bundled_pipelines || []
-    const activeServices = services.filter(s => s.status === "active")
 
-    if (activeServices.length > 0) {
-      for (const sd of activeServices) {
+    // Show ALL service deliveries with their real status
+    if (services.length > 0) {
+      for (const sd of services) {
+        const sdStatus = sd.status === "active" ? "ok"
+          : sd.status === "Completed" || sd.status === "completed" ? "ok"
+            : sd.status === "cancelled" ? "info"
+              : "warning"
         checks.push({
           id: `sd_${sd.service_type.toLowerCase().replace(/\s+/g, "_")}`,
           category: "Services",
           label: sd.service_type,
-          status: "ok",
-          detail: `Stage: ${sd.stage} (${sd.stage_order}) — ${sd.assigned_to || "unassigned"}`,
+          status: sdStatus,
+          detail: `Status: ${sd.status}${sd.stage ? ` — Stage: ${sd.stage}` : ""}${sd.assigned_to ? ` — ${sd.assigned_to}` : ""}`,
         })
       }
     } else if (bundledPipelines.length > 0) {
@@ -305,14 +309,14 @@ export async function GET(req: NextRequest) {
         category: "Services",
         label: "Service deliveries",
         status: "error",
-        detail: `No active services. Expected from offer: ${bundledPipelines.join(", ")}`,
+        detail: `No services found. Expected from offer: ${bundledPipelines.join(", ")}`,
         fix: {
           action: "create_service_deliveries",
           label: "Create all missing services",
           params: { pipelines: bundledPipelines, account_id: accountId, contact_id: contactId },
         },
       })
-    } else if (services.length === 0) {
+    } else {
       checks.push({
         id: "sd_missing",
         category: "Services",
@@ -478,10 +482,16 @@ export async function GET(req: NextRequest) {
       } : undefined,
     })
 
-    // Determine expected tier
+    // Determine expected tier — account.status is the strongest signal for legacy clients
+    const isActiveAccount = account.status === "Active"
     const hasPaidPayment = paidPayments.length > 0
     const hasCompletedForm = formationSub?.status === "completed" || onboardingSub?.status === "completed"
-    const expectedTier = hasCompletedForm ? "active" : hasPaidPayment ? "onboarding" : "lead"
+    const hasCompletedServices = services.some(s => s.status === "Completed" || s.status === "completed")
+    const expectedTier = (isActiveAccount && (hasCompletedServices || hasCompletedForm)) ? "active"
+      : (isActiveAccount && account.portal_account) ? "active"  // legacy clients with portal access
+        : hasCompletedForm ? "active"
+          : hasPaidPayment ? "onboarding"
+            : "lead"
 
     checks.push({
       id: "portal_tier_contact",
@@ -545,8 +555,8 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    const hasAnnualReport = deadlines.some(d => d.type === "Annual Report")
-    const hasRaRenewal = deadlines.some(d => d.type === "RA Renewal")
+    const hasAnnualReport = deadlines.some(d => d.deadline_type === "Annual Report")
+    const hasRaRenewal = deadlines.some(d => d.deadline_type === "RA Renewal")
 
     if (!hasAnnualReport && account.status === "Active") {
       checks.push({
