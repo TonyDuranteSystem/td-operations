@@ -80,6 +80,7 @@ import { registerTestingTools } from "@/lib/mcp/tools/testing"
 import { registerHarborComplianceTools } from "@/lib/mcp/tools/harbor-compliance"
 import { registerDevTaskTools } from "@/lib/mcp/tools/dev-tasks"
 import { registerCalendarTools } from "@/lib/mcp/tools/calendar"
+import { registerReferralTools } from "@/lib/mcp/tools/referrals"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -134,6 +135,7 @@ const handler = createMcpHandler(
     registerHarborComplianceTools(server)
     registerDevTaskTools(server)
     registerCalendarTools(server)
+    registerReferralTools(server)
   },
   {
     capabilities: {},
