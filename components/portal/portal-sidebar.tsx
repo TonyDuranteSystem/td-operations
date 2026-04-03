@@ -22,6 +22,7 @@ import {
   ChevronDown,
   PenSquare,
   PenLine,
+  Share2,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -30,7 +31,7 @@ import { CompanySwitcher } from './company-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility } from '@/lib/portal/queries'
-import { isTierFeatureVisible } from '@/lib/portal/tier-config'
+import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
 
 interface PortalSidebarProps {
   user: { email?: string; user_metadata?: { full_name?: string } }
@@ -42,6 +43,7 @@ interface PortalSidebarProps {
   unreadChatCount?: number
   accountType?: string | null
   contactId?: string
+  portalRole?: string | null
 }
 
 // Nav items organized into collapsible groups
@@ -65,6 +67,7 @@ const topItems: NavItem[] = [
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
   { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'] },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
 ]
 
 // Grouped items — each item can have a visibilityKey
@@ -102,7 +105,7 @@ const GROUP_LABELS: Record<string, Record<string, string>> = {
   'nav.group.finance': { en: 'Finance', it: 'Finanza' },
 }
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -258,8 +261,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           </button>
         </div>
 
-        {/* Company Switcher */}
-        {(accounts.length > 0 || user.email) && (
+        {/* Company Switcher (hidden for partners — they don't have accounts) */}
+        {!isPartnerPortal(portalRole) && (accounts.length > 0 || user.email) && (
           <div className="px-3 py-3 border-b">
             <CompanySwitcher
               accounts={accounts}
@@ -281,18 +284,22 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {/* Top items (filtered by tier) */}
+          {/* Top items (filtered by tier + role) */}
           {topItems.filter(item => {
+            // Referrals: gate with tier feature visibility
+            if (item.key === 'nav.referrals') {
+              return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+            }
             if (!item.tierOnly) return true
             return item.tierOnly.includes(portalTier || 'lead')
           }).map(renderNavItem)}
 
-          {/* Collapsible groups */}
-          {navGroups.map(group => {
+          {/* Collapsible groups (hidden for partners) */}
+          {!isPartnerPortal(portalRole) && navGroups.map(group => {
             // Filter items by visibility flags
             const visibleItems = group.items.filter(item => {
               // Check tier visibility first
-              if (item.visibilityKey && !isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType)) return false
+              if (item.visibilityKey && !isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType, portalRole)) return false
               // Then check data-driven visibility
               if (!item.visibilityKey || !navVisibility) return true
               return navVisibility[item.visibilityKey]

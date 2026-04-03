@@ -50,6 +50,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'deadlines',
     'activity',
     'customers',
+    'referralManagement',
   ],
   full: [
     'dashboard',
@@ -66,7 +67,25 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'customers',
     'bankAccounts',
     'taxDocuments',
+    'referralManagement',
   ],
+}
+
+// Partner portal features — partners only see referral management + basic comms
+const PARTNER_FEATURES = [
+  'dashboard',
+  'referralManagement',
+  'chat',
+  'profile',
+  'guide',
+]
+
+/**
+ * Check if the portal user is a partner (referrer, not a client).
+ * Partners have a stripped-down portal: Dashboard, Referrals, Chat, Settings, Guide.
+ */
+export function isPartnerPortal(portalRole: string | null | undefined): boolean {
+  return portalRole === 'partner'
 }
 
 // Features excluded for One-Time accounts (standalone service customers)
@@ -90,7 +109,13 @@ export function isTierFeatureVisible(
   tier: PortalTier | string | null,
   featureKey: string,
   accountType?: string | null,
+  portalRole?: string | null,
 ): boolean {
+  // Partners get a stripped-down feature set regardless of tier
+  if (isPartnerPortal(portalRole)) {
+    return PARTNER_FEATURES.includes(featureKey)
+  }
+
   const t = (tier || 'lead') as PortalTier // Default to most restricted tier, not 'active'
   const allowed = TIER_FEATURES[t]
   if (!allowed) return true // Unknown tier = show everything (safe fallback)

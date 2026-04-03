@@ -548,14 +548,15 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
 
   server.tool(
     "portal_create_user",
-    "Create a portal login for a client. Creates a Supabase Auth user with client role, sets temp password, marks account as portal-enabled. Returns login URL + temp password. For LLC clients: pass account_id. For leads without account: pass email + full_name directly.",
+    "Create a portal login for a client or partner. Creates a Supabase Auth user with client role, sets temp password, marks account as portal-enabled. Returns login URL + temp password. For LLC clients: pass account_id. For leads without account: pass email + full_name directly. For partners: set portal_role='partner' — auto-sets tier to active, generates referral_code, and sets referrer_type.",
     {
       account_id: z.string().uuid().optional().describe("CRM account UUID (for LLC clients)"),
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
       email: z.string().optional().describe("Email address (for leads without account -- use instead of account_id)"),
       full_name: z.string().optional().describe("Full name (for leads without account)"),
+      portal_role: z.enum(["client", "partner"]).optional().default("client").describe("Portal role: 'client' (default) or 'partner' (referrer portal with referral tracking)"),
     },
-    async ({ account_id, contact_id, email: directEmail, full_name: directName }) => {
+    async ({ account_id, contact_id, email: directEmail, full_name: directName, portal_role: portalRole }) => {
       try {
         let userEmail = directEmail
         let userName = directName || "Client"
@@ -623,30 +624,62 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         }
 
         if (resolvedContactId) {
-          await supabaseAdmin.from("contacts").update({ portal_tier: portalTier }).eq("id", resolvedContactId)
+          const contactUpdates: Record<string, unknown> = { portal_tier: portalTier }
+
+          // Partner-specific setup
+          if (portalRole === "partner") {
+            contactUpdates.portal_role = "partner"
+            contactUpdates.portal_tier = "active" // Partners always get active tier
+            contactUpdates.referrer_type = "partner"
+            portalTier = "active"
+          }
+
+          await supabaseAdmin.from("contacts").update(contactUpdates).eq("id", resolvedContactId)
+
+          // Generate referral code for partners
+          let referralCode: string | undefined
+          if (portalRole === "partner") {
+            const { generateReferralCode } = await import("@/lib/referral-utils")
+            referralCode = await generateReferralCode(userName, supabaseAdmin)
+            await supabaseAdmin.from("contacts").update({ referral_code: referralCode }).eq("id", resolvedContactId)
+          }
+        }
+
+        // For partner referral code in response message
+        let referralCode: string | undefined
+        if (portalRole === "partner" && resolvedContactId) {
+          const { data: codeData } = await supabaseAdmin.from("contacts").select("referral_code").eq("id", resolvedContactId).single()
+          referralCode = codeData?.referral_code || undefined
         }
 
         logAction({
           action_type: "create", table_name: "auth.users",
           record_id: newUser.user.id, account_id: account_id || undefined,
-          summary: `Portal user created: ${userName} (${userEmail}). IMPORTANT: Credentials email NOT sent yet -- send via gmail_send then update contacts.portal_email_sent_at.`,
+          summary: `Portal user created: ${userName} (${userEmail})${portalRole === "partner" ? " [PARTNER]" : ""}. IMPORTANT: Credentials email NOT sent yet -- send via gmail_send then update contacts.portal_email_sent_at.`,
         })
+
+        const lines = [
+          `Portal account created${portalRole === "partner" ? " (Partner)" : ""}`,
+          `${userName} (${userEmail})`,
+          `Temp password: ${tempPassword}`,
+          `Login: ${PORTAL_BASE_URL}/portal/login`,
+        ]
+        if (referralCode) {
+          lines.push(``, `Referral code: ${referralCode}`, `Referral link: ${APP_BASE_URL}/r/${referralCode}`)
+        }
+        lines.push(
+          ``,
+          `${portalRole === "partner" ? "Partner" : "Client"} will be asked to change password on first login.`,
+          ``,
+          `IMPORTANT: Credentials email has NOT been sent yet.`,
+          `After sending the email with gmail_send, you MUST update the contact:`,
+          `crm_update_record(contacts, ${resolvedContactId || '<contact_id>'}, {portal_email_sent_at: '${new Date().toISOString().split("T")[0]}', portal_email_template: '<template_name>'})`,
+        )
 
         return {
           content: [{
             type: "text" as const,
-            text: [
-              `Portal account created`,
-              `${userName} (${userEmail})`,
-              `Temp password: ${tempPassword}`,
-              `Login: ${PORTAL_BASE_URL}/portal/login`,
-              ``,
-              `Client will be asked to change password on first login.`,
-              ``,
-              `IMPORTANT: Credentials email has NOT been sent yet.`,
-              `After sending the email with gmail_send, you MUST update the contact:`,
-              `crm_update_record(contacts, ${resolvedContactId || '<contact_id>'}, {portal_email_sent_at: '${new Date().toISOString().split("T")[0]}', portal_email_template: '<template_name>'})`,
-            ].join("\n"),
+            text: lines.join("\n"),
           }],
         }
       } catch (error) {

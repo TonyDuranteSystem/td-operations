@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getContactOnlyNavVisibility, getUnreadChatCount } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount } from '@/lib/portal/queries'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { LocaleProvider } from '@/components/portal/locale-provider'
@@ -69,10 +69,10 @@ export default async function PortalLayout({
   const showOnboarding = false // Disabled until tier-specific tour is built
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
-  // Portal tier: always from contacts table (source of truth)
-  const portalTier = contactId
-    ? await getPortalTierByContact(contactId)
-    : (user.app_metadata?.portal_tier as string) || 'lead'
+  // Portal tier + role: always from contacts table (source of truth)
+  const [portalTier, portalRole] = contactId
+    ? await Promise.all([getPortalTierByContact(contactId), getPortalRoleByContact(contactId)])
+    : [(user.app_metadata?.portal_tier as string) || 'lead', null]
 
   // Account-level data: only if an account is selected
   const [activeServices, navVisibility, unreadChatCount] = selectedAccountId
@@ -100,6 +100,7 @@ export default async function PortalLayout({
             unreadChatCount={unreadChatCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
+            portalRole={portalRole}
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />

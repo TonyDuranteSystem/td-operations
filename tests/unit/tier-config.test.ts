@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isTierFeatureVisible, getDashboardVariant } from '@/lib/portal/tier-config'
+import { isTierFeatureVisible, getDashboardVariant, isPartnerPortal } from '@/lib/portal/tier-config'
 
 describe('isTierFeatureVisible', () => {
   // Lead tier — most restricted
@@ -74,6 +74,58 @@ describe('isTierFeatureVisible', () => {
   // Unknown tier shows everything (safe fallback)
   it('unknown tier shows everything', () => {
     expect(isTierFeatureVisible('xyz', 'services')).toBe(true)
+  })
+
+  // Partner role — only partner features visible
+  it('partner: shows referralManagement', () => {
+    expect(isTierFeatureVisible('active', 'referralManagement', null, 'partner')).toBe(true)
+  })
+
+  it('partner: shows dashboard', () => {
+    expect(isTierFeatureVisible('active', 'dashboard', null, 'partner')).toBe(true)
+  })
+
+  it('partner: shows chat', () => {
+    expect(isTierFeatureVisible('active', 'chat', null, 'partner')).toBe(true)
+  })
+
+  it('partner: hides services', () => {
+    expect(isTierFeatureVisible('active', 'services', null, 'partner')).toBe(false)
+  })
+
+  it('partner: hides billing', () => {
+    expect(isTierFeatureVisible('active', 'billing', null, 'partner')).toBe(false)
+  })
+
+  it('partner: hides documents', () => {
+    expect(isTierFeatureVisible('active', 'documents', null, 'partner')).toBe(false)
+  })
+
+  // Client referral management — visible at active/full tiers
+  it('active client: shows referralManagement', () => {
+    expect(isTierFeatureVisible('active', 'referralManagement')).toBe(true)
+  })
+
+  it('lead client: hides referralManagement', () => {
+    expect(isTierFeatureVisible('lead', 'referralManagement')).toBe(false)
+  })
+})
+
+describe('isPartnerPortal', () => {
+  it('returns true for partner', () => {
+    expect(isPartnerPortal('partner')).toBe(true)
+  })
+
+  it('returns false for client', () => {
+    expect(isPartnerPortal('client')).toBe(false)
+  })
+
+  it('returns false for null', () => {
+    expect(isPartnerPortal(null)).toBe(false)
+  })
+
+  it('returns false for undefined', () => {
+    expect(isPartnerPortal(undefined)).toBe(false)
   })
 })
 

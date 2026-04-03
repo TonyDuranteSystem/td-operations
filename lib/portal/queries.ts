@@ -338,6 +338,16 @@ export async function getPortalTierByContact(contactId: string): Promise<string>
   return data?.portal_tier || 'lead'
 }
 
+export async function getPortalRoleByContact(contactId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('contacts')
+    .select('portal_role')
+    .eq('id', contactId)
+    .single()
+
+  return data?.portal_role || null
+}
+
 /**
  * Nav visibility for contacts WITHOUT any account (e.g., ITIN-only clients).
  * Only contact-level features are visible.
