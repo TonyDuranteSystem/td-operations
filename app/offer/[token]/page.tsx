@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
@@ -128,14 +128,6 @@ function formatDate(d: string, lang: 'en' | 'it') {
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`
 }
 
-function calcSurcharge(amountStr: string, pct: number = 5): string {
-  const currency = amountStr.match(/^[^0-9]*/)?.[0] || '$'
-  const num = parseFloat(amountStr.replace(/[^0-9.]/g, ''))
-  if (isNaN(num)) return amountStr
-  const total = Math.round(num * (1 + pct / 100))
-  return `${currency}${total.toLocaleString()}`
-}
-
 const COOKIE_NAME = 'offer_verified'
 
 function setVerifiedCookie(token: string) {
@@ -174,6 +166,31 @@ export default function OfferPage() {
   const [selectedOptional, setSelectedOptional] = useState<Set<string>>(new Set())
 
   const L = LABELS[lang]
+
+  // Dynamic total based on selected optional services
+  const dynamicTotal = useMemo(() => {
+    if (!offer || !offer.services) return null
+    const services = Array.isArray(offer.services) ? offer.services : []
+    let total = 0
+    let currency = 'EUR'
+    for (const svc of services) {
+      const isOpt = !!(svc as any).optional
+      const isSelected = !isOpt || selectedOptional.has(svc.name)
+      if (!isSelected) continue
+      const priceStr = String(svc.price || '0')
+      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
+      if (!isNaN(priceNum) && priceNum > 0) total += priceNum
+      if (/\$|usd/i.test(priceStr)) currency = '$'
+      else if (/EUR/i.test(priceStr)) currency = 'EUR'
+    }
+    if (total <= 0) return null
+    const symbol = currency === '$' ? '$' : 'EUR'
+    return {
+      total,
+      formatted: `${symbol}${total.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      cardFormatted: `${symbol}${Math.round(total * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+    }
+  }, [offer, selectedOptional])
 
   const loadOffer = useCallback(async () => {
     try {
@@ -233,7 +250,7 @@ export default function OfferPage() {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, accessCode])
+  }, [token, accessCode, isPreview])
 
   function trackView(o: Offer) {
     supabasePublic
@@ -333,7 +350,7 @@ export default function OfferPage() {
 
   const o = offer
   const isSigned = o.status === 'signed' || o.status === 'completed'
-  const ptype = o.payment_type || 'none'
+  const _ptype = o.payment_type || 'none'
 
   return (
     <>
@@ -481,10 +498,23 @@ export default function OfferPage() {
                   <div key={i} className="offer-riepilogo-section">
                     <h4>{r.label}</h4>
                     <div className="offer-riepilogo-line" />
-                    {r.items?.map((item, j) => (
-                      <div key={j} className="offer-riepilogo-row"><span>{item.name}</span><span className="offer-riepilogo-price">{item.price}</span></div>
-                    ))}
-                    <div className="offer-riepilogo-total"><span>{r.total_label || L.total}</span><span>{r.total}</span></div>
+                    {r.items?.map((item, j) => {
+                      // Dim items linked to deselected optional services
+                      const optSvc = o.services?.find(s => (s as any).optional && item.name?.toLowerCase().includes(s.name?.toLowerCase()))
+                      const isDimmed = optSvc && !selectedOptional.has(optSvc.name)
+                      return (
+                        <div key={j} className="offer-riepilogo-row" style={isDimmed ? { opacity: 0.35, textDecoration: 'line-through' } : undefined}>
+                          <span>{item.name}</span><span className="offer-riepilogo-price">{item.price}</span>
+                        </div>
+                      )
+                    })}
+                    {/* Show dynamic total if available (first cost section only), otherwise static */}
+                    <div className="offer-riepilogo-total">
+                      <span>{r.total_label || L.total}</span>
+                      <span style={i === 0 && dynamicTotal ? { transition: 'all 0.3s' } : undefined}>
+                        {i === 0 && dynamicTotal ? dynamicTotal.formatted : r.total}
+                      </span>
+                    </div>
                   </div>
                 ))}
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
@@ -531,30 +561,30 @@ export default function OfferPage() {
 
             {isSigned && <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>}
 
-            {/* Payment Info — informational only, no buttons */}
-            {(o.payment_links?.length || o.bank_details) && (
+            {/* Payment Info — informational, dynamic based on selected services */}
+            {(dynamicTotal || o.payment_links?.length || o.bank_details) && (
               <div className="offer-pay-info">
-                {o.payment_links?.length && o.bank_details ? (
+                {(o.payment_type === 'checkout' || o.payment_links?.length) && o.bank_details ? (
                   <>
                     <div className="offer-pay-info-row">
                       <span>&#128179; {L.payByCard}</span>
-                      <span className="offer-pay-info-price">{o.payment_links[0].amount} <span className="offer-surcharge-tag">+5%</span></span>
+                      <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.cardFormatted : (o.payment_links?.[0]?.amount ?? '')} <span className="offer-surcharge-tag">+5%</span></span>
                     </div>
                     <div className="offer-pay-info-or">{lang === 'it' ? 'oppure' : 'or'}</div>
                     <div className="offer-pay-info-row">
                       <span>&#127974; {L.payByTransfer}</span>
-                      <span className="offer-pay-info-price">{o.bank_details.amount}</span>
+                      <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.formatted : (o.bank_details?.amount ?? '')}</span>
                     </div>
                   </>
-                ) : o.payment_links?.length ? (
+                ) : (o.payment_type === 'checkout' || o.payment_links?.length) ? (
                   <div className="offer-pay-info-row">
                     <span>&#128179; {L.payByCard}</span>
-                    <span className="offer-pay-info-price">{o.payment_links[0].amount}</span>
+                    <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.cardFormatted : (o.payment_links?.[0]?.amount ?? '')}</span>
                   </div>
                 ) : o.bank_details ? (
                   <div className="offer-pay-info-row">
                     <span>&#127974; {L.payByTransfer}</span>
-                    <span className="offer-pay-info-price">{o.bank_details.amount}</span>
+                    <span className="offer-pay-info-price">{dynamicTotal ? dynamicTotal.formatted : (o.bank_details?.amount ?? '')}</span>
                   </div>
                 ) : null}
                 <p className="offer-pay-info-note">{lang === 'it' ? 'Sceglierai il metodo di pagamento dopo la firma del contratto.' : 'You will choose your payment method after signing the contract.'}</p>
@@ -570,7 +600,7 @@ export default function OfferPage() {
               <div className="offer-contract-cta">
                 <a href={`/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`}
                   className="offer-accept-btn"
-                  onClick={async (e) => {
+                  onClick={async (_e) => {
                     // Save selections to DB before navigating
                     const allSelected = (o.services || [])
                       .filter(sv => !(sv as any).optional || selectedOptional.has(sv.name))

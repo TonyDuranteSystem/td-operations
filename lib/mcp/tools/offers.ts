@@ -559,13 +559,21 @@ Token must be unique (format: firstname-lastname-year). Set language to match th
 
 Status starts as 'draft'. Use offer_send to approve and deliver — offer_send automatically creates portal access for the client, sends them login credentials via email, and activates the full portal onboarding experience.
 
-When payment_type='checkout', a Stripe Checkout page is auto-generated with the service name and amount. Default gateway is Stripe.
+When payment_type='checkout', a Stripe Checkout session is created AFTER the client signs (deferred). The amount is calculated from the services the client selected. This means optional services that the client deselects are NOT charged.
 
 IMPORTANT: All offer content that appears in the contract (services, cost_summary, recurring_costs) MUST be in English. The offer intro and UI follow the offer language, but contract content is always English.
 
+SERVICES STRUCTURE:
+- Each service can be: required (default) or optional (client can toggle on/off)
+- Set optional=true for add-on services (e.g., ITIN). The client sees a checkbox.
+- Set recommended=true on optional services to pre-select them (highlighted as "RECOMMENDED")
+- Set pipeline_type on each service that should create a service_delivery pipeline on activation
+- Example: {name: "ITIN Application", price: "EUR500", optional: true, recommended: true, pipeline_type: "ITIN"}
+- The cost_summary should show the FULL total (all services including optional). The offer page dynamically adjusts the displayed total when clients deselect optional services.
+
 Contract types: 'formation' (LLC to create), 'onboarding' (LLC already exists), 'tax_return' (standalone tax filing), 'itin' (standalone ITIN application).
 
-IMPORTANT: Always set bundled_pipelines to list which service deliveries to create when the client pays. Each pipeline type becomes a separate tracked delivery. Example: formation + ITIN = ['Company Formation', 'ITIN'].`,
+IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries (including optional ones). When the client deselects an optional service at signing, its pipeline_type is automatically removed from bundled_pipelines before activation.`,
     {
       token: z.string().describe("Unique token (e.g. 'mario-rossi-2026')"),
       client_name: z.string().describe("Client full name"),
@@ -575,7 +583,7 @@ IMPORTANT: Always set bundled_pipelines to list which service deliveries to crea
       payment_type: z.enum(["checkout", "bank_transfer", "none"]).describe("Payment method"),
       payment_gateway: z.enum(["whop", "stripe"]).optional().describe("Payment gateway for checkout links. Default: 'stripe'. Use 'whop' only if specifically needed. Only applies when payment_type='checkout'."),
       // Content fields (JSONB — validated)
-      services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], recommended?}]"),
+      services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], optional?, recommended?, pipeline_type?}]. Set optional=true for add-on services (ITIN, Tax Return). Set recommended=true to pre-select. Set pipeline_type to create a service_delivery on activation."),
       cost_summary: z.any().describe("Cost summary: [{label, total?, total_label?, items?[{name, price}], rate?}]"),
       recurring_costs: z.any().optional().describe("Annual/recurring costs: [{label, price}]"),
       additional_services: z.any().optional().describe("Add-on services: same structure as services"),
@@ -722,85 +730,11 @@ IMPORTANT: Always set bundled_pipelines to list which service deliveries to crea
 
         const accessCode = data.access_code || ""
 
-        // Auto-create checkout plan if payment_type is checkout and no payment_links provided
-        let autoCheckoutLine = ""
-        if (params.payment_type === "checkout" && (!params.payment_links || (params.payment_links as unknown[]).length === 0)) {
-          try {
-            // Extract total amount from cost_summary
-            const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
-            const firstCost = costArr[0] as Record<string, unknown> | undefined
-            const totalStr = (firstCost?.total as string) || ""
-            const totalNum = parseFloat(totalStr.replace(/[^0-9.]/g, ""))
-            const isEUR = totalStr.includes("\u20AC") || totalStr.toUpperCase().includes("EUR")
-
-            if (totalNum > 0) {
-              const servArr = Array.isArray(params.services) ? params.services : []
-              const primaryService = (servArr[0] as Record<string, unknown>)?.name as string || undefined
-              const gateway = params.payment_gateway || "stripe"
-              const currencyVal: "usd" | "eur" = isEUR ? "eur" : "usd"
-              const cardAmount = Math.round(totalNum * 1.05)
-
-              if (gateway === "stripe") {
-                // Stripe Checkout
-                const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
-                const stripeResult = await createStripeCheckoutSession({
-                  clientName: params.client_name,
-                  amount: totalNum,
-                  currency: currencyVal,
-                  contractType: params.contract_type || "formation",
-                  serviceName: primaryService,
-                  clientEmail: params.client_email,
-                  offerToken: params.token,
-                  leadId: params.lead_id,
-                })
-
-                if (stripeResult.success && stripeResult.checkoutUrl) {
-                  await supabaseAdmin
-                    .from("offers")
-                    .update({
-                      payment_links: [{
-                        url: stripeResult.checkoutUrl,
-                        label: `Pay ${isEUR ? "\u20AC" : "$"}${totalNum.toLocaleString()} by Card`,
-                        amount: cardAmount,
-                        gateway: "stripe",
-                      }],
-                    })
-                    .eq("token", params.token)
-
-                  autoCheckoutLine = `\n💳 Stripe session auto-created: ${stripeResult.sessionId}\n   Checkout: ${stripeResult.checkoutUrl}`
-                }
-              } else {
-                // Whop (default)
-                const { createWhopPlan } = await import("@/lib/whop-auto-plan")
-                const whopResult = await createWhopPlan({
-                  clientName: params.client_name,
-                  amount: totalNum,
-                  currency: currencyVal,
-                  contractType: params.contract_type || "formation",
-                  serviceName: primaryService,
-                })
-
-                if (whopResult.success && whopResult.checkoutUrl) {
-                  await supabaseAdmin
-                    .from("offers")
-                    .update({
-                      payment_links: [{
-                        url: whopResult.checkoutUrl,
-                        label: `Pay ${isEUR ? "\u20AC" : "$"}${totalNum.toLocaleString()} by Card`,
-                        amount: cardAmount,
-                        gateway: "whop",
-                      }],
-                    })
-                    .eq("token", params.token)
-
-                  autoCheckoutLine = `\n💳 Whop plan auto-created: ${whopResult.planId}\n   Checkout: ${whopResult.checkoutUrl}`
-                }
-              }
-            }
-          } catch (checkoutErr) {
-            autoCheckoutLine = `\n⚠️ Checkout auto-plan failed: ${checkoutErr instanceof Error ? checkoutErr.message : String(checkoutErr)}`
-          }
-        }
+        // Stripe/Whop checkout is now DEFERRED — created at sign time via /api/offers/create-checkout
+        // This ensures the amount matches the client's selected optional services
+        const autoCheckoutLine = params.payment_type === "checkout"
+          ? "\n💳 Stripe checkout will be created at sign time (deferred — amount adjusts to selected services)"
+          : ""
 
         logAction({
           action_type: "create",

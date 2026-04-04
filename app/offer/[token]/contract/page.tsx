@@ -184,7 +184,7 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
 
 export default function ContractPage() {
   const params = useParams()
-  const router = useRouter()
+  const _router = useRouter()
   const searchParams = useSearchParams()
   const token = params.token as string
   const isCheckoutPreview = searchParams.get('checkout') === '1'
@@ -483,7 +483,32 @@ export default function ContractPage() {
       }
 
       // Post-sign behavior — show payment choice buttons
-      const hasCard = offer.payment_links && offer.payment_links.length > 0
+      // Create Stripe session dynamically based on selected services
+      const isCheckoutOffer = offer.payment_type === 'checkout' || (offer.payment_links && offer.payment_links.length > 0)
+      let stripeLink: { url: string; amount: string } | null = null
+
+      if (isCheckoutOffer) {
+        try {
+          const checkoutRes = await fetch('/api/offers/create-checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: offer.token }),
+          })
+          if (checkoutRes.ok) {
+            const checkoutData = await checkoutRes.json()
+            stripeLink = { url: checkoutData.checkoutUrl, amount: checkoutData.label }
+          }
+        } catch (e) {
+          console.warn('[contract] Failed to create Stripe checkout:', e)
+        }
+      }
+
+      // Fallback to existing payment_links if API failed
+      if (!stripeLink && offer.payment_links && offer.payment_links.length > 0) {
+        stripeLink = { url: offer.payment_links[0].url, amount: offer.payment_links[0].amount }
+      }
+
+      const hasCard = !!stripeLink
       const hasBank = !!offer.bank_details
       const successEl = document.getElementById('success-state')
 
@@ -495,12 +520,11 @@ export default function ContractPage() {
 
         // ── Choice buttons ──
         sh += '<div id="payment-choice">'
-        if (hasCard) {
-          const pl = offer.payment_links![0]
-          sh += `<a href="${esc(pl.url)}" class="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer">`
+        if (hasCard && stripeLink) {
+          sh += `<a href="${esc(stripeLink.url)}" class="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer">`
           sh += `<span class="ps-choice-icon">&#128179;</span>`
           sh += `<span class="ps-choice-label">${cl.payByCard}</span>`
-          sh += `<span class="ps-choice-price">${esc(pl.amount)}</span>`
+          sh += `<span class="ps-choice-price">${esc(stripeLink.amount)}</span>`
           if (hasBank) sh += `<span class="ps-choice-badge">+5%</span>`
           sh += '</a>'
         }
@@ -708,7 +732,7 @@ export default function ContractPage() {
   const zipInvalid = form.zip && !isValidZip(form.zip)
 
   // Build notice address
-  const clientNotice = [
+  const _clientNotice = [
     form.name,
     form.address,
     [form.city, form.state, form.zip].filter(Boolean).join(', '),
