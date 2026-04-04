@@ -178,10 +178,15 @@ export default function OfferPage() {
       const isSelected = !isOpt || selectedOptional.has(svc.name)
       if (!isSelected) continue
       const priceStr = String(svc.price || '0')
+      // Skip recurring/informational prices -- not one-time charges
+      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
+      if (/includ|inclus/i.test(priceStr)) continue
       const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
-      if (!isNaN(priceNum) && priceNum > 0) total += priceNum
-      if (/\$|usd/i.test(priceStr)) currency = '$'
-      else if (/EUR/i.test(priceStr)) currency = 'EUR'
+      if (!isNaN(priceNum) && priceNum > 0) {
+        total += priceNum
+        if (/\$|usd/i.test(priceStr)) currency = '$'
+        else if (/EUR/i.test(priceStr)) currency = 'EUR'
+      }
     }
     if (total <= 0) return null
     const symbol = currency === '$' ? '$' : 'EUR'

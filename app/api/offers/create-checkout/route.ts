@@ -57,16 +57,20 @@ export async function POST(req: NextRequest) {
 
       // Parse price (e.g. "EUR2,500", "$500", "Included")
       const priceStr = String(svc.price || "0")
+
+      // Skip recurring/informational prices -- not one-time charges
+      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
+      if (/includ|inclus/i.test(priceStr)) continue
+
       const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
 
       if (!isNaN(priceNum) && priceNum > 0) {
         total += priceNum
         selectedNames.push(name)
+        // Detect currency from one-time service prices
+        if (/\$|usd/i.test(priceStr)) currency = "usd"
+        else if (/EUR|euro/i.test(priceStr)) currency = "eur"
       }
-
-      // Detect currency from price string
-      if (/\$|usd/i.test(priceStr)) currency = "usd"
-      else if (/EUR|euro/i.test(priceStr)) currency = "eur"
     }
 
     // Fallback: if no parseable prices, use cost_summary[0].total
