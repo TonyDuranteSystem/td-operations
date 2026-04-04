@@ -195,7 +195,6 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       issue_date: today,
       due_date: due_date || null,
       paid_date: paidDateVal,
-      payment_date: paidDateVal || today,
       payment_type: 'Invoice',
       payment_method: payment_method || null,
       whop_payment_id: whop_payment_id || null,
