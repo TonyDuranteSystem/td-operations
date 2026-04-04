@@ -71,7 +71,7 @@ Do NOT describe this as "creating an offer" to the user — the offer is part of
 OFFER PREPARATION CHECKLIST — MANDATORY before creating any offer:
 1. Pull the most recent sent offer (offer_list status=sent + offer_get) as REFERENCE for structure. Copy the pattern, don't invent a new one.
 2. Pull call notes from Circleback (cb_list_calls + cb_get_call) AND Calendly (cal_list_bookings + cal_get_event_details) for each lead.
-3. Extract from the call: pricing discussed, services discussed, add-ons mentioned, referrer. NEVER assume prices — the deal makes the price.
+3. Extract from the call: setup fee discussed, annual maintenance discussed, services discussed, add-ons mentioned, referrer. NEVER assume prices — the deal makes the price. Setup fee and annual maintenance are TWO SEPARATE numbers. Annual maintenance depends on state of formation and company type, NOT on the setup fee. If either price is not clear from the call, ASK Antonio.
 4. Language: match the client's language. For Italian offers: intro, next_steps, strategy in Italian. Services names, cost_summary, recurring_costs always in English (contract content).
 5. Services discussed as add-ons during the call -> optional: true. If recommended during the call -> recommended: true. Always set pipeline_type on services that create deliveries.
 6. Annual maintenance is INFORMATIONAL — it shows what they pay from next year. It is NOT a one-time charge. Never include it in the payment total.
