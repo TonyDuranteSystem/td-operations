@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Share2, Users, TrendingUp, Wallet, Copy, Check, ExternalLink } from 'lucide-react'
+import { Share2, Users, TrendingUp, Wallet, Copy, Check, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { ReferralRow } from './page'
@@ -40,6 +40,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const filtered = referrals.filter(r => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false
@@ -52,6 +53,10 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
     setCopiedCode(code)
     toast.success('Referral link copied')
     setTimeout(() => setCopiedCode(null), 2000)
+  }
+
+  const toggleExpand = (id: string) => {
+    setExpandedId(prev => prev === id ? null : id)
   }
 
   return (
@@ -148,6 +153,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-zinc-50/50">
+                  <th className="w-8 px-2 py-2.5" />
                   <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Referrer</th>
                   <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Referred</th>
                   <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Type</th>
@@ -163,61 +169,141 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                   const tp = r.referrer_type ? typeConfig[r.referrer_type] : null
                   const displayReferred = r.referred_company || r.referred_name
                   const totalPaid = (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0)
+                  const isExpanded = expandedId === r.id
 
                   return (
-                    <tr key={r.id} className="hover:bg-zinc-50/50">
-                      <td className="px-5 py-3">
-                        <div className="font-medium text-zinc-900">{r.referrer_name || '—'}</div>
-                        {r.referrer_code && <div className="text-xs text-zinc-400">{r.referrer_code}</div>}
-                      </td>
-                      <td className="px-5 py-3">
-                        <div className="text-zinc-900">{displayReferred}</div>
-                        {r.offer_token && (
-                          <a
-                            href={`/offer/${r.offer_token}?preview=td`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-500 hover:underline inline-flex items-center gap-0.5"
-                          >
-                            View offer <ExternalLink className="h-3 w-3" />
-                          </a>
-                        )}
-                      </td>
-                      <td className="px-5 py-3">
-                        {tp ? (
-                          <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', tp.color)}>
-                            {tp.label}
+                    <>
+                      <tr
+                        key={r.id}
+                        className={cn('cursor-pointer transition-colors', isExpanded ? 'bg-zinc-50' : 'hover:bg-zinc-50/50')}
+                        onClick={() => toggleExpand(r.id)}
+                      >
+                        <td className="px-2 py-3 text-zinc-400">
+                          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="font-medium text-zinc-900">{r.referrer_name || '—'}</div>
+                          {r.referrer_code && <div className="text-xs text-zinc-400">{r.referrer_code}</div>}
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="text-zinc-900">{displayReferred}</div>
+                        </td>
+                        <td className="px-5 py-3">
+                          {tp ? (
+                            <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', tp.color)}>
+                              {tp.label}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-zinc-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.color)}>
+                            {s.label}
                           </span>
-                        ) : (
-                          <span className="text-xs text-zinc-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3">
-                        <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.color)}>
-                          {s.label}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        {r.commission_amount
-                          ? <span className="font-medium">€{Number(r.commission_amount).toLocaleString()}</span>
-                          : <span className="text-zinc-400">TBD</span>
-                        }
-                        {r.commission_type && (
-                          <div className="text-xs text-zinc-400">
-                            {r.commission_type === 'percentage' && r.commission_pct ? `${r.commission_pct}%` : r.commission_type}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        {totalPaid > 0
-                          ? <span className="font-medium text-emerald-600">€{totalPaid.toLocaleString()}</span>
-                          : <span className="text-zinc-400">€0</span>
-                        }
-                      </td>
-                      <td className="px-5 py-3 text-zinc-500">
-                        {r.created_at?.slice(0, 10)}
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {r.commission_amount
+                            ? <span className="font-medium">€{Number(r.commission_amount).toLocaleString()}</span>
+                            : <span className="text-zinc-400">TBD</span>
+                          }
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {totalPaid > 0
+                            ? <span className="font-medium text-emerald-600">€{totalPaid.toLocaleString()}</span>
+                            : <span className="text-zinc-400">€0</span>
+                          }
+                        </td>
+                        <td className="px-5 py-3 text-zinc-500">
+                          {r.created_at?.slice(0, 10)}
+                        </td>
+                      </tr>
+
+                      {/* Expanded Detail Row */}
+                      {isExpanded && (
+                        <tr key={`${r.id}-detail`} className="bg-zinc-50/80">
+                          <td colSpan={8} className="px-8 py-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 text-sm">
+                              {/* Commission Details */}
+                              <div>
+                                <h4 className="font-semibold text-zinc-700 mb-2">Commission Details</h4>
+                                <div className="space-y-1.5">
+                                  <DetailRow label="Type" value={r.commission_type || 'Not set'} />
+                                  {r.commission_pct != null && <DetailRow label="Percentage" value={`${r.commission_pct}%`} />}
+                                  <DetailRow label="Amount" value={r.commission_amount ? `€${Number(r.commission_amount).toLocaleString()}` : 'TBD'} />
+                                  <DetailRow label="Credited" value={`€${Number(r.credited_amount || 0).toLocaleString()}`} />
+                                  <DetailRow label="Paid Out" value={`€${Number(r.paid_amount || 0).toLocaleString()}`} />
+                                  <DetailRow
+                                    label="Remaining"
+                                    value={r.commission_amount
+                                      ? `€${(Number(r.commission_amount) - totalPaid).toLocaleString()}`
+                                      : '—'
+                                    }
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Referral Info */}
+                              <div>
+                                <h4 className="font-semibold text-zinc-700 mb-2">Referral Info</h4>
+                                <div className="space-y-1.5">
+                                  <DetailRow label="Referrer" value={r.referrer_name || '—'} />
+                                  <DetailRow label="Referred" value={r.referred_name} />
+                                  {r.referred_company && <DetailRow label="Company" value={r.referred_company} />}
+                                  <DetailRow label="Referrer Type" value={r.referrer_type || 'Not set'} />
+                                  <DetailRow label="Status" value={s.label} />
+                                </div>
+                              </div>
+
+                              {/* Links & Notes */}
+                              <div>
+                                <h4 className="font-semibold text-zinc-700 mb-2">Links & Notes</h4>
+                                <div className="space-y-1.5">
+                                  {r.offer_token && (
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-zinc-500">Offer:</span>
+                                      <a
+                                        href={`/offer/${r.offer_token}?preview=1`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-500 hover:underline inline-flex items-center gap-0.5"
+                                        onClick={e => e.stopPropagation()}
+                                      >
+                                        {r.offer_token} <ExternalLink className="h-3 w-3" />
+                                      </a>
+                                    </div>
+                                  )}
+                                  {r.referrer_code && (
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-zinc-500">Referral Link:</span>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); copyLink(r.referrer_code!) }}
+                                        className="text-blue-500 hover:underline inline-flex items-center gap-1 text-sm"
+                                      >
+                                        tonydurante.us/r/{r.referrer_code}
+                                        {copiedCode === r.referrer_code
+                                          ? <Check className="h-3 w-3 text-emerald-500" />
+                                          : <Copy className="h-3 w-3" />
+                                        }
+                                      </button>
+                                    </div>
+                                  )}
+                                  <DetailRow label="ID" value={r.id.slice(0, 8) + '...'} />
+                                  {r.notes && (
+                                    <div className="mt-2">
+                                      <span className="text-zinc-500">Notes:</span>
+                                      <p className="text-zinc-700 mt-0.5 text-xs bg-white rounded border px-2 py-1.5">
+                                        {r.notes}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   )
                 })}
               </tbody>
@@ -225,6 +311,15 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-zinc-500 shrink-0">{label}:</span>
+      <span className="text-zinc-900">{value}</span>
     </div>
   )
 }
