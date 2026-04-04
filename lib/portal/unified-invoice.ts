@@ -89,10 +89,8 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
     customerId = await resolveCustomerId(account_id, contact_id)
   }
 
-  // 2. Generate invoice number (INV-YYYY-SEQ — canonical format)
-  const ownerType = account_id ? 'account' as const : 'contact' as const
-  const ownerId = (account_id || contact_id)!
-  const invoiceNumber = await generateInvoiceNumber(ownerId, ownerType)
+  // 2. Generate invoice number (INV-NNNNNN — matches QB format, global sequence)
+  const invoiceNumber = await generateInvoiceNumber()
 
   // 3. Calculate totals (with optional tax)
   const items = line_items.map((item) => {
