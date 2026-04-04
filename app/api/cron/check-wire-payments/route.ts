@@ -183,12 +183,19 @@ export async function GET(req: NextRequest) {
 
     // ─── Step 6: Match all unmatched feeds against invoices ──────────
 
-    const { data: unmatchedFeeds } = await supabase
+    // Debug: count ALL feeds first
+    const { count: totalFeedCount } = await supabase
+      .from("td_bank_feeds")
+      .select("id", { count: "exact", head: true })
+
+    const { data: unmatchedFeeds, error: feedErr } = await supabase
       .from("td_bank_feeds")
       .select("id")
       .eq("status", "unmatched")
       .order("created_at", { ascending: false })
       .limit(100)
+
+    console.warn(`[check-wire] Feed debug: total=${totalFeedCount}, unmatched=${unmatchedFeeds?.length}, err=${feedErr?.message}`)
 
     let invoiceMatched = 0
     const matchResults: Array<{ feedId: string; matched: boolean; error?: string; confidence?: string }> = []
@@ -305,7 +312,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      version: "cfc516b",
+      version: "91c9ef2-debug",
+      total_feeds_in_table: totalFeedCount,
+      feed_query_error: feedErr?.message ?? null,
       new_feeds: newFeedCount + airwallexFeedCount,
       unmatched_feeds_found: unmatchedFeeds?.length ?? 0,
       invoice_matched: invoiceMatched,
