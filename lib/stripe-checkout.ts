@@ -8,9 +8,9 @@
  * enabling exact matching in the webhook (not just email-based).
  */
 
-import Stripe from "stripe"
+import StripeConstructor from "stripe"
 
-type StripeInstance = ReturnType<typeof Stripe>
+type StripeClient = ReturnType<typeof StripeConstructor>
 
 interface StripeCheckoutResult {
   success: boolean
@@ -19,12 +19,19 @@ interface StripeCheckoutResult {
   error?: string
 }
 
-let _stripe: StripeInstance | null = null
-function getStripe(): StripeInstance | null {
+let _stripe: StripeClient | null = null
+function getStripe(): StripeClient | null {
   if (!_stripe) {
     const key = process.env.STRIPE_SECRET_KEY
     if (!key) return null
-    _stripe = Stripe(key)
+    // Stripe SDK v22: CJS types say function call, but ESM runtime may need `new`
+    // Handle both cases to avoid "Class constructor cannot be invoked without new"
+    try {
+      _stripe = StripeConstructor(key)
+    } catch {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      _stripe = new (StripeConstructor as any)(key)
+    }
   }
   return _stripe
 }
