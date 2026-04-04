@@ -187,6 +187,14 @@ You have access to all registered MCP tools. Read each tool's description carefu
 - crm_dashboard_stats: Aggregate stats (counts, revenue, tasks).
 - crm_sync_airtable: Pull legacy Airtable data. Use only when CRM data is missing.
 
+### Referrals (5 tools: referral_*)
+- referral_create: Create a referral linking a referrer contact to a referred person. Set referrer_type: "client" (one-off referral, credit note) or "partner" (structured ongoing relationship like Valentini). Commission types: percentage (10%), price_difference (partner markup), credit_note.
+- referral_search: Search/filter referrals by referrer, status, referrer_type, offer. Returns referrer name, referred name, company, commission details.
+- referral_update: Update status (pending→converted→credited→paid), commission amount, referrer_type, link to account/contact.
+- referral_payout: Record a payout (credit_note, bank_transfer, invoice_deduction). Auto-updates referral status when fully paid.
+- referral_tracker: Dashboard view — status counts, pending/paid commission totals, top referrers. Optionally filter to single referrer.
+IMPORTANT: When creating a referral, always set referrer_type (client or partner) and commission_type. For partners like Valentini use referrer_type="partner", commission_type="percentage", commission_pct=10.
+
 ### Leads (4 tools: lead_*)
 - lead_search: Search leads by name, status, source, channel. Visual output grouped by status with icons.
 - lead_get: Full lead detail with linked call summaries and offer data.
