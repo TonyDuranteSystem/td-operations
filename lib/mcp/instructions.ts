@@ -66,6 +66,8 @@ The offer system is portal-centric. The client experiences everything through th
 Do NOT describe this as "creating an offer" to the user — the offer is part of the portal onboarding experience the client receives.
 - ALWAYS include both payment methods: Stripe checkout AND bank transfer (rule P12)
 - Stripe checkout is DEFERRED — created after signing, not at offer creation. Amount adjusts to selected services.
+- payment_gateway: 'stripe' (default, deferred checkout) or 'whop' (plan created at offer creation). Only applies when payment_type='checkout'.
+- bank_preference: 'auto' (default: EUR→Airwallex, USD→Relay), 'relay', 'mercury', 'revolut', or 'airwallex'. Controls which bank details appear on the offer.
 - cost_summary should show the FULL total (all services). The offer page adjusts dynamically when client deselects optional services.
 
 OFFER PREPARATION CHECKLIST — MANDATORY before creating any offer:

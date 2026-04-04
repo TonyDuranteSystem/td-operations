@@ -38,6 +38,48 @@ const RELAY_USD: BankDetails = {
   address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
 }
 
+const MERCURY_USD: BankDetails = {
+  beneficiary: "TONY DURANTE L.L.C.",
+  account_number: "202236384517",
+  routing_number: "091311229",
+  bank_name: "Choice Financial Group (via Mercury)",
+  address: "11761 80th Ave, Seminole, FL 33772",
+}
+
+const REVOLUT_USD: BankDetails = {
+  beneficiary: "TONY DURANTE L.L.C.",
+  account_number: "214414489805",
+  routing_number: "101019644",
+  bank_name: "Revolut",
+  address: "11761 80th Ave, Seminole, FL 33772",
+}
+
+export type BankPreference = "auto" | "relay" | "mercury" | "airwallex" | "revolut"
+
+export const BANK_ACCOUNTS: Record<BankPreference, { label: string; currency: string }> = {
+  auto: { label: "Auto (by currency)", currency: "auto" },
+  relay: { label: "Relay (USD)", currency: "USD" },
+  mercury: { label: "Mercury (USD)", currency: "USD" },
+  revolut: { label: "Revolut (USD)", currency: "USD" },
+  airwallex: { label: "Airwallex (EUR)", currency: "EUR" },
+}
+
+/**
+ * Get bank details for a specific bank preference.
+ * Used by create-offer API and MCP tool when a specific bank is selected.
+ */
+export function getBankDetailsByPreference(preference: BankPreference, currency?: string): BankDetails {
+  switch (preference) {
+    case "relay": return { ...RELAY_USD }
+    case "mercury": return { ...MERCURY_USD }
+    case "revolut": return { ...REVOLUT_USD }
+    case "airwallex": return { ...AIRWALLEX_EUR }
+    case "auto":
+    default:
+      return currency === "USD" ? { ...RELAY_USD } : { ...AIRWALLEX_EUR }
+  }
+}
+
 /**
  * Check if bank details contain placeholder or empty values
  */

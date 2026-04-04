@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { APP_BASE_URL } from '@/lib/config'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
+import { getBankDetailsByPreference, type BankPreference } from '@/app/offer/[token]/contract/bank-defaults'
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,6 +21,8 @@ export async function POST(req: NextRequest) {
       language,
       contract_type,
       payment_type,
+      payment_gateway,
+      bank_preference,
       services,
       cost_summary,
       recurring_costs,
@@ -82,21 +85,11 @@ export async function POST(req: NextRequest) {
     const isEUR = firstTotal.includes('€') || firstTotal.toUpperCase().includes('EUR')
       || servicesStr.includes('€') || servicesStr.toUpperCase().includes('EUR')
 
-    const bank_details = isEUR
-      ? {
-          beneficiary: 'TONY DURANTE L.L.C.',
-          iban: 'DK8989000023658198',
-          bic: 'SXPYDKKK',
-          bank_name: 'Banking Circle S.A. (via Airwallex)',
-          address: '10225 Ulmerton Rd, 3D, Largo, FL 33771',
-        }
-      : {
-          beneficiary: 'TONY DURANTE L.L.C.',
-          account_number: '200000306770',
-          routing_number: '064209588',
-          bank_name: 'Relay Financial',
-          address: '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
-        }
+    // Use bank_preference if specified, otherwise auto-detect by currency
+    const bank_details = getBankDetailsByPreference(
+      (bank_preference || 'auto') as BankPreference,
+      isEUR ? 'EUR' : 'USD'
+    )
 
     // Create offer
     const { data: offer, error: offerErr } = await supabaseAdmin
@@ -109,6 +102,7 @@ export async function POST(req: NextRequest) {
         offer_date: new Date().toISOString().split('T')[0],
         status: 'draft',
         payment_type: payment_type || 'bank_transfer',
+        payment_gateway: payment_gateway || 'stripe',
         contract_type: contract_type || 'formation',
         services,
         cost_summary,
@@ -135,9 +129,9 @@ export async function POST(req: NextRequest) {
       .update({ offer_link: offerUrl, offer_status: 'Draft' })
       .eq('id', lead_id)
 
-    // Auto-create Whop plan if checkout
+    // Auto-create Whop plan if checkout + whop gateway (Stripe checkout is deferred to sign time)
     let whopCheckoutUrl: string | null = null
-    if (payment_type === 'checkout') {
+    if (payment_type === 'checkout' && payment_gateway === 'whop') {
       try {
         const { createWhopPlan } = await import('@/lib/whop-auto-plan')
         const totalNum = parseFloat(firstTotal.replace(/[^0-9.]/g, ''))
@@ -160,6 +154,7 @@ export async function POST(req: NextRequest) {
                   url: whopResult.checkoutUrl,
                   label: `Pay ${isEUR ? '€' : '$'}${totalNum.toLocaleString()} by Card`,
                   amount: cardAmount,
+                  gateway: 'whop',
                 }],
               })
               .eq('token', token)
@@ -177,7 +172,7 @@ export async function POST(req: NextRequest) {
       table_name: 'offers',
       record_id: token,
       summary: `Offer created via CRM: ${client_name} (${token})`,
-      details: { lead_id, contract_type, payment_type, bundled_pipelines, source: 'crm-button' },
+      details: { lead_id, contract_type, payment_type, payment_gateway, bank_preference, bundled_pipelines, source: 'crm-button' },
     })
 
     return NextResponse.json({

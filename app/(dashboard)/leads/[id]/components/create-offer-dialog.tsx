@@ -33,8 +33,21 @@ interface SelectedService {
 const PAYMENT_TYPES = [
   { value: 'both', label: 'Let client decide (Recommended)' },
   { value: 'bank_transfer', label: 'Bank Transfer only' },
-  { value: 'checkout', label: 'Card only (Whop +5%)' },
+  { value: 'checkout', label: 'Card only (+5%)' },
   { value: 'none', label: 'No payment link' },
+]
+
+const PAYMENT_GATEWAYS = [
+  { value: 'stripe', label: 'Stripe (default)' },
+  { value: 'whop', label: 'Whop' },
+]
+
+const BANK_OPTIONS = [
+  { value: 'auto', label: 'Auto (by currency)' },
+  { value: 'relay', label: 'Relay (USD)' },
+  { value: 'mercury', label: 'Mercury (USD)' },
+  { value: 'revolut', label: 'Revolut (USD)' },
+  { value: 'airwallex', label: 'Airwallex (EUR)' },
 ]
 
 interface CreateOfferDialogProps {
@@ -65,6 +78,8 @@ export function CreateOfferDialog({
     leadLanguage === 'Italian' || leadLanguage === 'it' ? 'it' : 'en'
   )
   const [paymentType, setPaymentType] = useState('both')
+  const [paymentGateway, setPaymentGateway] = useState('stripe')
+  const [bankPreference, setBankPreference] = useState('auto')
   const [currency, setCurrency] = useState('EUR')
 
   // Selected services with prices
@@ -140,13 +155,19 @@ export function CreateOfferDialog({
 
     startTransition(async () => {
       try {
-        // Build services JSONB
+        // Build services JSONB — include contract_type and pipeline_type from catalog
         const servicesJson = selected
           .filter(s => s.price.trim())
-          .map(s => ({
-            name: SERVICE_CATALOG.find(c => c.id === s.id)!.name,
-            price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
-          }))
+          .map(s => {
+            const catalog = SERVICE_CATALOG.find(c => c.id === s.id)!
+            const svc: Record<string, unknown> = {
+              name: catalog.name,
+              price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
+            }
+            if (catalog.contractType) svc.contract_type = catalog.contractType
+            if (catalog.pipeline) svc.pipeline_type = catalog.pipeline
+            return svc
+          })
 
         // Build cost_summary JSONB
         const costItems = servicesJson.map(s => ({
@@ -186,6 +207,8 @@ export function CreateOfferDialog({
             language,
             contract_type: derivedContractType,
             payment_type: paymentType === 'both' ? 'checkout' : paymentType,
+            payment_gateway: paymentGateway,
+            bank_preference: bankPreference,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -341,6 +364,41 @@ export function CreateOfferDialog({
             </div>
           </div>
 
+          {/* Payment Gateway + Bank Account */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium mb-1">Payment Gateway</label>
+              <select
+                value={paymentGateway}
+                onChange={e => setPaymentGateway(e.target.value)}
+                disabled={paymentType === 'bank_transfer' || paymentType === 'none'}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:bg-zinc-100"
+              >
+                {PAYMENT_GATEWAYS.map(g => (
+                  <option key={g.value} value={g.value}>{g.label}</option>
+                ))}
+              </select>
+              {(paymentType === 'bank_transfer' || paymentType === 'none') && (
+                <p className="text-xs text-zinc-400 mt-0.5">N/A for this payment type</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Bank Account</label>
+              <select
+                value={bankPreference}
+                onChange={e => setBankPreference(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {BANK_OPTIONS.map(b => (
+                  <option key={b.value} value={b.value}>{b.label}</option>
+                ))}
+              </select>
+              {bankPreference === 'auto' && (
+                <p className="text-xs text-zinc-400 mt-0.5">EUR→Airwallex, USD→Relay</p>
+              )}
+            </div>
+          </div>
+
           {/* Annual Rates */}
           {showAnnual && (
             <div>
@@ -389,10 +447,13 @@ export function CreateOfferDialog({
               {(paymentType === 'checkout' || paymentType === 'both') && (
                 <p className="text-xs text-blue-800">
                   {paymentType === 'both'
-                    ? 'Client will see both options: bank transfer + card (+5%)'
-                    : 'Whop checkout link will be auto-created (+5% card fee)'}
+                    ? `Client will see both options: bank transfer + card via ${paymentGateway === 'whop' ? 'Whop' : 'Stripe'} (+5%)`
+                    : `${paymentGateway === 'whop' ? 'Whop' : 'Stripe'} checkout link (+5% card fee)`}
                 </p>
               )}
+              <p className="text-xs text-blue-800">
+                Bank: <span className="font-medium">{BANK_OPTIONS.find(b => b.value === bankPreference)?.label}</span>
+              </p>
             </div>
           )}
         </div>

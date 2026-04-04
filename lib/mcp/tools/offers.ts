@@ -17,6 +17,7 @@ import { getGreeting } from "@/lib/greeting"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
+import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 
 // ─── JSONB Validation Helpers ───────────────────────────────
 
@@ -582,6 +583,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
       offer_date: z.string().optional().describe("Offer date (YYYY-MM-DD, defaults to today)"),
       payment_type: z.enum(["checkout", "bank_transfer", "none"]).describe("Payment method"),
       payment_gateway: z.enum(["whop", "stripe"]).optional().describe("Payment gateway for checkout links. Default: 'stripe'. Use 'whop' only if specifically needed. Only applies when payment_type='checkout'."),
+      bank_preference: z.enum(["auto", "relay", "mercury", "revolut", "airwallex"]).optional().describe("Bank account for wire transfers. Default: 'auto' (EUR→Airwallex, USD→Relay). Options: 'relay' (USD), 'mercury' (USD), 'revolut' (USD), 'airwallex' (EUR). Saved to bank_details on the offer."),
       // Content fields (JSONB — validated)
       services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], optional?, recommended?, pipeline_type?, contract_type?}]. Set optional=true for add-on services (ITIN, Tax Return). Set recommended=true to pre-select. Set pipeline_type to create a service_delivery on activation. Set contract_type per service for multi-contract offers: services with a different contract_type than the offer's will render as separate standalone agreements (e.g., ITIN service with contract_type='itin' on a formation offer gets its own ITIN Agreement). Services without contract_type default to the offer's contract_type."),
       cost_summary: z.any().describe("Cost summary: [{label, total?, total_label?, items?[{name, price}], rate?}]"),
@@ -666,6 +668,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
             offer_date: params.offer_date || new Date().toISOString().split("T")[0],
             status: "draft",
             payment_type: params.payment_type,
+            payment_gateway: params.payment_gateway || "stripe",
             services: params.services,
             cost_summary: params.cost_summary,
             recurring_costs: params.recurring_costs,
@@ -679,32 +682,17 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
             intro_it: params.intro_it,
             payment_links: params.payment_links,
             bank_details: params.bank_details || (() => {
-              // Auto-select bank based on currency detected from cost_summary or services
+              // Auto-select bank based on bank_preference or currency
               const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
               const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
               const servicesStr = JSON.stringify(params.services || [])
               const isEUR = firstTotal.includes("\u20ac") || firstTotal.toUpperCase().includes("EUR")
                 || servicesStr.includes("\u20ac") || servicesStr.toUpperCase().includes("EUR")
 
-              if (isEUR) {
-                // Airwallex EUR account
-                return {
-                  beneficiary: "TONY DURANTE L.L.C.",
-                  iban: "DK8989000023658198",
-                  bic: "SXPYDKKK",
-                  bank_name: "Banking Circle S.A. (via Airwallex)",
-                  address: "10225 Ulmerton Rd, 3D, Largo, FL 33771",
-                }
-              } else {
-                // Relay USD account
-                return {
-                  beneficiary: "TONY DURANTE L.L.C.",
-                  account_number: "200000306770",
-                  routing_number: "064209588",
-                  bank_name: "Relay Financial",
-                  address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
-                }
-              }
+              return getBankDetailsByPreference(
+                (params.bank_preference || "auto") as BankPreference,
+                isEUR ? "EUR" : "USD"
+              )
             })(),
             effective_date: params.effective_date,
             expires_at: params.expires_at,
