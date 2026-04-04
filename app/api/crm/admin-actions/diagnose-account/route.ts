@@ -23,6 +23,12 @@ interface DiagnosticCheck {
     action: string
     label: string
     params: Record<string, unknown>
+    /** What this fix does — shown to user before confirming */
+    description: string
+    /** What downstream effects this has */
+    impact: string[]
+    /** Risk level: safe (no side effects), moderate (changes visible data), high (affects client) */
+    risk: "safe" | "moderate" | "high"
   }
 }
 
@@ -200,6 +206,9 @@ export async function GET(req: NextRequest) {
           action: "set_lead_converted",
           label: "Set to Converted",
           params: { lead_id: lead.id },
+          description: "Updates the lead status to 'Converted' in the leads table.",
+          impact: ["Lead will no longer appear in active leads list", "No downstream workflows triggered — this is a status label change only"],
+          risk: "safe" as const,
         } : undefined,
       })
     }
@@ -215,6 +224,9 @@ export async function GET(req: NextRequest) {
           action: "set_offer_completed",
           label: "Set to completed (payment received)",
           params: { offer_token: offer.token },
+          description: "Marks the offer as 'completed' — confirms payment was received.",
+          impact: ["Offer page will show as completed to the client", "Does NOT create service deliveries automatically — use the Services fix below if needed"],
+          risk: "moderate" as const,
         } : undefined,
       })
     } else {
@@ -239,6 +251,9 @@ export async function GET(req: NextRequest) {
           action: "complete_pending_activation",
           label: "Mark as activated",
           params: { pending_id: pending.id },
+          description: "Sets the pending activation to 'activated' status with today's date.",
+          impact: ["Activation pipeline will be marked complete", "Does NOT trigger service delivery creation — those must exist already or be created via Services fix"],
+          risk: "safe" as const,
         } : undefined,
       })
     }
@@ -269,6 +284,9 @@ export async function GET(req: NextRequest) {
           action: "mark_payment_paid",
           label: "Mark as paid",
           params: { payment_id: payments[0].id },
+          description: "Marks the existing payment record as 'Paid' with today's date.",
+          impact: ["Payment status changes to Paid in the system", "Client invoice (if linked) will reflect paid status", "Referral commission calculation may use this payment as trigger"],
+          risk: "moderate" as const,
         },
       })
     } else {
@@ -280,7 +298,12 @@ export async function GET(req: NextRequest) {
         const svc = (offer as unknown as { services: Array<{ price: string; optional?: boolean }> }).services || []
         for (const s of svc) {
           if (!s.price || s.price.toLowerCase().includes("/year") || s.price.toLowerCase().includes("inclus")) continue
-          const clean = s.price.replace(/[^0-9.,]/g, "").replace(",", "")
+          // Handle European format: €2.500 (dot = thousands) and €2,500 (comma = thousands)
+          let clean = s.price.replace(/[^0-9.,]/g, "")
+          // If format is X.XXX (dot as thousands separator with no decimal), remove dots
+          if (/^\d{1,3}\.\d{3}$/.test(clean)) clean = clean.replace(".", "")
+          // Remove commas (thousands separator in US format)
+          clean = clean.replace(",", "")
           const num = parseFloat(clean)
           if (!isNaN(num)) offerAmount += num
         }
@@ -306,6 +329,14 @@ export async function GET(req: NextRequest) {
             description: `Setup fee — ${offer.token}`,
             offer_token: offer.token,
           },
+          description: `Creates a new payment record for ${offerAmount > 0 ? `${offerCurrency === "EUR" ? "€" : "$"}${offerAmount.toLocaleString()}` : "the setup fee"} as Paid via ${offer.payment_type === "bank_transfer" ? "Wire Transfer" : "Card"}.`,
+          impact: [
+            "A new payment row will be created in the payments table linked to this account",
+            "Payment will be marked as Paid with today's date",
+            "Finance dashboard will reflect this payment",
+            "Does NOT create a client invoice — invoice must be created separately if needed",
+          ],
+          risk: "moderate" as const,
         } : undefined,
       })
     }
@@ -351,6 +382,9 @@ export async function GET(req: NextRequest) {
           action: "create_service_deliveries",
           label: "Create all missing services",
           params: { pipelines: bundledPipelines, account_id: accountId, contact_id: contactId },
+          description: "Creates service delivery records for all pipelines defined in the offer (e.g. Company Formation, ITIN, EIN). Each is initialized at stage 1 (Data Collection) and assigned to Luca.",
+          impact: ["New service delivery rows appear in the pipeline dashboard", "Tasks may be auto-created for stage 1 if pipeline_stages are configured", "Assigned team member will see new work items"],
+          risk: "safe" as const,
         },
       })
     } else {
@@ -377,6 +411,9 @@ export async function GET(req: NextRequest) {
             action: "create_service_delivery",
             label: `Create ${pipeline}`,
             params: { service_type: pipeline, account_id: accountId, contact_id: contactId },
+            description: `Creates a single '${pipeline}' service delivery record, initialized at stage 1 (Data Collection) and assigned to Luca.`,
+            impact: ["New service delivery row appears in the pipeline dashboard", "Assigned team member will see the new work item"],
+            risk: "safe" as const,
           },
         })
       }
@@ -402,6 +439,9 @@ export async function GET(req: NextRequest) {
           action: "create_formation_form",
           label: "Create formation wizard",
           params: { lead_id: lead.id, contact_id: contactId },
+          description: "Creates a formation data collection form pre-filled with the lead's info. The client receives a link to fill in their personal details (address, DOB, passport).",
+          impact: ["A new formation_submissions row is created in draft status", "Form URL is generated but NOT sent to the client automatically — must be sent separately via email"],
+          risk: "safe" as const,
         } : undefined,
       })
     }
@@ -471,6 +511,9 @@ export async function GET(req: NextRequest) {
         action: "create_oa",
         label: "Create OA (draft)",
         params: { account_id: accountId },
+        description: "Creates an Operating Agreement in draft status, pre-filled with the LLC's company name, state, and member info from the CRM.",
+        impact: ["A new oa_agreements row is created in draft status", "OA will appear in the client's portal under Sign Documents once sent", "Does NOT send anything to the client — must be reviewed and sent separately"],
+        risk: "safe" as const,
       } : undefined,
     })
 
@@ -486,6 +529,9 @@ export async function GET(req: NextRequest) {
         action: "create_lease",
         label: "Create Lease (draft)",
         params: { account_id: accountId },
+        description: "Creates a Lease Agreement in draft status with an auto-assigned suite number, pre-filled with the LLC's company name and primary contact info.",
+        impact: ["A new lease_agreements row is created in draft status", "A suite number is assigned to this client", "Lease will appear in the client's portal under Sign Documents once sent", "Does NOT send anything to the client — must be reviewed and sent separately"],
+        risk: "safe" as const,
       } : undefined,
     })
 
@@ -516,6 +562,9 @@ export async function GET(req: NextRequest) {
         action: "create_portal_user",
         label: "Create portal login",
         params: { contact_id: contactId, email: contactEmail },
+        description: "Creates a Supabase Auth user for this client so they can log in to the portal. A temporary password is generated. The contact's portal_tier is set to 'lead'.",
+        impact: ["A new auth user is created in Supabase Auth", "Client can now log in to the portal at portal.tonydurante.us", "Contact record is updated with portal_tier = 'lead'", "Client will NOT receive an email automatically — credentials must be shared manually or via welcome email"],
+        risk: "high" as const,
       } : undefined,
     })
 
@@ -540,6 +589,9 @@ export async function GET(req: NextRequest) {
         action: "set_portal_tier",
         label: `Upgrade to ${expectedTier}`,
         params: { contact_id: contactId, tier: expectedTier },
+        description: `Updates the contact's portal_tier to '${expectedTier}', which controls what the client can see and do in the portal.`,
+        impact: ["Contact's portal_tier is updated in the contacts table", "Client's portal UI will show different sections based on the new tier (lead < onboarding < active)", "If upgrading to 'active', client gains access to documents, invoices, and chat"],
+        risk: "high" as const,
       } : undefined,
     })
 
@@ -554,6 +606,9 @@ export async function GET(req: NextRequest) {
           action: "sync_portal_tier",
           label: "Sync to contact tier",
           params: { account_id: accountId, contact_id: contactId, tier: contactTier || expectedTier },
+          description: "Syncs the portal_tier field so both the account and contact records have the same value. Resolves the mismatch that can cause inconsistent portal behavior.",
+          impact: ["Both accounts.portal_tier and contacts.portal_tier are updated to the same value", "Portal access level becomes consistent across both records"],
+          risk: "high" as const,
         },
       })
     }
@@ -571,6 +626,9 @@ export async function GET(req: NextRequest) {
         action: "create_drive_folder",
         label: "Create Drive folder",
         params: { account_id: accountId, company_name: account.company_name },
+        description: "Creates the client's Google Drive folder structure on the Shared Drive (Companies/{State}/{Company Name}/ with subfolders 1-5) and links it to the account record.",
+        impact: ["A new folder tree is created on Google Drive", "Account's drive_folder_id is updated with the new folder ID", "Document processing and uploads will use this folder going forward"],
+        risk: "safe" as const,
       } : undefined,
     })
 
@@ -606,6 +664,9 @@ export async function GET(req: NextRequest) {
           action: "create_deadline",
           label: "Create deadline",
           params: { account_id: accountId, type: "Annual Report" },
+          description: "Creates an Annual Report deadline for this account based on the state's filing rules. The due date is calculated from the state of formation.",
+          impact: ["A new deadline row is created in the deadlines table", "Deadline will appear in the compliance dashboard and upcoming deadlines view", "Automated reminder emails will fire as the due date approaches"],
+          risk: "moderate" as const,
         },
       })
     }
@@ -621,6 +682,9 @@ export async function GET(req: NextRequest) {
           action: "create_deadline",
           label: "Create deadline",
           params: { account_id: accountId, type: "RA Renewal" },
+          description: "Creates a Registered Agent Renewal deadline for this account. The due date is based on the RA service expiration from Harbor Compliance.",
+          impact: ["A new deadline row is created in the deadlines table", "Deadline will appear in the compliance dashboard and upcoming deadlines view", "Automated reminder emails will fire as the due date approaches"],
+          risk: "moderate" as const,
         },
       })
     }

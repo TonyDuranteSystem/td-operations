@@ -3,10 +3,20 @@
 import { useState, useEffect } from 'react'
 import {
   X, Loader2, CheckCircle2, AlertCircle, XCircle, Info,
-  RefreshCw, Wrench, Stethoscope,
+  RefreshCw, Wrench, Stethoscope, ChevronDown, ChevronRight,
+  ShieldAlert, ShieldCheck, Shield,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+
+interface DiagnosticFix {
+  action: string
+  label: string
+  params: Record<string, unknown>
+  description?: string
+  impact?: string[]
+  risk?: 'safe' | 'moderate' | 'high'
+}
 
 interface DiagnosticCheck {
   id: string
@@ -14,11 +24,7 @@ interface DiagnosticCheck {
   label: string
   status: 'ok' | 'warning' | 'error' | 'info'
   detail: string
-  fix?: {
-    action: string
-    label: string
-    params: Record<string, unknown>
-  }
+  fix?: DiagnosticFix
 }
 
 interface DiagnosticResult {
@@ -55,12 +61,19 @@ const STATUS_BG = {
   info: 'bg-blue-50',
 }
 
+const RISK_CONFIG = {
+  safe: { icon: ShieldCheck, color: 'text-green-600', bg: 'bg-green-50', label: 'Safe — internal change only' },
+  moderate: { icon: Shield, color: 'text-amber-600', bg: 'bg-amber-50', label: 'Moderate — changes visible data' },
+  high: { icon: ShieldAlert, color: 'text-red-600', bg: 'bg-red-50', label: 'High — visible to client' },
+}
+
 const CATEGORY_ORDER = ['Contact', 'Lead & Offer', 'Payments', 'Services', 'Forms', 'Documents', 'Portal', 'Infrastructure']
 
 export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }: Props) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<DiagnosticResult | null>(null)
   const [fixingId, setFixingId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -69,6 +82,7 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
     } else {
       setResult(null)
       setError(null)
+      setExpandedId(null)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -107,7 +121,7 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
       const data = await res.json()
       if (data.success) {
         toast.success(data.detail)
-        // Re-run diagnostic to update all checks
+        setExpandedId(null)
         await runDiagnostic()
       } else {
         toast.error(data.detail || 'Fix failed')
@@ -121,7 +135,6 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
 
   if (!open) return null
 
-  // Group checks by category
   const grouped: Record<string, DiagnosticCheck[]> = {}
   if (result) {
     for (const check of result.checks) {
@@ -204,32 +217,116 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
                     <div className="space-y-1.5">
                       {grouped[category].map(check => {
                         const Icon = STATUS_ICON[check.status]
+                        const hasFix = !!check.fix
+                        const isExpanded = expandedId === check.id
+                        const isClickable = hasFix || check.status === 'error' || check.status === 'warning'
+
                         return (
-                          <div
-                            key={check.id}
-                            className={cn(
-                              'flex items-start gap-3 p-3 rounded-lg text-sm',
-                              STATUS_BG[check.status],
-                            )}
-                          >
-                            <Icon className={cn('h-4 w-4 mt-0.5 shrink-0', STATUS_COLOR[check.status])} />
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-zinc-800">{check.label}</p>
-                              <p className="text-xs text-zinc-600 mt-0.5">{check.detail}</p>
+                          <div key={check.id}>
+                            <div
+                              className={cn(
+                                'flex items-start gap-3 p-3 rounded-lg text-sm transition-colors',
+                                STATUS_BG[check.status],
+                                isClickable && 'cursor-pointer hover:opacity-80',
+                                isExpanded && 'rounded-b-none',
+                              )}
+                              onClick={() => isClickable ? setExpandedId(isExpanded ? null : check.id) : undefined}
+                            >
+                              {isClickable ? (
+                                <div className="mt-0.5 shrink-0">
+                                  {isExpanded
+                                    ? <ChevronDown className={cn('h-4 w-4', STATUS_COLOR[check.status])} />
+                                    : <ChevronRight className={cn('h-4 w-4', STATUS_COLOR[check.status])} />
+                                  }
+                                </div>
+                              ) : (
+                                <Icon className={cn('h-4 w-4 mt-0.5 shrink-0', STATUS_COLOR[check.status])} />
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-zinc-800">{check.label}</p>
+                                <p className="text-xs text-zinc-600 mt-0.5">{check.detail}</p>
+                              </div>
+                              {hasFix && !isExpanded && (
+                                <span className="text-xs text-zinc-400 shrink-0 mt-0.5">Click to fix</span>
+                              )}
                             </div>
-                            {check.fix && (
-                              <button
-                                onClick={() => executeFix(check)}
-                                disabled={fixingId === check.id}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-white border shadow-sm hover:bg-zinc-50 transition-colors shrink-0 disabled:opacity-50"
-                              >
-                                {fixingId === check.id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
+
+                            {/* Expanded Fix Panel */}
+                            {isExpanded && (
+                              <div className={cn(
+                                'border-t p-4 rounded-b-lg space-y-3',
+                                STATUS_BG[check.status],
+                              )}>
+                                {hasFix ? (
+                                  <>
+                                    {/* What this fix does */}
+                                    <div>
+                                      <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">What this fix does</p>
+                                      <p className="text-sm text-zinc-700">
+                                        {check.fix!.description || check.fix!.label}
+                                      </p>
+                                    </div>
+
+                                    {/* Impact */}
+                                    {check.fix!.impact && check.fix!.impact.length > 0 && (
+                                      <div>
+                                        <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">What happens next</p>
+                                        <ul className="space-y-1">
+                                          {check.fix!.impact.map((line, i) => (
+                                            <li key={i} className="text-xs text-zinc-600 flex items-start gap-1.5">
+                                              <span className="text-zinc-400 mt-0.5">•</span>
+                                              {line}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+
+                                    {/* Risk level */}
+                                    {check.fix!.risk && (
+                                      <div>
+                                        {(() => {
+                                          const rc = RISK_CONFIG[check.fix!.risk!]
+                                          const RiskIcon = rc.icon
+                                          return (
+                                            <div className={cn('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium', rc.bg, rc.color)}>
+                                              <RiskIcon className="h-3.5 w-3.5" />
+                                              {rc.label}
+                                            </div>
+                                          )
+                                        })()}
+                                      </div>
+                                    )}
+
+                                    {/* Action button */}
+                                    <div className="pt-1">
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); executeFix(check) }}
+                                        disabled={fixingId === check.id}
+                                        className={cn(
+                                          'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50',
+                                          check.fix!.risk === 'high'
+                                            ? 'bg-red-600 text-white hover:bg-red-700'
+                                            : check.fix!.risk === 'moderate'
+                                              ? 'bg-amber-600 text-white hover:bg-amber-700'
+                                              : 'bg-zinc-800 text-white hover:bg-zinc-900'
+                                        )}
+                                      >
+                                        {fixingId === check.id ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <Wrench className="h-4 w-4" />
+                                        )}
+                                        {check.fix!.label}
+                                      </button>
+                                    </div>
+                                  </>
                                 ) : (
-                                  <Wrench className="h-3 w-3" />
+                                  <p className="text-sm text-zinc-600">
+                                    No automatic fix available. Use Claude or MCP tools to resolve this manually.
+                                  </p>
                                 )}
-                                {check.fix.label}
-                              </button>
+                              </div>
                             )}
                           </div>
                         )
