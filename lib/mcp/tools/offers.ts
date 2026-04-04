@@ -583,7 +583,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
       payment_type: z.enum(["checkout", "bank_transfer", "none"]).describe("Payment method"),
       payment_gateway: z.enum(["whop", "stripe"]).optional().describe("Payment gateway for checkout links. Default: 'stripe'. Use 'whop' only if specifically needed. Only applies when payment_type='checkout'."),
       // Content fields (JSONB — validated)
-      services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], optional?, recommended?, pipeline_type?}]. Set optional=true for add-on services (ITIN, Tax Return). Set recommended=true to pre-select. Set pipeline_type to create a service_delivery on activation."),
+      services: z.any().describe("Services: [{name, price, price_label?, description?, includes?[], optional?, recommended?, pipeline_type?, contract_type?}]. Set optional=true for add-on services (ITIN, Tax Return). Set recommended=true to pre-select. Set pipeline_type to create a service_delivery on activation. Set contract_type per service for multi-contract offers: services with a different contract_type than the offer's will render as separate standalone agreements (e.g., ITIN service with contract_type='itin' on a formation offer gets its own ITIN Agreement). Services without contract_type default to the offer's contract_type."),
       cost_summary: z.any().describe("Cost summary: [{label, total?, total_label?, items?[{name, price}], rate?}]"),
       recurring_costs: z.any().optional().describe("Annual/recurring costs: [{label, price}]"),
       additional_services: z.any().optional().describe("Add-on services: same structure as services"),

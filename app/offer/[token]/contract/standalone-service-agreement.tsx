@@ -23,8 +23,8 @@ interface StandaloneServiceAgreementProps {
   contractType?: 'tax_return' | 'itin'
 }
 
-// Service-specific content based on contract type
-const SERVICE_CONTENT = {
+// Service-specific content based on contract type — exported for inline addon rendering
+export const SERVICE_CONTENT = {
   tax_return: {
     title: 'Tax Return Filing Agreement',
     shortTitle: 'Tax Return Filing Agreement',

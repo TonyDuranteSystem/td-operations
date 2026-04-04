@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
+import { SERVICE_CONTENT } from './standalone-service-agreement'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -89,6 +90,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
 
   const sigMsaRef = useRef<HTMLCanvasElement>(null)
   const sigSowRef = useRef<HTMLCanvasElement>(null)
+  const addonSigRefs = useRef<Record<string, HTMLCanvasElement | null>>({})
   const sigPadsRef = useRef<Record<string, any>>({})
   const contractBodyRef = useRef<HTMLDivElement>(null)
 
@@ -101,7 +103,11 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
 
   async function initSigPads() {
     const SignaturePad = (await import('signature_pad')).default
-    const canvases = { msa: sigMsaRef.current, sow: sigSowRef.current }
+    const canvases: Record<string, HTMLCanvasElement | null> = { msa: sigMsaRef.current, sow: sigSowRef.current }
+    // Include addon signature canvases
+    Object.entries(addonSigRefs.current).forEach(([key, canvas]) => {
+      if (canvas) canvases[key] = canvas
+    })
     Object.entries(canvases).forEach(([id, canvas]) => {
       if (!canvas) return
       const ratio = Math.max(window.devicePixelRatio || 1, 1)
@@ -128,7 +134,10 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     const hasSOW = sigPadsRef.current.sow && !sigPadsRef.current.sow.isEmpty()
     const phoneOk = !f.phone || isValidPhone(f.phone)
     const zipOk = !f.zip || isValidZip(f.zip)
-    const isReady = !!f.name && !!f.email && !!f.phone && !!f.address && !!f.zip && !!f.country && !!f.passport && hasMSA && hasSOW && phoneOk && zipOk
+    // Check addon signatures
+    const addonKeys = Object.keys(sigPadsRef.current).filter(k => k.startsWith('addon_'))
+    const allAddonsSigned = addonKeys.every(k => sigPadsRef.current[k] && !sigPadsRef.current[k].isEmpty())
+    const isReady = !!f.name && !!f.email && !!f.phone && !!f.address && !!f.zip && !!f.country && !!f.passport && hasMSA && hasSOW && allAddonsSigned && phoneOk && zipOk
     setReady(isReady)
 
     if (!isReady) {
@@ -144,6 +153,12 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
       if (!f.passport) missing.push('passport')
       if (!hasMSA) missing.push('MSA signature')
       if (!hasSOW) missing.push('SOW signature')
+      addonKeys.forEach(k => {
+        if (!sigPadsRef.current[k] || sigPadsRef.current[k].isEmpty()) {
+          const type = k.replace('addon_', '').replace('_', ' ')
+          missing.push(`${type} agreement signature`)
+        }
+      })
       setStatusMsg('Missing: ' + missing.join(', '))
       setStatusType('info')
     } else {
@@ -162,15 +177,19 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
   const year = offer.offer_date ? new Date(offer.offer_date).getFullYear() : new Date().getFullYear()
   const effDate = today()
 
-  // Calculate setup fee dynamically from selected services (one-time charges only)
+  // Calculate setup fee dynamically from MAIN contract services only
   const services = Array.isArray(offer.services) ? offer.services : []
   const selectedSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services : [])
+  const offerContractType = (offer as any).contract_type || 'onboarding'
   let totalSetup = 0
   let currencySymbol = 'EUR'
   for (const svc of services) {
     const isOpt = !!(svc as any).optional
     const isSelected = selectedSet.size > 0 ? (!isOpt || selectedSet.has(svc.name)) : !isOpt
     if (!isSelected) continue
+    // Multi-contract: only count services belonging to main contract
+    const svcCt = (svc as any).contract_type
+    if (svcCt && svcCt !== offerContractType) continue
     const priceStr = String(svc.price || '0')
     if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
     if (/includ|inclus/i.test(priceStr)) continue
@@ -203,16 +222,29 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
 
-  // Services from offer — filter by client selections, exclude recurring
+  // Services from offer — filter by client selections, exclude recurring, only main contract_type
   const servicesList = services
     .filter(svc => {
       const priceStr = String(svc.price || '')
       if (/\/(year|anno|month|mese)/i.test(priceStr)) return false
       const isOpt = !!(svc as any).optional
       if (isOpt && selectedSet.size > 0 && !selectedSet.has(svc.name)) return false
+      // Multi-contract: only include services that belong to the main contract
+      const svcCt = (svc as any).contract_type
+      if (svcCt && svcCt !== offerContractType) return false
       return true
     })
     .map(svc => ({ name: svc.name || '', desc: svc.description || '', includes: svc.includes || [] }))
+
+  // Addon services — services with a different contract_type that are selected
+  const addonServices = services.filter(svc => {
+    const svcCt = (svc as any).contract_type
+    if (!svcCt || svcCt === offerContractType) return false
+    if (!['itin', 'tax_return'].includes(svcCt)) return false
+    const isOpt = !!(svc as any).optional
+    if (isOpt && selectedSet.size > 0 && !selectedSet.has(svc.name)) return false
+    return true
+  })
 
   // LLC type
   let llcType = 'Single-Member LLC'
@@ -246,12 +278,19 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
         })
       }
 
-      // Replace canvases with images
+      // Replace canvases with images (MSA + SOW + addon agreements)
       ;['msa', 'sow'].forEach(id => {
         const canvas = id === 'msa' ? sigMsaRef.current : sigSowRef.current
         if (!canvas || !sigPadsRef.current[id]) return
         const wrap = canvas.parentElement!
         const dataUrl = sigPadsRef.current[id].toDataURL('image/png')
+        wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
+      })
+      // Replace addon signature canvases
+      Object.entries(addonSigRefs.current).forEach(([key, canvas]) => {
+        if (!canvas || !sigPadsRef.current[key]) return
+        const wrap = canvas.parentElement!
+        const dataUrl = sigPadsRef.current[key].toDataURL('image/png')
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
       })
 
@@ -492,7 +531,6 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
             <tr><th>Setup Fee</th><td>{fee} (one-time, covers all services for the first contract year)</td></tr>
             <tr><th>Payment Schedule</th><td>Setup fee due upon signing. From the following year: {paymentScheduleText}</td></tr>
-            <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
 
@@ -579,6 +617,56 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           </ol>
         </div>
 
+        {/* CLIENT PORTAL SECTION */}
+        <div className="contract-section">
+          <h3>Client Portal</h3>
+          <p>The Client will have access to the Client Portal at <strong>portal.tonydurante.us</strong>, which provides the following features:</p>
+
+          <div className="contract-subsection">
+            <h4>LLC Management</h4>
+            <ul>
+              <li><strong>Company documents</strong> &mdash; Articles of Organization, Operating Agreement, EIN Letter, and Lease Agreement always available</li>
+              <li><strong>Service tracking</strong> &mdash; Real-time progress on all active services</li>
+              <li><strong>Document signing</strong> &mdash; Operating Agreement, Lease, SS-4 signed directly online</li>
+              <li><strong>Deadlines</strong> &mdash; Calendar with Annual Report, Registered Agent Renewal, Tax Filing dates</li>
+              <li><strong>Tax documents</strong> &mdash; Upload bank statements, view filed returns</li>
+              <li><strong>Document generation</strong> &mdash; Distribution Resolutions, Tax Statements on demand</li>
+            </ul>
+          </div>
+
+          <div className="contract-subsection">
+            <h4>Business Tools</h4>
+            <ul>
+              <li><strong>Invoicing</strong> &mdash; Create and send invoices to your LLC clients</li>
+              <li><strong>Client management</strong> &mdash; Mini-CRM for your LLC clients</li>
+              <li><strong>Payments</strong> &mdash; View invoices and payment history</li>
+              <li><strong>Request services</strong> &mdash; Order new services with one click</li>
+            </ul>
+          </div>
+
+          <div className="contract-subsection">
+            <h4>Communication &mdash; Portal Chat Required</h4>
+            <p>All day-to-day communications shall be conducted through the portal chat. The Client agrees to use the portal chat instead of WhatsApp, Telegram, or other messaging platforms for the following reasons:</p>
+            <ul>
+              <li><strong>Security</strong> &mdash; WhatsApp shares metadata with Meta (Facebook). The portal is private and protected.</li>
+              <li><strong>Compliance</strong> &mdash; Professional firms are required to track and archive all client communications.</li>
+              <li><strong>Organization</strong> &mdash; Documents, messages, signatures, and forms are linked to your profile. No files lost.</li>
+              <li><strong>Faster responses</strong> &mdash; The team sees which matter the message relates to.</li>
+              <li><strong>Voice dictation</strong> &mdash; Press the microphone icon, dictate your message. The portal transcribes automatically.</li>
+            </ul>
+          </div>
+
+          <div className="contract-subsection">
+            <h4>Mobile App</h4>
+            <p>The portal can be installed as an app on your phone and computer with push notifications:</p>
+            <ul>
+              <li><strong>iPhone / iPad:</strong> Safari &rarr; Share &rarr; Add to Home Screen</li>
+              <li><strong>Android:</strong> Chrome &rarr; Menu &rarr; Install app</li>
+              <li><strong>Desktop:</strong> Chrome &rarr; Install icon in address bar</li>
+            </ul>
+          </div>
+        </div>
+
         <div className="contract-section"><h3>Payment Schedule</h3>
           <table className="contract-key-terms">
             <tbody>
@@ -630,6 +718,109 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           </div>
         </div>
 
+        {/* ADDON STANDALONE AGREEMENTS — rendered inline for multi-contract offers */}
+        {addonServices.map((svc) => {
+          const svcCt = (svc as any).contract_type as 'itin' | 'tax_return'
+          const ct = SERVICE_CONTENT[svcCt]
+          if (!ct) return null
+          const addonKey = `addon_${svcCt}`
+          const svcFee = svc.price || ''
+          return (
+            <div key={addonKey} style={{ pageBreakBefore: 'always', marginTop: 48 }}>
+              <div className="contract-part-divider"><h2>{ct.title}</h2></div>
+
+              <p>This {ct.shortTitle} (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
+              <p style={{ margin: '14px 0' }}><strong>Tony Durante LLC</strong>, a Florida limited liability company (&ldquo;<strong>Service Provider</strong>&rdquo;), and</p>
+              <p style={{ margin: '14px 0' }}><strong>{form.name || '[Client Name]'}</strong> (&ldquo;<strong>Client</strong>&rdquo;).</p>
+
+              <table className="contract-key-terms">
+                <caption>Service Summary</caption>
+                <tbody>
+                  <tr><th>Service</th><td>{svc.name}</td></tr>
+                  {svc.description && <tr><th>Description</th><td>{svc.description}</td></tr>}
+                  <tr><th>Fee</th><td>{svcFee} (one-time)</td></tr>
+                  {svc.includes && svc.includes.length > 0 && (
+                    <tr><th>Includes</th><td>{(svc.includes as string[]).map((item, i) => <span key={i}>{item}{i < svc.includes!.length - 1 ? ', ' : ''}</span>)}</td></tr>
+                  )}
+                </tbody>
+              </table>
+
+              <div className="contract-section">
+                <h3>1. Scope of Service</h3>
+                <p>{ct.scope.intro}</p>
+                <ul>{ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                <p><strong>{ct.scope.closing}</strong></p>
+              </div>
+
+              <div className="contract-section">
+                <h3>2. Client Responsibilities</h3>
+                <p>{ct.clientDuties.intro}</p>
+                <ol type="a">{ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong>{item.rest}</li>)}</ol>
+              </div>
+
+              <div className="contract-section">
+                <h3>3. Service Procedure</h3>
+                <p>{ct.procedure.intro}</p>
+                <ol>{ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; {step.desc}</li>)}</ol>
+              </div>
+
+              <div className="contract-section">
+                <h3>4. Service Provider Commitments</h3>
+                <p>The Service Provider agrees to:</p>
+                <ol type="a">{ct.commitments.map((item, i) => <li key={i}>{item}</li>)}</ol>
+              </div>
+
+              <div className="contract-section">
+                <h3>5. Payment</h3>
+                <p>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+                <p><strong>All fees are non-refundable</strong> once services have commenced.</p>
+              </div>
+
+              <div className="contract-section">
+                <h3>6. Limitation of Liability</h3>
+                <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client.</p>
+              </div>
+
+              <div className="contract-section">
+                <h3>7. Governing Law</h3>
+                <p>This Agreement is governed by the laws of the State of Florida. Any disputes shall be resolved through binding arbitration in Pinellas County, Florida, under AAA rules.</p>
+              </div>
+
+              <div className="contract-section">
+                <h3>8. Electronic Signatures</h3>
+                <p>Electronic signatures on this Agreement are valid and binding under the ESIGN Act (15 U.S.C. &sect; 7001) and UETA (Fla. Stat. &sect; 668.50).</p>
+              </div>
+
+              <div className="contract-sig-section">
+                <h3 style={{ textAlign: 'center' }}>{ct.shortTitle} &mdash; Signature</h3>
+                <p className="contract-text-center contract-text-muted" style={{ marginBottom: 16, fontSize: '9.5pt' }}>{ct.signatureText}</p>
+                <div className="contract-sig-grid">
+                  <div className="contract-sig-block">
+                    <div className="contract-sig-label">Service Provider</div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <div className="contract-sig-static"><img src="/images/logo.jpg" alt="Tony Durante" style={{ maxHeight: 40, opacity: 0.8 }} /></div>
+                    <div className="contract-sig-field">Name: Tony Durante</div>
+                    <div className="contract-sig-field">Title: Managing Member</div>
+                    <div className="contract-sig-date">Date: {today()}</div>
+                  </div>
+                  <div className="contract-sig-block">
+                    <div className="contract-sig-label">Client</div>
+                    <div className="contract-sig-canvas-wrap">
+                      <canvas
+                        ref={el => { addonSigRefs.current[addonKey] = el }}
+                        style={{ width: '100%', height: 120, display: 'block', borderRadius: 6 }}
+                      />
+                      <button className="contract-clear-btn" onClick={() => clearSig(addonKey)}>Clear</button>
+                    </div>
+                    <div className="contract-sig-field">Name: {form.name}</div>
+                    <div className="contract-sig-date">Date: {today()}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+
         {/* FOOTER */}
         <div className="contract-text-center" style={{ marginTop: 36, paddingTop: 20, borderTop: '1px solid var(--c-border)' }}>
           <p className="contract-text-muted contract-text-small">Tony Durante LLC &bull; 10225 Ulmerton Road, Suite 3D &bull; Largo, FL 33771</p>
@@ -640,7 +831,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
       {/* ACTION BAR */}
       <div className="contract-action-bar" id="action-bar-svc">
         <button className="contract-btn contract-btn-sign" onClick={signContract} disabled={!ready || signing}>
-          {signing ? 'Generating PDF...' : 'Sign & Submit Contract'}
+          {signing ? 'Generating PDF...' : `Sign${addonServices.length > 0 ? ` All (${2 + addonServices.length} Agreements)` : ''} & Submit Contract`}
         </button>
         <div className={`contract-status-msg ${statusType === 'error' ? 'contract-error-msg' : statusType === 'success' ? 'contract-success-msg' : ''}`}>
           {statusMsg}

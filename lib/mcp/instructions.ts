@@ -59,7 +59,7 @@ Default priority when "read the message" is ambiguous: portal chat FIRST → Gma
 
 OFFERS — Client Portal Flow:
 The offer system is portal-centric. The client experiences everything through the portal:
-1. After consultation, use offer_create to prepare the offer (status=draft). Services can be required or optional (client toggles on/off). Set optional=true + recommended=true for add-ons you discussed. Set pipeline_type on each service for activation tracking.
+1. After consultation, use offer_create to prepare the offer (status=draft). Services can be required or optional (client toggles on/off). Set optional=true + recommended=true for add-ons you discussed. Set pipeline_type on each service for activation tracking. Set contract_type per service for multi-contract offers: services with a different contract_type than the offer's render as separate standalone agreements (e.g., ITIN with contract_type='itin' on a formation offer gets its own ITIN Agreement below the main MSA+SOW). Client must sign ALL contracts before checkout.
 2. Use offer_send to approve and deliver. offer_send automatically creates portal access (tier=lead), sends the client an email with portal login credentials, and sets status=sent.
 3. Client logs into portal → sees the offer → selects/deselects optional services (total updates dynamically) → signs the contract → Stripe Checkout session created with the exact amount matching their selections → pays.
 4. Payment webhook fires → full activation pipeline runs automatically (only selected services get pipelines).
@@ -73,7 +73,7 @@ OFFER PREPARATION CHECKLIST — MANDATORY before creating any offer:
 2. Pull call notes from Circleback (cb_list_calls + cb_get_call) AND Calendly (cal_list_bookings + cal_get_event_details) for each lead.
 3. Extract from the call: setup fee discussed, annual maintenance discussed, services discussed, add-ons mentioned, referrer. NEVER assume prices — the deal makes the price. Setup fee and annual maintenance are TWO SEPARATE numbers. Annual maintenance depends on state of formation and company type, NOT on the setup fee. If either price is not clear from the call, ASK Antonio.
 4. Language: match the client's language. For Italian offers: intro, next_steps, strategy in Italian. Services names, cost_summary, recurring_costs always in English (contract content).
-5. Services discussed as add-ons during the call -> optional: true. If recommended during the call -> recommended: true. Always set pipeline_type on services that create deliveries.
+5. Services discussed as add-ons during the call -> optional: true. If recommended during the call -> recommended: true. Always set pipeline_type on services that create deliveries. For multi-contract: set contract_type on each service (e.g., 'formation' for the main LLC service, 'itin' for ITIN addon, 'tax_return' for Tax Return addon). Services without contract_type default to the offer's contract_type.
 6. Annual maintenance is INFORMATIONAL — it shows what they pay from next year. It is NOT a one-time charge. Never include it in the payment total.
 7. Verify the offer renders correctly via preview link (?preview=td) BEFORE showing Antonio.
 8. NEVER send (offer_send) until Antonio explicitly approves.
