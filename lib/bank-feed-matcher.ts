@@ -126,8 +126,15 @@ async function autoInvoiceForUnmatchedFeed(feed: {
     autoInvoiced: true,
   }
   } catch (err) {
-    console.error(`[bank-feed-matcher] Auto-invoice failed for feed ${feed.id}:`, err)
-    return { matched: false, error: `Auto-invoice failed: ${(err as Error).message}` }
+    const errMsg = (err as Error).message
+    console.error(`[bank-feed-matcher] Auto-invoice failed for feed ${feed.id}:`, errMsg)
+    // Store error in bank feed for debugging (non-blocking)
+    await supabaseAdmin
+      .from("td_bank_feeds")
+      .update({ match_confidence: `error: ${errMsg.slice(0, 200)}`, updated_at: new Date().toISOString() })
+      .eq("id", feed.id)
+      .then(() => null, () => null)
+    return { matched: false, error: `Auto-invoice failed: ${errMsg}` }
   }
 }
 
