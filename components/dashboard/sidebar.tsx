@@ -30,6 +30,7 @@ import {
   UserCheck,
   Target,
   Wrench,
+  Share2,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -83,6 +84,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet },
+  { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2 },
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare },

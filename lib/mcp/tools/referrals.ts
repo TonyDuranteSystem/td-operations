@@ -30,6 +30,7 @@ export function registerReferralTools(server: McpServer) {
       commission_pct: z.number().optional().describe("Commission percentage (e.g., 10 for 10%)"),
       commission_amount: z.number().optional().describe("Pre-calculated commission amount"),
       commission_currency: z.enum(["EUR", "USD"]).optional().default("EUR").describe("Commission currency (default: EUR)"),
+      referrer_type: z.enum(["client", "partner"]).optional().describe("Referrer type: client (one-off referral) or partner (structured ongoing relationship)"),
       status: z.enum(["pending", "converted", "credited", "paid", "cancelled"]).optional().default("pending").describe("Referral status (default: pending)"),
       notes: z.string().optional().describe("Internal notes about this referral"),
     },
@@ -49,6 +50,7 @@ export function registerReferralTools(server: McpServer) {
         if (params.commission_type) insert.commission_type = params.commission_type
         if (params.commission_pct != null) insert.commission_pct = params.commission_pct
         if (params.commission_amount != null) insert.commission_amount = params.commission_amount
+        if (params.referrer_type) insert.referrer_type = params.referrer_type
         if (params.notes) insert.notes = params.notes
 
         const { data, error } = await supabaseAdmin
@@ -91,6 +93,7 @@ export function registerReferralTools(server: McpServer) {
       referred_account_id: z.string().uuid().optional().describe("Filter by referred account UUID"),
       status: z.enum(["pending", "converted", "credited", "paid", "cancelled"]).optional().describe("Filter by status"),
       offer_token: z.string().optional().describe("Filter by offer token"),
+      referrer_type: z.enum(["client", "partner"]).optional().describe("Filter by referrer type"),
       limit: z.number().optional().default(50).describe("Max results (default 50)"),
     },
     async (params) => {
@@ -99,7 +102,7 @@ export function registerReferralTools(server: McpServer) {
           .from("referrals")
           .select(`
             id, referrer_contact_id, referred_contact_id, referred_account_id,
-            referred_lead_id, referred_name, offer_token, status,
+            referred_lead_id, referred_name, offer_token, status, referrer_type,
             commission_type, commission_pct, commission_amount, commission_currency,
             credited_amount, paid_amount, notes, is_test, created_at, updated_at,
             referrer:contacts!referrals_referrer_contact_id_fkey(full_name),
@@ -114,6 +117,7 @@ export function registerReferralTools(server: McpServer) {
         if (params.referred_account_id) q = q.eq("referred_account_id", params.referred_account_id)
         if (params.status) q = q.eq("status", params.status)
         if (params.offer_token) q = q.eq("offer_token", params.offer_token)
+        if (params.referrer_type) q = q.eq("referrer_type", params.referrer_type)
 
         const { data, error } = await q
         if (error) throw new Error(error.message)
@@ -172,6 +176,7 @@ export function registerReferralTools(server: McpServer) {
       id: z.string().uuid().describe("Referral UUID to update"),
       updates: z.object({
         status: z.enum(["pending", "converted", "credited", "paid", "cancelled"]).optional(),
+        referrer_type: z.enum(["client", "partner"]).optional(),
         commission_type: z.enum(["percentage", "price_difference", "credit_note"]).optional(),
         commission_pct: z.number().optional(),
         commission_amount: z.number().optional(),

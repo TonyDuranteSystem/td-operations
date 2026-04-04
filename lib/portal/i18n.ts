@@ -42,6 +42,20 @@ const translations: Record<Locale, Record<string, string>> = {
     'billing.status.voided': 'Voided',
     'billing.status.credit': 'Credit',
 
+    // Referrals
+    'referrals.title': 'Referral Program',
+    'referrals.subtitle': 'Refer new clients and earn commissions',
+    'referrals.yourLink': 'Your Referral Link',
+    'referrals.shareLinkDesc': 'Share this link with people who could benefit from our services. When they sign up, you earn a commission.',
+    'referrals.copied': 'Copied!',
+    'referrals.copyLink': 'Copy Link',
+    'referrals.totalReferrals': 'Total Referrals',
+    'referrals.converted': 'Converted',
+    'referrals.earned': 'Total Earned',
+    'referrals.noReferrals': 'No referrals yet',
+    'referrals.noReferralsDesc': 'Share your link to start earning commissions.',
+    'referrals.noLinkYet': 'Your referral link is being set up. Contact us if you need it sooner.',
+
     // Pay Now
     'pay.title': 'Pay This Invoice',
     'pay.card': 'Pay by Card',
@@ -499,6 +513,20 @@ const translations: Record<Locale, Record<string, string>> = {
     'billing.status.overdue': 'Scaduta',
     'billing.status.voided': 'Annullata',
     'billing.status.credit': 'Nota di Credito',
+
+    // Referrals
+    'referrals.title': 'Programma Referral',
+    'referrals.subtitle': 'Presenta nuovi clienti e guadagna commissioni',
+    'referrals.yourLink': 'Il Tuo Link Referral',
+    'referrals.shareLinkDesc': 'Condividi questo link con chi potrebbe beneficiare dei nostri servizi. Quando si iscrivono, guadagni una commissione.',
+    'referrals.copied': 'Copiato!',
+    'referrals.copyLink': 'Copia Link',
+    'referrals.totalReferrals': 'Referral Totali',
+    'referrals.converted': 'Convertiti',
+    'referrals.earned': 'Totale Guadagnato',
+    'referrals.noReferrals': 'Nessun referral ancora',
+    'referrals.noReferralsDesc': 'Condividi il tuo link per iniziare a guadagnare commissioni.',
+    'referrals.noLinkYet': 'Il tuo link referral e\' in fase di configurazione. Contattaci se ne hai bisogno prima.',
 
     // Pay Now
     'pay.title': 'Paga Questa Fattura',
