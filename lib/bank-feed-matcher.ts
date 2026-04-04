@@ -40,13 +40,16 @@ async function autoInvoiceForUnmatchedFeed(feed: {
   transaction_date: string
   source: string
 }): Promise<MatchResult> {
+  try {
   const senderName = (feed.sender_name || "").trim()
   if (!senderName || senderName.length < 3) {
     return { matched: false }
   }
 
-  // Search accounts by sender name — fuzzy word match
-  const senderWords = senderName.toLowerCase().split(/\s+/).filter(w => w.length > 2)
+  // Search accounts by sender name — strict word match
+  // Exclude common business suffixes that cause false positives
+  const NOISE_WORDS = new Set(["llc", "inc", "ltd", "corp", "corporation", "company", "group", "holdings", "holding", "international", "via", "your", "multi", "the", "services", "solutions", "consulting", "management", "marketing", "enterprises", "partners", "associates", "global", "capital", "ventures", "investments"])
+  const senderWords = senderName.toLowerCase().split(/[\s.]+/).filter(w => w.length > 2 && !NOISE_WORDS.has(w))
   if (senderWords.length === 0) return { matched: false }
 
   const { data: accounts } = await supabaseAdmin
@@ -56,20 +59,20 @@ async function autoInvoiceForUnmatchedFeed(feed: {
 
   if (!accounts || accounts.length === 0) return { matched: false }
 
-  // Find best matching account — at least 2 words match or single-word company matches
+  // Find best matching account — significant name words must match
   let bestAccount: { id: string; company_name: string } | null = null
   let bestScore = 0
 
   for (const acct of accounts) {
-    const acctWords = (acct.company_name || "").toLowerCase().split(/\s+/).filter((w: string) => w.length > 2)
+    const acctWords = (acct.company_name || "").toLowerCase().split(/[\s.]+/).filter((w: string) => w.length > 2 && !NOISE_WORDS.has(w))
     if (acctWords.length === 0) continue
 
-    // How many of the account's name words appear in the sender string?
-    const matchingWords = acctWords.filter((aw: string) => senderWords.some((w: string) => aw.includes(w) || w.includes(aw)))
+    // How many of the account's distinctive name words appear in the sender string?
+    const matchingWords = acctWords.filter((aw: string) => senderWords.some((w: string) => aw === w || (aw.length > 4 && (aw.includes(w) || w.includes(aw)))))
     const score = matchingWords.length / acctWords.length
 
-    // Require all (or nearly all) account name words to appear in sender
-    if (score > bestScore && score >= 0.8 && matchingWords.length >= 1) {
+    // Require ALL distinctive words to match, and at least 1 distinctive word
+    if (score > bestScore && score >= 1.0 && matchingWords.length >= 1) {
       bestScore = score
       bestAccount = acct
     }
@@ -122,6 +125,10 @@ async function autoInvoiceForUnmatchedFeed(feed: {
     confidence: "auto_invoiced",
     autoInvoiced: true,
   }
+  } catch (err) {
+    console.error(`[bank-feed-matcher] Auto-invoice failed for feed ${feed.id}:`, err)
+    return { matched: false, error: `Auto-invoice failed: ${(err as Error).message}` }
+  }
 }
 
 /**
@@ -155,7 +162,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     if (!openInvoices || openInvoices.length === 0) {
       // No open invoices in this currency — try auto-invoice if we can identify the client
-      return autoInvoiceForUnmatchedFeed({
+      return await autoInvoiceForUnmatchedFeed({
         id: feedId,
         amount: feedAmount,
         currency: feedCurrency,
@@ -228,7 +235,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     if (candidates.length === 0) {
       // No invoice matched within tolerance — try auto-invoice if we can identify the client
-      return autoInvoiceForUnmatchedFeed({
+      return await autoInvoiceForUnmatchedFeed({
         id: feedId,
         amount: feedAmount,
         currency: feedCurrency,
