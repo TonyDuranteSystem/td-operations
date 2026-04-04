@@ -77,7 +77,7 @@ interface Props {
   token: string
 }
 
-export default function ServiceAgreement({ offer, token }: Props) {
+export default function ServiceAgreement({ offer, token: _token }: Props) {
   const cl = CL[offer.language || 'en']
   const [signing, setSigning] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Complete all required fields and sign both sections above.')
@@ -150,7 +150,7 @@ export default function ServiceAgreement({ offer, token }: Props) {
       setStatusMsg('Ready to sign. Click the button below.')
       setStatusType('info')
     }
-  }, [offer.language])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { checkReady() }, [form, checkReady])
 
@@ -474,9 +474,8 @@ export default function ServiceAgreement({ offer, token }: Props) {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
-            <tr><th>Annual Service Fee</th><td>{fee}</td></tr>
-            <tr><th>Payment Schedule</th><td>Full annual fee due upon signing. From the following year: {paymentScheduleText}</td></tr>
-            <tr><th>Late Onboarding</th><td>Clients onboarding after January 1 shall pay the full Annual Service Fee for the initial Contract Year, regardless of start date. The fee will not be prorated.</td></tr>
+            <tr><th>Setup Fee</th><td>{fee} (one-time, covers all services for the first contract year)</td></tr>
+            <tr><th>Payment Schedule</th><td>Setup fee due upon signing. From the following year: {paymentScheduleText}</td></tr>
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
@@ -543,12 +542,12 @@ export default function ServiceAgreement({ offer, token }: Props) {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
-            <tr><th>Annual Service Fee</th><td>{fee}</td></tr>
+            <tr><th>Setup Fee</th><td>{fee}</td></tr>
           </tbody>
         </table>
 
         <div className="contract-section"><h3>Included Services</h3>
-          <p>The following services are included in the Annual Service Fee:</p>
+          <p>The following services are included in the Setup Fee:</p>
           <ol>
             {servicesList.map((svc, i) => (
               <li key={i}>
@@ -567,10 +566,9 @@ export default function ServiceAgreement({ offer, token }: Props) {
         <div className="contract-section"><h3>Payment Schedule</h3>
           <table className="contract-key-terms">
             <tbody>
-              <tr><th>Total Annual Fee</th><td>{fee}</td></tr>
-              <tr><th>Upon Signing (First Year)</th><td>The full Annual Service Fee of {fee} is due at the time of contract signing.</td></tr>
+              <tr><th>Setup Fee</th><td>{fee} (one-time, due upon signing)</td></tr>
               {installmentLines.length >= 2 && (
-                <tr><th>From Following Year</th><td>The Annual Service Fee will be split into two installments:{installmentLines.map((inst, i) => <span key={i}><br />&bull; {inst.label}: {inst.amount}</span>)}</td></tr>
+                <tr><th>Annual Maintenance (from following year)</th><td>{installmentLines.map((inst, i) => <span key={i}>{i > 0 && <br />}&bull; {inst.label}: {inst.amount}</span>)}</td></tr>
               )}
             </tbody>
           </table>
@@ -667,11 +665,11 @@ function LegalSections() {
 
       <div className="contract-section"><h3>4. Communication &amp; Business Hours</h3>
         <div className="contract-subsection"><h4>4.1 Business Hours</h4><p>The Consulting Firm operates <strong>Monday through Friday, 8:00 AM to 3:00 PM Eastern Time (ET)</strong>, excluding U.S. federal holidays (&ldquo;Business Hours&rdquo;). Client communications received outside of Business Hours will be addressed on the next business day.</p></div>
-        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications between the Parties shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>WhatsApp:</strong> For quick operational questions and updates</li><li><strong>Telegram:</strong> For quick operational questions and updates</li></ul><p>The Consulting Firm shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
+        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications between the Parties shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>Client Portal Chat:</strong> For operational questions, updates, and day-to-day communication. Available at portal.tonydurante.us with voice dictation support</li></ul><p>The Consulting Firm shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
         <div className="contract-subsection"><h4>4.3 Scheduled Calls</h4><p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong>. A fee of <strong>$197.00 per call</strong> may apply for non-essential calls.</p></div></div>
 
       <div className="contract-section"><h3>5. Fees &amp; Payment</h3>
-        <div className="contract-subsection"><h4>5.1 Annual Service Fee</h4><p>The Client shall pay the Annual Service Fee as specified in the Key Terms Summary and the applicable SOW.</p></div>
+        <div className="contract-subsection"><h4>5.1 Service Fees</h4><p>The Client shall pay the Setup Fee and any applicable Annual Maintenance Fee as specified in the Key Terms Summary and the applicable SOW.</p></div>
         <div className="contract-subsection"><h4>5.2 Payment Methods</h4><p>Payments may be made via:</p><ul><li><strong>Credit or debit card</strong> through the secure online checkout system;</li><li><strong>Bank wire transfer</strong> to the designated bank account.</li></ul></div>
         <div className="contract-subsection"><h4>5.3 Payment Schedule</h4><p>The payment schedule shall be as specified in the Key Terms Summary.</p></div>
         <div className="contract-subsection"><h4>5.4 Late Payment</h4><p>A late fee of <strong>1.5% per month</strong> shall accrue on unpaid balances. Services may be <strong>suspended after thirty (30) days</strong> past due.</p></div>
@@ -717,7 +715,7 @@ function LegalSections() {
 
       <div className="contract-section"><h3>22. Entire Agreement</h3><p>This Agreement and all SOWs constitute the entire agreement. No amendments unless in writing and signed by both Parties.</p></div>
 
-      <div className="contract-section"><h3>23. Notices</h3><p>Formal notices via email (with confirmation) or certified mail. <strong>WhatsApp/Telegram do not constitute formal notice.</strong></p>
+      <div className="contract-section"><h3>23. Notices</h3><p>Formal notices via email (with confirmation) or certified mail. <strong>Portal chat messages do not constitute formal notice.</strong></p>
         <table className="contract-key-terms" style={{ marginTop: 12 }}>
           <tbody>
             <tr><th>Consulting Firm</th><td>Tony Durante LLC<br />10225 Ulmerton Road, Suite 3D<br />Largo, FL 33771<br />Email: support@tonydurante.us</td></tr>
