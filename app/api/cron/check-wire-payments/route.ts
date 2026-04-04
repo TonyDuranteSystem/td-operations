@@ -191,9 +191,11 @@ export async function GET(req: NextRequest) {
       .limit(100)
 
     let invoiceMatched = 0
+    const matchResults: Array<{ feedId: string; matched: boolean; error?: string; confidence?: string }> = []
     for (const feed of unmatchedFeeds || []) {
       const result = await matchAndReconcile(feed.id)
       if (result.matched) invoiceMatched++
+      matchResults.push({ feedId: feed.id, matched: result.matched, error: result.error, confidence: result.confidence })
     }
 
     // ─── Step 7: Match QB deposits against pending activations (legacy) ───
@@ -293,8 +295,10 @@ export async function GET(req: NextRequest) {
         qb_deposits: deposits.length,
         new_feeds: newFeedCount,
         airwallex_feeds: airwallexFeedCount,
+        unmatched_feeds: unmatchedFeeds?.length ?? 0,
         invoice_matched: invoiceMatched,
         activation_matched: activationMatched,
+        match_details: matchResults.slice(0, 10),
       },
       executed_at: new Date().toISOString(),
     })
