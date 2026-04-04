@@ -258,17 +258,54 @@ export async function GET(req: NextRequest) {
         status: "ok",
         detail: `${paidPayments.length} paid (${paidPayments[0].amount_currency || "USD"} ${totalPaid.toLocaleString()})`,
       })
-    } else {
+    } else if (payments.length > 0) {
       checks.push({
         id: "payment_received",
         category: "Payments",
         label: "Setup payment",
-        status: payments.length > 0 ? "warning" : "error",
-        detail: payments.length > 0 ? `${payments.length} payment(s) but none marked Paid` : "No payments found",
-        fix: payments.length > 0 ? {
+        status: "warning",
+        detail: `${payments.length} payment(s) but none marked Paid`,
+        fix: {
           action: "mark_payment_paid",
           label: "Mark as paid",
           params: { payment_id: payments[0].id },
+        },
+      })
+    } else {
+      // Zero payments — offer may be completed (transition client paid externally)
+      // Parse offer amount for the fix button
+      let offerAmount = 0
+      let offerCurrency: "EUR" | "USD" = "EUR"
+      if (offer) {
+        const svc = (offer as unknown as { services: Array<{ price: string; optional?: boolean }> }).services || []
+        for (const s of svc) {
+          if (!s.price || s.price.toLowerCase().includes("/year") || s.price.toLowerCase().includes("inclus")) continue
+          const clean = s.price.replace(/[^0-9.,]/g, "").replace(",", "")
+          const num = parseFloat(clean)
+          if (!isNaN(num)) offerAmount += num
+        }
+        const firstPrice = svc[0]?.price || ""
+        if (firstPrice.includes("$")) offerCurrency = "USD"
+      }
+
+      checks.push({
+        id: "payment_received",
+        category: "Payments",
+        label: "Setup payment",
+        status: "error",
+        detail: "No payments found" + (offer?.status === "completed" ? " — offer is completed, payment may have been received externally" : ""),
+        fix: offer?.status === "completed" ? {
+          action: "record_payment",
+          label: offerAmount > 0 ? `Record ${offerCurrency === "EUR" ? "€" : "$"}${offerAmount.toLocaleString()} payment` : "Record payment",
+          params: {
+            account_id: accountId,
+            contact_id: contactId,
+            amount: offerAmount || null,
+            currency: offerCurrency,
+            payment_method: offer.payment_type === "bank_transfer" ? "Wire Transfer" : "Card",
+            description: `Setup fee — ${offer.token}`,
+            offer_token: offer.token,
+          },
         } : undefined,
       })
     }
@@ -655,6 +692,35 @@ export async function POST(req: NextRequest) {
           .update({ status: "Paid", paid_date: new Date().toISOString().split("T")[0], updated_at: new Date().toISOString() })
           .eq("id", params.payment_id)
         result = { success: !error, detail: error ? error.message : "Payment marked as paid" }
+        break
+      }
+
+      case "record_payment": {
+        const today = new Date().toISOString().split("T")[0]
+        const { data: newPayment, error } = await supabaseAdmin
+          .from("payments")
+          .insert({
+            account_id: params.account_id,
+            contact_id: params.contact_id || null,
+            amount: params.amount || 0,
+            amount_paid: params.amount || 0,
+            amount_due: 0,
+            amount_currency: params.currency || "EUR",
+            status: "Paid",
+            invoice_status: "Paid",
+            payment_method: params.payment_method || "Wire Transfer",
+            description: params.description || "Setup payment",
+            paid_date: today,
+            issue_date: today,
+            period: "Setup",
+            year: new Date().getFullYear(),
+            installment: "Setup",
+            notes: `Recorded via diagnostic fix${params.offer_token ? ` — offer: ${params.offer_token}` : ""}`,
+          })
+          .select("id")
+          .single()
+        const amt = params.amount ? `${params.currency === "USD" ? "$" : "€"}${Number(params.amount).toLocaleString()}` : "unknown amount"
+        result = { success: !error, detail: error ? error.message : `Payment recorded: ${amt} (${newPayment?.id?.slice(0, 8)})` }
         break
       }
 
