@@ -305,7 +305,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      version: "cfc516b",
       new_feeds: newFeedCount + airwallexFeedCount,
+      unmatched_feeds_found: unmatchedFeeds?.length ?? 0,
       invoice_matched: invoiceMatched,
       activation_matched: activationMatched,
       total_matched: totalMatched,
