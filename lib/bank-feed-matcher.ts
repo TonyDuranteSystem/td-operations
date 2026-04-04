@@ -48,14 +48,19 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const refLower = (feed.sender_reference || "").toLowerCase()
 
     // Get all open invoices (Sent or Overdue) in matching currency
-    const { data: openInvoices } = await supabaseAdmin
+    const { data: openInvoices, error: invQueryErr } = await supabaseAdmin
       .from("payments")
       .select("id, account_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name)")
       .in("invoice_status", ["Sent", "Overdue", "Partial"])
-      .eq("amount_currency", feedCurrency)
 
-    if (!openInvoices || openInvoices.length === 0) {
-      // No open invoices in this currency — try auto-invoice if we can identify the client
+    if (invQueryErr) {
+      return { matched: false, error: `Invoice query failed: ${invQueryErr.message}` }
+    }
+
+    // Filter by currency in code (PostgREST may not handle custom enum .eq correctly)
+    const currencyFiltered = (openInvoices || []).filter(inv => String(inv.amount_currency) === feedCurrency)
+
+    if (currencyFiltered.length === 0) {
       return { matched: false }
     }
 
@@ -69,7 +74,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     const candidates: ScoredInvoice[] = []
 
-    for (const inv of openInvoices) {
+    for (const inv of currencyFiltered) {
       // For Partial invoices, match against remaining balance (amount_due)
       const invAmount = inv.invoice_status === 'Partial'
         ? Number(inv.amount_due ?? inv.total ?? 0)
@@ -151,7 +156,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const paymentMethod = feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire"
 
     // Check if this is a partial payment (feed amount < invoice remaining balance)
-    const bestInvoice = openInvoices.find(inv => inv.id === best.id)
+    const bestInvoice = currencyFiltered.find(inv => inv.id === best.id)
     const bestInvoiceBalance = bestInvoice?.invoice_status === 'Partial'
       ? Number(bestInvoice?.amount_due ?? bestInvoice?.total ?? 0)
       : Number(bestInvoice?.total ?? bestInvoice?.amount ?? 0)
