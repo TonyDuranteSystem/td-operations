@@ -852,6 +852,7 @@ export default function ContractPage() {
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
             <tr><th>Setup Fee</th><td>{fee} -- one-time, due upon signing. Covers all selected services for the first contract year.</td></tr>
             {annualFee && <tr><th>Annual Maintenance (from {year + 1})</th><td>{annualFee} -- {installments}</td></tr>}
+            <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
 

@@ -531,6 +531,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
             <tr><th>Setup Fee</th><td>{fee} (one-time, covers all services for the first contract year)</td></tr>
             <tr><th>Payment Schedule</th><td>Setup fee due upon signing. From the following year: {paymentScheduleText}</td></tr>
+            <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
 
