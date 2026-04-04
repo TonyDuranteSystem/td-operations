@@ -162,15 +162,28 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
   const year = offer.offer_date ? new Date(offer.offer_date).getFullYear() : new Date().getFullYear()
   const effDate = today()
 
-  // Fee from cost_summary
-  let fee = ''
-  if (offer.cost_summary && Array.isArray(offer.cost_summary) && offer.cost_summary.length > 0) {
-    const cs = offer.cost_summary[offer.cost_summary.length - 1]
-    fee = cs.total || ''
+  // Calculate setup fee dynamically from selected services (one-time charges only)
+  const services = Array.isArray(offer.services) ? offer.services : []
+  const selectedSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services : [])
+  let totalSetup = 0
+  let currencySymbol = 'EUR'
+  for (const svc of services) {
+    const isOpt = !!(svc as any).optional
+    const isSelected = selectedSet.size > 0 ? (!isOpt || selectedSet.has(svc.name)) : !isOpt
+    if (!isSelected) continue
+    const priceStr = String(svc.price || '0')
+    if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
+    if (/includ|inclus/i.test(priceStr)) continue
+    const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
+    if (!isNaN(priceNum) && priceNum > 0) {
+      totalSetup += priceNum
+      if (/\$|usd/i.test(priceStr)) currencySymbol = '$'
+      else if (/EUR/i.test(priceStr)) currencySymbol = 'EUR'
+    }
   }
-  if (!fee) fee = 'As specified in the offer'
-  // Normalize fee text to English (e.g., "/anno" → "/year")
-  fee = fee.replace(/\/anno/gi, '/year').replace(/\/mese/gi, '/month')
+  const fee = totalSetup > 0
+    ? `${currencySymbol}${totalSetup.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+    : 'As specified in the offer'
 
   // Installments from recurring_costs — always English labels in contract
   const rc = Array.isArray(offer.recurring_costs) ? offer.recurring_costs : []
@@ -190,13 +203,16 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
 
-  // Services from offer — filter by client selections if available
-  const selectedSet = new Set((offer as any).selected_services || [])
-  const servicesList = offer.services && Array.isArray(offer.services)
-    ? offer.services
-        .filter(svc => selectedSet.size === 0 || selectedSet.has(svc.name) || !(svc as any).optional)
-        .map(svc => ({ name: svc.name || '', desc: svc.description || '', includes: svc.includes || [] }))
-    : []
+  // Services from offer — filter by client selections, exclude recurring
+  const servicesList = services
+    .filter(svc => {
+      const priceStr = String(svc.price || '')
+      if (/\/(year|anno|month|mese)/i.test(priceStr)) return false
+      const isOpt = !!(svc as any).optional
+      if (isOpt && selectedSet.size > 0 && !selectedSet.has(svc.name)) return false
+      return true
+    })
+    .map(svc => ({ name: svc.name || '', desc: svc.description || '', includes: svc.includes || [] }))
 
   // LLC type
   let llcType = 'Single-Member LLC'

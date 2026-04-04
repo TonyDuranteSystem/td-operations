@@ -306,23 +306,42 @@ export default function ContractPage() {
 
   // Extract offer data for contract
   function getContractData() {
-    if (!offer) return { fee: '', llcType: '', installments: '', year: new Date().getFullYear() }
+    if (!offer) return { fee: '', llcType: '', installments: '', annualFee: '', year: new Date().getFullYear() }
     const o = offer
     const year = new Date().getFullYear()
-    let fee = '', llcType = '', installments = ''
+    let llcType = '', installments = '', annualFee = ''
 
-    // Pick the recommended service first, fallback to last
-    if (o.services && Array.isArray(o.services) && o.services.length > 0) {
-      const rec = o.services.find(x => x.recommended) || o.services[o.services.length - 1]
-      fee = rec.price || ''
+    // Calculate setup fee dynamically from selected services (one-time charges only)
+    const services = Array.isArray(o.services) ? o.services : []
+    const selectedSet = new Set(Array.isArray((o as any).selected_services) ? (o as any).selected_services : [])
+    let totalSetup = 0
+    let currency = 'EUR'
+    for (const svc of services) {
+      const isOpt = !!(svc as any).optional
+      // If selected_services exists, use it; otherwise include all non-optional
+      const isSelected = selectedSet.size > 0
+        ? (!isOpt || selectedSet.has(svc.name))
+        : !isOpt
+      if (!isSelected) continue
+      const priceStr = String(svc.price || '0')
+      // Skip recurring/informational prices
+      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
+      if (/includ|inclus/i.test(priceStr)) continue
+      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
+      if (!isNaN(priceNum) && priceNum > 0) {
+        totalSetup += priceNum
+        if (/\$|usd/i.test(priceStr)) currency = '$'
+        else if (/EUR/i.test(priceStr)) currency = 'EUR'
+      }
     }
-    // Override with matching cost_summary if available (prefer "recommended" label)
-    if (o.cost_summary && Array.isArray(o.cost_summary) && o.cost_summary.length > 0) {
-      const rc = o.cost_summary.find(x => /recommended/i.test(x.label || '')) || o.cost_summary[o.cost_summary.length - 1]
-      if (rc.total) fee = rc.total
-    }
-    // Derive installments from recurring_costs — always English labels
-    if (o.recurring_costs && Array.isArray(o.recurring_costs) && o.recurring_costs.length >= 2) {
+
+    const symbol = currency === '$' ? '$' : 'EUR'
+    const fee = totalSetup > 0
+      ? `${symbol}${totalSetup.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+      : 'As specified in the offer'
+
+    // Derive annual maintenance from recurring_costs
+    if (o.recurring_costs && Array.isArray(o.recurring_costs) && o.recurring_costs.length > 0) {
       const parts: string[] = []
       for (let idx = 0; idx < o.recurring_costs.length; idx++) {
         const item = o.recurring_costs[idx]
@@ -334,21 +353,20 @@ export default function ContractPage() {
         else engLabel = idx === 0 ? 'First Installment' : 'Second Installment'
         parts.push(`${engLabel}: ${amt}`)
       }
-      installments = parts.join(' — ')
+      installments = parts.join(' -- ')
+      // Extract total annual fee from first recurring cost
+      const firstRc = o.recurring_costs[0]
+      annualFee = (firstRc as any).price || ''
     }
-    if (!installments && fee) {
-      installments = `Single payment of ${fee}`
-    }
-    if (o.services && Array.isArray(o.services)) {
-      const svc = o.services.find(x => (x.name || '').toLowerCase().includes('llc'))
+    if (!installments) installments = 'As specified in the offer'
+
+    if (services.length > 0) {
+      const svc = services.find(x => (x.name || '').toLowerCase().includes('llc'))
       if (svc) llcType = svc.name || ''
     }
-    if (!llcType) llcType = 'Single-Member LLC (Florida)'
-    if (!fee) fee = 'As specified in the offer'
-    // Normalize fee text to English (e.g., "/anno" → "/year")
-    fee = fee.replace(/\/anno/gi, '/year').replace(/\/mese/gi, '/month')
-    if (!installments) installments = 'As specified in the offer'
-    return { fee, llcType, installments, year }
+    if (!llcType) llcType = 'Single-Member LLC'
+
+    return { fee, llcType, installments, annualFee, year }
   }
 
   // Sign contract
@@ -726,7 +744,7 @@ export default function ContractPage() {
     )
   }
 
-  const { fee, llcType, installments, year } = getContractData()
+  const { fee, llcType, installments, annualFee, year } = getContractData()
   const effDate = today()
   const phoneInvalid = form.phone && !isValidPhone(form.phone)
   const zipInvalid = form.zip && !isValidZip(form.zip)
@@ -739,18 +757,25 @@ export default function ContractPage() {
     form.email
   ].filter(Boolean).join('\n')
 
-  // Services list
+  // Services list — only selected one-time services (exclude annual maintenance, deselected optional)
+  const selectedSvcSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services : [])
   const servicesList = offer.services && Array.isArray(offer.services)
-    ? offer.services.map(svc => ({ name: svc.name || '', desc: svc.description || '' }))
+    ? offer.services
+        .filter(svc => {
+          const priceStr = String(svc.price || '')
+          // Exclude recurring/informational
+          if (/\/(year|anno|month|mese)/i.test(priceStr)) return false
+          // Exclude deselected optional services
+          const isOpt = !!(svc as any).optional
+          if (isOpt && selectedSvcSet.size > 0 && !selectedSvcSet.has(svc.name)) return false
+          return true
+        })
+        .map(svc => ({ name: svc.name || '', desc: svc.description || '', includes: svc.includes || [] }))
     : [
-        { name: 'LLC Formation & State Registration', desc: '' },
-        { name: 'EIN Application', desc: '' },
-        { name: 'Registered Agent', desc: '' },
-        { name: 'U.S. Business Address & Mail Handling', desc: '' },
-        { name: 'Banking Assistance', desc: '' },
-        { name: 'Payment Processor Setup', desc: '' },
-        { name: 'Annual Report Filing', desc: '' },
-        { name: 'Ongoing Administrative Support', desc: '' }
+        { name: 'LLC Formation & State Registration', desc: '', includes: [] },
+        { name: 'EIN Application', desc: '', includes: [] },
+        { name: 'Registered Agent', desc: '', includes: [] },
+        { name: 'Banking Assistance', desc: '', includes: [] },
       ]
 
   return (
@@ -782,8 +807,8 @@ export default function ContractPage() {
           <tbody>
             <tr><th>Contract Year</th><td>{year} (January 1 - December 31)</td></tr>
             <tr><th>LLC Type</th><td>{llcType}</td></tr>
-            <tr><th>Setup Fee</th><td>{fee} (one-time, covers all services for the first contract year)</td></tr>
-            <tr><th>Payment Schedule</th><td>Setup fee due upon signing. From the following year: {installments}</td></tr>
+            <tr><th>Setup Fee</th><td>{fee} -- one-time, due upon signing. Covers all selected services for the first contract year.</td></tr>
+            {annualFee && <tr><th>Annual Maintenance (from {year + 1})</th><td>{annualFee} -- {installments}</td></tr>}
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
@@ -868,7 +893,14 @@ export default function ContractPage() {
           <p>The following services are included in the Setup Fee:</p>
           <ol>
             {servicesList.map((svc, i) => (
-              <li key={i}><strong>{svc.name}</strong>{svc.desc ? ` — ${svc.desc}` : ''}</li>
+              <li key={i}>
+                <strong>{svc.name}</strong>{svc.desc ? ` — ${svc.desc}` : ''}
+                {svc.includes && svc.includes.length > 0 && (
+                  <ul style={{ marginTop: 4 }}>
+                    {svc.includes.map((inc: string, j: number) => <li key={j}>{inc}</li>)}
+                  </ul>
+                )}
+              </li>
             ))}
           </ol>
         </div>
