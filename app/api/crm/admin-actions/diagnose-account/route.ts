@@ -760,7 +760,8 @@ export async function POST(req: NextRequest) {
       }
 
       case "record_payment": {
-        const today = new Date().toISOString().split("T")[0]
+        const paidDate = (params.paid_date as string) || new Date().toISOString().split("T")[0]
+        const bankName = params.bank_name as string | undefined
         const { data: newPayment, error } = await supabaseAdmin
           .from("payments")
           .insert({
@@ -774,12 +775,12 @@ export async function POST(req: NextRequest) {
             invoice_status: "Paid",
             payment_method: params.payment_method || "Wire Transfer",
             description: params.description || "Setup payment",
-            paid_date: today,
-            issue_date: today,
-            period: "Setup",
+            paid_date: paidDate,
+            issue_date: paidDate,
+            period: "One-Time",
             year: new Date().getFullYear(),
-            installment: "Setup",
-            notes: `Recorded via diagnostic fix${params.offer_token ? ` — offer: ${params.offer_token}` : ""}`,
+            installment: "One-Time",
+            notes: `Recorded via diagnostic fix${bankName ? ` — bank: ${bankName}` : ""}${params.offer_token ? ` — offer: ${params.offer_token}` : ""}`,
           })
           .select("id")
           .single()

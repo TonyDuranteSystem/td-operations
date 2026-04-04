@@ -69,12 +69,24 @@ const RISK_CONFIG = {
 
 const CATEGORY_ORDER = ['Contact', 'Lead & Offer', 'Payments', 'Services', 'Forms', 'Documents', 'Portal', 'Infrastructure']
 
+// Actions that need a form instead of one-click
+const FORM_ACTIONS = new Set(['record_payment'])
+
 export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }: Props) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<DiagnosticResult | null>(null)
   const [fixingId, setFixingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // Payment form state
+  const [paymentForm, setPaymentForm] = useState({
+    amount: '',
+    currency: 'EUR',
+    payment_method: 'Wire Transfer',
+    bank_name: '',
+    paid_date: new Date().toISOString().split('T')[0],
+  })
 
   useEffect(() => {
     if (open) {
@@ -86,6 +98,21 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // Pre-fill payment form when a record_payment fix is expanded
+  useEffect(() => {
+    if (!expandedId || !result) return
+    const check = result.checks.find(c => c.id === expandedId)
+    if (check?.fix?.action === 'record_payment') {
+      const p = check.fix.params
+      setPaymentForm(prev => ({
+        ...prev,
+        amount: p.amount ? String(p.amount) : '',
+        currency: (p.currency as string) || 'EUR',
+        payment_method: (p.payment_method as string) || 'Wire Transfer',
+      }))
+    }
+  }, [expandedId, result])
 
   async function runDiagnostic() {
     setLoading(true)
@@ -105,17 +132,21 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
     }
   }
 
-  async function executeFix(check: DiagnosticCheck) {
+  async function executeFix(check: DiagnosticCheck, overrideParams?: Record<string, unknown>) {
     if (!check.fix) return
     setFixingId(check.id)
     try {
+      const params = overrideParams
+        ? { ...check.fix.params, ...overrideParams }
+        : check.fix.params
+
       const res = await fetch('/api/crm/admin-actions/diagnose-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           account_id: accountId,
           action: check.fix.action,
-          params: check.fix.params,
+          params,
         }),
       })
       const data = await res.json()
@@ -220,6 +251,7 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
                         const hasFix = !!check.fix
                         const isExpanded = expandedId === check.id
                         const isClickable = hasFix || check.status === 'error' || check.status === 'warning'
+                        const needsForm = hasFix && FORM_ACTIONS.has(check.fix!.action)
 
                         return (
                           <div key={check.id}>
@@ -274,7 +306,7 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
                                         <ul className="space-y-1">
                                           {check.fix!.impact.map((line, i) => (
                                             <li key={i} className="text-xs text-zinc-600 flex items-start gap-1.5">
-                                              <span className="text-zinc-400 mt-0.5">•</span>
+                                              <span className="text-zinc-400 mt-0.5">&bull;</span>
                                               {line}
                                             </li>
                                           ))}
@@ -298,10 +330,118 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
                                       </div>
                                     )}
 
+                                    {/* Payment Form (for record_payment action) */}
+                                    {needsForm && check.fix!.action === 'record_payment' && (
+                                      <div className="bg-white rounded-lg border p-4 space-y-3" onClick={e => e.stopPropagation()}>
+                                        <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Payment details</p>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                          {/* Amount */}
+                                          <div>
+                                            <label className="block text-xs font-medium text-zinc-600 mb-1">Amount</label>
+                                            <input
+                                              type="number"
+                                              step="0.01"
+                                              value={paymentForm.amount}
+                                              onChange={e => setPaymentForm(p => ({ ...p, amount: e.target.value }))}
+                                              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                              placeholder="3000"
+                                            />
+                                          </div>
+
+                                          {/* Currency */}
+                                          <div>
+                                            <label className="block text-xs font-medium text-zinc-600 mb-1">Currency</label>
+                                            <select
+                                              value={paymentForm.currency}
+                                              onChange={e => setPaymentForm(p => ({ ...p, currency: e.target.value }))}
+                                              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                                            >
+                                              <option value="EUR">EUR</option>
+                                              <option value="USD">USD</option>
+                                            </select>
+                                          </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                          {/* Payment Method */}
+                                          <div>
+                                            <label className="block text-xs font-medium text-zinc-600 mb-1">Payment method</label>
+                                            <select
+                                              value={paymentForm.payment_method}
+                                              onChange={e => setPaymentForm(p => ({ ...p, payment_method: e.target.value, bank_name: e.target.value === 'Card' ? '' : p.bank_name }))}
+                                              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                                            >
+                                              <option value="Wire Transfer">Wire Transfer</option>
+                                              <option value="Card">Card (Stripe/Whop)</option>
+                                            </select>
+                                          </div>
+
+                                          {/* Bank (only for wire) */}
+                                          <div>
+                                            <label className="block text-xs font-medium text-zinc-600 mb-1">
+                                              {paymentForm.payment_method === 'Wire Transfer' ? 'Bank used' : 'Gateway'}
+                                            </label>
+                                            {paymentForm.payment_method === 'Wire Transfer' ? (
+                                              <select
+                                                value={paymentForm.bank_name}
+                                                onChange={e => setPaymentForm(p => ({ ...p, bank_name: e.target.value }))}
+                                                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                                              >
+                                                <option value="">Select bank...</option>
+                                                <option value="Airwallex">Airwallex (EUR)</option>
+                                                <option value="Relay">Relay (USD)</option>
+                                                <option value="Mercury">Mercury (USD)</option>
+                                                <option value="Revolut">Revolut</option>
+                                              </select>
+                                            ) : (
+                                              <select
+                                                value={paymentForm.bank_name}
+                                                onChange={e => setPaymentForm(p => ({ ...p, bank_name: e.target.value }))}
+                                                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                                              >
+                                                <option value="">Select gateway...</option>
+                                                <option value="Stripe">Stripe</option>
+                                                <option value="Whop">Whop</option>
+                                              </select>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* Paid Date */}
+                                        <div>
+                                          <label className="block text-xs font-medium text-zinc-600 mb-1">Date paid</label>
+                                          <input
+                                            type="date"
+                                            value={paymentForm.paid_date}
+                                            onChange={e => setPaymentForm(p => ({ ...p, paid_date: e.target.value }))}
+                                            className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+
                                     {/* Action button */}
                                     <div className="pt-1">
                                       <button
-                                        onClick={(e) => { e.stopPropagation(); executeFix(check) }}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          if (needsForm && check.fix!.action === 'record_payment') {
+                                            if (!paymentForm.amount || parseFloat(paymentForm.amount) <= 0) {
+                                              toast.error('Enter a valid amount')
+                                              return
+                                            }
+                                            executeFix(check, {
+                                              amount: parseFloat(paymentForm.amount),
+                                              currency: paymentForm.currency,
+                                              payment_method: paymentForm.payment_method,
+                                              bank_name: paymentForm.bank_name || undefined,
+                                              paid_date: paymentForm.paid_date,
+                                            })
+                                          } else {
+                                            executeFix(check)
+                                          }
+                                        }}
                                         disabled={fixingId === check.id}
                                         className={cn(
                                           'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50',
@@ -317,7 +457,7 @@ export function ClientDiagnosticDialog({ open, onClose, accountId, companyName }
                                         ) : (
                                           <Wrench className="h-4 w-4" />
                                         )}
-                                        {check.fix!.label}
+                                        {needsForm ? 'Confirm payment' : check.fix!.label}
                                       </button>
                                     </div>
                                   </>
