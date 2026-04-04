@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { qbApiCall } from "@/lib/quickbooks"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 
 export async function GET(req: NextRequest) {
   try {
@@ -130,57 +131,54 @@ export async function GET(req: NextRequest) {
       newFeedCount++
     }
 
-    // ─── Step 5: Check Airwallex EUR deposits via Gmail ──────────────
+    // ─── Step 5: Sync Airwallex EUR deposits via API ──────────────────
 
     let airwallexFeedCount = 0
     try {
-      const { gmailGet } = await import("@/lib/gmail")
-      const searchQuery = encodeURIComponent(`from:airwallex subject:"deposit" after:${dateStr.replace(/-/g, "/")}`)
-      const searchResult = await gmailGet(`/messages?q=${searchQuery}&maxResults=50`)
-      const messageIds = (searchResult.messages || []) as Array<{ id: string }>
-
-      for (const msg of messageIds.slice(0, 20)) {
-        try {
-          const externalId = `airwallex_${msg.id}`
-
-          // Check if already stored
-          const { data: existing } = await supabase
-            .from("td_bank_feeds")
-            .select("id")
-            .eq("external_id", externalId)
-            .limit(1)
-
-          if (existing?.length) continue
-
-          const detail = await gmailGet(`/messages/${msg.id}?format=full`)
-          const headers = (detail.payload?.headers || []) as Array<{ name: string; value: string }>
-          const dateHeader = headers.find((h: { name: string }) => h.name === "Date")?.value || ""
-          const snippet = String(detail.snippet || "")
-
-          const amountMatch = snippet.match(/deposit\s+of\s+([\d,.]+)\s*EUR/i)
-          const senderMatch = snippet.match(/from\s+([A-Z][A-Za-z0-9\s.]+(?:LLC|Inc|Ltd|Corp)?)/i)
-
-          if (amountMatch) {
-            const amount = parseFloat(amountMatch[1].replace(/,/g, ""))
-            const sender = senderMatch ? senderMatch[1].trim() : ""
-
-            await supabase.from("td_bank_feeds").insert({
-              source: "airwallex_email",
-              external_id: externalId,
-              transaction_date: dateHeader ? new Date(dateHeader).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
-              amount,
-              currency: "EUR",
-              sender_name: sender || null,
-              memo: snippet.slice(0, 500),
-              raw_data: { messageId: msg.id, snippet, dateHeader },
-              status: "unmatched",
-            })
-            airwallexFeedCount++
-          }
-        } catch { /* skip individual email parse errors */ }
+      const toDate = new Date().toISOString().split("T")[0]
+      const airwallexResult = await syncAirwallexDeposits(dateStr, toDate)
+      airwallexFeedCount = airwallexResult.added
+      if (airwallexResult.errors > 0) {
+        console.error(`[check-wire] Airwallex sync had ${airwallexResult.errors} errors`)
       }
     } catch (airwallexErr) {
-      console.error("[check-wire] Airwallex Gmail check failed:", airwallexErr)
+      console.error("[check-wire] Airwallex API sync failed:", airwallexErr)
+    }
+
+    // ─── Step 5b: Content-based dedup safety net ────────────────────
+    // Catch duplicates that slip past external_id (e.g. same deposit from different sources)
+
+    try {
+      const { data: recentFeeds } = await supabase
+        .from("td_bank_feeds")
+        .select("id, source, amount, transaction_date, sender_name, created_at")
+        .eq("status", "unmatched")
+        .order("created_at", { ascending: false })
+        .limit(200)
+
+      if (recentFeeds && recentFeeds.length > 1) {
+        const seen = new Set<string>()
+        const dupeIds: string[] = []
+
+        for (const feed of recentFeeds) {
+          const key = `${feed.source}|${Number(feed.amount).toFixed(2)}|${feed.transaction_date}|${(feed.sender_name || "").toLowerCase().trim()}`
+          if (seen.has(key)) {
+            dupeIds.push(feed.id)
+          } else {
+            seen.add(key)
+          }
+        }
+
+        if (dupeIds.length > 0) {
+          await supabase
+            .from("td_bank_feeds")
+            .update({ status: "duplicate", updated_at: new Date().toISOString() })
+            .in("id", dupeIds)
+          console.warn(`[check-wire] Marked ${dupeIds.length} content-duplicate feeds`)
+        }
+      }
+    } catch (dedupErr) {
+      console.error("[check-wire] Content dedup failed:", dedupErr)
     }
 
     // ─── Step 6: Match all unmatched feeds against invoices ──────────

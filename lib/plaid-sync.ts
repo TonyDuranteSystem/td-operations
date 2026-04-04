@@ -11,11 +11,11 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
   // Get cursor from last sync
   const { data: connection } = await supabaseAdmin
     .from('plaid_connections')
-    .select('id, last_synced_at')
+    .select('id, last_synced_at, sync_cursor')
     .eq('access_token', accessToken)
     .single()
 
-  let cursor: string | undefined = undefined
+  let cursor: string | undefined = connection?.sync_cursor ?? undefined
   let hasMore = true
   let added = 0
   let modified = 0
@@ -66,11 +66,14 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
     hasMore = has_more
   }
 
-  // Update last_synced_at
+  // Update last_synced_at and persist cursor for incremental sync
   if (connection) {
     await supabaseAdmin
       .from('plaid_connections')
-      .update({ last_synced_at: new Date().toISOString() })
+      .update({
+        last_synced_at: new Date().toISOString(),
+        sync_cursor: cursor,
+      })
       .eq('id', connection.id)
   }
 

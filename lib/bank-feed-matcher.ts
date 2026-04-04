@@ -15,7 +15,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
-import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
+import { syncInvoiceStatus, createUnifiedInvoice } from "@/lib/portal/unified-invoice"
 
 interface MatchResult {
   matched: boolean
@@ -23,6 +23,105 @@ interface MatchResult {
   invoiceNumber?: string
   confidence?: string
   error?: string
+  autoInvoiced?: boolean
+}
+
+/**
+ * Auto-create an invoice for an unmatched bank feed when we can identify the client.
+ * Matches sender_name against accounts.company_name (fuzzy word match).
+ * Creates a paid invoice + payment via createUnifiedInvoice(mark_as_paid: true),
+ * then links the bank feed to the new payment record.
+ */
+async function autoInvoiceForUnmatchedFeed(feed: {
+  id: string
+  amount: number
+  currency: string
+  sender_name: string | null
+  transaction_date: string
+  source: string
+}): Promise<MatchResult> {
+  const senderName = (feed.sender_name || "").trim()
+  if (!senderName || senderName.length < 3) {
+    return { matched: false }
+  }
+
+  // Search accounts by sender name — fuzzy word match
+  const senderWords = senderName.toLowerCase().split(/\s+/).filter(w => w.length > 2)
+  if (senderWords.length === 0) return { matched: false }
+
+  const { data: accounts } = await supabaseAdmin
+    .from("accounts")
+    .select("id, company_name")
+    .not("company_name", "is", null)
+
+  if (!accounts || accounts.length === 0) return { matched: false }
+
+  // Find best matching account — at least 2 words match or single-word company matches
+  let bestAccount: { id: string; company_name: string } | null = null
+  let bestScore = 0
+
+  for (const acct of accounts) {
+    const acctWords = (acct.company_name || "").toLowerCase().split(/\s+/).filter((w: string) => w.length > 2)
+    if (acctWords.length === 0) continue
+
+    // How many of the account's name words appear in the sender string?
+    const matchingWords = acctWords.filter((aw: string) => senderWords.some((w: string) => aw.includes(w) || w.includes(aw)))
+    const score = matchingWords.length / acctWords.length
+
+    // Require all (or nearly all) account name words to appear in sender
+    if (score > bestScore && score >= 0.8 && matchingWords.length >= 1) {
+      bestScore = score
+      bestAccount = acct
+    }
+  }
+
+  if (!bestAccount) return { matched: false }
+
+  // Auto-create invoice marked as paid
+  const paymentMethod = feed.source === "relay" ? "Wire (Relay)"
+    : feed.source === "mercury" ? "Wire (Mercury)"
+    : feed.source === "airwallex" ? "Wire (Airwallex)"
+    : "Wire"
+
+  const result = await createUnifiedInvoice({
+    account_id: bestAccount.id,
+    line_items: [{
+      description: `Payment received — ${senderName}`,
+      unit_price: feed.amount,
+      quantity: 1,
+    }],
+    currency: (feed.currency || "USD") as "USD" | "EUR",
+    mark_as_paid: true,
+    paid_date: feed.transaction_date,
+    payment_method: paymentMethod,
+  })
+
+  // Link bank feed to the new payment
+  const now = new Date().toISOString()
+  await supabaseAdmin
+    .from("td_bank_feeds")
+    .update({
+      matched_payment_id: result.paymentId,
+      match_confidence: "auto_invoiced",
+      matched_at: now,
+      matched_by: "auto",
+      status: "matched",
+      updated_at: now,
+    })
+    .eq("id", feed.id)
+
+  // QB sync (non-blocking)
+  syncPaymentToQB(result.paymentId, { paymentDate: feed.transaction_date }).catch(() => {})
+
+  console.warn(`[bank-feed-matcher] Auto-invoiced: ${senderName} → ${bestAccount.company_name} (${result.invoiceNumber}, ${feed.currency} ${feed.amount})`)
+
+  return {
+    matched: true,
+    paymentId: result.paymentId,
+    invoiceNumber: result.invoiceNumber,
+    confidence: "auto_invoiced",
+    autoInvoiced: true,
+  }
 }
 
 /**
@@ -55,7 +154,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       .eq("amount_currency", feedCurrency)
 
     if (!openInvoices || openInvoices.length === 0) {
-      return { matched: false }
+      // No open invoices in this currency — try auto-invoice if we can identify the client
+      return autoInvoiceForUnmatchedFeed({
+        id: feedId,
+        amount: feedAmount,
+        currency: feedCurrency,
+        sender_name: feed.sender_name,
+        transaction_date: feed.transaction_date,
+        source: feed.source,
+      })
     }
 
     // Score each invoice
@@ -120,7 +227,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     }
 
     if (candidates.length === 0) {
-      return { matched: false }
+      // No invoice matched within tolerance — try auto-invoice if we can identify the client
+      return autoInvoiceForUnmatchedFeed({
+        id: feedId,
+        amount: feedAmount,
+        currency: feedCurrency,
+        sender_name: feed.sender_name,
+        transaction_date: feed.transaction_date,
+        source: feed.source,
+      })
     }
 
     // Sort by score descending — take the best match
