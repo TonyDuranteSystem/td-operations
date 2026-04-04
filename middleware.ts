@@ -11,7 +11,6 @@ const PUBLIC_PREFIXES = [
   '/portal/reset-password',
   '/portal/auth/callback',
   // API: external webhooks, cron, sync, dashboard badges
-  '/api/test-match',
   '/api/dashboard/badges',
   '/api/qb',
   '/api/mcp',
