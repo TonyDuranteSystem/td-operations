@@ -183,19 +183,14 @@ export async function GET(req: NextRequest) {
 
     // ─── Step 6: Match all unmatched feeds against invoices ──────────
 
-    // Debug: count ALL feeds first
-    const { count: totalFeedCount } = await supabase
+    // Fetch all feeds and filter in code (PostgREST .eq on text may return stale results)
+    const { data: allFeeds } = await supabase
       .from("td_bank_feeds")
-      .select("id", { count: "exact", head: true })
-
-    const { data: unmatchedFeeds, error: feedErr } = await supabase
-      .from("td_bank_feeds")
-      .select("id")
-      .eq("status", "unmatched")
+      .select("id, status")
       .order("created_at", { ascending: false })
-      .limit(100)
+      .limit(500)
 
-    console.warn(`[check-wire] Feed debug: total=${totalFeedCount}, unmatched=${unmatchedFeeds?.length}, err=${feedErr?.message}`)
+    const unmatchedFeeds = (allFeeds || []).filter(f => f.status === "unmatched")
 
     let invoiceMatched = 0
     const matchResults: Array<{ feedId: string; matched: boolean; error?: string; confidence?: string }> = []
@@ -312,9 +307,8 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      version: "91c9ef2-debug",
-      total_feeds_in_table: totalFeedCount,
-      feed_query_error: feedErr?.message ?? null,
+      version: "cc9843e-fix",
+      total_feeds_in_table: allFeeds?.length ?? 0,
       new_feeds: newFeedCount + airwallexFeedCount,
       unmatched_feeds_found: unmatchedFeeds?.length ?? 0,
       invoice_matched: invoiceMatched,
