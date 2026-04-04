@@ -25,6 +25,63 @@ function mapQBStatus(balance: number, total: number): { invoiceStatus: string; p
   return { invoiceStatus: 'Sent', paymentStatus: 'Pending' }
 }
 
+// Ensure a client_customers record exists for an account or contact
+async function ensureCustomer(accountId?: string | null, contactId?: string | null, name?: string): Promise<string | null> {
+  const col = accountId ? 'account_id' : 'contact_id'
+  const val = accountId || contactId
+  if (!val) return null
+
+  const { data: existing } = await supabaseAdmin
+    .from('client_customers')
+    .select('id')
+    .eq(col, val)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing) return existing.id
+
+  // Create new customer
+  let customerName = name || 'Unknown'
+  let email = ''
+
+  if (accountId) {
+    const { data: acct } = await supabaseAdmin
+      .from('accounts')
+      .select('company_name')
+      .eq('id', accountId)
+      .single()
+    if (acct) customerName = acct.company_name
+
+    const { data: link } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contacts(email)')
+      .eq('account_id', accountId)
+      .limit(1)
+    if (link?.[0]) {
+      const c = link[0].contacts as unknown as { email?: string }
+      email = c?.email || ''
+    }
+  } else if (contactId) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('first_name, last_name, email')
+      .eq('id', contactId)
+      .single()
+    if (contact) {
+      customerName = `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
+      email = contact.email || ''
+    }
+  }
+
+  const { data: newCustomer } = await supabaseAdmin
+    .from('client_customers')
+    .insert({ account_id: accountId || null, contact_id: contactId || null, name: customerName, email })
+    .select('id')
+    .single()
+
+  return newCustomer?.id ?? null
+}
+
 // Try to match a QB customer name to a CRM account or contact
 async function matchCustomerToCRM(customerName: string): Promise<{
   account_id: string | null
@@ -43,18 +100,11 @@ async function matchCustomerToCRM(customerName: string): Promise<{
   if (accounts) {
     for (const acct of accounts) {
       if (acct.company_name.toLowerCase().trim() === nameLower) {
-        // Find customer_id for this account
-        const { data: customer } = await supabaseAdmin
-          .from('client_customers')
-          .select('id')
-          .eq('account_id', acct.id)
-          .limit(1)
-          .maybeSingle()
-
+        const customerId = await ensureCustomer(acct.id, null, acct.company_name)
         return {
           account_id: acct.id,
           contact_id: null,
-          customer_id: customer?.id ?? null,
+          customer_id: customerId,
           match_type: 'account',
         }
       }
@@ -91,17 +141,11 @@ async function matchCustomerToCRM(customerName: string): Promise<{
     for (const contact of contacts) {
       const fullName = `${contact.first_name || ''} ${contact.last_name || ''}`.toLowerCase().trim()
       if (fullName === nameLower || nameLower.includes(fullName) || fullName.includes(nameLower)) {
-        const { data: customer } = await supabaseAdmin
-          .from('client_customers')
-          .select('id')
-          .eq('contact_id', contact.id)
-          .limit(1)
-          .maybeSingle()
-
+        const customerId = await ensureCustomer(null, contact.id)
         return {
           account_id: null,
           contact_id: contact.id,
-          customer_id: customer?.id ?? null,
+          customer_id: customerId,
           match_type: 'contact',
         }
       }
