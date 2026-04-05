@@ -6,7 +6,7 @@ import {
   ArrowLeft, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
-  Loader2, ChevronRight, Eye, X, FolderOpen,
+  Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
 } from 'lucide-react'
 import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,7 @@ import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/ty
 const TABS = [
   { key: 'overview', label: 'Overview', icon: User },
   { key: 'services', label: 'Services', icon: Briefcase },
+  { key: 'invoices', label: 'Invoices', icon: CreditCard },
   { key: 'documents', label: 'Documents', icon: FolderOpen },
   { key: 'portal', label: 'Portal', icon: KeyRound },
   { key: 'activity', label: 'Activity', icon: MessageSquare },
@@ -134,12 +135,34 @@ interface ContactDocumentRecord {
   account_id: string | null
 }
 
+interface ContactInvoice {
+  id: string
+  description: string | null
+  amount: number
+  total: number | null
+  amount_currency: string | null
+  status: string | null
+  invoice_status: string | null
+  invoice_number: string | null
+  payment_method: string | null
+  paid_date: string | null
+  due_date: string | null
+  installment: string | null
+  amount_paid: number | null
+  amount_due: number | null
+  account_id: string | null
+  contact_id: string | null
+  portal_invoice_id: string | null
+  accounts: { company_name: string } | null
+}
+
 interface ContactDetailProps {
   contact: ContactRecord
   accounts: LinkedAccount[]
   serviceDeliveries: ServiceDelivery[]
   conversations: ConversationEntry[]
   documents: ContactDocumentRecord[]
+  invoices: ContactInvoice[]
   lead: LeadOrigin | null
   portalAuth: PortalAuth
   today: string
@@ -153,6 +176,7 @@ export function ContactDetail({
   serviceDeliveries,
   conversations,
   documents = [],
+  invoices = [],
   lead,
   portalAuth,
 }: ContactDetailProps) {
@@ -205,6 +229,7 @@ export function ContactDetail({
             const Icon = tab.icon
             let count = 0
             if (tab.key === 'services') count = activeSds.length
+            if (tab.key === 'invoices') count = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0').length
             if (tab.key === 'documents') count = documents.length
             if (tab.key === 'activity') count = conversations.length
 
@@ -243,6 +268,9 @@ export function ContactDetail({
       )}
       {activeTab === 'services' && (
         <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} />
+      )}
+      {activeTab === 'invoices' && (
+        <InvoicesTab invoices={invoices} />
       )}
       {activeTab === 'documents' && (
         <ContactDocumentsTab documents={documents} accounts={accounts} />
@@ -819,6 +847,129 @@ function ActivityTab({ conversations }: { conversations: ConversationEntry[] }) 
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+// ─── Invoices Tab ───
+
+const INVOICE_STATUS_COLORS: Record<string, string> = {
+  Paid: 'bg-emerald-100 text-emerald-700',
+  Overdue: 'bg-red-100 text-red-700',
+  Sent: 'bg-blue-100 text-blue-700',
+  Draft: 'bg-zinc-100 text-zinc-600',
+  Partial: 'bg-orange-100 text-orange-700',
+  Cancelled: 'bg-zinc-100 text-zinc-500',
+  Pending: 'bg-amber-100 text-amber-700',
+}
+
+function InvoicesTab({ invoices }: { invoices: ContactInvoice[] }) {
+  const real = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0')
+  const legacy = invoices.filter(i => !i.invoice_number || i.invoice_number === '1.0' || i.invoice_number === '2.0')
+
+  if (real.length === 0 && legacy.length === 0) {
+    return <p className="text-sm text-muted-foreground">No invoices found</p>
+  }
+
+  const getCompany = (inv: ContactInvoice) =>
+    (inv.accounts as unknown as { company_name: string })?.company_name ?? null
+
+  const renderInvoiceRow = (inv: ContactInvoice) => {
+    const status = inv.invoice_status ?? inv.status ?? '—'
+    const total = Number(inv.total) || inv.amount || 0
+    const curr = inv.amount_currency || 'USD'
+    const company = getCompany(inv)
+    const dateLabel = inv.paid_date ? 'Paid' : inv.due_date ? 'Due' : ''
+    const dateVal = inv.paid_date ?? inv.due_date
+
+    return (
+      <div key={inv.id} className="grid grid-cols-1 md:grid-cols-[110px,1fr,100px,80px,100px,90px] gap-1 md:gap-3 px-4 py-2.5 border-b last:border-b-0 text-sm items-center">
+        <span className="font-mono text-xs text-blue-600">{inv.invoice_number ?? '—'}</span>
+        <div className="min-w-0">
+          <p className="font-medium truncate">{inv.description ?? '—'}</p>
+          {company && (
+            <p className="text-xs text-muted-foreground truncate">
+              <Building2 className="inline h-3 w-3 mr-1" />{company}
+            </p>
+          )}
+          {!company && inv.contact_id && !inv.account_id && (
+            <p className="text-xs text-muted-foreground">Personal (no company)</p>
+          )}
+        </div>
+        <p className="text-right font-medium hidden md:block">
+          {curr === 'EUR' ? '€' : '$'}{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </p>
+        <div className="hidden md:block">
+          <span className={cn('text-xs px-1.5 py-0.5 rounded', INVOICE_STATUS_COLORS[status] ?? 'bg-zinc-100')}>
+            {status}
+          </span>
+        </div>
+        <p className="hidden md:block text-xs text-muted-foreground">
+          {dateLabel} {dateVal ? format(parseISO(dateVal), 'MMM d, yyyy') : ''}
+        </p>
+        <p className="hidden md:block text-xs text-muted-foreground truncate">{inv.payment_method ?? '—'}</p>
+      </div>
+    )
+  }
+
+  const overdue = real.filter(i => (i.invoice_status ?? i.status) === 'Overdue')
+  const pending = real.filter(i => ['Sent', 'Draft', 'Partial'].includes(i.invoice_status ?? i.status ?? ''))
+  const paid = real.filter(i => (i.invoice_status ?? i.status) === 'Paid')
+  const other = real.filter(i => !overdue.includes(i) && !pending.includes(i) && !paid.includes(i))
+
+  return (
+    <div className="space-y-6">
+      {overdue.length > 0 && (
+        <InvoiceGroup title="Overdue" items={overdue} color="text-red-600" renderRow={renderInvoiceRow} />
+      )}
+      {pending.length > 0 && (
+        <InvoiceGroup title="Pending" items={pending} color="text-amber-600" renderRow={renderInvoiceRow} />
+      )}
+      {paid.length > 0 && (
+        <InvoiceGroup title="Paid" items={paid} color="text-emerald-600" renderRow={renderInvoiceRow} defaultCollapsed />
+      )}
+      {other.length > 0 && (
+        <InvoiceGroup title="Other" items={other} color="text-zinc-600" renderRow={renderInvoiceRow} defaultCollapsed />
+      )}
+      {legacy.length > 0 && (
+        <InvoiceGroup title="Legacy (pre-invoice)" items={legacy} color="text-zinc-400" renderRow={renderInvoiceRow} defaultCollapsed />
+      )}
+    </div>
+  )
+}
+
+function InvoiceGroup({
+  title, items, color, renderRow, defaultCollapsed = false,
+}: {
+  title: string; items: ContactInvoice[]; color: string
+  renderRow: (inv: ContactInvoice) => React.ReactNode; defaultCollapsed?: boolean
+}) {
+  const [open, setOpen] = useState(!defaultCollapsed)
+  const total = items.reduce((sum, i) => sum + (Number(i.total) || i.amount || 0), 0)
+  const curr = items[0]?.amount_currency || 'USD'
+
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-2 w-full text-left py-2">
+        <span className={cn('font-semibold text-sm uppercase tracking-wide', color)}>{title}</span>
+        <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">{items.length}</span>
+        <span className="text-xs text-muted-foreground ml-auto">
+          {curr === 'EUR' ? '€' : '$'}{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </span>
+      </button>
+      {open && (
+        <div className="bg-white rounded-lg border overflow-hidden">
+          <div className="hidden md:grid md:grid-cols-[110px,1fr,100px,80px,100px,90px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
+            <span>Invoice</span>
+            <span>Description</span>
+            <span className="text-right">Amount</span>
+            <span>Status</span>
+            <span>Date</span>
+            <span>Method</span>
+          </div>
+          {items.map(renderRow)}
+        </div>
+      )}
     </div>
   )
 }

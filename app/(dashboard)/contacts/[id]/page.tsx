@@ -69,7 +69,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     }
   })
 
-  // Also fetch SDs from linked accounts
+  // Also fetch SDs from linked accounts + invoices
   const accountIds = accounts.map(a => a.id)
   let accountSds: ServiceDelivery[] = []
   if (accountIds.length > 0) {
@@ -81,6 +81,31 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
 
     accountSds = (accSdsData ?? []) as ServiceDelivery[]
   }
+
+  // Fetch invoices: contact-direct + via linked accounts
+  const invoiceFields = 'id, description, amount, total, amount_currency, status, invoice_status, invoice_number, payment_method, paid_date, due_date, installment, amount_paid, amount_due, account_id, contact_id, portal_invoice_id, accounts:account_id(company_name)'
+  const { data: contactInvoices } = await supabase
+    .from('payments')
+    .select(invoiceFields)
+    .eq('contact_id', params.id)
+    .order('due_date', { ascending: false })
+
+  let accountInvoices: Record<string, unknown>[] = []
+  if (accountIds.length > 0) {
+    const { data: accInvData } = await supabase
+      .from('payments')
+      .select(invoiceFields)
+      .in('account_id', accountIds)
+      .order('due_date', { ascending: false })
+    accountInvoices = accInvData ?? []
+  }
+
+  // Merge and deduplicate invoices by id
+  const allInvoicesMap = new Map<string, Record<string, unknown>>()
+  for (const inv of [...(contactInvoices ?? []), ...accountInvoices]) {
+    if (!allInvoicesMap.has(inv.id as string)) allInvoicesMap.set(inv.id as string, inv)
+  }
+  const invoices = Array.from(allInvoicesMap.values())
 
   // Merge SDs (contact-direct + account-linked), deduplicate by id
   const contactSds = (sdsResult.data ?? []) as ServiceDelivery[]
@@ -128,6 +153,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         serviceDeliveries={serviceDeliveries}
         conversations={conversations}
         documents={contactDocuments}
+        invoices={invoices as never[]}
         lead={leadResult.data}
         portalAuth={portalAuth}
         today={today}
