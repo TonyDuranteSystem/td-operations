@@ -61,18 +61,20 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const memoLower = (feed.memo || "").toLowerCase()
     const refLower = (feed.sender_reference || "").toLowerCase()
 
-    // Get all open invoices (Sent or Overdue) in matching currency
-    const { data: openInvoices, error: invQueryErr } = await supabaseAdmin
+    // Get all invoices — filter status AND currency in JS (PostgREST .in() on custom enums is unreliable)
+    const { data: allInvoices, error: invQueryErr } = await supabaseAdmin
       .from("payments")
       .select("id, account_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name)")
-      .in("invoice_status", ["Sent", "Overdue", "Partial"])
 
     if (invQueryErr) {
       return { matched: false, error: `Invoice query failed: ${invQueryErr.message}` }
     }
 
-    // Filter by currency in code (PostgREST may not handle custom enum .eq correctly)
-    const currencyFiltered = (openInvoices || []).filter(inv => String(inv.amount_currency) === feedCurrency)
+    // Filter BOTH status and currency in code — PostgREST .eq()/.in() on custom enums returns wrong results
+    const openStatuses = new Set(["Sent", "Overdue", "Partial"])
+    const currencyFiltered = (allInvoices || []).filter(inv =>
+      openStatuses.has(String(inv.invoice_status)) && String(inv.amount_currency) === feedCurrency
+    )
 
     if (currencyFiltered.length === 0) {
       return { matched: false }
@@ -149,13 +151,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     // ── Retroactive pass: check already-Paid invoices (audit trail only) ──
     if (candidates.length === 0) {
-      const { data: paidInvoices, error: paidErr } = await supabaseAdmin
-        .from("payments")
-        .select("id, account_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name)")
-        .eq("invoice_status", "Paid")
+      // Reuse allInvoices from above, filter for Paid + correct currency in JS
+      const paidFiltered = (allInvoices || []).filter(inv =>
+        String(inv.invoice_status) === "Paid" && String(inv.amount_currency) === feedCurrency
+      )
 
-      if (!paidErr && paidInvoices && paidInvoices.length > 0) {
-        const paidFiltered = paidInvoices.filter(inv => String(inv.amount_currency) === feedCurrency)
+      if (paidFiltered.length > 0) {
 
         // Get already-retroactively-matched payment IDs to avoid 1-invoice-many-feeds
         const { data: alreadyMatched } = await supabaseAdmin
@@ -182,7 +183,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           const paidCompany = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
           const paidInvNum = (inv.invoice_number || "").toLowerCase()
 
-          const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+          const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
           const paidNameMatch = paidNameWords.length > 0 && paidNameWords.some(w => feedText.includes(w))
           const paidInvRefMatch = paidInvNum && feedText.includes(paidInvNum)
 
@@ -220,6 +221,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
       return { matched: false }
     }
+
 
     // Sort by score descending — take the best match
     candidates.sort((a, b) => b.score - a.score)
