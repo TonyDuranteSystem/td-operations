@@ -26,6 +26,7 @@ const STOP_WORDS = new Set([
   "management", "solutions", "ventures", "capital", "partners",
   "trading", "digital", "global", "group", "media", "investments",
   "properties", "enterprises", "advisors", "associates", "agency",
+  "solution", "strategies", "accelerator",
   // Common filler words
   "the", "and", "for", "via", "from", "tax", "return", "annual",
   "service", "fee", "payment", "invoice", "contractor", "vendor",
@@ -109,10 +110,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const invoiceNum = (inv.invoice_number || "").toLowerCase()
 
       // Check if sender/memo/reference contains company name or invoice number
+      // Use word boundary regex to avoid substring false matches (e.g. "solution" inside "solutions")
       const nameWords = companyName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-      const nameMatch = nameWords.length > 0 && nameWords.some(w =>
-        senderLower.includes(w) || memoLower.includes(w) || refLower.includes(w)
-      )
+      const nameMatch = nameWords.length > 0 && nameWords.some(w => {
+        const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+        return re.test(senderLower) || re.test(memoLower) || re.test(refLower)
+      })
       // Check both exact invoice number AND INV-NNNNNN pattern in feed text
       const invoiceRefMatch = invoiceNum && (
         feedText.includes(invoiceNum) ||
@@ -187,7 +190,10 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           const paidInvNum = (inv.invoice_number || "").toLowerCase()
 
           const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-          const paidNameMatch = paidNameWords.length > 0 && paidNameWords.some(w => feedText.includes(w))
+          const paidNameMatch = paidNameWords.length > 0 && paidNameWords.some(w => {
+            const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+            return re.test(feedText)
+          })
           const paidInvRefMatch = paidInvNum && feedText.includes(paidInvNum)
 
           // Require strong signal: invoice ref OR (name match + exact amount)

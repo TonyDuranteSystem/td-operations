@@ -307,7 +307,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      version: "54107de-wise-stopword",
+      version: "9b2e110-word-boundary",
       total_feeds_in_table: allFeeds?.length ?? 0,
       new_feeds: newFeedCount + airwallexFeedCount,
       unmatched_feeds_found: unmatchedFeeds?.length ?? 0,
