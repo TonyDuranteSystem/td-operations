@@ -8,7 +8,8 @@ import {
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, sendInvoiceReminder, updateInvoice } from './actions'
+import { markInvoicePaid, voidInvoice, sendInvoiceReminder, updateInvoice, createUnifiedInvoiceDraft } from './actions'
+import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -64,6 +65,8 @@ function getClientName(inv: InvoiceRecord): string {
 
 export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
   const [search, setSearch] = useState('')
+  const [showNewInvoice, setShowNewInvoice] = useState(false)
+  const newInvRouter = useRouter()
   const [statusFilter, setStatusFilter] = useState<string>('All')
   const [sortField, setSortField] = useState<SortField>('issue_date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -172,13 +175,13 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
             Overdue: <strong>{formatCurrency(summaryStats.overdueAmount)}</strong> ({summaryStats.overdueCount} invoices)
           </span>
         )}
-        <a
-          href="/finance?tab=clients"
+        <button
+          onClick={() => setShowNewInvoice(true)}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
         >
           <Plus className="w-3.5 h-3.5" />
           New Invoice
-        </a>
+        </button>
       </div>
 
       {/* Search + status filter */}
@@ -308,6 +311,26 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
       <div className="text-xs text-muted-foreground text-right">
         Showing {filtered.length} of {invoices.length} invoices
       </div>
+
+      {/* New Invoice Dialog */}
+      <InvoiceDialog
+        open={showNewInvoice}
+        onClose={() => {
+          setShowNewInvoice(false)
+          newInvRouter.refresh()
+        }}
+        onCreateInvoice={async (input) => {
+          const result = await createUnifiedInvoiceDraft({
+            account_id: input.account_id,
+            description: input.description,
+            currency: (input.amount_currency || 'USD') as 'USD' | 'EUR',
+            due_date: input.due_date,
+            message: input.message,
+            items: input.items,
+          })
+          return result
+        }}
+      />
     </div>
   )
 }
