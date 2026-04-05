@@ -469,16 +469,45 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   )
 }
 
-/* ── Installment Status Badge ────────────────────────── */
+/* ── Installments Section ────────────────────────────── */
 
-function InstallmentStatus({ payments, amount, currency, label: _label }: { payments: Payment[]; amount: number; currency: string; label: string }) {
-  // Find a payment/invoice matching this installment amount (±$1 tolerance)
-  const match = payments.find(p => {
+function InstallmentsSection({ account, payments, makeAccountSaver }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }> }) {
+  // Resolve 1st installment invoice first
+  const inst1Amount = account.installment_1_amount
+  const inst1Currency = account.installment_1_currency ?? 'USD'
+  const inst1Match = inst1Amount ? findInstallmentInvoice(payments, inst1Amount, inst1Currency, []) : null
+
+  // Resolve 2nd installment, excluding the 1st match to avoid double-counting
+  const inst2Amount = account.installment_2_amount
+  const inst2Currency = account.installment_2_currency ?? 'USD'
+  const excludeIds = inst1Match ? [inst1Match.id] : []
+  const inst2Match = inst2Amount ? findInstallmentInvoice(payments, inst2Amount, inst2Currency, excludeIds) : null
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-4">
+      <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
+      <div className="grid gap-3 text-sm">
+        <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
+        <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
+        {inst1Amount && <InstallmentBadge match={inst1Match} />}
+        <EditableField icon={CreditCard} label="2nd Installment" value={inst2Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
+        <EditableField icon={Globe} label="2nd Currency" value={inst2Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
+        {inst2Amount && <InstallmentBadge match={inst2Match} />}
+      </div>
+    </div>
+  )
+}
+
+function findInstallmentInvoice(payments: Payment[], amount: number, currency: string, excludeIds: string[]): Payment | null {
+  return payments.find(p => {
+    if (excludeIds.includes(p.id)) return false
     const invTotal = Number(p.total) || p.amount || 0
     const invCurr = p.amount_currency || 'USD'
     return Math.abs(invTotal - amount) < 2 && invCurr === currency && p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0'
-  })
+  }) ?? null
+}
 
+function InstallmentBadge({ match }: { match: Payment | null }) {
   if (!match) {
     return (
       <div className="flex items-center gap-2 pl-6 text-xs">
@@ -486,10 +515,8 @@ function InstallmentStatus({ payments, amount, currency, label: _label }: { paym
       </div>
     )
   }
-
   const status = match.invoice_status ?? match.status ?? ''
   const isPaid = status === 'Paid'
-
   return (
     <div className="flex items-center gap-2 pl-6 text-xs">
       <span className="font-mono text-blue-600">{match.invoice_number}</span>
@@ -581,21 +608,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin }: { accoun
       </div>
 
       {/* Billing */}
-      <div className="bg-white rounded-lg border p-5 space-y-4">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
-        <div className="grid gap-3 text-sm">
-          <EditableField icon={CreditCard} label="1st Installment" value={account.installment_1_amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
-          <EditableField icon={Globe} label="1st Currency" value={account.installment_1_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
-          {account.installment_1_amount && (
-            <InstallmentStatus payments={payments} amount={account.installment_1_amount} currency={account.installment_1_currency ?? 'USD'} label="1st" />
-          )}
-          <EditableField icon={CreditCard} label="2nd Installment" value={account.installment_2_amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
-          <EditableField icon={Globe} label="2nd Currency" value={account.installment_2_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
-          {account.installment_2_amount && (
-            <InstallmentStatus payments={payments} amount={account.installment_2_amount} currency={account.installment_2_currency ?? 'USD'} label="2nd" />
-          )}
-        </div>
-      </div>
+      <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
 
       {/* Contacts */}
       <ContactsSection
