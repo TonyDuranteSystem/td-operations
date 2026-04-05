@@ -17,6 +17,9 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 
+// Common business suffixes excluded from name matching to prevent false positives
+const STOP_WORDS = new Set(["llc", "inc", "ltd", "corp", "co", "the", "and", "for", "via", "from"])
+
 interface MatchResult {
   matched: boolean
   paymentId?: string
@@ -73,6 +76,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     }
 
     const candidates: ScoredInvoice[] = []
+    const feedText = `${memoLower} ${refLower} ${senderLower}`
 
     for (const inv of currencyFiltered) {
       // For Partial invoices, match against remaining balance (amount_due)
@@ -89,12 +93,11 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const invoiceNum = (inv.invoice_number || "").toLowerCase()
 
       // Check if sender/memo/reference contains company name or invoice number
-      const nameWords = companyName.split(/\s+/).filter(w => w.length > 2)
-      const nameMatch = nameWords.some(w =>
+      const nameWords = companyName.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+      const nameMatch = nameWords.length > 0 && nameWords.some(w =>
         senderLower.includes(w) || memoLower.includes(w) || refLower.includes(w)
       )
       // Check both exact invoice number AND INV-NNNNNN pattern in feed text
-      const feedText = `${memoLower} ${refLower} ${senderLower}`
       const invoiceRefMatch = invoiceNum && (
         feedText.includes(invoiceNum) ||
         feedText.includes(invoiceNum.replace("inv-", "inv ")) ||
@@ -143,7 +146,22 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       if (!paidErr && paidInvoices && paidInvoices.length > 0) {
         const paidFiltered = paidInvoices.filter(inv => String(inv.amount_currency) === feedCurrency)
 
+        // Get already-retroactively-matched payment IDs to avoid 1-invoice-many-feeds
+        const { data: alreadyMatched } = await supabaseAdmin
+          .from("td_bank_feeds")
+          .select("matched_payment_id")
+          .eq("status", "matched")
+          .eq("match_confidence", "retroactive")
+
+        const retroMatchedIds = new Set((alreadyMatched ?? []).map(f => f.matched_payment_id))
+
+        // Score retroactive candidates — pick the best, don't just take the first
+        let bestRetro: { id: string; invoiceNumber: string | null; score: number } | null = null
+
         for (const inv of paidFiltered) {
+          // Skip if this invoice is already retroactively matched to another feed
+          if (retroMatchedIds.has(inv.id)) continue
+
           const invAmount = Number(inv.total ?? inv.amount ?? 0)
           const amountDiff = Math.abs(feedAmount - invAmount)
           const tolerance = invAmount * 0.05
@@ -153,32 +171,38 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           const paidCompany = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
           const paidInvNum = (inv.invoice_number || "").toLowerCase()
 
-          const paidFeedText = `${memoLower} ${refLower} ${senderLower}`
-          const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 2)
-          const paidNameMatch = paidNameWords.some(w => paidFeedText.includes(w))
-          const paidInvRefMatch = paidInvNum && paidFeedText.includes(paidInvNum)
+          const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+          const paidNameMatch = paidNameWords.length > 0 && paidNameWords.some(w => feedText.includes(w))
+          const paidInvRefMatch = paidInvNum && feedText.includes(paidInvNum)
 
-          // Only retroactively match if we have a strong signal (invoice ref or name + exact amount)
-          if (paidInvRefMatch || (paidNameMatch && amountDiff < 1)) {
-            // Link feed to the Paid invoice for audit trail — do NOT change invoice status
-            await supabaseAdmin
-              .from("td_bank_feeds")
-              .update({
-                matched_payment_id: inv.id,
-                match_confidence: "retroactive",
-                matched_at: new Date().toISOString(),
-                matched_by: "auto",
-                status: "matched",
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", feedId)
+          // Require strong signal: invoice ref OR (name match + exact amount)
+          if (!paidInvRefMatch && !(paidNameMatch && amountDiff < 1)) continue
 
-            return {
-              matched: true,
-              paymentId: inv.id,
-              invoiceNumber: inv.invoice_number ?? undefined,
-              confidence: "retroactive",
-            }
+          const score = paidInvRefMatch ? 100 : 80
+          if (!bestRetro || score > bestRetro.score) {
+            bestRetro = { id: inv.id, invoiceNumber: inv.invoice_number, score }
+          }
+        }
+
+        if (bestRetro) {
+          // Link feed to the Paid invoice for audit trail — do NOT change invoice status
+          await supabaseAdmin
+            .from("td_bank_feeds")
+            .update({
+              matched_payment_id: bestRetro.id,
+              match_confidence: "retroactive",
+              matched_at: new Date().toISOString(),
+              matched_by: "auto",
+              status: "matched",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", feedId)
+
+          return {
+            matched: true,
+            paymentId: bestRetro.id,
+            invoiceNumber: bestRetro.invoiceNumber ?? undefined,
+            confidence: "retroactive",
           }
         }
       }

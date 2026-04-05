@@ -307,7 +307,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      version: "cc9843e-fix",
+      version: "1ed979c-strict-matcher",
       total_feeds_in_table: allFeeds?.length ?? 0,
       new_feeds: newFeedCount + airwallexFeedCount,
       unmatched_feeds_found: unmatchedFeeds?.length ?? 0,
