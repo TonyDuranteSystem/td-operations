@@ -17,8 +17,19 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 
-// Common business suffixes excluded from name matching to prevent false positives
-const STOP_WORDS = new Set(["llc", "inc", "ltd", "corp", "co", "the", "and", "for", "via", "from"])
+// Common business words excluded from name matching to prevent false positives
+const STOP_WORDS = new Set([
+  // Legal suffixes
+  "llc", "inc", "ltd", "corp", "co", "plc", "gmbh", "srl",
+  // Generic business words (cause cross-company false matches)
+  "consulting", "commerce", "international", "services", "holdings",
+  "management", "solutions", "ventures", "capital", "partners",
+  "trading", "digital", "global", "group", "media", "investments",
+  "properties", "enterprises", "advisors", "associates", "agency",
+  // Common filler words
+  "the", "and", "for", "via", "from", "tax", "return", "annual",
+  "service", "fee", "payment", "invoice", "contractor", "vendor",
+])
 
 interface MatchResult {
   matched: boolean
@@ -93,7 +104,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const invoiceNum = (inv.invoice_number || "").toLowerCase()
 
       // Check if sender/memo/reference contains company name or invoice number
-      const nameWords = companyName.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+      const nameWords = companyName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
       const nameMatch = nameWords.length > 0 && nameWords.some(w =>
         senderLower.includes(w) || memoLower.includes(w) || refLower.includes(w)
       )
