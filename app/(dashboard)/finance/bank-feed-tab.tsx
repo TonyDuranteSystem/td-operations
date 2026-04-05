@@ -365,7 +365,11 @@ function UnmatchedRow({
     })
   }
 
-  // Suggest matching invoices (same currency, similar amount — 10% tolerance)
+  // Suggest matching invoices — smart ranking: name match first, then amount match
+  const senderLower = (feed.sender_name || '').toLowerCase()
+  const memoLower = (feed.memo || '').toLowerCase()
+  const feedTextLower = `${senderLower} ${memoLower}`
+
   const suggestions = openInvoices
     .filter(inv => {
       const invCurrency = inv.amount_currency || 'USD'
@@ -374,14 +378,25 @@ function UnmatchedRow({
         ? Number(inv.amount_due ?? inv.total ?? 0)
         : Number(inv.total ?? inv.amount ?? 0)
       const diff = Math.abs(invAmount - amount)
-      return diff <= invAmount * 0.1
+      // Wider tolerance (20%) to catch more candidates; scoring handles ranking
+      return diff <= Math.max(invAmount * 0.2, 50)
     })
-    .sort((a, b) => {
-      const aAmt = a.invoice_status === 'Partial' ? Number(a.amount_due ?? a.total ?? 0) : Number(a.total ?? a.amount ?? 0)
-      const bAmt = b.invoice_status === 'Partial' ? Number(b.amount_due ?? b.total ?? 0) : Number(b.total ?? b.amount ?? 0)
-      return Math.abs(aAmt - amount) - Math.abs(bAmt - amount)
+    .map(inv => {
+      const invAmount = inv.invoice_status === 'Partial' ? Number(inv.amount_due ?? inv.total ?? 0) : Number(inv.total ?? inv.amount ?? 0)
+      const diff = Math.abs(invAmount - amount)
+      const companyName = (getCompanyName(inv.accounts) || '').toLowerCase()
+      // Check if company name appears in sender/memo
+      const companyWords = companyName.split(/\s+/).filter(w => w.length > 3 && !['llc','inc','ltd','consulting','services','international'].includes(w))
+      const nameMatch = companyWords.length > 0 && companyWords.some(w => feedTextLower.includes(w))
+      // Check if invoice number appears in memo
+      const invNum = (inv.invoice_number || '').toLowerCase()
+      const invRefMatch = invNum && feedTextLower.includes(invNum)
+      // Score: inv ref > name match > amount-only
+      const score = (invRefMatch ? 200 : 0) + (nameMatch ? 100 : 0) + (diff < 1 ? 50 : 0) + (1000 / (diff + 1))
+      return { ...inv, score, nameMatch, invRefMatch }
     })
-    .slice(0, 5)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
 
   return (
     <div className="border-b last:border-b-0">
@@ -438,8 +453,15 @@ function UnmatchedRow({
                     {inv.invoice_status === 'Partial' && (
                       <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
                     )}
+                    {inv.invoice_status === 'Paid' && (
+                      <span className="text-[10px] bg-green-100 text-green-700 px-1 py-0.5 rounded">Paid</span>
+                    )}
                     <span className="font-medium">{formatCurrency(invAmount, inv.amount_currency)}</span>
-                    {diff < 1 ? (
+                    {inv.invRefMatch ? (
+                      <span className="text-emerald-600 font-medium">INV ref</span>
+                    ) : inv.nameMatch ? (
+                      <span className="text-emerald-600">name</span>
+                    ) : diff < 1 ? (
                       <span className="text-emerald-600">exact</span>
                     ) : (
                       <span className="text-amber-600">±{formatCurrency(diff, inv.amount_currency)}</span>
@@ -453,7 +475,7 @@ function UnmatchedRow({
           {openInvoices.length > suggestions.length && (
             <details className="mt-2">
               <summary className="text-xs text-blue-600 cursor-pointer hover:underline">
-                Show all {openInvoices.length} open invoices
+                Show all {openInvoices.length} invoices
               </summary>
               <div className="mt-1 space-y-1 max-h-48 overflow-y-auto">
                 {openInvoices

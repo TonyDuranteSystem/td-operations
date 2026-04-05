@@ -212,7 +212,11 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     }
 
     // ── Retroactive pass: check already-Paid invoices (audit trail only) ──
-    if (candidates.length === 0) {
+    // Run retroactive when: no candidates at all, OR only medium-confidence matches
+    // (medium = amount-only, unreliable — retroactive with name/ref match is better)
+    const bestOpenMatch = candidates.sort((a, b) => b.score - a.score)[0]
+    const shouldTryRetroactive = candidates.length === 0 || (bestOpenMatch && bestOpenMatch.confidence === "medium")
+    if (shouldTryRetroactive) {
       // Reuse allInvoices from above, filter for Paid + correct currency in JS
       const paidFiltered = (allInvoices || []).filter(inv =>
         String(inv.invoice_status) === "Paid" && String(inv.amount_currency) === feedCurrency
@@ -293,7 +297,11 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         }
       }
 
-      return { matched: false }
+      // If we had no candidates at all (not even medium), return unmatched
+      if (candidates.length === 0) {
+        return { matched: false }
+      }
+      // Otherwise fall through to process the medium candidates below
     }
 
 
