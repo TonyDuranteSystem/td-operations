@@ -29,6 +29,9 @@ const STOP_WORDS = new Set([
   // Common filler words
   "the", "and", "for", "via", "from", "tax", "return", "annual",
   "service", "fee", "payment", "invoice", "contractor", "vendor",
+  "company", "first",
+  // Payment processor names (appear in sender but aren't the actual client)
+  "wise",
 ])
 
 interface MatchResult {
