@@ -44,6 +44,45 @@ interface MatchResult {
 }
 
 /**
+ * Extract the numeric part of an invoice number for flexible matching.
+ * INV-001312 → "1312", INV-001312 → "001312"
+ */
+function extractInvNumber(invoiceNum: string): { full: string; bare: number } | null {
+  const match = invoiceNum.match(/inv[- ]?0*(\d+)/i)
+  if (!match) return null
+  return { full: invoiceNum.toLowerCase(), bare: parseInt(match[1], 10) }
+}
+
+/**
+ * Check if feed text contains a reference to this invoice number,
+ * handling common variations: INV-001312, inv1312, inv 1312, 001312, #INV-001312
+ */
+function invoiceRefInText(feedText: string, invoiceNum: string): boolean {
+  if (!invoiceNum) return false
+  const lower = invoiceNum.toLowerCase()
+
+  // Direct match (exact or without dash)
+  if (feedText.includes(lower)) return true
+  if (feedText.includes(lower.replace("inv-", "inv "))) return true
+  if (feedText.includes(lower.replace("inv-", "inv"))) return true
+
+  // Extract numeric part for flexible matching
+  const parsed = extractInvNumber(invoiceNum)
+  if (!parsed) return false
+
+  // Match "inv" + bare number (inv1312, inv 1312)
+  const bareStr = String(parsed.bare)
+  const invBarePattern = new RegExp(`inv[- ]?0*${bareStr}\\b`, 'i')
+  if (invBarePattern.test(feedText)) return true
+
+  // Match standalone 6-digit number with leading zeros (001312)
+  const paddedStr = String(parsed.bare).padStart(6, '0')
+  if (feedText.includes(paddedStr)) return true
+
+  return false
+}
+
+/**
  * Try to match a td_bank_feeds record against open invoices.
  * If matched, marks both the feed and the invoice as paid.
  */
@@ -65,10 +104,22 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     const memoLower = (feed.memo || "").toLowerCase()
     const refLower = (feed.sender_reference || "").toLowerCase()
 
+    // Extract real sender from Wise transfers: "From <real_sender> Via WISE"
+    let effectiveSender = senderLower
+    const wiseMatch = (feed.memo || "").match(/from\s+(.+?)\s+via\s+wise/i)
+    if (wiseMatch) {
+      effectiveSender = wiseMatch[1].toLowerCase()
+    }
+    // Also check for Mercury format: "Merchant name: <company>"
+    const merchantMatch = (feed.sender_name || "").match(/merchant name:\s*(?:\d+\/)?(.+)/i)
+    if (merchantMatch && !wiseMatch) {
+      effectiveSender = merchantMatch[1].toLowerCase().trim()
+    }
+
     // Get all invoices — filter status AND currency in JS (PostgREST .in() on custom enums is unreliable)
     const { data: allInvoices, error: invQueryErr } = await supabaseAdmin
       .from("payments")
-      .select("id, account_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name)")
+      .select("id, account_id, contact_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name), contacts:contact_id(full_name)")
 
     if (invQueryErr) {
       return { matched: false, error: `Invoice query failed: ${invQueryErr.message}` }
@@ -93,7 +144,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     }
 
     const candidates: ScoredInvoice[] = []
-    const feedText = `${memoLower} ${refLower} ${senderLower}`
+    const feedText = `${memoLower} ${refLower} ${effectiveSender} ${senderLower}`
 
     for (const inv of currencyFiltered) {
       // For Partial invoices, match against remaining balance (amount_due)
@@ -114,14 +165,19 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const nameWords = companyName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
       const nameMatch = nameWords.length > 0 && nameWords.some(w => {
         const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-        return re.test(senderLower) || re.test(memoLower) || re.test(refLower)
+        return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
       })
-      // Check both exact invoice number AND INV-NNNNNN pattern in feed text
-      const invoiceRefMatch = invoiceNum && (
-        feedText.includes(invoiceNum) ||
-        feedText.includes(invoiceNum.replace("inv-", "inv ")) ||
-        feedText.includes(invoiceNum.replace("inv-", "inv"))
-      )
+
+      // Contact-first resolution: also match against contact full_name
+      const contactName = ((inv.contacts as unknown as { full_name: string })?.full_name || "").toLowerCase()
+      const contactWords = contactName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
+      const contactMatch = contactWords.length > 0 && contactWords.some(w => {
+        const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+        return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
+      })
+
+      // Check both exact invoice number AND flexible INV-NNNNNN pattern in feed text
+      const invoiceRefMatch = invoiceRefInText(feedText, invoiceNum)
 
       let confidence: "exact" | "high" | "medium"
       let score: number
@@ -130,12 +186,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         // Invoice number found in memo/reference AND amount within 5% → strongest match
         confidence = "exact"
         score = 100
-      } else if (amountDiff < 1 && nameMatch) {
-        // Exact amount (<$1 diff) AND company name match → auto-match
+      } else if (amountDiff < 1 && (nameMatch || contactMatch)) {
+        // Exact amount (<$1 diff) AND company/contact name match → auto-match
         confidence = "exact"
         score = 95
-      } else if (nameMatch && amountDiff <= tolerance) {
-        // Company name match + amount within 5% → high confidence
+      } else if ((nameMatch || contactMatch) && amountDiff <= tolerance) {
+        // Company/contact name match + amount within 5% → high confidence
         confidence = "high"
         score = 70
       } else {
@@ -194,10 +250,19 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
             const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
             return re.test(feedText)
           })
-          const paidInvRefMatch = paidInvNum && feedText.includes(paidInvNum)
 
-          // Require strong signal: invoice ref OR (name match + exact amount)
-          if (!paidInvRefMatch && !(paidNameMatch && amountDiff < 1)) continue
+          // Contact-first resolution for retroactive pass
+          const paidContactName = ((inv.contacts as unknown as { full_name: string })?.full_name || "").toLowerCase()
+          const paidContactWords = paidContactName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
+          const paidContactMatch = paidContactWords.length > 0 && paidContactWords.some(w => {
+            const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+            return re.test(feedText)
+          })
+
+          const paidInvRefMatch = invoiceRefInText(feedText, paidInvNum)
+
+          // Require strong signal: invoice ref OR (name/contact match + exact amount)
+          if (!paidInvRefMatch && !((paidNameMatch || paidContactMatch) && amountDiff < 1)) continue
 
           const score = paidInvRefMatch ? 100 : 80
           if (!bestRetro || score > bestRetro.score) {
@@ -255,7 +320,12 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     // Auto-match: mark feed as matched
     const now = new Date().toISOString()
     const today = new Date().toISOString().split("T")[0]
-    const paymentMethod = feed.source === "relay" ? "Wire (Relay)" : feed.source === "banking_circle" ? "Wire (Banking Circle)" : "Wire"
+    const paymentMethod = feed.source === "relay" ? "Wire (Relay)"
+      : feed.source === "banking_circle" ? "Wire (Banking Circle)"
+      : feed.source === "mercury" ? "Wire (Mercury)"
+      : feed.source === "airwallex_api" || feed.source === "airwallex_email" ? "Wire (Airwallex)"
+      : feed.source === "stripe" ? "Stripe"
+      : "Wire"
 
     // Check if this is a partial payment (feed amount < invoice remaining balance)
     const bestInvoice = currencyFiltered.find(inv => inv.id === best.id)
