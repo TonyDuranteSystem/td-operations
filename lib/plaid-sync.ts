@@ -33,7 +33,7 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
     for (const txn of newTxns) {
       const isIncoming = txn.amount < 0 // Plaid: negative = money coming IN
 
-      await supabaseAdmin.from('td_bank_feeds').upsert({
+      const { error: upsertErr } = await supabaseAdmin.from('td_bank_feeds').upsert({
         source: bankName.toLowerCase().replace(/\s+/g, '_'),
         external_id: txn.transaction_id,
         transaction_date: txn.date,
@@ -45,6 +45,11 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
         raw_data: txn as unknown as Record<string, unknown>,
         status: isIncoming ? 'unmatched' : 'outgoing',
       }, { onConflict: 'external_id' })
+
+      if (upsertErr) {
+        console.error(`[plaid-sync] Failed to upsert txn ${txn.transaction_id}:`, upsertErr.message)
+        continue
+      }
 
       if (isIncoming) added++
     }

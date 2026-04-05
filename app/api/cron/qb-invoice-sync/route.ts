@@ -310,7 +310,6 @@ export async function GET(req: NextRequest) {
           issue_date: txnDate,
           due_date: dueDate,
           paid_date: balance === 0 && total > 0 ? txnDate : null,
-          payment_type: 'Invoice',
           notes: `QB Invoice ${docNumber} — ${customerName}`,
           qb_invoice_id: qbId,
           qb_sync_status: 'synced',
