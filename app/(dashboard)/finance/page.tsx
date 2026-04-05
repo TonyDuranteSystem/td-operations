@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
+import type { InvoiceRecord } from './all-invoices-tab'
 
 export const dynamic = 'force-dynamic'
 
@@ -71,6 +72,14 @@ export default async function FinancePage({
       invoice_count: 0, overdue_count: 0, has_partial: false,
     }),
   }))
+
+  // ── Fetch ALL invoices for flat list view ──
+  const { data: allInvoicesFlat } = await supabaseAdmin
+    .from('client_invoices')
+    .select('id, invoice_number, status, total, amount_paid, amount_due, currency, issue_date, due_date, paid_date, notes, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .not('status', 'in', '("Cancelled","Split")')
+    .order('issue_date', { ascending: false })
+    .limit(500)
 
   // ── Fetch selected client's invoices ──
   let clientInvoices: Array<Record<string, unknown>> = []
@@ -224,6 +233,7 @@ export default async function FinancePage({
         bankFeeds={bankFeeds}
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}
+        allInvoicesFlat={(allInvoicesFlat ?? []) as unknown as InvoiceRecord[]}
       />
     </div>
   )

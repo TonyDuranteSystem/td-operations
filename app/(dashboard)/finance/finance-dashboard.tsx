@@ -6,6 +6,7 @@ import { Users, Landmark, BarChart3 } from 'lucide-react'
 import { ClientsInvoicesTab } from './clients-invoices-tab'
 import { OverviewTab } from './overview-tab'
 import { BankFeedTab, type BankFeedRecord, type OpenInvoice } from './bank-feed-tab'
+import { AllInvoicesTab, type InvoiceRecord } from './all-invoices-tab'
 
 interface ClientSummary {
   id: string
@@ -33,6 +34,7 @@ interface Props {
   bankFeeds: BankFeedRecord[]
   bankOpenInvoices: OpenInvoice[]
   bankFeedTotalCount: number
+  allInvoicesFlat: InvoiceRecord[]
 }
 
 const tabs = [
@@ -45,10 +47,12 @@ export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
+  allInvoicesFlat,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [tab, setTab] = useState(activeTab)
+  const [clientsView, setClientsView] = useState<'all' | 'by-client'>('all')
 
   function switchTab(newTab: string) {
     setTab(newTab)
@@ -96,14 +100,44 @@ export function FinanceDashboard({
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
         {tab === 'clients' && (
-          <ClientsInvoicesTab
-            clientList={clientList}
-            selectedClientId={selectedClientId}
-            invoices={clientInvoices}
-            creditNotes={clientCreditNotes}
-            auditLog={clientAuditLog}
-            paymentHistory={clientPaymentHistory}
-          />
+          <div className="h-full flex flex-col">
+            <div className="flex gap-2 px-6 pt-4">
+              <button
+                onClick={() => setClientsView('all')}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  clientsView === 'all'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}
+              >
+                All Invoices
+              </button>
+              <button
+                onClick={() => setClientsView('by-client')}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  clientsView === 'by-client'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}
+              >
+                By Client
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              {clientsView === 'all' ? (
+                <AllInvoicesTab invoices={allInvoicesFlat} />
+              ) : (
+                <ClientsInvoicesTab
+                  clientList={clientList}
+                  selectedClientId={selectedClientId}
+                  invoices={clientInvoices}
+                  creditNotes={clientCreditNotes}
+                  auditLog={clientAuditLog}
+                  paymentHistory={clientPaymentHistory}
+                />
+              )}
+            </div>
+          </div>
         )}
         {tab === 'bank' && (
           <BankFeedTab
