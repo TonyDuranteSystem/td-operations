@@ -1,11 +1,14 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
   Search, FileText, Send, CheckCircle, Edit3,
-  ChevronDown, ChevronUp, Building2, User,
+  ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
 } from 'lucide-react'
+import { toast } from 'sonner'
+import { markInvoicePaid, voidInvoice, sendInvoiceReminder } from './actions'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -285,30 +288,7 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                     {inv.status === 'Paid' ? formatDate(inv.paid_date) : formatDate(inv.due_date)}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-center gap-1">
-                      {inv.status !== 'Paid' && (
-                        <button
-                          title="Mark Paid"
-                          className="p-1.5 rounded-md hover:bg-emerald-100 text-emerald-600 transition-colors"
-                        >
-                          <CheckCircle className="w-4 h-4" />
-                        </button>
-                      )}
-                      {['Draft', 'Sent', 'Overdue'].includes(inv.status) && (
-                        <button
-                          title="Send / Remind"
-                          className="p-1.5 rounded-md hover:bg-blue-100 text-blue-600 transition-colors"
-                        >
-                          <Send className="w-4 h-4" />
-                        </button>
-                      )}
-                      <button
-                        title="Edit"
-                        className="p-1.5 rounded-md hover:bg-zinc-100 text-zinc-500 transition-colors"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </div>
+                    <InvoiceActions invoiceId={inv.id} invoiceNumber={inv.invoice_number} status={inv.status} />
                   </td>
                 </tr>
               )
@@ -321,6 +301,79 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
       <div className="text-xs text-muted-foreground text-right">
         Showing {filtered.length} of {invoices.length} invoices
       </div>
+    </div>
+  )
+}
+
+// ── Invoice Action Buttons ──
+
+function InvoiceActions({ invoiceId, invoiceNumber, status }: { invoiceId: string; invoiceNumber: string; status: string }) {
+  const [isPending, startTransition] = useTransition()
+  const router = useRouter()
+
+  const handleMarkPaid = () => {
+    if (!window.confirm(`Mark ${invoiceNumber} as Paid?`)) return
+    startTransition(async () => {
+      const result = await markInvoicePaid(invoiceId)
+      if (result.success) {
+        toast.success(`${invoiceNumber} marked as Paid`)
+        router.refresh()
+      } else {
+        toast.error(result.error ?? 'Failed to mark as paid')
+      }
+    })
+  }
+
+  const handleSendReminder = () => {
+    if (!window.confirm(`Send payment reminder for ${invoiceNumber}?`)) return
+    startTransition(async () => {
+      const result = await sendInvoiceReminder(invoiceId)
+      if (result.success) {
+        toast.success(`Reminder sent for ${invoiceNumber}`)
+        router.refresh()
+      } else {
+        toast.error(result.error ?? 'Failed to send reminder')
+      }
+    })
+  }
+
+  const handleVoid = () => {
+    if (!window.confirm(`Void invoice ${invoiceNumber}? This cannot be undone.`)) return
+    startTransition(async () => {
+      const result = await voidInvoice(invoiceId)
+      if (result.success) {
+        toast.success(`${invoiceNumber} voided`)
+        router.refresh()
+      } else {
+        toast.error(result.error ?? 'Failed to void invoice')
+      }
+    })
+  }
+
+  if (isPending) {
+    return <div className="flex justify-center"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
+  }
+
+  return (
+    <div className="flex items-center justify-center gap-1">
+      {status !== 'Paid' && status !== 'Cancelled' && (
+        <button onClick={handleMarkPaid} title="Mark Paid" className="p-1.5 rounded-md hover:bg-emerald-100 text-emerald-600 transition-colors">
+          <CheckCircle className="w-4 h-4" />
+        </button>
+      )}
+      {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
+        <button onClick={handleSendReminder} title="Send Reminder" className="p-1.5 rounded-md hover:bg-blue-100 text-blue-600 transition-colors">
+          <Send className="w-4 h-4" />
+        </button>
+      )}
+      {status !== 'Paid' && status !== 'Cancelled' && (
+        <button onClick={handleVoid} title="Void Invoice" className="p-1.5 rounded-md hover:bg-red-100 text-red-500 transition-colors">
+          <Ban className="w-4 h-4" />
+        </button>
+      )}
+      <button title="Edit" className="p-1.5 rounded-md hover:bg-zinc-100 text-zinc-500 transition-colors">
+        <Edit3 className="w-4 h-4" />
+      </button>
     </div>
   )
 }
