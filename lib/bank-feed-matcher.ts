@@ -93,23 +93,31 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       const nameMatch = nameWords.some(w =>
         senderLower.includes(w) || memoLower.includes(w) || refLower.includes(w)
       )
+      // Check both exact invoice number AND INV-NNNNNN pattern in feed text
+      const feedText = `${memoLower} ${refLower} ${senderLower}`
       const invoiceRefMatch = invoiceNum && (
-        memoLower.includes(invoiceNum) || refLower.includes(invoiceNum)
+        feedText.includes(invoiceNum) ||
+        feedText.includes(invoiceNum.replace("inv-", "inv ")) ||
+        feedText.includes(invoiceNum.replace("inv-", "inv"))
       )
 
       let confidence: "exact" | "high" | "medium"
       let score: number
 
-      if (amountDiff < 1 && (nameMatch || invoiceRefMatch)) {
+      if (invoiceRefMatch && amountDiff <= tolerance) {
+        // Invoice number found in memo/reference AND amount within 5% → strongest match
         confidence = "exact"
         score = 100
-      } else if (amountDiff < 1) {
-        confidence = "high"
-        score = 80
-      } else if (nameMatch || invoiceRefMatch) {
+      } else if (amountDiff < 1 && nameMatch) {
+        // Exact amount (<$1 diff) AND company name match → auto-match
+        confidence = "exact"
+        score = 95
+      } else if (nameMatch && amountDiff <= tolerance) {
+        // Company name match + amount within 5% → high confidence
         confidence = "high"
         score = 70
       } else {
+        // Amount-only match (no name, no invoice ref) → manual review only
         confidence = "medium"
         score = 50
       }
@@ -125,8 +133,56 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       })
     }
 
+    // ── Retroactive pass: check already-Paid invoices (audit trail only) ──
     if (candidates.length === 0) {
-      // No invoice matched within tolerance — try auto-invoice if we can identify the client
+      const { data: paidInvoices, error: paidErr } = await supabaseAdmin
+        .from("payments")
+        .select("id, account_id, invoice_number, invoice_status, total, amount, amount_due, amount_currency, description, accounts:account_id(company_name)")
+        .eq("invoice_status", "Paid")
+
+      if (!paidErr && paidInvoices && paidInvoices.length > 0) {
+        const paidFiltered = paidInvoices.filter(inv => String(inv.amount_currency) === feedCurrency)
+
+        for (const inv of paidFiltered) {
+          const invAmount = Number(inv.total ?? inv.amount ?? 0)
+          const amountDiff = Math.abs(feedAmount - invAmount)
+          const tolerance = invAmount * 0.05
+
+          if (amountDiff > tolerance && amountDiff > 1) continue
+
+          const paidCompany = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
+          const paidInvNum = (inv.invoice_number || "").toLowerCase()
+
+          const paidFeedText = `${memoLower} ${refLower} ${senderLower}`
+          const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 2)
+          const paidNameMatch = paidNameWords.some(w => paidFeedText.includes(w))
+          const paidInvRefMatch = paidInvNum && paidFeedText.includes(paidInvNum)
+
+          // Only retroactively match if we have a strong signal (invoice ref or name + exact amount)
+          if (paidInvRefMatch || (paidNameMatch && amountDiff < 1)) {
+            // Link feed to the Paid invoice for audit trail — do NOT change invoice status
+            await supabaseAdmin
+              .from("td_bank_feeds")
+              .update({
+                matched_payment_id: inv.id,
+                match_confidence: "retroactive",
+                matched_at: new Date().toISOString(),
+                matched_by: "auto",
+                status: "matched",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", feedId)
+
+            return {
+              matched: true,
+              paymentId: inv.id,
+              invoiceNumber: inv.invoice_number ?? undefined,
+              confidence: "retroactive",
+            }
+          }
+        }
+      }
+
       return { matched: false }
     }
 

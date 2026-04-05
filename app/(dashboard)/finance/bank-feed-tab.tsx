@@ -79,18 +79,29 @@ interface Props {
 
 const SOURCE_LABELS: Record<string, string> = {
   relay: 'Relay',
+  mercury: 'Mercury',
   banking_circle: 'Banking Circle',
   qb_deposit: 'QB Deposit',
   airwallex_email: 'Airwallex',
+  airwallex_api: 'Airwallex',
   manual: 'Manual',
 }
 
 const SOURCE_COLORS: Record<string, string> = {
   relay: 'bg-blue-100 text-blue-700',
+  mercury: 'bg-indigo-100 text-indigo-700',
   banking_circle: 'bg-purple-100 text-purple-700',
   qb_deposit: 'bg-emerald-100 text-emerald-700',
   airwallex_email: 'bg-orange-100 text-orange-700',
+  airwallex_api: 'bg-orange-100 text-orange-700',
   manual: 'bg-zinc-100 text-zinc-700',
+}
+
+// Map bank institution names to source filter values
+const BANK_SOURCE_MAP: Record<string, string[]> = {
+  relay: ['relay'],
+  mercury: ['mercury'],
+  airwallex: ['airwallex_email', 'airwallex_api'],
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -193,7 +204,7 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
   )
 }
 
-function BanksSummary() {
+function BanksSummary({ activeSource, onSourceFilter }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void }) {
   const [connections, setConnections] = useState<PlaidConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -266,8 +277,27 @@ function BanksSummary() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {connections.map(conn => (
-            <div key={conn.id} className="border rounded-lg p-3">
+          {connections.map(conn => {
+            const bankKey = (conn.institution_name ?? conn.bank_name ?? '').toLowerCase()
+            const matchedSources = Object.entries(BANK_SOURCE_MAP).find(([key]) => bankKey.includes(key))?.[1] ?? null
+            const isActive = activeSource && matchedSources && activeSource.join() === matchedSources.join()
+
+            return (
+            <div
+              key={conn.id}
+              onClick={() => {
+                if (isActive) {
+                  onSourceFilter(null)
+                } else if (matchedSources) {
+                  onSourceFilter(matchedSources)
+                }
+              }}
+              className={cn(
+                'border rounded-lg p-3 transition-colors',
+                matchedSources ? 'cursor-pointer hover:border-blue-400' : '',
+                isActive ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-200' : ''
+              )}
+            >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium">{conn.institution_name ?? conn.bank_name}</span>
                 <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Active</span>
@@ -288,7 +318,8 @@ function BanksSummary() {
                 Last synced: {conn.last_synced_at ? format(parseISO(conn.last_synced_at), 'MMM d, h:mm a') : 'Never'}
               </p>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -468,6 +499,7 @@ function MatchedRow({ feed }: { feed: BankFeedRecord }) {
         feed.match_confidence === 'high' ? 'bg-blue-100 text-blue-700' :
         feed.match_confidence === 'manual' ? 'bg-zinc-100 text-zinc-700' :
         feed.match_confidence === 'partial' ? 'bg-orange-100 text-orange-700' :
+        feed.match_confidence === 'retroactive' ? 'bg-violet-100 text-violet-700' :
         'bg-amber-100 text-amber-700'
       )}>
         {feed.match_confidence ?? 'matched'}
@@ -497,6 +529,7 @@ function IgnoredRow({ feed }: { feed: BankFeedRecord }) {
 
 export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
   const [filter, setFilter] = useState<FilterTab>('all')
+  const [sourceFilter, setSourceFilter] = useState<string[] | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [matchingFeed, setMatchingFeed] = useState<string | null>(null)
   const [page, setPage] = useState(0)
@@ -505,6 +538,11 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
   // Filter and search
   const filtered = useMemo(() => {
     let items = bankFeeds
+
+    // Filter by bank source
+    if (sourceFilter) {
+      items = items.filter(f => sourceFilter.includes(f.source))
+    }
 
     // Filter by status
     if (filter !== 'all') {
@@ -523,7 +561,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
     }
 
     return items
-  }, [bankFeeds, filter, searchQuery])
+  }, [bankFeeds, filter, sourceFilter, searchQuery])
 
   // Paginate
   const paginated = filtered.slice(page * pageSize, (page + 1) * pageSize)
@@ -540,7 +578,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
       {/* Connected banks summary */}
-      <BanksSummary />
+      <BanksSummary activeSource={sourceFilter} onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }} />
 
       {/* Stats cards */}
       <div className="flex gap-3">
@@ -561,6 +599,19 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
           <p className="text-xs text-muted-foreground mt-1">Total transactions</p>
         </div>
       </div>
+
+      {/* Active source filter badge */}
+      {sourceFilter && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Showing:</span>
+          <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+            {sourceFilter.map(s => SOURCE_LABELS[s] ?? s).join(', ')}
+          </span>
+          <button onClick={() => setSourceFilter(null)} className="text-muted-foreground hover:text-foreground">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Filter bar + search */}
       <div className="flex items-center justify-between gap-3">
