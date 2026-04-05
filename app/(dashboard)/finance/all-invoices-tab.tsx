@@ -4,7 +4,7 @@ import { useState, useMemo, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
-  Search, FileText, Send, CheckCircle, Edit3, X,
+  Search, FileText, Send, CheckCircle, Edit3, X, Plus,
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -172,6 +172,13 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
             Overdue: <strong>{formatCurrency(summaryStats.overdueAmount)}</strong> ({summaryStats.overdueCount} invoices)
           </span>
         )}
+        <a
+          href="/finance?tab=clients"
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          New Invoice
+        </a>
       </div>
 
       {/* Search + status filter */}
@@ -392,6 +399,7 @@ function EditInvoiceDialog({ invoice, onClose }: { invoice: InvoiceRecord; onClo
   const router = useRouter()
   const [dueDate, setDueDate] = useState(invoice.due_date ?? '')
   const [notes, setNotes] = useState(invoice.notes ?? '')
+  const [message, setMessage] = useState((invoice as unknown as Record<string, string>).message ?? '')
   const [total, setTotal] = useState(String(invoice.total ?? 0))
 
   const handleSave = () => {
@@ -399,12 +407,13 @@ function EditInvoiceDialog({ invoice, onClose }: { invoice: InvoiceRecord; onClo
       const updates: Record<string, unknown> = {}
       if (dueDate !== (invoice.due_date ?? '')) updates.due_date = dueDate
       if (notes !== (invoice.notes ?? '')) updates.notes = notes
+      if (message !== ((invoice as unknown as Record<string, string>).message ?? '')) updates.message = message
       const newTotal = parseFloat(total)
       if (!isNaN(newTotal) && newTotal !== Number(invoice.total)) updates.total = newTotal
 
       if (Object.keys(updates).length === 0) { onClose(); return }
 
-      const result = await updateInvoice(invoice.id, updates as { due_date?: string; notes?: string; total?: number })
+      const result = await updateInvoice(invoice.id, updates as { due_date?: string; notes?: string; message?: string; total?: number })
       if (result.success) {
         toast.success(`${invoice.invoice_number} updated`)
         router.refresh()
@@ -417,7 +426,7 @@ function EditInvoiceDialog({ invoice, onClose }: { invoice: InvoiceRecord; onClo
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-lg">Edit {invoice.invoice_number}</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
@@ -435,24 +444,36 @@ function EditInvoiceDialog({ invoice, onClose }: { invoice: InvoiceRecord; onClo
             </p>
           </div>
 
-          <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Amount ({invoice.currency || 'USD'})</label>
-            <input
-              type="number"
-              step="0.01"
-              value={total}
-              onChange={e => setTotal(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1">Amount ({invoice.currency || 'USD'})</label>
+              <input
+                type="number"
+                step="0.01"
+                value={total}
+                onChange={e => setTotal(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1">Due Date</label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={e => setDueDate(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
           </div>
 
           <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">Due Date</label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={e => setDueDate(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Payment Terms <span className="text-amber-600">(visible to client in portal)</span></label>
+            <textarea
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              rows={2}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              placeholder="Payment terms visible to client (e.g. 'Net 30', 'Due upon receipt')"
             />
           </div>
 

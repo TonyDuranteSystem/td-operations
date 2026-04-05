@@ -76,7 +76,7 @@ export default async function FinancePage({
   // ── Fetch ALL invoices for flat list view ──
   const { data: allInvoicesFlat } = await supabaseAdmin
     .from('client_invoices')
-    .select('id, invoice_number, status, total, amount_paid, amount_due, currency, issue_date, due_date, paid_date, notes, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .select('id, invoice_number, status, total, amount_paid, amount_due, currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
     .not('status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
     .limit(500)

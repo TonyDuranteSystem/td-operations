@@ -106,10 +106,10 @@ export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
       status: 'Cancelled', updated_at: now,
     }).eq('id', invoiceId)
 
-    // Also update linked payment
+    // Update linked payment + void in QB
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('id')
+      .select('id, qb_invoice_id')
       .eq('portal_invoice_id', invoiceId)
       .limit(1)
       .maybeSingle()
@@ -117,6 +117,20 @@ export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
       await supabaseAdmin.from('payments').update({
         status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
       }).eq('id', payment.id)
+
+      // Void in QuickBooks (non-blocking)
+      if (payment.qb_invoice_id) {
+        try {
+          const { syncVoidToQB } = await import('@/lib/qb-sync')
+          syncVoidToQB(payment.id).catch(() => {})
+        } catch { /* QB not critical */ }
+      }
+
+      // Unlink any matched bank feeds pointing to this payment
+      await supabaseAdmin.from('td_bank_feeds').update({
+        matched_payment_id: null, match_confidence: null,
+        status: 'unmatched', updated_at: now,
+      }).eq('matched_payment_id', payment.id)
     }
 
     revalidatePath('/finance')
@@ -125,7 +139,7 @@ export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
     action_type: 'update',
     table_name: 'client_invoices',
     record_id: invoiceId,
-    summary: 'Invoice voided/cancelled',
+    summary: 'Invoice voided/cancelled + QB void + bank feeds unlinked',
   })
 }
 
@@ -208,10 +222,10 @@ export async function updateInvoice(
 
     await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', invoiceId)
 
-    // Also update linked payment mirror
+    // Also update linked payment mirror + QB
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('id')
+      .select('id, qb_invoice_id')
       .eq('portal_invoice_id', invoiceId)
       .limit(1)
       .maybeSingle()
@@ -226,8 +240,29 @@ export async function updateInvoice(
         payUpdates.amount = updates.total
         payUpdates.amount_due = updates.total
       }
+      if (updates.message !== undefined) payUpdates.message = updates.message
       await supabaseAdmin.from('payments').update(payUpdates).eq('id', payment.id)
+
+      // Re-sync to QB if amount changed (non-blocking)
+      if (updates.total !== undefined && payment.qb_invoice_id) {
+        payUpdates.qb_sync_status = 'pending'
+        try {
+          const { syncInvoiceToQB } = await import('@/lib/qb-sync')
+          syncInvoiceToQB(payment.id).catch(() => {})
+        } catch { /* QB not critical */ }
+      }
     }
+
+    // Audit trail
+    try {
+      const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
+      logInvoiceAudit({
+        invoice_id: invoiceId,
+        action: 'edited',
+        new_values: updates,
+        performed_by: 'staff',
+      })
+    } catch { /* audit not critical */ }
 
     revalidatePath('/finance')
     revalidatePath('/payments')
