@@ -4,11 +4,11 @@ import { useState, useMemo, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
-  Search, FileText, Send, CheckCircle, Edit3,
+  Search, FileText, Send, CheckCircle, Edit3, X,
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, sendInvoiceReminder } from './actions'
+import { markInvoicePaid, voidInvoice, sendInvoiceReminder, updateInvoice } from './actions'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -288,7 +288,7 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                     {inv.status === 'Paid' ? formatDate(inv.paid_date) : formatDate(inv.due_date)}
                   </td>
                   <td className="px-4 py-3">
-                    <InvoiceActions invoiceId={inv.id} invoiceNumber={inv.invoice_number} status={inv.status} />
+                    <InvoiceActions invoice={inv} />
                   </td>
                 </tr>
               )
@@ -307,20 +307,38 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
 
 // ── Invoice Action Buttons ──
 
-function InvoiceActions({ invoiceId, invoiceNumber, status }: { invoiceId: string; invoiceNumber: string; status: string }) {
+// ── Styled Tooltip Button ──
+
+function ActionButton({ onClick, label, icon: Icon, color, hoverBg }: {
+  onClick?: () => void; label: string; icon: typeof CheckCircle; color: string; hoverBg: string
+}) {
+  return (
+    <div className="relative group">
+      <button onClick={onClick} className={`p-1.5 rounded-md ${hoverBg} ${color} transition-colors`}>
+        <Icon className="w-4 h-4" />
+      </button>
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-zinc-900 text-white text-[10px] rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+        {label}
+        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-zinc-900" />
+      </div>
+    </div>
+  )
+}
+
+// ── Invoice Actions ──
+
+function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
+  const [editing, setEditing] = useState(false)
   const router = useRouter()
+  const { id: invoiceId, invoice_number: invoiceNumber, status } = invoice
 
   const handleMarkPaid = () => {
     if (!window.confirm(`Mark ${invoiceNumber} as Paid?`)) return
     startTransition(async () => {
       const result = await markInvoicePaid(invoiceId)
-      if (result.success) {
-        toast.success(`${invoiceNumber} marked as Paid`)
-        router.refresh()
-      } else {
-        toast.error(result.error ?? 'Failed to mark as paid')
-      }
+      if (result.success) { toast.success(`${invoiceNumber} marked as Paid`); router.refresh() }
+      else toast.error(result.error ?? 'Failed')
     })
   }
 
@@ -328,12 +346,8 @@ function InvoiceActions({ invoiceId, invoiceNumber, status }: { invoiceId: strin
     if (!window.confirm(`Send payment reminder for ${invoiceNumber}?`)) return
     startTransition(async () => {
       const result = await sendInvoiceReminder(invoiceId)
-      if (result.success) {
-        toast.success(`Reminder sent for ${invoiceNumber}`)
-        router.refresh()
-      } else {
-        toast.error(result.error ?? 'Failed to send reminder')
-      }
+      if (result.success) { toast.success(`Reminder sent for ${invoiceNumber}`); router.refresh() }
+      else toast.error(result.error ?? 'Failed')
     })
   }
 
@@ -341,12 +355,8 @@ function InvoiceActions({ invoiceId, invoiceNumber, status }: { invoiceId: strin
     if (!window.confirm(`Void invoice ${invoiceNumber}? This cannot be undone.`)) return
     startTransition(async () => {
       const result = await voidInvoice(invoiceId)
-      if (result.success) {
-        toast.success(`${invoiceNumber} voided`)
-        router.refresh()
-      } else {
-        toast.error(result.error ?? 'Failed to void invoice')
-      }
+      if (result.success) { toast.success(`${invoiceNumber} voided`); router.refresh() }
+      else toast.error(result.error ?? 'Failed')
     })
   }
 
@@ -355,25 +365,123 @@ function InvoiceActions({ invoiceId, invoiceNumber, status }: { invoiceId: strin
   }
 
   return (
-    <div className="flex items-center justify-center gap-1">
-      {status !== 'Paid' && status !== 'Cancelled' && (
-        <button onClick={handleMarkPaid} title="Mark Paid" className="p-1.5 rounded-md hover:bg-emerald-100 text-emerald-600 transition-colors">
-          <CheckCircle className="w-4 h-4" />
-        </button>
+    <>
+      <div className="flex items-center justify-center gap-0.5">
+        {status !== 'Paid' && status !== 'Cancelled' && (
+          <ActionButton onClick={handleMarkPaid} label="Mark as Paid" icon={CheckCircle} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
+        )}
+        {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
+          <ActionButton onClick={handleSendReminder} label="Send Reminder Email" icon={Send} color="text-blue-600" hoverBg="hover:bg-blue-100" />
+        )}
+        {status !== 'Paid' && status !== 'Cancelled' && (
+          <ActionButton onClick={handleVoid} label="Void / Cancel Invoice" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
+        )}
+        <ActionButton onClick={() => setEditing(true)} label="Edit Invoice" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+      </div>
+      {editing && (
+        <EditInvoiceDialog invoice={invoice} onClose={() => setEditing(false)} />
       )}
-      {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
-        <button onClick={handleSendReminder} title="Send Reminder" className="p-1.5 rounded-md hover:bg-blue-100 text-blue-600 transition-colors">
-          <Send className="w-4 h-4" />
-        </button>
-      )}
-      {status !== 'Paid' && status !== 'Cancelled' && (
-        <button onClick={handleVoid} title="Void Invoice" className="p-1.5 rounded-md hover:bg-red-100 text-red-500 transition-colors">
-          <Ban className="w-4 h-4" />
-        </button>
-      )}
-      <button title="Edit" className="p-1.5 rounded-md hover:bg-zinc-100 text-zinc-500 transition-colors">
-        <Edit3 className="w-4 h-4" />
-      </button>
+    </>
+  )
+}
+
+// ── Edit Invoice Dialog ──
+
+function EditInvoiceDialog({ invoice, onClose }: { invoice: InvoiceRecord; onClose: () => void }) {
+  const [isPending, startTransition] = useTransition()
+  const router = useRouter()
+  const [dueDate, setDueDate] = useState(invoice.due_date ?? '')
+  const [notes, setNotes] = useState(invoice.notes ?? '')
+  const [total, setTotal] = useState(String(invoice.total ?? 0))
+
+  const handleSave = () => {
+    startTransition(async () => {
+      const updates: Record<string, unknown> = {}
+      if (dueDate !== (invoice.due_date ?? '')) updates.due_date = dueDate
+      if (notes !== (invoice.notes ?? '')) updates.notes = notes
+      const newTotal = parseFloat(total)
+      if (!isNaN(newTotal) && newTotal !== Number(invoice.total)) updates.total = newTotal
+
+      if (Object.keys(updates).length === 0) { onClose(); return }
+
+      const result = await updateInvoice(invoice.id, updates as { due_date?: string; notes?: string; total?: number })
+      if (result.success) {
+        toast.success(`${invoice.invoice_number} updated`)
+        router.refresh()
+        onClose()
+      } else {
+        toast.error(result.error ?? 'Failed to update')
+      }
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-lg">Edit {invoice.invoice_number}</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Client</label>
+            <p className="text-sm font-medium">
+              {(invoice.accounts as unknown as { company_name: string })?.company_name
+                ?? (invoice.contacts as unknown as { full_name: string })?.full_name
+                ?? '—'}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Amount ({invoice.currency || 'USD'})</label>
+            <input
+              type="number"
+              step="0.01"
+              value={total}
+              onChange={e => setTotal(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Due Date</label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={e => setDueDate(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">Internal Notes</label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              placeholder="Internal notes (not visible to client)"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border hover:bg-zinc-50">
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isPending}
+            className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            {isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+            Save Changes
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

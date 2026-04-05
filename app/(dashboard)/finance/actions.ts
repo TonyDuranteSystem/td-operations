@@ -187,6 +187,58 @@ export async function sendInvoiceReminder(invoiceId: string): Promise<ActionResu
   })
 }
 
+export async function updateInvoice(
+  invoiceId: string,
+  updates: { description?: string; due_date?: string; notes?: string; message?: string; total?: number }
+): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const now = new Date().toISOString()
+
+    // Update client_invoices
+    const invUpdates: Record<string, unknown> = { updated_at: now }
+    if (updates.due_date !== undefined) invUpdates.due_date = updates.due_date || null
+    if (updates.notes !== undefined) invUpdates.notes = updates.notes || null
+    if (updates.message !== undefined) invUpdates.message = updates.message || null
+    if (updates.total !== undefined) {
+      invUpdates.total = updates.total
+      invUpdates.subtotal = updates.total
+      invUpdates.amount_due = updates.total
+    }
+
+    await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', invoiceId)
+
+    // Also update linked payment mirror
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id')
+      .eq('portal_invoice_id', invoiceId)
+      .limit(1)
+      .maybeSingle()
+
+    if (payment) {
+      const payUpdates: Record<string, unknown> = { updated_at: now }
+      if (updates.description !== undefined) payUpdates.description = updates.description
+      if (updates.due_date !== undefined) payUpdates.due_date = updates.due_date || null
+      if (updates.notes !== undefined) payUpdates.notes = updates.notes || null
+      if (updates.total !== undefined) {
+        payUpdates.total = updates.total
+        payUpdates.amount = updates.total
+        payUpdates.amount_due = updates.total
+      }
+      await supabaseAdmin.from('payments').update(payUpdates).eq('id', payment.id)
+    }
+
+    revalidatePath('/finance')
+    revalidatePath('/payments')
+  }, {
+    action_type: 'update',
+    table_name: 'client_invoices',
+    record_id: invoiceId,
+    summary: `Invoice updated: ${Object.keys(updates).join(', ')}`,
+  })
+}
+
 // ── Bank Feed actions ──
 
 export async function matchBankFeedToInvoice(
