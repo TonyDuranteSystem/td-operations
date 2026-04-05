@@ -126,7 +126,7 @@ export async function syncAirwallexDeposits(
         const { error: upsertErr } = await supabaseAdmin
           .from('td_bank_feeds')
           .upsert({
-            source: 'airwallex',
+            source: 'airwallex_api',
             external_id: externalId,
             transaction_date: transactionDate,
             amount,
