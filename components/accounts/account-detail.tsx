@@ -443,7 +443,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'panoramica' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} isAdmin={isAdmin} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} />
       )}
       {activeTab === 'servizi' && (
         <ServiziTab services={services} today={today} />
@@ -469,9 +469,41 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   )
 }
 
+/* ── Installment Status Badge ────────────────────────── */
+
+function InstallmentStatus({ payments, amount, currency, label: _label }: { payments: Payment[]; amount: number; currency: string; label: string }) {
+  // Find a payment/invoice matching this installment amount (±$1 tolerance)
+  const match = payments.find(p => {
+    const invTotal = Number(p.total) || p.amount || 0
+    const invCurr = p.amount_currency || 'USD'
+    return Math.abs(invTotal - amount) < 2 && invCurr === currency && p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0'
+  })
+
+  if (!match) {
+    return (
+      <div className="flex items-center gap-2 pl-6 text-xs">
+        <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500">Not invoiced</span>
+      </div>
+    )
+  }
+
+  const status = match.invoice_status ?? match.status ?? ''
+  const isPaid = status === 'Paid'
+
+  return (
+    <div className="flex items-center gap-2 pl-6 text-xs">
+      <span className="font-mono text-blue-600">{match.invoice_number}</span>
+      <span className={cn('px-1.5 py-0.5 rounded', isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
+        {isPaid ? 'Paid' : status}
+      </span>
+      {match.paid_date && <span className="text-muted-foreground">{formatDate(match.paid_date)}</span>}
+    </div>
+  )
+}
+
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account; contacts: Contact[]; deals: Deal[]; isAdmin: boolean }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean }) {
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
 
@@ -554,8 +586,14 @@ function PanoramicaTab({ account, contacts, deals, isAdmin }: { account: Account
         <div className="grid gap-3 text-sm">
           <EditableField icon={CreditCard} label="1st Installment" value={account.installment_1_amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
           <EditableField icon={Globe} label="1st Currency" value={account.installment_1_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
+          {account.installment_1_amount && (
+            <InstallmentStatus payments={payments} amount={account.installment_1_amount} currency={account.installment_1_currency ?? 'USD'} label="1st" />
+          )}
           <EditableField icon={CreditCard} label="2nd Installment" value={account.installment_2_amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
           <EditableField icon={Globe} label="2nd Currency" value={account.installment_2_currency ?? ''} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
+          {account.installment_2_amount && (
+            <InstallmentStatus payments={payments} amount={account.installment_2_amount} currency={account.installment_2_currency ?? 'USD'} label="2nd" />
+          )}
         </div>
       </div>
 
@@ -642,10 +680,10 @@ function ServiziTab({ services, today }: { services: Service[]; today: string })
       {/* Active services */}
       <div className="space-y-2">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          Attivi ({active.length})
+          Active ({active.length})
         </h3>
         {active.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nessun servizio attivo</p>
+          <p className="text-sm text-muted-foreground">No active services</p>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             {active.map(s => (
@@ -659,7 +697,7 @@ function ServiziTab({ services, today }: { services: Service[]; today: string })
       {completed.length > 0 && (
         <div className="space-y-2">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-            Completati ({completed.length})
+            Completed ({completed.length})
           </h3>
           <div className="grid gap-2 sm:grid-cols-2">
             {completed.map(s => (
@@ -728,35 +766,36 @@ function ServiceCard({ service: s, today }: { service: Service; today: string })
 /* ── Pagamenti Tab ───────────────────────────────────── */
 
 function PagamentiTab({ payments, today }: { payments: Payment[]; today: string }) {
-  const overdue = payments.filter(p =>
-    (p.status === 'Due' || p.status === 'Overdue' || p.status === 'Partially Paid') &&
-    p.due_date && p.due_date < today
-  )
-  const upcoming = payments.filter(p =>
-    (p.status === 'Due' || p.status === 'Partially Paid') &&
-    p.due_date && p.due_date >= today
-  )
-  const paid = payments.filter(p => p.status === 'Paid')
-  const other = payments.filter(p =>
-    !overdue.includes(p) && !upcoming.includes(p) && !paid.includes(p)
-  )
+  // Split into invoiced (unified system) vs legacy tracking records
+  const invoiced = payments.filter(p => p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0')
+  const legacy = payments.filter(p => !p.invoice_number || p.invoice_number === '1.0' || p.invoice_number === '2.0')
+
+  // Group invoiced by status
+  const invoiceStatus = (p: Payment) => p.invoice_status ?? p.status ?? ''
+  const overdue = invoiced.filter(p => invoiceStatus(p) === 'Overdue' || (invoiceStatus(p) === 'Sent' && p.due_date && p.due_date < today))
+  const pending = invoiced.filter(p => ['Sent', 'Draft', 'Partial'].includes(invoiceStatus(p)) && !(p.due_date && p.due_date < today))
+  const paid = invoiced.filter(p => invoiceStatus(p) === 'Paid')
+  const otherInvoiced = invoiced.filter(p => !overdue.includes(p) && !pending.includes(p) && !paid.includes(p))
 
   return (
     <div className="space-y-6">
       {overdue.length > 0 && (
-        <PaymentSection title="Scaduti" payments={overdue} color="text-red-600" today={today} />
+        <PaymentSection title="Overdue" payments={overdue} color="text-red-600" today={today} />
       )}
-      {upcoming.length > 0 && (
-        <PaymentSection title="In Arrivo" payments={upcoming} color="text-amber-600" today={today} />
+      {pending.length > 0 && (
+        <PaymentSection title="Pending" payments={pending} color="text-amber-600" today={today} />
       )}
       {paid.length > 0 && (
-        <PaymentSection title="Pagati" payments={paid} color="text-emerald-600" today={today} defaultCollapsed />
+        <PaymentSection title="Paid" payments={paid} color="text-emerald-600" today={today} defaultCollapsed />
       )}
-      {other.length > 0 && (
-        <PaymentSection title="Altro" payments={other} color="text-zinc-600" today={today} defaultCollapsed />
+      {otherInvoiced.length > 0 && (
+        <PaymentSection title="Other" payments={otherInvoiced} color="text-zinc-600" today={today} defaultCollapsed />
+      )}
+      {legacy.length > 0 && (
+        <PaymentSection title="Legacy (pre-invoice)" payments={legacy} color="text-zinc-400" today={today} defaultCollapsed />
       )}
       {payments.length === 0 && (
-        <p className="text-sm text-muted-foreground">Nessun pagamento registrato</p>
+        <p className="text-sm text-muted-foreground">No payments recorded</p>
       )}
     </div>
   )
@@ -776,7 +815,8 @@ function PaymentSection({
   defaultCollapsed?: boolean
 }) {
   const [open, setOpen] = useState(!defaultCollapsed)
-  const total = payments.reduce((sum, p) => sum + (p.amount_due ?? p.amount), 0)
+  const total = payments.reduce((sum, p) => sum + (Number(p.total) || p.amount_due || p.amount || 0), 0)
+  const curr = payments[0]?.amount_currency || 'USD'
 
   return (
     <div>
@@ -784,39 +824,40 @@ function PaymentSection({
         <span className={cn('font-semibold text-sm uppercase tracking-wide', color)}>{title}</span>
         <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">{payments.length}</span>
         <span className="text-xs text-muted-foreground ml-auto">
-          {formatCurrency(total)}
+          {formatCurrency(total, curr)}
         </span>
       </button>
       {open && (
         <div className="bg-white rounded-lg border overflow-hidden">
-          <div className="hidden md:grid md:grid-cols-[1fr,100px,100px,100px,100px,100px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
-            <span>Descrizione</span>
-            <span className="text-right">Importo</span>
+          <div className="hidden md:grid md:grid-cols-[120px,1fr,100px,100px,90px,100px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
+            <span>Invoice</span>
+            <span>Description</span>
             <span className="text-right">Amount</span>
-            <span>Due Date</span>
+            <span>Date</span>
             <span>Status</span>
-            <span>Follow-up</span>
+            <span>Method</span>
           </div>
           {payments.map(p => {
-            const isOverdue = p.due_date && p.due_date < today && p.status !== 'Paid' && p.status !== 'Cancelled' && p.status !== 'Waived'
+            const status = p.invoice_status ?? p.status ?? '—'
+            const isOverdue = p.due_date && p.due_date < today && status !== 'Paid' && status !== 'Cancelled' && status !== 'Waived'
             return (
               <div key={p.id} className={cn(
-                'grid grid-cols-1 md:grid-cols-[1fr,100px,100px,100px,100px,100px] gap-1 md:gap-3 px-4 py-2.5 border-b last:border-b-0 text-sm items-center',
+                'grid grid-cols-1 md:grid-cols-[120px,1fr,100px,100px,90px,100px] gap-1 md:gap-3 px-4 py-2.5 border-b last:border-b-0 text-sm items-center',
                 isOverdue && 'bg-red-50/50'
               )}>
+                <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '—'}</span>
                 <div className="min-w-0">
-                  <p className="font-medium truncate">{p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || '—')}</p>
+                  <p className="font-medium truncate">{p.description ?? '—'}</p>
                   {p.installment && <p className="text-xs text-muted-foreground">{p.installment}</p>}
                 </div>
-                <p className="text-right font-medium hidden md:block">{formatCurrency(p.amount, p.amount_currency)}</p>
-                <p className="text-right hidden md:block">{formatCurrency(p.amount_due, p.amount_currency)}</p>
-                <p className="hidden md:block text-muted-foreground">{formatDate(p.due_date)}</p>
+                <p className="text-right font-medium hidden md:block">{formatCurrency(Number(p.total) || p.amount, p.amount_currency)}</p>
+                <p className="hidden md:block text-xs text-muted-foreground">{p.paid_date ? formatDate(p.paid_date) : p.due_date ? formatDate(p.due_date) : '—'}</p>
                 <div className="hidden md:block">
-                  <span className={cn('text-xs px-1.5 py-0.5 rounded', PAYMENT_STATUS_COLORS[p.status ?? ''] ?? 'bg-zinc-100')}>
-                    {p.status}
+                  <span className={cn('text-xs px-1.5 py-0.5 rounded', PAYMENT_STATUS_COLORS[status] ?? 'bg-zinc-100')}>
+                    {status}
                   </span>
                 </div>
-                <p className="hidden md:block text-xs text-muted-foreground">{p.followup_stage ?? '—'}</p>
+                <p className="hidden md:block text-xs text-muted-foreground truncate">{p.payment_method ?? '—'}</p>
               </div>
             )
           })}
@@ -830,7 +871,7 @@ function PaymentSection({
 
 function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string }) {
   if (taxReturns.length === 0) {
-    return <p className="text-sm text-muted-foreground">Nessuna dichiarazione fiscale</p>
+    return <p className="text-sm text-muted-foreground">No tax returns</p>
   }
 
   return (

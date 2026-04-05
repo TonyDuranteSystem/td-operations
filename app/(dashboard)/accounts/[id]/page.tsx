@@ -52,7 +52,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Payments
     supabase
       .from('payments')
-      .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, notes, updated_at')
+      .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, notes, updated_at, invoice_status, portal_invoice_id, total')
       .eq('account_id', params.id)
       .order('due_date', { ascending: false }),
     // Deals
@@ -99,7 +99,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     notes: sd.notes ?? null,
     updated_at: sd.updated_at,
   })) as Service[]
-  const payments: Payment[] = (paymentsResult.data ?? []).map(p => ({ ...p, account_id: params.id })) as Payment[]
+  const payments: Payment[] = (paymentsResult.data ?? []).map(p => ({ ...p, account_id: params.id })) as unknown as Payment[]
   const deals: Deal[] = (dealsResult.data ?? []).map(d => ({ ...d, account_id: params.id })) as Deal[]
   const taxReturns: TaxReturn[] = (taxReturnsResult.data ?? []) as TaxReturn[]
   const documents = (documentsResult.data ?? []) as DocumentRecord[]
