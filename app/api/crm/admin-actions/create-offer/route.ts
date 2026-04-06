@@ -102,7 +102,6 @@ export async function POST(req: NextRequest) {
         offer_date: new Date().toISOString().split('T')[0],
         status: 'draft',
         payment_type: payment_type || 'bank_transfer',
-        payment_gateway: payment_gateway || 'stripe',
         contract_type: contract_type || 'formation',
         services,
         cost_summary,
