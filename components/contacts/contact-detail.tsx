@@ -1,13 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, User, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
-  Stethoscope,
+  Stethoscope, Send,
 } from 'lucide-react'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
 import { EditableField } from '@/components/accounts/editable-field'
@@ -24,6 +24,7 @@ const TABS = [
   { key: 'services', label: 'Services', icon: Briefcase },
   { key: 'invoices', label: 'Invoices', icon: CreditCard },
   { key: 'documents', label: 'Documents', icon: FolderOpen },
+  { key: 'chat', label: 'Chat', icon: MessageSquare },
   { key: 'portal', label: 'Portal', icon: KeyRound },
   { key: 'activity', label: 'Activity', icon: MessageSquare },
 ]
@@ -225,6 +226,7 @@ export function ContactDetail({
 }: ContactDetailProps) {
   const [activeTab, setActiveTab] = useState('overview')
   const [showDiagnostic, setShowDiagnostic] = useState(false)
+  const [chatUnread, setChatUnread] = useState(0)
 
   const makeContactSaver = (field: string) => async (value: string) => {
     const result = await updateContactField(contact.id, field, value, contact.updated_at)
@@ -292,6 +294,7 @@ export function ContactDetail({
             if (tab.key === 'services') count = activeSds.length
             if (tab.key === 'invoices') count = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0').length
             if (tab.key === 'documents') count = documents.length
+            if (tab.key === 'chat') count = chatUnread
             if (tab.key === 'activity') count = conversations.length
 
             return (
@@ -308,7 +311,10 @@ export function ContactDetail({
                 <Icon className="h-4 w-4" />
                 {tab.label}
                 {count > 0 && (
-                  <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-zinc-100 text-zinc-600 font-medium">
+                  <span className={cn(
+                    'ml-1 px-1.5 py-0.5 text-xs rounded-full font-medium',
+                    tab.key === 'chat' && chatUnread > 0 ? 'bg-red-500 text-white' : 'bg-zinc-100 text-zinc-600'
+                  )}>
                     {count}
                   </span>
                 )}
@@ -338,6 +344,9 @@ export function ContactDetail({
       )}
       {activeTab === 'documents' && (
         <ContactDocumentsTab documents={documents} accounts={accounts} />
+      )}
+      {activeTab === 'chat' && (
+        <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
       )}
       {activeTab === 'portal' && (
         <PortalTab contact={contact} portalAuth={portalAuth} />
@@ -1027,6 +1036,209 @@ function WizardProgressCard({
           : `Last updated ${formatDate(primaryWizard.updated_at.split('T')[0])}`
         }
       </div>
+    </div>
+  )
+}
+
+// ─── Chat Tab ───
+
+interface ChatMessage {
+  id: string
+  account_id: string | null
+  contact_id: string | null
+  sender_type: 'client' | 'admin'
+  message: string
+  attachment_url: string | null
+  attachment_name: string | null
+  read_at: string | null
+  created_at: string
+  source: string
+}
+
+function ChatTab({
+  contactId,
+  onUnreadChange,
+}: {
+  contactId: string
+  onUnreadChange: (count: number) => void
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [notifications, setNotifications] = useState<Array<{ id: string; type: string; title: string; body: string | null; created_at: string }>>([])
+  const [loading, setLoading] = useState(true)
+  const [sending, setSending] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const fetchMessages = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/communications`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setMessages(data.messages ?? [])
+      setNotifications(data.notifications ?? [])
+      onUnreadChange(data.unreadCount ?? 0)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [contactId, onUnreadChange])
+
+  useEffect(() => {
+    fetchMessages()
+  }, [fetchMessages])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSend = async () => {
+    if (!draft.trim() || sending) return
+    setSending(true)
+    try {
+      const res = await fetch('/api/portal/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contact_id: contactId,
+          message: draft.trim(),
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+      setDraft('')
+      await fetchMessages()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to send')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 rounded-lg p-4 text-sm text-red-700">
+        Failed to load chat: {error}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Messages */}
+      <div className="bg-white rounded-lg border">
+        {messages.length === 0 ? (
+          <div className="p-8 text-center text-sm text-muted-foreground">
+            <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p>No chat messages yet</p>
+          </div>
+        ) : (
+          <div className="max-h-[500px] overflow-y-auto p-4 space-y-3">
+            {messages.map(msg => (
+              <div
+                key={msg.id}
+                className={cn(
+                  'flex gap-3',
+                  msg.sender_type === 'admin' ? 'flex-row-reverse' : ''
+                )}
+              >
+                <div className={cn(
+                  'max-w-[70%] rounded-lg px-3 py-2',
+                  msg.sender_type === 'admin'
+                    ? 'bg-blue-50 text-blue-900'
+                    : 'bg-zinc-100 text-zinc-900'
+                )}>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className={cn(
+                      'text-[10px] font-medium uppercase',
+                      msg.sender_type === 'admin' ? 'text-blue-500' : 'text-zinc-500'
+                    )}>
+                      {msg.sender_type === 'admin' ? 'Staff' : 'Client'}
+                    </span>
+                    {msg.source !== 'Personal' && (
+                      <span className="text-[10px] text-zinc-400">via {msg.source}</span>
+                    )}
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>
+                  {msg.attachment_url && (
+                    <a
+                      href={msg.attachment_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"
+                    >
+                      <FileText className="h-3 w-3" />
+                      {msg.attachment_name ?? 'Attachment'}
+                    </a>
+                  )}
+                  <p className="text-[10px] text-zinc-400 mt-1">
+                    {formatDateTime(msg.created_at)}
+                  </p>
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        )}
+
+        {/* Send area */}
+        <div className="border-t p-3">
+          <div className="flex gap-2">
+            <textarea
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSend()
+                }
+              }}
+              placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+              rows={2}
+              className="flex-1 px-3 py-2 rounded-lg border text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!draft.trim() || sending}
+              className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors shrink-0"
+            >
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Notification History */}
+      {notifications.length > 0 && (
+        <div className="bg-white rounded-lg border p-4">
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
+            Notification History ({notifications.length})
+          </h3>
+          <div className="space-y-2">
+            {notifications.slice(0, 10).map(n => (
+              <div key={n.id} className="flex items-start gap-3 text-sm">
+                <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-2 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium text-zinc-800">{n.title}</p>
+                  {n.body && <p className="text-xs text-zinc-500 truncate">{n.body}</p>}
+                  <p className="text-[10px] text-zinc-400">{formatDateTime(n.created_at)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
