@@ -2192,6 +2192,7 @@ function ContactDocumentsTab({
           <option value="Passport">Passport</option>
           <option value="ID Document">ID Document</option>
           <option value="EIN Letter">EIN Letter</option>
+          <option value="ITIN Letter">ITIN Letter</option>
           <option value="Articles of Organization">Articles of Organization</option>
           <option value="Operating Agreement">Operating Agreement</option>
           <option value="Bank Statement">Bank Statement</option>

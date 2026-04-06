@@ -149,37 +149,92 @@ export async function POST(req: NextRequest) {
       details: { file_name: fileName, document_type: documentType, category, contact_id: contactId },
     })
 
-    // Passport OCR (best-effort — file is already saved above)
+    // OCR for smart document types (best-effort — file is already saved above)
     let ocrData: Record<string, unknown> | null = null
     const ocrSupported = ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff', 'image/gif', 'image/bmp', 'image/webp']
+    const docTypeLower = (documentType as string).toLowerCase()
+    const isItinLetter = docTypeLower.includes('itin')
+    const isEinLetter = docTypeLower.includes('ein')
 
-    if (isPassport && ocrSupported.includes(fileMime)) {
+    if ((isPassport || isItinLetter || isEinLetter) && ocrSupported.includes(fileMime)) {
       try {
         const { ocrDriveFile } = await import('@/lib/docai')
-        const { parsePassportFromOcr } = await import('@/lib/passport-processing')
         const ocrResult = await ocrDriveFile(driveFile.id)
 
         if (ocrResult.fullText) {
-          const parsed = parsePassportFromOcr(ocrResult.fullText)
-          ocrData = parsed as unknown as Record<string, unknown>
+          if (isPassport) {
+            // Passport MRZ parsing
+            const { parsePassportFromOcr } = await import('@/lib/passport-processing')
+            const parsed = parsePassportFromOcr(ocrResult.fullText)
+            ocrData = parsed as unknown as Record<string, unknown>
 
-          const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-          if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
-          if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
-          if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
+            const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+            if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
+            if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
+            if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
 
-          const extracted = Object.keys(updates).filter(k => k !== 'updated_at')
-          if (extracted.length > 0) {
-            await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
-            sideEffects.push(`OCR extracted: ${extracted.join(', ')}`)
-          } else {
-            sideEffects.push('OCR ran but no MRZ data found')
+            const extracted = Object.keys(updates).filter(k => k !== 'updated_at')
+            if (extracted.length > 0) {
+              await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
+              sideEffects.push(`OCR extracted: ${extracted.join(', ')}`)
+            } else {
+              sideEffects.push('OCR ran but no MRZ data found')
+            }
+          } else if (isItinLetter) {
+            // ITIN number extraction: format 9XX-XX-XXXX
+            const itinMatch = ocrResult.fullText.match(/\b(9\d{2}[- ]?\d{2}[- ]?\d{4})\b/)
+            if (itinMatch) {
+              const rawItin = itinMatch[1].replace(/[- ]/g, '')
+              const itinFormatted = `${rawItin.slice(0, 3)}-${rawItin.slice(3, 5)}-${rawItin.slice(5)}`
+              ocrData = { itinNumber: itinFormatted }
+
+              await supabaseAdmin.from('contacts').update({
+                itin_number: itinFormatted,
+                itin_issue_date: new Date().toISOString().split('T')[0],
+                updated_at: new Date().toISOString(),
+              }).eq('id', contactId)
+              sideEffects.push(`ITIN extracted: ${itinFormatted}`)
+            } else {
+              sideEffects.push('OCR ran but no ITIN number found (expected format: 9XX-XX-XXXX)')
+            }
+          } else if (isEinLetter) {
+            // EIN number extraction: format XX-XXXXXXX
+            const einMatch = ocrResult.fullText.match(/\b(\d{2}[- ]?\d{7})\b/)
+            if (einMatch) {
+              const rawEin = einMatch[1].replace(/[- ]/g, '')
+              const einFormatted = `${rawEin.slice(0, 2)}-${rawEin.slice(2)}`
+              ocrData = { einNumber: einFormatted }
+              sideEffects.push(`EIN found in document: ${einFormatted} (use Enter EIN on the SS-4 card to save it)`)
+            } else {
+              sideEffects.push('OCR ran but no EIN number found (expected format: XX-XXXXXXX)')
+            }
           }
         }
       } catch (ocrErr) {
         const errMsg = ocrErr instanceof Error ? ocrErr.message : String(ocrErr)
         sideEffects.push(`OCR skipped: ${errMsg.includes('too large') ? 'File too large for OCR (max 15MB). Reduce PDF size.' : errMsg}`)
       }
+    }
+
+    // Notify client via portal (document is now visible in their portal)
+    try {
+      const { createPortalNotification } = await import('@/lib/portal/notifications')
+      const docLabel = isItinLetter ? 'Your ITIN letter is ready'
+        : isEinLetter ? 'Your EIN letter is ready'
+        : isPassport ? 'Your passport has been uploaded'
+        : `New document: ${documentType}`
+
+      await createPortalNotification({
+        contact_id: contactId,
+        account_id: accountId ?? undefined,
+        type: 'document_uploaded',
+        title: docLabel,
+        body: `${fileName} is now available in your portal Documents section.`,
+        link: '/portal/documents',
+      })
+      sideEffects.push('Client notified via portal')
+    } catch {
+      // Non-critical — notification failure shouldn't block upload
     }
 
     // Clean up storage file (best-effort)
