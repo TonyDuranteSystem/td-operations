@@ -9,6 +9,7 @@
  *   select_llc_name    — Choose one of 3 wizard name options as the official LLC name
  *   mark_fax_sent      — Mark SS-4 fax as sent to IRS + advance pipeline to EIN Submitted
  *   enter_ein          — Set EIN on account + advance pipeline to Post-Formation
+ *   process_documents  — Re-run Drive folder creation + passport processing for a contact
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -561,6 +562,187 @@ export async function POST(req: NextRequest) {
           success: true,
           detail: `EIN ${einFormatted} saved. Pipeline advancing to Post-Formation.`,
           side_effects: einSideEffects,
+        }
+        break
+      }
+
+      // ─── PROCESS DOCUMENTS (re-run Drive folder + passport for a contact) ───
+      case "process_documents": {
+        const docSideEffects: string[] = []
+
+        // Get contact info
+        const { data: docContact } = await supabaseAdmin
+          .from("contacts")
+          .select("first_name, last_name, gdrive_folder_url")
+          .eq("id", contact_id)
+          .single()
+        if (!docContact) {
+          result = { success: false, detail: "Contact not found" }
+          break
+        }
+
+        // Get wizard data for passport path
+        const { data: wizards } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("id, data, wizard_type, status")
+          .eq("contact_id", contact_id)
+          .eq("status", "submitted")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+
+        const wizard = wizards?.[0]
+        if (!wizard?.data) {
+          result = { success: false, detail: "No submitted wizard found for this contact" }
+          break
+        }
+
+        const wizData = wizard.data as Record<string, unknown>
+        const contactName = [docContact.first_name, docContact.last_name].filter(Boolean).join(" ") || "Unknown"
+
+        // Get linked account (if any)
+        const { data: acLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id")
+          .eq("contact_id", contact_id)
+          .limit(1)
+        const linkedAccountId = acLinks?.[0]?.account_id ?? null
+
+        // 1. Ensure contact Drive folder
+        const { ensureContactFolder } = await import("@/lib/drive-folder-utils")
+        const folderResult = await ensureContactFolder(contact_id, contactName)
+        if (folderResult.created) {
+          docSideEffects.push(`Drive folder created: Contacts/${contactName}/`)
+        } else {
+          docSideEffects.push("Drive folder already exists")
+        }
+
+        // 2. Copy passport from Storage to Drive
+        const passportPath = wizData.passport_owner as string | undefined
+        if (passportPath) {
+          const contactsSubfolder = folderResult.subfolders["2. Contacts"]
+          if (contactsSubfolder) {
+            try {
+              const cleanPath = passportPath.replace(/^\/+/, "")
+              const { data: blob, error: dlErr } = await supabaseAdmin.storage
+                .from("onboarding-uploads")
+                .download(cleanPath)
+
+              if (dlErr || !blob) {
+                docSideEffects.push(`Passport download failed: ${dlErr?.message || "no data"}`)
+              } else {
+                const { uploadBinaryToDrive } = await import("@/lib/google-drive")
+                const fileName = cleanPath.split("/").pop() || "passport.pdf"
+                const buffer = Buffer.from(await blob.arrayBuffer())
+                const mimeType = blob.type || "application/octet-stream"
+
+                // Check if already uploaded (dedup by filename in folder)
+                const { listFolderAnyDrive } = await import("@/lib/google-drive")
+                const existingFiles = await listFolderAnyDrive(contactsSubfolder)
+                const alreadyUploaded = existingFiles.some(
+                  (f: { name: string }) => f.name === fileName
+                )
+
+                if (alreadyUploaded) {
+                  docSideEffects.push(`Passport already in Drive: ${fileName}`)
+                } else {
+                  const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, contactsSubfolder) as { id: string }
+                  docSideEffects.push(`Passport uploaded to Drive: ${fileName}`)
+
+                  // OCR if supported
+                  const ocrSupported = ["application/pdf", "image/jpeg", "image/png", "image/tiff", "image/gif", "image/bmp", "image/webp"]
+                  if (ocrSupported.includes(mimeType)) {
+                    try {
+                      const { ocrDriveFile } = await import("@/lib/docai")
+                      const { parsePassportFromOcr } = await import("@/lib/passport-processing")
+                      const ocrResult = await ocrDriveFile(driveFile.id)
+
+                      if (ocrResult.fullText) {
+                        const passportData = parsePassportFromOcr(ocrResult.fullText)
+                        const passportUpdates: Record<string, unknown> = {}
+                        if (passportData.passportNumber) passportUpdates.passport_number = passportData.passportNumber
+                        if (passportData.expiryDate) passportUpdates.passport_expiry_date = passportData.expiryDate
+                        if (passportData.dateOfBirth) passportUpdates.date_of_birth = passportData.dateOfBirth
+
+                        if (Object.keys(passportUpdates).length > 0) {
+                          await supabaseAdmin
+                            .from("contacts")
+                            .update({ ...passportUpdates, passport_on_file: true, updated_at: new Date().toISOString() })
+                            .eq("id", contact_id)
+                          docSideEffects.push(`Passport OCR extracted: ${Object.keys(passportUpdates).join(", ")}`)
+                        } else {
+                          docSideEffects.push("Passport OCR: no data extracted from MRZ")
+                        }
+                      }
+                    } catch (ocrErr) {
+                      docSideEffects.push(`Passport OCR error: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`)
+                    }
+                  } else {
+                    docSideEffects.push(`Passport format (${mimeType}) not supported for OCR — manual data entry needed`)
+                    // Create manual task
+                    await supabaseAdmin.from("tasks").insert({
+                      task_title: `Manual passport data entry: ${contactName}`,
+                      description: `Passport uploaded as ${mimeType}. Manually enter passport_number and passport_expiry_date.`,
+                      assigned_to: "Luca",
+                      category: "Document",
+                      priority: "Normal",
+                      status: "To Do",
+                      contact_id: contact_id,
+                      ...(linkedAccountId ? { account_id: linkedAccountId } : {}),
+                    })
+                    await supabaseAdmin
+                      .from("contacts")
+                      .update({ passport_on_file: true, updated_at: new Date().toISOString() })
+                      .eq("id", contact_id)
+                  }
+
+                  // Create document record
+                  // Check dedup first
+                  const { data: existingDoc } = await supabaseAdmin
+                    .from("documents")
+                    .select("id")
+                    .eq("contact_id", contact_id)
+                    .eq("document_type_name", "Passport")
+                    .limit(1)
+
+                  if (!existingDoc?.length) {
+                    await supabaseAdmin.from("documents").insert({
+                      file_name: fileName,
+                      drive_file_id: driveFile.id,
+                      drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
+                      document_type_name: "Passport",
+                      category: 2,
+                      category_name: "Contacts",
+                      status: "classified",
+                      contact_id: contact_id,
+                      account_id: linkedAccountId,
+                      portal_visible: true,
+                    })
+                    docSideEffects.push("Document record created")
+                  }
+                }
+              }
+            } catch (passErr) {
+              docSideEffects.push(`Passport error: ${passErr instanceof Error ? passErr.message : String(passErr)}`)
+            }
+          }
+        } else {
+          docSideEffects.push("No passport file in wizard data")
+        }
+
+        // Log
+        await supabaseAdmin.from("action_log").insert({
+          actor: "crm-admin",
+          action_type: "process_documents",
+          table_name: "contacts",
+          record_id: contact_id,
+          summary: `Documents processed for ${contactName}`,
+          details: { side_effects: docSideEffects },
+        })
+
+        result = {
+          success: true,
+          detail: `Documents processed for ${contactName}`,
+          side_effects: docSideEffects,
         }
         break
       }

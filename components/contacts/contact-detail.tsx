@@ -597,7 +597,7 @@ function OverviewTab({
       <OfferStatusCard offers={offers} pendingActivations={pendingActivations} />
 
       {/* Wizard Progress Card */}
-      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} />
+      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />
 
       {/* LLC Name Selection Card */}
       <LlcNameSelectionCard
@@ -1214,12 +1214,38 @@ const WIZARD_STEP_LABELS: Record<string, string[]> = {
 function WizardProgressCard({
   wizardProgress,
   pendingActivations,
+  contactId,
 }: {
   wizardProgress: WizardProgressRecord[]
   pendingActivations: PendingActivationRecord[]
+  contactId: string
 }) {
+  const [processing, setProcessing] = useState(false)
   const primaryWizard = wizardProgress[0] ?? null
   const primaryActivation = pendingActivations[0] ?? null
+
+  const handleProcessDocs = async () => {
+    setProcessing(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId, action: 'process_documents' }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail)
+        if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
+        window.location.reload()
+      } else {
+        toast.error(data.detail || 'Failed')
+      }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setProcessing(false)
+    }
+  }
 
   if (!primaryWizard) {
     // Show "not started" with days since payment if applicable
@@ -1311,11 +1337,23 @@ function WizardProgressCard({
         </div>
       )}
 
-      <div className="text-xs text-muted-foreground">
-        {primaryWizard.status === 'submitted'
-          ? `Submitted ${formatDate(primaryWizard.updated_at.split('T')[0])}`
-          : `Last updated ${formatDate(primaryWizard.updated_at.split('T')[0])}`
-        }
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">
+          {primaryWizard.status === 'submitted'
+            ? `Submitted ${formatDate(primaryWizard.updated_at.split('T')[0])}`
+            : `Last updated ${formatDate(primaryWizard.updated_at.split('T')[0])}`
+          }
+        </div>
+        {primaryWizard.status === 'submitted' && (
+          <button
+            onClick={handleProcessDocs}
+            disabled={processing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors"
+          >
+            {processing ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderOpen className="h-3 w-3" />}
+            Process Documents
+          </button>
+        )}
       </div>
     </div>
   )
