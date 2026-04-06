@@ -168,7 +168,7 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
               }
             }}
             disabled={uploading}
-            accept={field.accept ?? '.pdf,.jpg,.jpeg,.png,.heic'}
+            accept={field.accept ?? '.pdf,.jpg,.jpeg,.png'}
             className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
           />
           {uploading && (

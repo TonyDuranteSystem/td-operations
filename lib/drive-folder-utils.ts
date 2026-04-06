@@ -40,23 +40,30 @@ const STANDARD_SUBFOLDERS = [
 // Contacts root folder under TD Clients/ (created on first use)
 let contactsRootId: string | null = null
 
+// ─── Types ─────────────────────────────────────────────────────────────────
+interface DriveItem { id: string; name: string; mimeType: string }
+
 // ─── Helper: lazy import google-drive ──────────────────────────────────────
 async function getDriveHelpers() {
   const { createFolder, listFolderAnyDrive, moveFile } = await import('@/lib/google-drive')
-  return { createFolder, listFolderAnyDrive, moveFile }
+  // Wrap listFolderAnyDrive to return files array (it returns { files: [...] })
+  const listFiles = async (folderId: string): Promise<DriveItem[]> => {
+    const res = await listFolderAnyDrive(folderId)
+    return (res as { files?: DriveItem[] }).files ?? []
+  }
+  return { createFolder, listFiles, moveFile }
 }
 
 // ─── Ensure Contacts root folder exists ───────────────────────────────────
 async function ensureContactsRoot(): Promise<string> {
   if (contactsRootId) return contactsRootId
 
-  const { listFolderAnyDrive, createFolder } = await getDriveHelpers()
+  const { listFiles, createFolder } = await getDriveHelpers()
 
   // Check if Contacts folder already exists under TD Clients
-  const items = await listFolderAnyDrive(TD_CLIENTS_ROOT)
+  const items = await listFiles(TD_CLIENTS_ROOT)
   const existing = items.find(
-    (f: { name: string; mimeType: string }) =>
-      f.name === 'Contacts' && f.mimeType === 'application/vnd.google-apps.folder',
+    f => f.name === 'Contacts' && f.mimeType === 'application/vnd.google-apps.folder',
   )
 
   if (existing) {
@@ -88,8 +95,8 @@ export async function ensureContactFolder(
     const idMatch = (contact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
     if (idMatch) {
       const existingId = idMatch[1]
-      const { listFolderAnyDrive } = await getDriveHelpers()
-      const subs = await listFolderAnyDrive(existingId)
+      const { listFiles } = await getDriveHelpers()
+      const subs = await listFiles(existingId)
       const subfolders: Record<string, string> = {}
       for (const f of subs) {
         if (f.mimeType === 'application/vnd.google-apps.folder') {
@@ -145,8 +152,8 @@ export async function ensureCompanyFolder(
     .single()
 
   if (account?.drive_folder_id) {
-    const { listFolderAnyDrive } = await getDriveHelpers()
-    const subs = await listFolderAnyDrive(account.drive_folder_id)
+    const { listFiles } = await getDriveHelpers()
+    const subs = await listFiles(account.drive_folder_id)
     const subfolders: Record<string, string> = {}
     for (const f of subs) {
       if (f.mimeType === 'application/vnd.google-apps.folder') {
@@ -199,12 +206,12 @@ export async function migrateContactToCompany(
   contactFolderId: string,
   companyFolderId: string,
 ): Promise<{ moved: number; errors: string[] }> {
-  const { listFolderAnyDrive, moveFile } = await getDriveHelpers()
+  const { listFiles, moveFile } = await getDriveHelpers()
   const result = { moved: 0, errors: [] as string[] }
 
   // List contact subfolders
-  const contactSubs = await listFolderAnyDrive(contactFolderId)
-  const companySubs = await listFolderAnyDrive(companyFolderId)
+  const contactSubs = await listFiles(contactFolderId)
+  const companySubs = await listFiles(companyFolderId)
 
   const companySubMap: Record<string, string> = {}
   for (const f of companySubs) {
@@ -224,7 +231,7 @@ export async function migrateContactToCompany(
     }
 
     // List files in this contact subfolder
-    const files = await listFolderAnyDrive(contactSub.id)
+    const files = await listFiles(contactSub.id)
     for (const file of files) {
       if (file.mimeType === 'application/vnd.google-apps.folder') continue // skip nested folders
       try {

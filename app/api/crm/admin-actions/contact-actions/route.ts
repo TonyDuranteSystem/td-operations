@@ -637,7 +637,8 @@ export async function POST(req: NextRequest) {
 
                 // Check if already uploaded (dedup by filename in folder)
                 const { listFolderAnyDrive } = await import("@/lib/google-drive")
-                const existingFiles = await listFolderAnyDrive(contactsSubfolder)
+                const existingFilesRes = await listFolderAnyDrive(contactsSubfolder)
+                const existingFiles = (existingFilesRes as { files?: Array<{ name: string }> }).files ?? []
                 const alreadyUploaded = existingFiles.some(
                   (f: { name: string }) => f.name === fileName
                 )
