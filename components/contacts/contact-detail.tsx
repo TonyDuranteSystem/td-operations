@@ -7,7 +7,7 @@ import {
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
-  Stethoscope, Send,
+  Stethoscope, Send, Zap, Bell, PlayCircle,
 } from 'lucide-react'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
 import { EditableField } from '@/components/accounts/editable-field'
@@ -274,6 +274,16 @@ export function ContactDetail({
           Diagnose
         </button>
       </div>
+
+      {/* Quick Actions */}
+      <QuickActionsBar
+        contact={contact}
+        portalAuth={portalAuth}
+        offers={offers}
+        pendingActivations={pendingActivations}
+        wizardProgress={wizardProgress}
+        serviceDeliveries={serviceDeliveries}
+      />
 
       {/* Journey Tracker */}
       <JourneyTracker
@@ -564,6 +574,232 @@ function OverviewTab({
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} />
     </div>
+  )
+}
+
+// ─── Quick Actions Bar ───
+
+function QuickActionsBar({
+  contact,
+  portalAuth,
+  offers,
+  pendingActivations,
+  wizardProgress,
+  serviceDeliveries,
+}: {
+  contact: ContactRecord
+  portalAuth: PortalAuth
+  offers: OfferRecord[]
+  pendingActivations: PendingActivationRecord[]
+  wizardProgress: WizardProgressRecord[]
+  serviceDeliveries: ServiceDelivery[]
+}) {
+  const [loading, setLoading] = useState<string | null>(null)
+  const [advanceDialog, setAdvanceDialog] = useState<{ id: string; name: string; stage: string } | null>(null)
+
+  const hasWizard = wizardProgress.length > 0
+  const activeSds = serviceDeliveries.filter(sd => sd.status === 'active')
+  const hasPaidOffer = offers.some(o => o.status === 'completed' || o.status === 'signed')
+
+  // Determine which actions to show
+  const showCreatePortal = !portalAuth.exists && !!contact.email
+  const showResendWelcome = portalAuth.exists && !portalAuth.lastLogin
+  const showWizardReminder = contact.portal_tier === 'onboarding' && !hasWizard && (hasPaidOffer || pendingActivations.some(pa => pa.payment_confirmed_at))
+  const showAdvanceStage = activeSds.length > 0
+
+  const hasActions = showCreatePortal || showResendWelcome || showWizardReminder || showAdvanceStage
+
+  const handlePortalAction = async (action: string, extra?: Record<string, string>) => {
+    setLoading(action)
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-portal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, contact_id: contact.id, ...extra }),
+      })
+      const data = await res.json()
+      if (res.ok) toast.success(data.message)
+      else toast.error(data.error ?? 'Failed')
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleWizardReminder = async () => {
+    setLoading('wizard_reminder')
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contact.id, action: 'wizard_reminder' }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail)
+      } else {
+        toast.error(data.detail)
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleAdvanceStage = async (deliveryId: string) => {
+    setLoading('advance_stage')
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contact_id: contact.id,
+          action: 'advance_stage',
+          params: { delivery_id: deliveryId },
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        const effects = data.side_effects?.join(', ') ?? ''
+        toast.success(`${data.detail}${effects ? ` (${effects})` : ''}`)
+        setAdvanceDialog(null)
+      } else {
+        toast.error(data.detail)
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  if (!hasActions) return null
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <Zap className="h-4 w-4 text-zinc-400" />
+
+        {showCreatePortal && (
+          <button
+            onClick={() => {
+              if (!confirm('Create portal account? Client will receive login credentials.')) return
+              handlePortalAction('create_portal')
+            }}
+            disabled={loading === 'create_portal'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors"
+          >
+            {loading === 'create_portal' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+            Create Portal
+          </button>
+        )}
+
+        {showResendWelcome && (
+          <button
+            onClick={() => {
+              if (!confirm('Resend welcome email with new password?')) return
+              handlePortalAction('reset_password')
+            }}
+            disabled={loading === 'reset_password'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+          >
+            {loading === 'reset_password' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+            Resend Welcome
+          </button>
+        )}
+
+        {showWizardReminder && (
+          <button
+            onClick={handleWizardReminder}
+            disabled={loading === 'wizard_reminder'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 disabled:opacity-50 transition-colors"
+          >
+            {loading === 'wizard_reminder' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+            Send Wizard Reminder
+          </button>
+        )}
+
+        {showAdvanceStage && activeSds.length === 1 && (
+          <button
+            onClick={() => setAdvanceDialog({
+              id: activeSds[0].id,
+              name: activeSds[0].service_name ?? activeSds[0].service_type ?? 'Service',
+              stage: activeSds[0].stage ?? 'Unknown',
+            })}
+            disabled={loading === 'advance_stage'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+          >
+            <PlayCircle className="h-3.5 w-3.5" />
+            Advance Stage
+          </button>
+        )}
+
+        {showAdvanceStage && activeSds.length > 1 && (
+          <div className="relative group">
+            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
+              <PlayCircle className="h-3.5 w-3.5" />
+              Advance Stage ({activeSds.length})
+            </button>
+            <div className="absolute left-0 top-full mt-1 z-20 hidden group-hover:block bg-white border rounded-lg shadow-lg py-1 min-w-[240px]">
+              {activeSds.map(sd => (
+                <button
+                  key={sd.id}
+                  onClick={() => setAdvanceDialog({
+                    id: sd.id,
+                    name: sd.service_name ?? sd.service_type ?? 'Service',
+                    stage: sd.stage ?? 'Unknown',
+                  })}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-50 transition-colors"
+                >
+                  <p className="font-medium truncate">{sd.service_name ?? sd.service_type ?? 'Service'}</p>
+                  <p className="text-xs text-muted-foreground">Current: {sd.stage ?? '—'}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Advance Stage Confirmation Dialog */}
+      {advanceDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <h3 className="text-lg font-semibold">Advance Stage</h3>
+            <div className="text-sm space-y-2">
+              <p><span className="text-muted-foreground">Service:</span> {advanceDialog.name}</p>
+              <p><span className="text-muted-foreground">Current stage:</span> {advanceDialog.stage}</p>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+              <p className="font-medium mb-1">This action triggers auto-chains:</p>
+              <ul className="space-y-0.5 text-xs">
+                <li>- Auto-tasks created for the new stage</li>
+                <li>- Portal notification sent to client</li>
+                <li>- Portal tier may upgrade (active → full)</li>
+                <li>- Tax return status synced (if Tax Return Filing)</li>
+              </ul>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setAdvanceDialog(null)}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-zinc-100 hover:bg-zinc-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleAdvanceStage(advanceDialog.id)}
+                disabled={loading === 'advance_stage'}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+              >
+                {loading === 'advance_stage' ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+                Confirm Advance
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
