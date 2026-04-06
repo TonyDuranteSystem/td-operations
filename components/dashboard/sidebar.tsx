@@ -62,6 +62,7 @@ interface NavItem {
   badge?: number
   adminOnly?: boolean
   featureFlag?: string
+  tooltip?: string
 }
 
 interface SidebarProps {
@@ -75,23 +76,23 @@ const STORAGE_KEY = 'td-sidebar-order'
 const STORAGE_KEY_V2 = 'td-sidebar-order-v2'
 
 const defaultNavigation: NavItem[] = [
-  { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard },
-  { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare },
-  { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare },
-  { id: 'leads', name: 'Leads', href: '/leads', icon: Target },
-  { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck },
-  { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2 },
-  { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
-  { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge },
-  { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet },
-  { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText },
-  { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar },
-  { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2 },
-  { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList },
-  { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings },
-  { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket },
-  { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true },
-  { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true },
+  { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
+  { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
+  { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
+  { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
+  { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
+  { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
+  { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
+  { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
+  { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, and financial overview. Create and manage client billing.' },
+  { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
+  { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
+  { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral partner tracking — who referred whom, commissions, and payouts.' },
+  { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList, tooltip: 'Kanban board for manual and auto-generated tasks. Use message tags for daily work instead.' },
+  { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
+  { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, tooltip: 'Client portal management — create portal users, send invitations.' },
+  { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
+  { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true, tooltip: 'Developer utilities — database queries, system status, and debugging tools.' },
 ]
 
 function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
@@ -139,6 +140,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
       <Link
         href={item.href}
         onClick={onMobileClose}
+        title={item.tooltip}
         className={cn(
           'flex-1 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
           editMode && 'pl-1',

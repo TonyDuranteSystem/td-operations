@@ -38,9 +38,9 @@ interface Props {
 }
 
 const tabs = [
-  { id: 'clients', label: 'Clients & Invoices', icon: Users },
-  { id: 'bank', label: 'Bank Feed', icon: Landmark },
-  { id: 'overview', label: 'Overview', icon: BarChart3 },
+  { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.' },
+  { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.' },
+  { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.' },
 ]
 
 export function FinanceDashboard({
@@ -84,6 +84,7 @@ export function FinanceDashboard({
             <button
               key={t.id}
               onClick={() => switchTab(t.id)}
+              title={t.tooltip}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 tab === t.id
                   ? 'bg-blue-600 text-white'

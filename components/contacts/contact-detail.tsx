@@ -10,6 +10,7 @@ import {
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
   ChevronDown as ChevronDownIcon,
 } from 'lucide-react'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
@@ -23,13 +24,13 @@ import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/ty
 // ─── Constants ───
 
 const TABS = [
-  { key: 'overview', label: 'Overview', icon: User },
-  { key: 'services', label: 'Services', icon: Briefcase },
-  { key: 'invoices', label: 'Invoices', icon: CreditCard },
-  { key: 'documents', label: 'Documents', icon: FolderOpen },
-  { key: 'chat', label: 'Chat', icon: MessageSquare },
-  { key: 'portal', label: 'Portal', icon: KeyRound },
-  { key: 'activity', label: 'Activity', icon: MessageSquare },
+  { key: 'overview', label: 'Overview', icon: User, tooltip: 'Contact details, linked accounts, and offer history.' },
+  { key: 'services', label: 'Services', icon: Briefcase, tooltip: 'Active service deliveries for this client — formations, annual reports, etc.' },
+  { key: 'invoices', label: 'Invoices', icon: CreditCard, tooltip: 'All invoices and payment history for this client.' },
+  { key: 'documents', label: 'Documents', icon: FolderOpen, tooltip: 'Uploaded files — IDs, contracts, certificates, and more.' },
+  { key: 'chat', label: 'Chat', icon: MessageSquare, tooltip: 'All communication — portal messages and email threads in one timeline.' },
+  { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
+  { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
 ]
 
 const TIER_COLORS: Record<string, string> = {
@@ -285,6 +286,7 @@ export function ContactDetail({
         <button
           onClick={() => setShowDiagnostic(true)}
           className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+          title="Run a health check on this contact — finds missing data, broken links, and suggests fixes."
         >
           <Stethoscope className="h-3.5 w-3.5" />
           Diagnose
@@ -327,6 +329,7 @@ export function ContactDetail({
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
+                title={tab.tooltip}
                 className={cn(
                   'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
                   activeTab === tab.key
@@ -717,7 +720,9 @@ function QuickActionsBar({
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Zap className="h-4 w-4 text-zinc-400" />
+        <span title="Quick actions available for this client based on their current stage.">
+          <Zap className="h-4 w-4 text-zinc-400" />
+        </span>
 
         {showCreatePortal && (
           <button
@@ -1017,7 +1022,10 @@ function JourneyTracker({
   return (
     <div className="bg-white rounded-lg border p-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Client Journey</h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Client Journey</h3>
+          <InfoTooltip text="Tracks this client's progress from first contact to active services. Each step shows what's done, what's next, and what needs attention." />
+        </div>
       </div>
       {/* Desktop: horizontal pipeline */}
       <div className="hidden sm:flex items-start gap-0">
