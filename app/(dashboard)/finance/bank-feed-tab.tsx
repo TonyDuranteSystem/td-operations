@@ -73,6 +73,7 @@ interface Props {
   bankFeeds: BankFeedRecord[]
   openInvoices: OpenInvoice[]
   totalCount: number
+  isAdmin?: boolean
 }
 
 // ── Constants ──
@@ -204,7 +205,7 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
   )
 }
 
-function BanksSummary({ activeSource, onSourceFilter }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void }) {
+function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean }) {
   const [connections, setConnections] = useState<PlaidConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -250,7 +251,7 @@ function BanksSummary({ activeSource, onSourceFilter }: { activeSource: string[]
             <h3 className="text-sm font-semibold">Connected Banks</h3>
             {!loading && connections.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                {connections.length} bank{connections.length !== 1 ? 's' : ''} &middot; {totalAccounts} account{totalAccounts !== 1 ? 's' : ''} &middot; {formatCurrency(totalBalance)}
+                {connections.length} bank{connections.length !== 1 ? 's' : ''} &middot; {totalAccounts} account{totalAccounts !== 1 ? 's' : ''}{isAdmin ? ` \u00B7 ${formatCurrency(totalBalance)}` : ''}
               </p>
             )}
           </div>
@@ -307,9 +308,9 @@ function BanksSummary({ activeSource, onSourceFilter }: { activeSource: string[]
                   <div key={acc.account_id} className="flex justify-between items-center text-xs">
                     <span className="text-muted-foreground">{acc.name} •••• {acc.mask}</span>
                     <span className="font-medium">
-                      {acc.balances.current != null
-                        ? formatCurrency(acc.balances.current, acc.balances.iso_currency_code)
-                        : '—'}
+                      {isAdmin
+                        ? (acc.balances.current != null ? formatCurrency(acc.balances.current, acc.balances.iso_currency_code) : '—')
+                        : '••••'}
                     </span>
                   </div>
                 ))}
@@ -549,7 +550,7 @@ function IgnoredRow({ feed }: { feed: BankFeedRecord }) {
 
 // ── Main Component ──
 
-export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
+export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = false }: Props) {
   const [filter, setFilter] = useState<FilterTab>('all')
   const [sourceFilter, setSourceFilter] = useState<string[] | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -560,6 +561,11 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
   // Filter and search
   const filtered = useMemo(() => {
     let items = bankFeeds
+
+    // Hide outgoing transactions for non-admin users
+    if (!isAdmin) {
+      items = items.filter(f => f.status !== 'outgoing')
+    }
 
     // Filter by bank source
     if (sourceFilter) {
@@ -583,7 +589,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
     }
 
     return items
-  }, [bankFeeds, filter, sourceFilter, searchQuery])
+  }, [bankFeeds, filter, sourceFilter, searchQuery, isAdmin])
 
   // Paginate
   const paginated = filtered.slice(page * pageSize, (page + 1) * pageSize)
@@ -600,7 +606,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount }: Props) {
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
       {/* Connected banks summary */}
-      <BanksSummary activeSource={sourceFilter} onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }} />
+      <BanksSummary activeSource={sourceFilter} onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }} isAdmin={isAdmin} />
 
       {/* Stats cards */}
       <div className="flex gap-3">

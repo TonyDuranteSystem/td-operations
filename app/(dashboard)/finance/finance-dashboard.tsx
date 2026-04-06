@@ -37,20 +37,21 @@ interface Props {
   bankFeedTotalCount: number
   allInvoicesFlat: InvoiceRecord[]
   tdExpenses: TDExpenseRecord[]
+  isAdmin: boolean
 }
 
-const tabs = [
-  { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.' },
-  { id: 'expenses', label: 'Expenses', icon: Receipt, tooltip: 'TD operating expenses — vendor bills, filing fees, software, services.' },
-  { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.' },
-  { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.' },
+const allTabs = [
+  { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.', adminOnly: false },
+  { id: 'expenses', label: 'Expenses', icon: Receipt, tooltip: 'TD operating expenses — vendor bills, filing fees, software, services.', adminOnly: true },
+  { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.', adminOnly: false },
+  { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.', adminOnly: false },
 ]
 
 export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
-  allInvoicesFlat, tdExpenses,
+  allInvoicesFlat, tdExpenses, isAdmin,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -83,7 +84,7 @@ export function FinanceDashboard({
 
         {/* Tabs */}
         <div className="flex gap-1">
-          {tabs.map(t => (
+          {allTabs.filter(t => !t.adminOnly || isAdmin).map(t => (
             <button
               key={t.id}
               onClick={() => switchTab(t.id)}
@@ -151,6 +152,7 @@ export function FinanceDashboard({
             bankFeeds={bankFeeds}
             openInvoices={bankOpenInvoices}
             totalCount={bankFeedTotalCount}
+            isAdmin={isAdmin}
           />
         )}
         {tab === 'overview' && (
