@@ -14,6 +14,9 @@
  * 4. Return { success, driveFileId, ocrData? }
  */
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
