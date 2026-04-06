@@ -31,9 +31,10 @@ RULE: Individual services (ITIN, Banking Physical) can exist on a Contact WITHOU
 
 The system is transitioning to portal-first. The portal is the OFFICIAL system. Use existing MCP tools as described below. When portal MCP tools are built, switch to them.
 
-INVOICING:
-- Use portal_invoice_create for creating invoices (OFFICIAL system). Supports contact-level (setup fees, pre-account) and account-level (annual installments) invoices.
+INVOICING (3-table architecture):
+- Use portal_invoice_create for TD invoices TO clients (OFFICIAL). Writes to payments (CRM) + client_expenses (portal). Supports contact-level (setup fees, pre-account) and account-level (annual installments).
 - Use portal_invoice_send to email the invoice with PDF to the client.
+- client_invoices table is EXCLUSIVELY for client-created sales invoices (their business). TD systems NEVER write to it.
 - QuickBooks (qb_create_invoice) is for ACCOUNTING only -- use when you need a QB ledger entry, not for client invoicing.
 
 DATA COLLECTION:
@@ -277,7 +278,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - msg_send: Send to WhatsApp or Telegram group (legacy). NOT for normal client communication.
 
 ### QuickBooks (9 tools: qb_*)
-- **NOTE: QB is for ACCOUNTING sync only. For client invoicing, use portal_invoice_create.**
+- **NOTE: QB is for ACCOUNTING sync only. For TD invoicing, use portal_invoice_create (writes to payments + client_expenses).**
 - qb_list_invoices/qb_list_payments: Financial records. Filter by customer, status, date.
 - qb_get_invoice: Full invoice details — line items, memo, payment instructions, email status. Use BEFORE sending.
 - qb_create_invoice: Create invoice (auto-finds/creates QB customer). Does NOT send — review first.

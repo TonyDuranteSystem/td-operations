@@ -79,6 +79,12 @@ The ONLY source of truth for active tools is `app/api/[transport]/route.ts`.
 - RLS enabled on all tables
 - Enums defined in DB — check before adding new values
 
+### Invoice Architecture (3 separate domains)
+- `payments` = TD receivables (CRM + QB). Created by `createTDInvoice()` in `lib/portal/td-invoice.ts`
+- `client_invoices` = Client sales invoices ONLY (their business). Created by `createUnifiedInvoice()` in `lib/portal/unified-invoice.ts`. **TD systems NEVER write here.**
+- `client_expenses` = Client expenses (TD invoices as `source='td_invoice'` + uploads + manual). Auto-synced from payments.
+- Supporting: `client_vendors`, `client_expense_items`, `client_invoice_documents` (archive)
+
 ### Auth
 - Dual auth: Bearer token (Claude Code) + OAuth 2.1 (Claude.ai)
 - OAuth tables: `oauth_clients`, `oauth_codes`, `oauth_tokens`, `oauth_users`
@@ -251,6 +257,10 @@ lib/
   mcp/
     instructions.ts           <- Server instructions (sent in MCP initialize)
     tools/                    <- 15 tool files (crm, doc, drive, gmail, etc.)
+  portal/
+    td-invoice.ts             <- TD billing: createTDInvoice() → payments + client_expenses
+    unified-invoice.ts        <- Client sales: createUnifiedInvoice() → client_invoices only
+    queries.ts                <- Portal data queries (accounts, services, expenses, etc.)
   gmail.ts                    <- Gmail API helper (SA + DWD)
   google-drive.ts             <- Drive API helper (SA + DWD)
   supabase-admin.ts           <- Supabase service role client
