@@ -2031,6 +2031,30 @@ function ContactDocumentsTab({
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('Passport')
   const [uploadCategory, setUploadCategory] = useState('Contacts')
+  const [deleting, setDeleting] = useState<string | null>(null)
+
+  const handleDeleteDoc = async (docId: string, fileName: string) => {
+    if (!confirm(`Delete "${fileName}"? This will trash it on Drive and remove the record.`)) return
+    setDeleting(docId)
+    try {
+      const res = await fetch('/api/crm/admin-actions/delete-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document_id: docId }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail)
+        window.location.reload()
+      } else {
+        toast.error(data.detail || 'Delete failed')
+      }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setDeleting(null)
+    }
+  }
   const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
 
   const handleFileUpload = async (file: File) => {
@@ -2225,6 +2249,18 @@ function ContactDocumentsTab({
                   {doc.drive_file_id && (
                     <Eye className="h-4 w-4 text-muted-foreground" />
                   )}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteDoc(doc.id, doc.file_name) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDeleteDoc(doc.id, doc.file_name) } }}
+                    className={cn(
+                      'p-1 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 transition-colors',
+                      deleting === doc.id && 'opacity-50 pointer-events-none'
+                    )}
+                  >
+                    {deleting === doc.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                  </span>
                 </div>
               </button>
             ))}
