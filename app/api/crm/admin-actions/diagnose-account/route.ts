@@ -97,8 +97,10 @@ export async function GET(req: NextRequest) {
           .eq("client_email", contactEmail).order("created_at", { ascending: false }).limit(1)
         : { data: [] },
       // Payments
+      // Payments: check both account-level AND contact-level (setup payments belong to contact)
       supabaseAdmin.from("payments").select("id, amount, amount_currency, status, payment_method, paid_date, invoice_status, description")
-        .eq("account_id", accountId).order("created_at", { ascending: false }),
+        .or(`account_id.eq.${accountId}${contactId ? `,contact_id.eq.${contactId}` : ""}`)
+        .order("created_at", { ascending: false }),
       // Service deliveries
       supabaseAdmin.from("service_deliveries").select("id, service_type, status, stage, stage_order, assigned_to, updated_at")
         .or(`account_id.eq.${accountId}${contactId ? `,contact_id.eq.${contactId}` : ""}`),
@@ -160,7 +162,17 @@ export async function GET(req: NextRequest) {
     const pending = (pendingResult.data as unknown[])?.[0] as { id: string; offer_token: string; status: string; activated_at: string | null; payment_confirmed_at: string | null; payment_method: string; prepared_steps: unknown[]; confirmation_mode: string } | undefined
     const payments = (paymentsResult.data || []) as { id: string; amount: number; amount_currency: string; status: string; payment_method: string; paid_date: string; invoice_status: string; description: string }[]
     const services = (servicesResult.data || []) as { id: string; service_type: string; status: string; stage: string; stage_order: number; assigned_to: string; updated_at: string }[]
-    const formationSub = (formationResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
+    let formationSub = (formationResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
+    // Fallback: legacy formation submissions linked by lead_id (not contact_id)
+    if (!formationSub && lead) {
+      const { data: legacySub } = await supabaseAdmin
+        .from("formation_submissions")
+        .select("id, token, status, completed_at")
+        .eq("lead_id", lead.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+      formationSub = (legacySub as unknown[])?.[0] as typeof formationSub
+    }
     const onboardingSub = (onboardingResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
     const taxForm = (taxFormResult.data as unknown[])?.[0] as { id: string; token: string; status: string; completed_at: string } | undefined
     const oa = (oaResult.data as unknown[])?.[0] as { id: string; token: string; status: string; signed_at: string } | undefined
