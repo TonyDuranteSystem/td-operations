@@ -526,12 +526,15 @@ export async function GET(req: NextRequest) {
       } : undefined,
     })
 
-    // Check tier
+    // Check tier — strongest signal first
     const hasPaidPayment = paidPayments.length > 0
-    const hasCompletedForm = formationSub?.status === "completed" || onboardingSub?.status === "completed"
+    const hasCompletedForm = formationSub?.status === "completed" || formationSub?.status === "reviewed"
+      || onboardingSub?.status === "completed" || onboardingSub?.status === "reviewed"
     const hasActiveAccount = linkedAccounts.some(a => a.status === "Active")
-    const expectedTier = (hasActiveAccount && hasCompletedForm) ? "active"
-      : hasCompletedForm ? "active"
+    const hasActiveService = services.some(s => s.status === "active")
+    // Active account = strongest signal (company exists, client is active)
+    const expectedTier = hasActiveAccount ? "active"
+      : (hasCompletedForm || hasActiveService) ? "active"
         : hasPaidPayment ? "onboarding"
           : "lead"
 
