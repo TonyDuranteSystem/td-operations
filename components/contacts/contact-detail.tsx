@@ -369,7 +369,7 @@ export function ContactDetail({
         />
       )}
       {activeTab === 'services' && (
-        <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} />
+        <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} contactId={contact.id} />
       )}
       {activeTab === 'invoices' && (
         <InvoicesTab invoices={invoices} />
@@ -1803,11 +1803,37 @@ function ChatTab({
 function ServicesTab({
   serviceDeliveries,
   accounts,
+  contactId,
 }: {
   serviceDeliveries: ServiceDelivery[]
   accounts: LinkedAccount[]
+  contactId: string
 }) {
+  const [cancelling, setCancelling] = useState<string | null>(null)
   const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
+
+  const handleCancel = async (sdId: string, sdName: string) => {
+    if (!confirm(`Cancel "${sdName}"? This will close all linked tasks.`)) return
+    setCancelling(sdId)
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId, action: 'cancel_service', params: { delivery_id: sdId } }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail)
+        window.location.reload()
+      } else {
+        toast.error(data.detail || 'Failed')
+      }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setCancelling(null)
+    }
+  }
 
   if (serviceDeliveries.length === 0) {
     return (
@@ -1819,18 +1845,22 @@ function ServicesTab({
 
   return (
     <div className="bg-white rounded-lg border overflow-hidden">
-      <div className="hidden md:grid md:grid-cols-[1fr,120px,1fr,100px,80px,100px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+      <div className="hidden md:grid md:grid-cols-[1fr,120px,1fr,100px,80px,100px,50px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
         <span>Service</span>
         <span>Type</span>
         <span>Stage</span>
         <span>Status</span>
         <span>Assigned</span>
         <span>Account</span>
+        <span></span>
       </div>
       {serviceDeliveries.map(sd => (
         <div
           key={sd.id}
-          className="grid grid-cols-1 md:grid-cols-[1fr,120px,1fr,100px,80px,100px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center"
+          className={cn(
+            "grid grid-cols-1 md:grid-cols-[1fr,120px,1fr,100px,80px,100px,50px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center",
+            sd.status === 'cancelled' && 'opacity-50'
+          )}
         >
           <div className="font-medium text-sm truncate">{sd.service_name ?? sd.service_type ?? '—'}</div>
           <div className="text-xs text-muted-foreground">{sd.service_type ?? '—'}</div>
@@ -1848,6 +1878,18 @@ function ServicesTab({
               </Link>
             ) : (
               <span className="text-zinc-400">Direct</span>
+            )}
+          </div>
+          <div className="flex justify-center">
+            {sd.status === 'active' && (
+              <button
+                onClick={() => handleCancel(sd.id, sd.service_name ?? sd.service_type ?? 'Service')}
+                disabled={cancelling === sd.id}
+                className="p-1 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                title="Cancel service"
+              >
+                {cancelling === sd.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+              </button>
             )}
           </div>
         </div>

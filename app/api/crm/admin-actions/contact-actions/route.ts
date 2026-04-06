@@ -10,6 +10,7 @@
  *   mark_fax_sent      — Mark SS-4 fax as sent to IRS + advance pipeline to EIN Submitted
  *   enter_ein          — Set EIN on account + advance pipeline to Post-Formation
  *   process_documents  — Re-run Drive folder creation + passport processing for a contact
+ *   cancel_service     — Cancel a service delivery (set status to cancelled)
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -744,6 +745,63 @@ export async function POST(req: NextRequest) {
           success: true,
           detail: `Documents processed for ${contactName}`,
           side_effects: docSideEffects,
+        }
+        break
+      }
+
+      // ─── CANCEL SERVICE DELIVERY ───
+      case "cancel_service": {
+        const deliveryId = params?.delivery_id as string
+        if (!deliveryId) {
+          result = { success: false, detail: "Missing delivery_id" }
+          break
+        }
+
+        const { data: sd } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, service_name, service_type, status, account_id")
+          .eq("id", deliveryId)
+          .single()
+
+        if (!sd) {
+          result = { success: false, detail: "Service delivery not found" }
+          break
+        }
+        if (sd.status === "cancelled") {
+          result = { success: false, detail: "Already cancelled" }
+          break
+        }
+
+        await supabaseAdmin
+          .from("service_deliveries")
+          .update({ status: "cancelled", end_date: new Date().toISOString().split("T")[0], updated_at: new Date().toISOString() })
+          .eq("id", deliveryId)
+
+        // Close any open tasks linked to this SD
+        const { data: closedTasks } = await supabaseAdmin
+          .from("tasks")
+          .update({ status: "Done", updated_at: new Date().toISOString() })
+          .eq("delivery_id", deliveryId)
+          .in("status", ["To Do", "In Progress", "Waiting"])
+          .select("id")
+
+        await supabaseAdmin.from("action_log").insert({
+          actor: "crm-admin",
+          action_type: "cancel_service",
+          table_name: "service_deliveries",
+          record_id: deliveryId,
+          account_id: sd.account_id,
+          summary: `Service cancelled: ${sd.service_name || sd.service_type}`,
+          details: { delivery_id: deliveryId, tasks_closed: closedTasks?.length ?? 0 },
+        })
+
+        result = {
+          success: true,
+          detail: `Cancelled: ${sd.service_name || sd.service_type}`,
+          side_effects: [
+            `Service delivery set to cancelled`,
+            closedTasks?.length ? `${closedTasks.length} linked task(s) closed` : "No linked tasks",
+          ],
         }
         break
       }
