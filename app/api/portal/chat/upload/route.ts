@@ -13,6 +13,7 @@ const ALLOWED_TYPES = [
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
   'text/plain',
   'text/csv',
 ]
@@ -27,6 +28,7 @@ const MAGIC_BYTES: Record<string, number[][]> = {
   'application/msword': [[0xD0, 0xCF, 0x11, 0xE0]], // OLE2
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [[0x50, 0x4B, 0x03, 0x04]], // PK (ZIP)
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': [[0x50, 0x4B, 0x03, 0x04]], // PK (ZIP)
+  'application/vnd.ms-excel': [[0xD0, 0xCF, 0x11, 0xE0]], // OLE2
 }
 
 function validateMagicBytes(buffer: Buffer, mimeType: string): boolean {
@@ -92,7 +94,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Sanitize extension — only allow safe extensions
-    const SAFE_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'doc', 'docx', 'xlsx', 'txt', 'csv']
+    const SAFE_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'csv']
     const rawExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '')
     const ext = SAFE_EXTENSIONS.includes(rawExt) ? rawExt : 'bin'
     // Use random filename — never user-controlled names in storage path

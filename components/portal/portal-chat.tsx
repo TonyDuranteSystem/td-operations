@@ -163,7 +163,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   }
 
   const handleFileSelect = (file: File) => {
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain']
+    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     if (!ALLOWED_TYPES.includes(file.type)) {
       toast.error('Unsupported file type')
       return
@@ -512,7 +512,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
             <input
               ref={fileRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
               className="hidden"
             />

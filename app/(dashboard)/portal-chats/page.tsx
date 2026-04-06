@@ -142,7 +142,7 @@ export default function PortalChatsPage() {
   // Internal file select
   const handleInternalFileSelect = (file: File) => {
     const maxSize = 10 * 1024 * 1024
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'text/csv', 'text/plain']
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'text/csv', 'text/plain', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     if (file.size > maxSize) { toast.error('File too large (max 10MB)'); return }
     if (!allowedTypes.includes(file.type)) { toast.error('File type not allowed'); return }
     const isImg = file.type.startsWith('image/')
@@ -552,7 +552,7 @@ export default function PortalChatsPage() {
   }, [replyText])
 
   const handleAdminFileSelect = (file: File) => {
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain']
+    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     if (!ALLOWED_TYPES.includes(file.type)) {
       toast.error('Unsupported file type')
       return
@@ -1106,7 +1106,7 @@ export default function PortalChatsPage() {
               <input
                 ref={internalFileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 onChange={e => { if (e.target.files?.[0]) handleInternalFileSelect(e.target.files[0]) }}
                 className="hidden"
               />
@@ -1588,7 +1588,7 @@ export default function PortalChatsPage() {
                   <input
                     ref={adminFileRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain"
+                    accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={e => { if (e.target.files?.[0]) handleAdminFileSelect(e.target.files[0]) }}
                     className="hidden"
                   />
