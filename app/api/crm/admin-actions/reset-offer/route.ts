@@ -75,6 +75,19 @@ export async function POST(request: Request) {
       )
     }
 
+    // Reset lead status if linked (offer is back to draft)
+    if (offer.lead_id) {
+      await supabaseAdmin
+        .from("leads")
+        .update({
+          offer_status: "Draft",
+          status: "Call Done",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", offer.lead_id)
+        .in("status", ["Offer Sent", "Negotiating"])
+    }
+
     logAction({
       actor: "crm-admin",
       action_type: "update",

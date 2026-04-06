@@ -71,6 +71,19 @@ export async function POST(request: Request) {
     }
     deleted.offers = 1
 
+    // 4. Reset lead status if linked (offer is gone, status is stale)
+    if (offer.lead_id) {
+      await supabaseAdmin
+        .from("leads")
+        .update({
+          offer_status: null,
+          status: "Call Done",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", offer.lead_id)
+        .in("status", ["Offer Sent", "Negotiating"])
+    }
+
     logAction({
       actor: "crm-admin",
       action_type: "delete",
