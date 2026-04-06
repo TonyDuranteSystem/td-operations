@@ -38,7 +38,7 @@ async function buildEmailLookup(): Promise<
 
 export async function GET(req: NextRequest) {
   try {
-    const channel = req.nextUrl.searchParams.get("channel") // whatsapp | telegram | gmail | null (all)
+    const channel = req.nextUrl.searchParams.get("channel") // gmail | portal | null (all)
     const searchQuery = req.nextUrl.searchParams.get("q") // Gmail search query
     const labelFilter = req.nextUrl.searchParams.get("label") // Gmail label ID filter
     const pageToken = req.nextUrl.searchParams.get("pageToken") // Gmail pagination
@@ -54,41 +54,6 @@ export async function GET(req: NextRequest) {
     // Start email lookup in parallel (used later for Gmail matching)
     const emailLookupPromise =
       !channel || channel === "gmail" ? buildEmailLookup() : Promise.resolve(new Map())
-
-    // ─── WhatsApp + Telegram from Supabase view ──────────
-    if (!channel || channel === "whatsapp" || channel === "telegram") {
-      let q = supabaseAdmin
-        .from("v_messaging_inbox")
-        .select(
-          "group_id, group_name, unread_count, last_message_at, platform, last_message_preview, last_message_sender, account_name, contact_name"
-        )
-        .order("last_message_at", { ascending: false, nullsFirst: false })
-        .limit(limit)
-
-      // Filter by platform field directly from the view
-      if (channel === "whatsapp") {
-        q = q.eq("platform", "whatsapp")
-      } else if (channel === "telegram") {
-        q = q.eq("platform", "telegram")
-      }
-
-      const { data: groups, error } = await q
-
-      if (error) throw error
-
-      for (const g of groups || []) {
-        conversations.push({
-          id: g.group_id,
-          channel: g.platform === "telegram" ? "telegram" : "whatsapp",
-          name: g.group_name || g.contact_name || g.account_name || "Unknown",
-          preview: g.last_message_preview
-            ? `${g.last_message_sender ? g.last_message_sender + ": " : ""}${g.last_message_preview}`
-            : "",
-          unread: g.unread_count || 0,
-          lastMessageAt: g.last_message_at || "",
-        })
-      }
-    }
 
     // ─── Gmail threads ──────────────────────────────────
     if (!channel || channel === "gmail") {

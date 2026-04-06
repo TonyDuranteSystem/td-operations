@@ -72,22 +72,23 @@ interface SidebarProps {
 }
 
 const STORAGE_KEY = 'td-sidebar-order'
+const STORAGE_KEY_V2 = 'td-sidebar-order-v2'
 
 const defaultNavigation: NavItem[] = [
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard },
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare },
-  { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList },
-  { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText },
+  { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2 },
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet },
-  { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2 },
-  { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings },
+  { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar },
-  { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare },
+  { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2 },
+  { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList },
+  { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true },
   { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true },
@@ -290,13 +291,13 @@ export function Sidebar({
     }
   }, [])
 
-  // Load saved order from localStorage
+  // Load saved order from localStorage (v2 > v1 > default)
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) {
-        const order = JSON.parse(saved) as string[]
-        // Validate — only use if all default IDs are present
+      // Check v2 first (new layout or user-customized after v2 shipped)
+      const savedV2 = localStorage.getItem(STORAGE_KEY_V2)
+      if (savedV2) {
+        const order = JSON.parse(savedV2) as string[]
         const defaultIds = defaultNavigation.map(n => n.id)
         const hasAll = defaultIds.every(id => order.includes(id))
         if (hasAll) {
@@ -304,8 +305,24 @@ export function Sidebar({
           return
         }
       }
+      // Fall back to v1 — user had a custom order before the reorder shipped
+      const savedV1 = localStorage.getItem(STORAGE_KEY)
+      if (savedV1) {
+        const order = JSON.parse(savedV1) as string[]
+        const defaultIds = defaultNavigation.map(n => n.id)
+        const hasAll = defaultIds.every(id => order.includes(id))
+        if (hasAll) {
+          // Migrate: save their v1 order as v2 so future saves go to v2
+          localStorage.setItem(STORAGE_KEY_V2, savedV1)
+          setNavOrder(order)
+          return
+        }
+      }
     } catch { /* ignore */ }
-    setNavOrder(defaultNavigation.map(n => n.id))
+    // Fresh user — use new lifecycle default order
+    const freshOrder = defaultNavigation.map(n => n.id)
+    localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(freshOrder))
+    setNavOrder(freshOrder)
   }, [])
 
   // Build ordered nav with badges applied
@@ -341,7 +358,7 @@ export function Sidebar({
       const oldIndex = prev.indexOf(active.id as string)
       const newIndex = prev.indexOf(over.id as string)
       const newOrder = arrayMove(prev, oldIndex, newIndex)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newOrder))
+      localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(newOrder))
       return newOrder
     })
   }, [])
@@ -349,6 +366,7 @@ export function Sidebar({
   const handleResetOrder = useCallback(() => {
     const defaultOrder = defaultNavigation.map(n => n.id)
     setNavOrder(defaultOrder)
+    localStorage.removeItem(STORAGE_KEY_V2)
     localStorage.removeItem(STORAGE_KEY)
     setEditMode(false)
   }, [])

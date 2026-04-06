@@ -29,49 +29,7 @@ export async function GET(
 
     const conversations: InboxConversation[] = []
 
-    // 2) Fetch WA/TG from messaging_groups directly (not the view — it lacks account_id)
-    const { data: groups, error: gErr } = await supabaseAdmin
-      .from("messaging_groups")
-      .select(`
-        id, group_name, unread_count, last_message_at, group_type,
-        channel:messaging_channels(platform),
-        account:accounts(company_name),
-        contact:contacts(full_name)
-      `)
-      .eq("account_id", accountId)
-      .eq("is_active", true)
-      .order("last_message_at", { ascending: false, nullsFirst: false })
-
-    if (gErr) throw gErr
-
-    for (const g of groups || []) {
-      const platform = (g.channel as unknown as { platform: string } | null)?.platform || "whatsapp"
-      const accountName = (g.account as unknown as { company_name: string } | null)?.company_name || ""
-      const contactName = (g.contact as unknown as { full_name: string } | null)?.full_name || ""
-
-      // Fetch last message preview
-      const { data: lastMsg } = await supabaseAdmin
-        .from("messages")
-        .select("content_text, sender_name")
-        .eq("group_id", g.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      conversations.push({
-        id: g.id,
-        channel: platform === "telegram" ? "telegram" : "whatsapp",
-        name: g.group_name || contactName || accountName || "Unknown",
-        preview: lastMsg
-          ? `${lastMsg.sender_name ? lastMsg.sender_name + ": " : ""}${lastMsg.content_text || ""}`
-          : "",
-        unread: g.unread_count || 0,
-        lastMessageAt: g.last_message_at || "",
-        accountId,
-      })
-    }
-
-    // 3) Fetch portal messages for this account
+    // 2) Fetch portal messages for this account
     const { data: portalMsgs, error: pErr } = await supabaseAdmin
       .from("portal_messages")
       .select("id, sender_type, message, created_at, read_at, contact:contacts(full_name)")
@@ -165,8 +123,6 @@ export async function GET(
 
     // Stats per channel
     const stats = {
-      whatsapp: conversations.filter((c) => c.channel === "whatsapp").length,
-      telegram: conversations.filter((c) => c.channel === "telegram").length,
       gmail: conversations.filter((c) => c.channel === "gmail").length,
       portal: conversations.filter((c) => c.channel === "portal").length,
       total: conversations.length,

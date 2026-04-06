@@ -63,13 +63,13 @@ export async function GET(req: NextRequest) {
     const results: { company: string; action: string }[] = []
 
     for (const account of accounts) {
-      // Check if SD already exists
+      // Check if SD already exists (active or blocked)
       const { data: existingSD } = await supabaseAdmin
         .from("service_deliveries")
         .select("id")
         .eq("account_id", account.id)
         .eq("service_type", "State Annual Report")
-        .eq("status", "active")
+        .in("status", ["active", "blocked"])
         .limit(1)
 
       if (existingSD?.length) {
@@ -131,39 +131,59 @@ export async function GET(req: NextRequest) {
       }
 
       if (isBlocked) {
-        // Create task for Antonio — payment issue
-        await supabaseAdmin
+        // Dedup: check if task already exists for this account
+        const { data: existingTask } = await supabaseAdmin
           .from("tasks")
-          .insert({
-            task_title: `Annual Report blocked — ${account.company_name} has overdue payment`,
-            assigned_to: "Antonio",
-            status: "To Do",
-            priority: "Urgent",
-            category: "Payment",
-            due_date: account.annual_report_due_date,
-            account_id: account.id,
-            delivery_id: sd?.id,
-            description: `Annual report due ${account.annual_report_due_date} but payment is overdue. Resolve payment before proceeding.`,
-          })
+          .select("id")
+          .eq("account_id", account.id)
+          .like("task_title", "Annual Report blocked%")
+          .eq("status", "To Do")
+          .limit(1)
+
+        if (!existingTask?.length) {
+          await supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `Annual Report blocked — ${account.company_name} has overdue payment`,
+              assigned_to: "Antonio",
+              status: "To Do",
+              priority: "Urgent",
+              category: "Payment",
+              due_date: account.annual_report_due_date,
+              account_id: account.id,
+              delivery_id: sd?.id,
+              description: `Annual report due ${account.annual_report_due_date} but payment is overdue. Resolve payment before proceeding.`,
+            })
+        }
         blocked++
-        results.push({ company: account.company_name, action: "created SD (BLOCKED) + task Antonio" })
+        results.push({ company: account.company_name, action: existingTask?.length ? "created SD (BLOCKED) — task already exists" : "created SD (BLOCKED) + task Antonio" })
       } else {
-        // Create task for Luca — filing
-        await supabaseAdmin
+        // Dedup: check if task already exists for this account
+        const { data: existingTask } = await supabaseAdmin
           .from("tasks")
-          .insert({
-            task_title: `File Annual Report for ${account.company_name} — deadline ${account.annual_report_due_date}`,
-            assigned_to: "Luca",
-            status: "To Do",
-            priority: "High",
-            category: "Filing",
-            due_date: account.annual_report_due_date,
-            account_id: account.id,
-            delivery_id: sd?.id,
-            description: `Go to ${portal}, search for ${account.company_name}, complete and submit annual report, pay ${fee}, download receipt, upload to Drive.`,
-          })
+          .select("id")
+          .eq("account_id", account.id)
+          .like("task_title", "File Annual Report for%")
+          .eq("status", "To Do")
+          .limit(1)
+
+        if (!existingTask?.length) {
+          await supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `File Annual Report for ${account.company_name} — deadline ${account.annual_report_due_date}`,
+              assigned_to: "Luca",
+              status: "To Do",
+              priority: "High",
+              category: "Filing",
+              due_date: account.annual_report_due_date,
+              account_id: account.id,
+              delivery_id: sd?.id,
+              description: `Go to ${portal}, search for ${account.company_name}, complete and submit annual report, pay ${fee}, download receipt, upload to Drive.`,
+            })
+        }
         created++
-        results.push({ company: account.company_name, action: "created SD + task Luca" })
+        results.push({ company: account.company_name, action: existingTask?.length ? "created SD — task already exists" : "created SD + task Luca" })
       }
     }
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Mail, Send, CheckSquare, Square, Paperclip, Trash2, MessagesSquare } from 'lucide-react'
+import { Mail, CheckSquare, Square, Paperclip, Trash2, MessagesSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
@@ -23,15 +23,11 @@ interface ConversationListProps {
 }
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
-  whatsapp: MessageSquare,
-  telegram: Send,
   gmail: Mail,
   portal: MessagesSquare,
 }
 
 const channelColors: Record<InboxChannel, string> = {
-  whatsapp: 'text-emerald-600',
-  telegram: 'text-blue-500',
   gmail: 'text-red-500',
   portal: 'text-purple-600',
 }

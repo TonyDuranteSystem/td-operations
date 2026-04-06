@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -831,9 +832,17 @@ export default function PortalChatsPage() {
                   <div className="flex items-center gap-2 min-w-0">
                     <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
                     <div className="min-w-0">
-                      <span className="text-sm font-medium text-zinc-900 truncate block">{thread.company_name}</span>
+                      {thread.account_id ? (
+                        <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.company_name}</Link>
+                      ) : (
+                        <span className="text-sm font-medium text-zinc-900 truncate block">{thread.company_name}</span>
+                      )}
                       {thread.contact_name && (
-                        <span className="text-[11px] text-zinc-400 truncate block">{thread.contact_name}</span>
+                        thread.contact_id ? (
+                          <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-[11px] text-zinc-400 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name}</Link>
+                        ) : (
+                          <span className="text-[11px] text-zinc-400 truncate block">{thread.contact_name}</span>
+                        )
                       )}
                     </div>
                   </div>
@@ -1236,11 +1245,21 @@ export default function PortalChatsPage() {
                 return (
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-zinc-900">
-                        {threadName}
-                      </p>
+                      {selectedAccountId ? (
+                        <Link href={`/accounts/${selectedAccountId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
+                          {threadName}
+                        </Link>
+                      ) : (
+                        <p className="text-sm font-semibold text-zinc-900">
+                          {threadName}
+                        </p>
+                      )}
                       {contactName && (
-                        <p className="text-xs text-zinc-500">{contactName}</p>
+                        selectedContactId ? (
+                          <Link href={`/contacts/${selectedContactId}`} className="text-xs text-zinc-500 hover:text-blue-600 hover:underline transition-colors">{contactName}</Link>
+                        ) : (
+                          <p className="text-xs text-zinc-500">{contactName}</p>
+                        )
                       )}
                     </div>
                     <button

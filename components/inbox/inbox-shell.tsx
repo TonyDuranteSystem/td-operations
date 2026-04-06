@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft, MessageSquare, Mail, Send, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -11,20 +11,15 @@ import { ConversationList } from './conversation-list'
 import { MessageThread } from './message-thread'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog } from './compose-dialog'
-import { NewWhatsAppDialog } from './new-whatsapp-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
-  whatsapp: MessageSquare,
-  telegram: Send,
   gmail: Mail,
   portal: MessagesSquare,
 }
 
 const channelLabels: Record<InboxChannel, string> = {
-  whatsapp: 'WhatsApp',
-  telegram: 'Telegram',
   gmail: 'Gmail',
   portal: 'Portal',
 }
@@ -41,7 +36,6 @@ export function InboxShell() {
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
   const [selected, setSelected] = useState<InboxConversation | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
-  const [whatsappOpen, setWhatsappOpen] = useState(false)
   const [composeMenuOpen, setComposeMenuOpen] = useState(false)
   const [forwardData, setForwardData] = useState<{ subject: string; body: string; from: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -648,14 +642,6 @@ export function InboxShell() {
         prefillBody={forwardData?.body || ''}
       />
 
-      <NewWhatsAppDialog
-        open={whatsappOpen}
-        onClose={() => setWhatsappOpen(false)}
-        onConversationCreated={(conv) => {
-          setSelected(conv)
-          setActiveChannel('whatsapp')
-        }}
-      />
 
       {createDialog && (
         <CreateFromEmailDialog
