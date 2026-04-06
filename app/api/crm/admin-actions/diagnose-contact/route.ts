@@ -273,13 +273,29 @@ export async function GET(req: NextRequest) {
       const existingTypes = new Set(services.map(s => s.service_type || s.pipeline).filter(Boolean))
       const missing = bundled.filter(p => !existingTypes.has(p))
       if (missing.length > 0) {
-        checks.push({
-          id: "offer_vs_sds",
-          category: "Lead & Offer",
-          label: "Missing services from offer",
-          status: "error",
-          detail: `Offer bundles ${bundled.length} pipelines but ${missing.length} missing: ${missing.join(", ")}`,
-        })
+        // For formation clients: only Company Formation is created initially.
+        // Other services (ITIN, Banking, CMRA, Tax Return, Annual Renewal) are
+        // created automatically at later pipeline stages (Post-Formation + Banking, Closing).
+        const isFormation = offer?.contract_type === "formation"
+        const hasFormationSD = existingTypes.has("Company Formation")
+
+        if (isFormation && hasFormationSD) {
+          checks.push({
+            id: "offer_vs_sds",
+            category: "Lead & Offer",
+            label: "Additional services pending",
+            status: "info",
+            detail: `${missing.length} services will be created after company formation: ${missing.join(", ")}`,
+          })
+        } else {
+          checks.push({
+            id: "offer_vs_sds",
+            category: "Lead & Offer",
+            label: "Missing services from offer",
+            status: "error",
+            detail: `Offer bundles ${bundled.length} pipelines but ${missing.length} missing: ${missing.join(", ")}`,
+          })
+        }
       }
     }
 
