@@ -4,8 +4,10 @@
  * POST { contact_id, action, params }
  *
  * Actions:
- *   wizard_reminder  — Send wizard reminder notification (3-day dedup)
- *   advance_stage    — Advance a service delivery stage (full auto-chain)
+ *   wizard_reminder    — Send wizard reminder notification (3-day dedup)
+ *   advance_stage      — Advance a service delivery stage (full auto-chain)
+ *   select_llc_name    — Choose one of 3 wizard name options as the official LLC name
+ *   mark_fax_sent      — Mark SS-4 fax as sent to IRS + advance pipeline to EIN Submitted
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -279,6 +281,154 @@ export async function POST(req: NextRequest) {
           detail: `Advanced to ${targetStage.stage_name}`,
           side_effects: sideEffects,
         }
+        break
+      }
+
+      // ─── SELECT LLC NAME (choose from 3 wizard options) ───
+      case "select_llc_name": {
+        const selectedName = (params?.selected_name as string ?? "").trim()
+        const wizardProgressId = params?.wizard_progress_id as string
+
+        if (!selectedName || !wizardProgressId) {
+          result = { success: false, detail: "Missing selected_name or wizard_progress_id" }
+          break
+        }
+
+        // Validate wizard progress
+        const { data: wp, error: wpErr } = await supabaseAdmin
+          .from("wizard_progress")
+          .select("id, data, wizard_type, status, contact_id")
+          .eq("id", wizardProgressId)
+          .single()
+        if (wpErr || !wp) {
+          result = { success: false, detail: "Wizard progress record not found" }
+          break
+        }
+        if (wp.wizard_type !== "formation") {
+          result = { success: false, detail: "Wizard is not a formation type" }
+          break
+        }
+
+        const sideEffects: string[] = []
+        const wizardData = (wp.data || {}) as Record<string, unknown>
+        const state = (wizardData.owner_state_province as string) || "NM"
+        const entityType = wizardData.entity_type === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
+
+        // Check if contact already has a linked account
+        const { data: existingLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id, accounts:account_id(id, company_name, status)")
+          .eq("contact_id", contact_id)
+
+        let accountId: string | null = null
+
+        if (existingLinks && existingLinks.length > 0) {
+          // Update existing account
+          const acct = existingLinks[0].accounts as unknown as { id: string; company_name: string } | null
+          if (acct) {
+            accountId = acct.id
+            await supabaseAdmin
+              .from("accounts")
+              .update({
+                company_name: `${selectedName} LLC`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", accountId)
+            sideEffects.push(`Account updated: ${acct.company_name} → ${selectedName} LLC`)
+          }
+        } else {
+          // Create new account
+          const { data: newAccount, error: aErr } = await supabaseAdmin
+            .from("accounts")
+            .insert({
+              company_name: `${selectedName} LLC`,
+              entity_type: entityType,
+              state_of_formation: state === "NM" ? "New Mexico" : state === "WY" ? "Wyoming" : state === "DE" ? "Delaware" : state === "FL" ? "Florida" : state,
+              status: "Active",
+              account_type: "Client",
+            })
+            .select("id")
+            .single()
+
+          if (aErr || !newAccount) {
+            result = { success: false, detail: `Failed to create account: ${aErr?.message}` }
+            break
+          }
+          accountId = newAccount.id
+
+          // Link contact to account
+          await supabaseAdmin
+            .from("account_contacts")
+            .insert({
+              account_id: accountId,
+              contact_id: contact_id,
+              role: "Owner",
+            })
+          sideEffects.push(`Account created: ${selectedName} LLC`)
+          sideEffects.push("Contact linked to account as Owner")
+        }
+
+        // Update wizard_progress.data with chosen_name
+        await supabaseAdmin
+          .from("wizard_progress")
+          .update({
+            data: { ...wizardData, chosen_name: selectedName },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", wizardProgressId)
+        sideEffects.push(`Wizard data updated with chosen_name: ${selectedName}`)
+
+        // Update active Company Formation SD service_name if exists
+        if (accountId) {
+          const { data: updatedSds } = await supabaseAdmin
+            .from("service_deliveries")
+            .update({
+              service_name: `Company Formation - ${selectedName} LLC`,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("account_id", accountId)
+            .eq("service_type", "Company Formation")
+            .eq("status", "active")
+            .select("id")
+
+          if (updatedSds && updatedSds.length > 0) {
+            sideEffects.push("Service delivery name updated")
+          }
+        }
+
+        // Log
+        await supabaseAdmin.from("action_log").insert({
+          actor: "crm-admin",
+          action_type: "select_llc_name",
+          table_name: "accounts",
+          record_id: accountId,
+          account_id: accountId,
+          summary: `LLC name selected: ${selectedName} LLC (from 3 wizard choices)`,
+          details: {
+            selected_name: selectedName,
+            wizard_progress_id: wizardProgressId,
+            all_names: [wizardData.llc_name_1, wizardData.llc_name_2, wizardData.llc_name_3].filter(Boolean),
+          },
+        })
+
+        result = {
+          success: true,
+          detail: `LLC name set to "${selectedName} LLC"`,
+          side_effects: sideEffects,
+        }
+        break
+      }
+
+      // ─── MARK FAX SENT (SS-4 → IRS) ───
+      case "mark_fax_sent": {
+        const ss4Id = params?.ss4_id as string
+        if (!ss4Id) {
+          result = { success: false, detail: "Missing ss4_id" }
+          break
+        }
+
+        const { markFaxAsSent } = await import("@/lib/pipeline-utils")
+        result = await markFaxAsSent(ss4Id, "crm-admin", params?.notes as string | undefined)
         break
       }
 

@@ -67,7 +67,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Wizard progress — by contact_id
     supabase
       .from('wizard_progress')
-      .select('id, contact_id, wizard_type, current_step, status, created_at, updated_at')
+      .select('id, contact_id, wizard_type, current_step, status, data, created_at, updated_at')
       .eq('contact_id', params.id)
       .order('updated_at', { ascending: false }),
   ])
@@ -154,8 +154,22 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   }>
   const wizardProgress = (wizardProgressResult.data ?? []) as Array<{
     id: string; contact_id: string; wizard_type: string; current_step: number
-    status: string; created_at: string; updated_at: string
+    status: string; data: Record<string, unknown> | null; created_at: string; updated_at: string
   }>
+
+  // SS-4 applications for linked accounts
+  let ss4Applications: Array<{
+    id: string; token: string; account_id: string; company_name: string
+    status: string; signed_at: string | null; pdf_signed_drive_id: string | null
+  }> = []
+  if (accountIds.length > 0) {
+    const { data: ss4Data } = await supabase
+      .from('ss4_applications')
+      .select('id, token, account_id, company_name, status, signed_at, pdf_signed_drive_id')
+      .in('account_id', accountIds)
+      .order('created_at', { ascending: false })
+    ss4Applications = (ss4Data ?? []) as typeof ss4Applications
+  }
 
   const conversations = (conversationsResult.data ?? []) as ConversationEntry[]
 
@@ -194,6 +208,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         offers={offers}
         pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}
+        ss4Applications={ss4Applications}
       />
     </div>
   )

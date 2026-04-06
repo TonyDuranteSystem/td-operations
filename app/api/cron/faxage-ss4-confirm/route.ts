@@ -177,53 +177,19 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
     return
   }
 
-  // Update SS-4 status → submitted
-  await supabaseAdmin
-    .from('ss4_applications')
-    .update({ status: 'submitted', updated_at: new Date().toISOString() })
-    .eq('id', ss4.id)
+  // Use shared utility to mark fax as sent + advance pipeline + close tasks + log
+  const { markFaxAsSent } = await import('@/lib/pipeline-utils')
+  const faxResult = await markFaxAsSent(
+    ss4.id,
+    'system',
+    `FaxAge confirmed (Job ${jobId}, message ${messageId})`,
+  )
 
-  // Find active Company Formation service delivery for this account
-  const { data: deliveries } = await supabaseAdmin
-    .from('service_deliveries')
-    .select('id, service_name, service_type, stage, stage_order, stage_history, deal_id, account_id')
-    .eq('account_id', ss4.account_id)
-    .eq('service_type', 'Company Formation')
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1)
-
-  if (deliveries && deliveries.length > 0) {
-    await advanceToEinSubmitted(deliveries[0])
+  if (faxResult.success) {
+    results.processed++
   } else {
-    console.warn(`[faxage-ss4] No active Company Formation delivery for account ${ss4.account_id}`)
+    results.errors.push(`SS-4 ${ss4.id}: ${faxResult.detail}`)
   }
-
-  // Close open "Fax signed SS-4" tasks for this account
-  await supabaseAdmin
-    .from('tasks')
-    .update({ status: 'Done', updated_at: new Date().toISOString() })
-    .eq('account_id', ss4.account_id)
-    .ilike('task_title', '%Fax%SS-4%')
-    .in('status', ['To Do', 'In Progress', 'Waiting'])
-
-  // Log to action_log
-  await supabaseAdmin.from('action_log').insert({
-    actor: 'system',
-    action_type: 'ss4_fax_confirmed',
-    table_name: 'ss4_applications',
-    record_id: ss4.id,
-    account_id: ss4.account_id,
-    summary: `FaxAge confirmed: SS-4 faxed to IRS for ${ss4.company_name} (Job ${jobId})`,
-    details: {
-      job_id: jobId,
-      message_id: messageId,
-      company_name: companyName,
-      fax_status: faxStatus,
-    },
-  })
-
-  results.processed++
 }
 
 // ─── Handle fax failure — create Urgent task ────────────────────────────────
@@ -305,112 +271,6 @@ async function handleFaxFailure(
   })
 
   results.failures_detected++
-}
-
-// ─── Advance Company Formation pipeline to EIN Submitted ─────────────────────
-async function advanceToEinSubmitted(delivery: {
-  id: string
-  service_name: string
-  service_type: string
-  stage: string
-  stage_order: number
-  stage_history: unknown
-  deal_id: string | null
-  account_id: string
-}): Promise<void> {
-  const { data: stages } = await supabaseAdmin
-    .from('pipeline_stages')
-    .select('*')
-    .eq('service_type', 'Company Formation')
-    .order('stage_order')
-
-  if (!stages?.length) {
-    console.error('[faxage-ss4] No pipeline stages found for Company Formation')
-    return
-  }
-
-  const targetStage = stages.find(
-    (s: { stage_name: string }) => s.stage_name.toLowerCase() === 'ein submitted'
-  )
-  if (!targetStage) {
-    console.error('[faxage-ss4] Stage "EIN Submitted" not found in Company Formation pipeline')
-    return
-  }
-
-  // Don't advance backwards
-  if ((delivery.stage_order || 0) >= targetStage.stage_order) {
-    console.warn(
-      `[faxage-ss4] Delivery already at stage "${delivery.stage}" (order ${delivery.stage_order}), skipping advance`
-    )
-    return
-  }
-
-  const historyEntry = {
-    from_stage: delivery.stage || 'New',
-    from_order: delivery.stage_order || 0,
-    to_stage: targetStage.stage_name,
-    to_order: targetStage.stage_order,
-    advanced_at: new Date().toISOString(),
-    notes: 'Auto-advanced by FaxAge SS-4 confirmation cron',
-  }
-  const stageHistory = Array.isArray(delivery.stage_history)
-    ? [...delivery.stage_history, historyEntry]
-    : [historyEntry]
-
-  await supabaseAdmin
-    .from('service_deliveries')
-    .update({
-      stage: targetStage.stage_name,
-      stage_order: targetStage.stage_order,
-      stage_entered_at: new Date().toISOString(),
-      stage_history: stageHistory,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', delivery.id)
-
-  // Create auto-tasks for EIN Submitted stage
-  if (targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
-    for (const taskDef of targetStage.auto_tasks as Array<{
-      title: string
-      assigned_to?: string
-      category?: string
-      priority?: string
-      description?: string
-    }>) {
-      const { error: tErr } = await supabaseAdmin.from('tasks').insert({
-        task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
-        assigned_to: taskDef.assigned_to || 'Luca',
-        category: taskDef.category || 'Internal',
-        priority: taskDef.priority || 'Normal',
-        description:
-          taskDef.description ||
-          'Auto-created: FaxAge confirmed SS-4 faxed to IRS. Pipeline advanced to EIN Submitted.',
-        status: 'To Do',
-        account_id: delivery.account_id,
-        deal_id: delivery.deal_id,
-        delivery_id: delivery.id,
-        stage_order: targetStage.stage_order,
-      })
-      if (tErr) {
-        console.error(`[faxage-ss4] Failed to create task "${taskDef.title}":`, tErr.message)
-      }
-    }
-  }
-
-  // Log the advance
-  await supabaseAdmin.from('action_log').insert({
-    actor: 'system',
-    action_type: 'advance',
-    table_name: 'service_deliveries',
-    record_id: delivery.id,
-    account_id: delivery.account_id,
-    summary: `Pipeline advanced: ${delivery.stage || 'New'} -> EIN Submitted (auto by FaxAge cron)`,
-    details: {
-      from_stage: delivery.stage,
-      to_stage: targetStage.stage_name,
-      to_order: targetStage.stage_order,
-    },
-  })
 }
 
 // ─── Alert email when SS-4 can't be matched ──────────────────────────────────

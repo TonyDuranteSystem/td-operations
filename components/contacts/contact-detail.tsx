@@ -11,6 +11,8 @@ import {
   ChevronDown as ChevronDownIcon,
 } from 'lucide-react'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
+import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
+import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -191,8 +193,19 @@ interface WizardProgressRecord {
   wizard_type: string
   current_step: number
   status: string
+  data: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+interface SS4ApplicationRecord {
+  id: string
+  token: string
+  account_id: string
+  company_name: string
+  status: string
+  signed_at: string | null
+  pdf_signed_drive_id: string | null
 }
 
 interface ContactDetailProps {
@@ -208,6 +221,7 @@ interface ContactDetailProps {
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
+  ss4Applications: SS4ApplicationRecord[]
 }
 
 // ─── Main Component ───
@@ -224,6 +238,7 @@ export function ContactDetail({
   offers = [],
   pendingActivations = [],
   wizardProgress = [],
+  ss4Applications = [],
 }: ContactDetailProps) {
   const [activeTab, setActiveTab] = useState('overview')
   const [showDiagnostic, setShowDiagnostic] = useState(false)
@@ -345,6 +360,8 @@ export function ContactDetail({
           offers={offers}
           pendingActivations={pendingActivations}
           wizardProgress={wizardProgress}
+          ss4Applications={ss4Applications}
+          serviceDeliveries={serviceDeliveries}
         />
       )}
       {activeTab === 'services' && (
@@ -386,6 +403,8 @@ function OverviewTab({
   offers,
   pendingActivations,
   wizardProgress,
+  ss4Applications,
+  serviceDeliveries,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -394,6 +413,8 @@ function OverviewTab({
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
+  ss4Applications: SS4ApplicationRecord[]
+  serviceDeliveries: ServiceDelivery[]
 }) {
   const [note, setNote] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -574,6 +595,21 @@ function OverviewTab({
 
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} />
+
+      {/* LLC Name Selection Card */}
+      <LlcNameSelectionCard
+        wizardProgress={wizardProgress}
+        accounts={accounts}
+        contactId={contact.id}
+      />
+
+      {/* SS-4 / EIN Application Pipeline Card */}
+      <SS4PipelineCard
+        ss4Applications={ss4Applications}
+        serviceDeliveries={serviceDeliveries}
+        accounts={accounts}
+        contactId={contact.id}
+      />
     </div>
   )
 }
