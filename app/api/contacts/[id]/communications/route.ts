@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
 
 export const dynamic = "force-dynamic"
 
@@ -21,7 +22,7 @@ export async function GET(
     // Verify contact exists
     const { data: contact } = await supabaseAdmin
       .from("contacts")
-      .select("id, full_name, email")
+      .select("id, full_name, email, email_2")
       .eq("id", contactId)
       .single()
 
@@ -110,10 +111,76 @@ export async function GET(
       title: string; body: string | null; link: string | null; read_at: string | null; created_at: string
     }>
 
+    // Fetch Gmail threads for this contact's email(s) — lazy loaded
+    const gmailThreads: Array<{
+      id: string
+      subject: string
+      from: string
+      snippet: string
+      date: string
+      unread: boolean
+      messageCount: number
+    }> = []
+
+    const emails: string[] = []
+    if (contact.email) emails.push(contact.email.toLowerCase())
+    if (contact.email_2) emails.push(contact.email_2.toLowerCase())
+
+    if (emails.length > 0) {
+      try {
+        const queryParts = emails.flatMap(e => [`from:${e}`, `to:${e}`])
+        const q = queryParts.join(" OR ")
+
+        const listResult = await gmailGet("/threads", {
+          maxResults: "20",
+          q,
+        }) as { threads?: Array<{ id: string; snippet: string }> }
+
+        if (listResult?.threads) {
+          const threadDetails = await Promise.allSettled(
+            listResult.threads.slice(0, 20).map(t =>
+              gmailGet(`/threads/${t.id}`, {
+                format: "metadata",
+                metadataHeaders: ["From", "Subject", "Date"],
+              }) as Promise<{ id: string; messages: GmailAPIMessage[] }>
+            )
+          )
+
+          for (const result of threadDetails) {
+            if (result.status !== "fulfilled") continue
+            const thread = result.value
+            const firstMsg = thread.messages[0]
+            const lastMsg = thread.messages[thread.messages.length - 1]
+
+            const from = getHeader(firstMsg?.payload?.headers, "From")
+            const subject = getHeader(firstMsg?.payload?.headers, "Subject")
+            const lastDate = getHeader(lastMsg?.payload?.headers, "Date")
+            const isUnread = lastMsg?.labelIds?.includes("UNREAD") || false
+
+            gmailThreads.push({
+              id: thread.id,
+              subject: subject || "(no subject)",
+              from: from.replace(/<.*>/, "").trim() || from,
+              snippet: firstMsg?.snippet || "",
+              date: lastDate
+                ? new Date(lastDate).toISOString()
+                : new Date(parseInt(lastMsg?.internalDate || "0")).toISOString(),
+              unread: isUnread,
+              messageCount: thread.messages.length,
+            })
+          }
+        }
+      } catch (gmailErr) {
+        console.error("[contact-communications] Gmail fetch error:", gmailErr)
+        // Don't fail — just skip Gmail
+      }
+    }
+
     return NextResponse.json({
       messages,
       unreadCount,
       notifications,
+      gmailThreads,
       contactName: contact.full_name,
       linkedAccounts,
     })

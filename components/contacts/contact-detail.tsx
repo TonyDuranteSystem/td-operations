@@ -1328,6 +1328,16 @@ interface ChatMessage {
   source: string
 }
 
+interface GmailThread {
+  id: string
+  subject: string
+  from: string
+  snippet: string
+  date: string
+  unread: boolean
+  messageCount: number
+}
+
 function ChatTab({
   contactId,
   onUnreadChange,
@@ -1336,6 +1346,8 @@ function ChatTab({
   onUnreadChange: (count: number) => void
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [gmailThreads, setGmailThreads] = useState<GmailThread[]>([])
+  const [gmailLoading, setGmailLoading] = useState(true)
   const [notifications, setNotifications] = useState<Array<{ id: string; type: string; title: string; body: string | null; created_at: string }>>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -1365,9 +1377,12 @@ function ChatTab({
       const data = await res.json()
       setMessages(data.messages ?? [])
       setNotifications(data.notifications ?? [])
+      setGmailThreads(data.gmailThreads ?? [])
+      setGmailLoading(false)
       onUnreadChange(data.unreadCount ?? 0)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setGmailLoading(false)
     } finally {
       setLoading(false)
     }
@@ -1490,58 +1505,114 @@ function ChatTab({
 
   return (
     <div className="space-y-3">
-      {/* Messages */}
+      {/* Messages — merged timeline of portal chat + Gmail threads */}
       <div className="bg-white rounded-lg border">
-        {messages.length === 0 ? (
+        {messages.length === 0 && gmailThreads.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
             <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p>No chat messages yet</p>
+            <p>No communications yet</p>
           </div>
         ) : (
           <div className="max-h-[500px] overflow-y-auto p-4 space-y-3">
-            {messages.map(msg => (
-              <div
-                key={msg.id}
-                className={cn(
-                  'flex gap-3',
-                  msg.sender_type === 'admin' ? 'flex-row-reverse' : ''
-                )}
-              >
-                <div className={cn(
-                  'max-w-[70%] rounded-lg px-3 py-2',
-                  msg.sender_type === 'admin'
-                    ? 'bg-blue-50 text-blue-900'
-                    : 'bg-zinc-100 text-zinc-900'
-                )}>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className={cn(
-                      'text-[10px] font-medium uppercase',
-                      msg.sender_type === 'admin' ? 'text-blue-500' : 'text-zinc-500'
-                    )}>
-                      {msg.sender_type === 'admin' ? 'Staff' : 'Client'}
-                    </span>
-                    {msg.source !== 'Personal' && (
-                      <span className="text-[10px] text-zinc-400">via {msg.source}</span>
-                    )}
-                  </div>
-                  <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>
-                  {msg.attachment_url && (
-                    <a
-                      href={msg.attachment_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"
+            {/* Build merged timeline */}
+            {(() => {
+              type TimelineItem =
+                | { type: 'chat'; date: string; data: ChatMessage }
+                | { type: 'email'; date: string; data: GmailThread }
+
+              const items: TimelineItem[] = [
+                ...messages.map(m => ({ type: 'chat' as const, date: m.created_at, data: m })),
+                ...gmailThreads.map(t => ({ type: 'email' as const, date: t.date, data: t })),
+              ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+              return items.map(item => {
+                if (item.type === 'chat') {
+                  const msg = item.data
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn(
+                        'flex gap-3',
+                        msg.sender_type === 'admin' ? 'flex-row-reverse' : ''
+                      )}
                     >
-                      <FileText className="h-3 w-3" />
-                      {msg.attachment_name ?? 'Attachment'}
-                    </a>
-                  )}
-                  <p className="text-[10px] text-zinc-400 mt-1">
-                    {formatDateTime(msg.created_at)}
-                  </p>
-                </div>
+                      <div className={cn(
+                        'max-w-[70%] rounded-lg px-3 py-2',
+                        msg.sender_type === 'admin'
+                          ? 'bg-blue-50 text-blue-900'
+                          : 'bg-zinc-100 text-zinc-900'
+                      )}>
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className={cn(
+                            'text-[10px] font-medium uppercase',
+                            msg.sender_type === 'admin' ? 'text-blue-500' : 'text-zinc-500'
+                          )}>
+                            {msg.sender_type === 'admin' ? 'Staff' : 'Client'}
+                          </span>
+                          {msg.source !== 'Personal' && (
+                            <span className="text-[10px] text-zinc-400">via {msg.source}</span>
+                          )}
+                        </div>
+                        <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>
+                        {msg.attachment_url && (
+                          <a
+                            href={msg.attachment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"
+                          >
+                            <FileText className="h-3 w-3" />
+                            {msg.attachment_name ?? 'Attachment'}
+                          </a>
+                        )}
+                        <p className="text-[10px] text-zinc-400 mt-1">
+                          {formatDateTime(msg.created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                }
+
+                // Gmail thread card
+                const thread = item.data
+                return (
+                  <Link
+                    key={`gmail-${thread.id}`}
+                    href={`/inbox?thread=${thread.id}`}
+                    className="block rounded-lg border border-zinc-200 hover:border-zinc-300 hover:shadow-sm transition-all p-3 bg-white"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <div className="flex items-center justify-center h-7 w-7 rounded-full bg-red-50 shrink-0 mt-0.5">
+                        <Mail className="h-3.5 w-3.5 text-red-500" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className={cn('text-sm font-medium truncate', thread.unread && 'font-semibold text-zinc-900')}>
+                            {thread.subject}
+                          </p>
+                          {thread.unread && (
+                            <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-xs text-zinc-500 truncate mt-0.5">
+                          {thread.from} {thread.messageCount > 1 && `(${thread.messageCount} messages)`}
+                        </p>
+                        <p className="text-xs text-zinc-400 truncate mt-0.5">{thread.snippet}</p>
+                        <p className="text-[10px] text-zinc-400 mt-1">
+                          {formatDateTime(thread.date)}
+                        </p>
+                      </div>
+                    </div>
+                  </Link>
+                )
+              })
+            })()}
+            {gmailLoading && (
+              <div className="flex items-center gap-2 py-2 text-xs text-zinc-400">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading email history...
               </div>
-            ))}
+            )}
             <div ref={messagesEndRef} />
           </div>
         )}
