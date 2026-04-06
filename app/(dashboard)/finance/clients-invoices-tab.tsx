@@ -440,6 +440,8 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             currency: (input.amount_currency || 'USD') as 'USD' | 'EUR',
             due_date: input.due_date,
             message: input.message,
+            payment_method: input.payment_method,
+            bank_preference: input.bank_preference,
             items: input.items,
           })
           return result

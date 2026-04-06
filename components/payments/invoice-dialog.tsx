@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { X, Loader2, Plus, Trash2, FileText } from 'lucide-react'
+import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { ServiceTypeSelect } from '@/components/shared/service-type-select'
@@ -34,6 +34,8 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
   const [dueDate, setDueDate] = useState('')
   const [discount, setDiscount] = useState('')
   const [message, setMessage] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'card' | 'both'>('both')
+  const [bankPreference, setBankPreference] = useState<'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'>('auto')
   const [items, setItems] = useState<InvoiceItem[]>([emptyItem()])
   const [errors, setErrors] = useState<Record<string, string>>({})
 
@@ -83,6 +85,8 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
     setDueDate('')
     setDiscount('')
     setMessage('')
+    setPaymentMethod('both')
+    setBankPreference('auto')
     setItems([emptyItem()])
     setErrors({})
   }
@@ -128,6 +132,8 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
           due_date: dueDate || undefined,
           discount: discountNum,
           message: message.trim() || undefined,
+          payment_method: paymentMethod,
+          bank_preference: bankPreference,
           items: items.map((item, i) => ({ ...item, sort_order: i })),
         }
         const result = onCreateInvoice
@@ -353,15 +359,69 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
               </div>
             </div>
 
+            {/* Payment Method + Bank Account (invoice only) */}
+            {!isCredit && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Payment Method *</label>
+                  <div className="flex gap-2">
+                    {([
+                      { value: 'both', label: 'Both', desc: 'Bank + Card', icon: BankIcon },
+                      { value: 'bank_transfer', label: 'Bank Transfer', desc: 'Wire only', icon: Landmark },
+                      { value: 'card', label: 'Card', desc: 'Stripe only', icon: CreditCard },
+                    ] as const).map(opt => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setPaymentMethod(opt.value)}
+                        className={`flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 text-left transition-all ${
+                          paymentMethod === opt.value
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-zinc-200 hover:border-zinc-300 text-zinc-600'
+                        }`}
+                      >
+                        <opt.icon className={`h-4 w-4 shrink-0 ${paymentMethod === opt.value ? 'text-blue-500' : 'text-zinc-400'}`} />
+                        <div>
+                          <p className="text-sm font-medium">{opt.label}</p>
+                          <p className="text-[10px] text-zinc-400">{opt.desc}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Bank Account Selector — shown when bank transfer is selected */}
+                {(paymentMethod === 'bank_transfer' || paymentMethod === 'both') && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Bank Account</label>
+                    <select
+                      value={bankPreference}
+                      onChange={e => setBankPreference(e.target.value as typeof bankPreference)}
+                      className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="auto">Auto — {currency === 'EUR' ? 'Airwallex (EUR)' : 'Relay (USD)'}</option>
+                      <option value="relay">Relay Financial (USD)</option>
+                      <option value="mercury">Mercury (USD)</option>
+                      <option value="revolut">Revolut (USD)</option>
+                      <option value="airwallex">Airwallex (EUR)</option>
+                    </select>
+                    <p className="text-[10px] text-zinc-400 mt-1">
+                      Bank details will be included in the invoice message automatically.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Message (invoice only) */}
             {!isCredit && (
               <div>
-                <label className="block text-sm font-medium mb-1">Payment Terms / Message</label>
+                <label className="block text-sm font-medium mb-1">Additional Notes</label>
                 <textarea
                   value={message}
                   onChange={e => setMessage(e.target.value)}
                   rows={2}
-                  placeholder="Payment due within 30 days. Wire transfer to..."
+                  placeholder="Any additional payment terms or notes..."
                   className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 />
               </div>

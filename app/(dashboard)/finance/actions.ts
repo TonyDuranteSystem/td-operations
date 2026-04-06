@@ -13,10 +13,36 @@ export async function createUnifiedInvoiceDraft(input: {
   currency: 'USD' | 'EUR'
   due_date?: string
   message?: string
+  payment_method?: 'bank_transfer' | 'card' | 'both'
+  bank_preference?: 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
   items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order: number }>
 }): Promise<ActionResult<{ id: string; invoice_number: string }>> {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
+    const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
+
+    // Resolve bank details from preference
+    const bankPref = input.bank_preference || 'auto'
+    const bankDetails = getBankDetailsByPreference(bankPref, input.currency)
+    const bankLabel = bankPref === 'auto'
+      ? (input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Relay (USD)')
+      : bankPref.charAt(0).toUpperCase() + bankPref.slice(1)
+
+    // Build payment instructions for the message field
+    const paymentMethod = input.payment_method || 'both'
+    let paymentInstructions = ''
+    if (paymentMethod === 'bank_transfer' || paymentMethod === 'both') {
+      if (bankDetails.iban) {
+        paymentInstructions += `\n\nBank Transfer:\nBeneficiary: ${bankDetails.beneficiary}\nIBAN: ${bankDetails.iban}\nBIC: ${bankDetails.bic}\nBank: ${bankDetails.bank_name}`
+      } else if (bankDetails.account_number) {
+        paymentInstructions += `\n\nBank Transfer:\nBeneficiary: ${bankDetails.beneficiary}\nAccount: ${bankDetails.account_number}\nRouting: ${bankDetails.routing_number}\nBank: ${bankDetails.bank_name}`
+      }
+    }
+    if (paymentMethod === 'card' || paymentMethod === 'both') {
+      paymentInstructions += '\n\nCard payment available upon request.'
+    }
+
+    const fullMessage = (input.message || '').trim() + paymentInstructions
 
     const result = await createTDInvoice({
       account_id: input.account_id,
@@ -27,7 +53,8 @@ export async function createUnifiedInvoiceDraft(input: {
       })),
       currency: input.currency,
       due_date: input.due_date || undefined,
-      message: input.message || undefined,
+      message: fullMessage.trim() || undefined,
+      payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
     })
 
     revalidatePath('/finance')

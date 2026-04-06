@@ -23,6 +23,8 @@ export const createInvoiceSchema = z.object({
   discount: z.number().min(0).default(0),
   message: z.string().optional(),
   billing_entity_id: z.string().uuid().optional(),
+  payment_method: z.enum(['bank_transfer', 'card', 'both']).optional(),
+  bank_preference: z.enum(['auto', 'relay', 'mercury', 'revolut', 'airwallex']).optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item required'),
 })
 
