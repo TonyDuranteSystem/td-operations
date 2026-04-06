@@ -8,6 +8,7 @@ import { UnreadMessagesCard } from '@/components/dashboard/cards/unread-messages
 import { UpcomingDeadlinesCard } from '@/components/dashboard/cards/upcoming-deadlines'
 import { PendingFormsCard } from '@/components/dashboard/cards/pending-forms'
 import { RecentPaymentsCard } from '@/components/dashboard/cards/recent-payments'
+import { ActionItemsCard } from '@/components/dashboard/cards/action-items'
 import { PendingActions } from '@/components/dashboard/pending-actions'
 import { DevToolsPanel } from '@/components/dashboard/dev-tools-panel'
 
@@ -33,6 +34,15 @@ export default async function DashboardPage() {
         </div>
 
         <PendingActions />
+
+        {/* Row 1b: Action Items (message tags) */}
+        <div className="lg:col-span-2">
+          <CardErrorBoundary fallbackTitle="Action Items">
+            <Suspense fallback={<CardSkeleton title="Action Items" />}>
+              <ActionItemsCard />
+            </Suspense>
+          </CardErrorBoundary>
+        </div>
 
         {/* Row 2: Unread Messages + Deadlines + Pending Forms */}
         <CardErrorBoundary fallbackTitle="Unread Messages">

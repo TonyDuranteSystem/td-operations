@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -35,6 +35,25 @@ interface ChatMessage {
   attachment_name?: string
   read_at?: string | null
   reply_to_id?: string | null
+}
+
+interface MessageAction {
+  id: string
+  message_id: string
+  contact_id: string | null
+  account_id: string | null
+  action_type: 'action_needed' | 'in_progress' | 'waiting_on_client' | 'done'
+  label: string | null
+  created_by: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+const ACTION_TAG_CONFIG: Record<string, { label: string; color: string; bg: string; icon: React.ElementType }> = {
+  action_needed: { label: 'Action Needed', color: 'text-red-600', bg: 'bg-red-100', icon: AlertCircle },
+  in_progress: { label: 'In Progress', color: 'text-blue-600', bg: 'bg-blue-100', icon: Clock },
+  waiting_on_client: { label: 'Waiting on Client', color: 'text-amber-600', bg: 'bg-amber-100', icon: Hourglass },
+  done: { label: 'Done', color: 'text-emerald-600', bg: 'bg-emerald-100', icon: CheckCircle2 },
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
@@ -217,6 +236,50 @@ export default function PortalChatsPage() {
     queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&limit=50`).then(r => r.json()).then(d => d.messages),
     enabled: !!(selectedAccountId || selectedContactId),
     refetchInterval: 3_000, // faster for active conversation
+  })
+
+  // Fetch message action tags for the selected thread
+  const { data: messageActions } = useQuery<MessageAction[]>({
+    queryKey: ['message-actions', selectedAccountId || selectedContactId],
+    queryFn: () => {
+      const param = selectedAccountId ? `account_id=${selectedAccountId}` : `contact_id=${selectedContactId}`
+      return fetch(`/api/crm/admin-actions/message-actions?${param}`).then(r => r.json()).then(d => d.actions || [])
+    },
+    enabled: !!(selectedAccountId || selectedContactId),
+    refetchInterval: 10_000,
+  })
+
+  // Build a lookup: message_id → action for quick access in render
+  const actionsByMessageId = new Map<string, MessageAction>()
+  if (messageActions) {
+    for (const a of messageActions) {
+      actionsByMessageId.set(a.message_id, a)
+    }
+  }
+
+  // Mutation to tag a message
+  const tagMessageMutation = useMutation({
+    mutationFn: async ({ messageId, actionType }: { messageId: string; actionType: string }) => {
+      const res = await fetch('/api/crm/admin-actions/message-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message_id: messageId,
+          contact_id: selectedContactId || null,
+          account_id: selectedAccountId || null,
+          action_type: actionType,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to tag message')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['message-actions', selectedAccountId || selectedContactId] })
+      toast.success('Message tagged')
+    },
+    onError: () => {
+      toast.error('Failed to tag message')
+    },
   })
 
   // Mark messages as read when admin opens a thread
@@ -1358,6 +1421,29 @@ export default function PortalChatsPage() {
                           >
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Create Invoice
                           </DropdownMenu.Item>
+                          <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                          <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                            Tag Message
+                          </DropdownMenu.Label>
+                          {Object.entries(ACTION_TAG_CONFIG).map(([key, cfg]) => {
+                            const TagIcon = cfg.icon
+                            const currentAction = actionsByMessageId.get(msg.id)
+                            const isActive = currentAction?.action_type === key
+                            return (
+                              <DropdownMenu.Item
+                                key={key}
+                                className={cn(
+                                  'flex items-center gap-2.5 px-3 py-2 cursor-pointer outline-none',
+                                  isActive ? `${cfg.bg} ${cfg.color} font-medium` : 'text-zinc-700 hover:bg-zinc-50'
+                                )}
+                                onSelect={() => tagMessageMutation.mutate({ messageId: msg.id, actionType: key })}
+                              >
+                                <TagIcon className={cn('h-3.5 w-3.5', isActive ? cfg.color : 'text-zinc-400')} />
+                                {cfg.label}
+                                {isActive && <Check className="h-3 w-3 ml-auto" />}
+                              </DropdownMenu.Item>
+                            )
+                          })}
                         </DropdownMenu.Content>
                       </DropdownMenu.Portal>
                     </DropdownMenu.Root>
@@ -1432,6 +1518,19 @@ export default function PortalChatsPage() {
                             </span>
                           )}
                         </p>
+                        {(() => {
+                          const msgAction = actionsByMessageId.get(msg.id)
+                          if (!msgAction || msgAction.action_type === 'done') return null
+                          const cfg = ACTION_TAG_CONFIG[msgAction.action_type]
+                          if (!cfg) return null
+                          const TagIcon = cfg.icon
+                          return (
+                            <div className={cn('flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-[10px] font-medium w-fit', cfg.bg, cfg.color)}>
+                              <TagIcon className="h-2.5 w-2.5" />
+                              {cfg.label}
+                            </div>
+                          )
+                        })()}
                       </div>
                       {!isAdmin && actionButton}
                     </div>
