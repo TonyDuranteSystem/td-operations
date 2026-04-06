@@ -143,57 +143,6 @@ export async function getPortalPayments(accountId: string) {
 }
 
 /**
- * Get TD LLC invoices sent to this client account (from CRM payments table).
- * These are invoices Tony Durante LLC sent TO the client, not the client's own invoices.
- */
-export async function getPortalBilling(accountId: string) {
-  // Legacy payments (from payments table — old invoicing system)
-  const { data: legacyPayments } = await supabaseAdmin
-    .from('payments')
-    .select('id, invoice_number, invoice_status, description, total, amount, amount_currency, issue_date, due_date, paid_date, sent_at, message, payment_items(description, quantity, unit_price, amount)')
-    .eq('account_id', accountId)
-    .not('invoice_status', 'is', null)
-    .order('issue_date', { ascending: false })
-    .limit(50)
-
-  // Portal invoices (from client_invoices — only TD-created invoices, not client's own sales)
-  const { data: portalInvoices } = await supabaseAdmin
-    .from('client_invoices')
-    .select('id, invoice_number, status, currency, total, subtotal, issue_date, due_date, paid_date, message, notes, client_invoice_items(description, quantity, unit_price, amount)')
-    .eq('account_id', accountId)
-    .eq('source', 'td_legacy')
-    .order('issue_date', { ascending: false })
-    .limit(50)
-
-  // Map portal invoices to the same shape as legacy payments
-  const mappedPortal = (portalInvoices ?? []).map(inv => ({
-    id: inv.id,
-    invoice_number: inv.invoice_number,
-    invoice_status: inv.status,
-    description: null,
-    total: inv.total,
-    amount: inv.total,
-    amount_currency: inv.currency,
-    issue_date: inv.issue_date,
-    due_date: inv.due_date,
-    paid_date: inv.paid_date,
-    sent_at: null,
-    message: inv.message,
-    payment_items: inv.client_invoice_items ?? [],
-  }))
-
-  // Merge and sort by issue_date descending
-  const all = [...(legacyPayments ?? []), ...mappedPortal]
-  all.sort((a, b) => {
-    const da = a.issue_date ?? ''
-    const db = b.issue_date ?? ''
-    return db.localeCompare(da)
-  })
-
-  return all
-}
-
-/**
  * Get client expenses (incoming invoices: TD billing + third-party uploads).
  * Used in the Expenses tab of the portal invoices page.
  */
