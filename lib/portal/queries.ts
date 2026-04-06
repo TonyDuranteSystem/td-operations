@@ -434,7 +434,7 @@ export async function getPortalActionItems(
     .eq('id', accountId)
     .single()
 
-  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes, taxRes] = await Promise.all([
+  const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes, taxRes, sigReqRes] = await Promise.all([
     // 1. In-progress wizard forms
     supabaseAdmin
       .from('wizard_progress')
@@ -498,6 +498,14 @@ export async function getPortalActionItems(
           .eq('data_received', false)
           .limit(5)
       : Promise.resolve({ data: [] }),
+
+    // 8. Unsigned generic signature requests (Form 8879, etc.)
+    supabaseAdmin
+      .from('signature_requests')
+      .select('id, token, access_code, document_name, status, created_at')
+      .eq('account_id', accountId)
+      .in('status', ['sent', 'viewed'])
+      .limit(10),
   ])
 
   const items: ActionItem[] = []
@@ -615,6 +623,22 @@ export async function getPortalActionItems(
       href: '/portal/sign',
       priority,
       createdAt: oaDoc.created_at,
+    })
+  }
+
+  // ── Generic signature requests (Form 8879, etc.) ──
+  for (const sig of (sigReqRes as { data: Array<{ id: string; token: string; access_code: string; document_name: string; status: string; created_at: string }> | null }).data ?? []) {
+    const age = daysSince(sig.created_at)
+    const priority: ActionItem['priority'] = age > 14 ? 'red' : age > 7 ? 'orange' : 'blue'
+    items.push({
+      type: 'signature',
+      title: `Sign ${sig.document_name}`,
+      titleIt: `Firma ${sig.document_name}`,
+      description: 'Document awaiting your signature.',
+      descriptionIt: 'Documento in attesa della tua firma.',
+      href: `/portal/sign/document?token=${sig.token}`,
+      priority,
+      createdAt: sig.created_at,
     })
   }
 
