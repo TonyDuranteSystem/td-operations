@@ -163,6 +163,100 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
   })
 }
 
+/**
+ * Send a newly created invoice to the client via email.
+ * Sets status to Sent, includes bank details + payment instructions from the message field.
+ */
+export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, total, amount_due, amount_currency, invoice_status, due_date, account_id, contact_id, message, description')
+      .eq('id', paymentId)
+      .single()
+    if (!payment) throw new Error('Payment not found')
+
+    // Resolve client email
+    let clientEmail = ''
+    let clientName = ''
+    if (payment.contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('full_name, email')
+        .eq('id', payment.contact_id)
+        .single()
+      if (contact) { clientName = contact.full_name; clientEmail = contact.email || '' }
+    }
+    if (!clientEmail && payment.account_id) {
+      const { data: link } = await supabaseAdmin
+        .from('account_contacts')
+        .select('contacts(full_name, email)')
+        .eq('account_id', payment.account_id)
+        .limit(1)
+        .maybeSingle()
+      if (link) {
+        const c = link.contacts as unknown as { full_name: string; email: string }
+        clientName = c.full_name; clientEmail = c.email || ''
+      }
+    }
+    if (!clientEmail) throw new Error('No client email found — check contact record')
+
+    const currency = payment.amount_currency ?? 'USD'
+    const csym = currency === 'EUR' ? '€' : '$'
+    const total = Number(payment.total ?? payment.amount_due)
+    const dueDateStr = payment.due_date ? `\nDue date: ${payment.due_date}` : ''
+
+    // Build email body with payment instructions from the message field
+    const paymentInstructions = payment.message || ''
+    const subject = `Invoice ${payment.invoice_number} — ${csym}${total.toLocaleString(undefined, { minimumFractionDigits: 2 })} — ${payment.description || 'Tony Durante LLC'}`
+    const body = `Dear ${clientName},
+
+Please find below the details for invoice ${payment.invoice_number}.
+
+Service: ${payment.description || 'Professional Services'}
+Amount: ${csym}${total.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${currency}${dueDateStr}
+${paymentInstructions ? `\n${paymentInstructions}` : ''}
+
+Please include invoice number ${payment.invoice_number} in the payment reference.
+
+If you have any questions, please reply to this email.
+
+Best regards,
+Tony Durante LLC
+support@tonydurante.us`
+
+    const { gmailPost } = await import('@/lib/gmail')
+    const raw = Buffer.from(
+      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
+    ).toString('base64url')
+
+    await gmailPost('/messages/send', { raw })
+
+    // Mark as Sent
+    await supabaseAdmin.from('payments').update({
+      invoice_status: 'Sent',
+      status: 'Pending',
+      sent_at: new Date().toISOString(),
+      sent_to: clientEmail,
+      updated_at: new Date().toISOString(),
+    }).eq('id', paymentId)
+
+    // Sync to client_expenses
+    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
+    await syncTDInvoiceStatus(paymentId, 'Pending')
+
+    revalidatePath('/finance')
+    revalidatePath('/payments')
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: `Invoice sent to client via email`,
+  })
+}
+
 export async function sendInvoiceReminder(paymentId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')

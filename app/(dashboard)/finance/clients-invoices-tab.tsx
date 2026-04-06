@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
-import { createUnifiedInvoiceDraft } from './actions'
+import { createUnifiedInvoiceDraft, sendNewInvoice } from './actions'
 
 interface ClientSummary {
   id: string
@@ -445,6 +445,9 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             items: input.items,
           })
           return result
+        }}
+        onSendInvoice={async (paymentId) => {
+          return await sendNewInvoice(paymentId)
         }}
       />
     </div>

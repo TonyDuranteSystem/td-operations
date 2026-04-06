@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, sendInvoiceReminder, updateInvoice, createUnifiedInvoiceDraft } from './actions'
+import { markInvoicePaid, voidInvoice, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft } from './actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -331,6 +331,9 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
             items: input.items,
           })
           return result
+        }}
+        onSendInvoice={async (paymentId) => {
+          return await sendNewInvoice(paymentId)
         }}
       />
     </div>

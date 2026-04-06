@@ -114,7 +114,6 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       issue_date: today,
       due_date: due_date || null,
       paid_date: paidDateVal,
-      payment_type: 'Invoice',
       payment_method: payment_method || null,
       whop_payment_id: whop_payment_id || null,
       notes: notes || null,

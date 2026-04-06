@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon } from 'lucide-react'
+import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { ServiceTypeSelect } from '@/components/shared/service-type-select'
@@ -14,6 +14,8 @@ interface InvoiceDialogProps {
   mode?: 'invoice' | 'credit'
   /** Override the default createInvoice action (e.g. to use createUnifiedInvoice) */
   onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string } }>
+  /** Called after creation to send the invoice via email. Receives the payment ID. */
+  onSendInvoice?: (paymentId: string) => Promise<{ success: boolean; error?: string }>
 }
 
 const emptyItem = (): InvoiceItem => ({
@@ -24,8 +26,9 @@ const emptyItem = (): InvoiceItem => ({
   sort_order: 0,
 })
 
-export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice }: InvoiceDialogProps) {
+export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice, onSendInvoice }: InvoiceDialogProps) {
   const [isPending, startTransition] = useTransition()
+  const [sendMode, setSendMode] = useState(false)
   const [accountId, setAccountId] = useState<string | undefined>()
   const [accountName, setAccountName] = useState<string | undefined>()
   const [description, setDescription] = useState('')
@@ -140,7 +143,19 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
           ? await onCreateInvoice(input)
           : await createInvoice(input)
         if (result.success) {
-          toast.success(`Invoice ${result.data?.invoice_number} created as Draft`)
+          // If "Create & Send" was clicked, send immediately
+          if (sendMode && onSendInvoice && result.data?.id) {
+            const sendResult = await onSendInvoice(result.data.id)
+            if (sendResult.success) {
+              toast.success(`Invoice ${result.data.invoice_number} created and sent`)
+            } else {
+              toast.success(`Invoice ${result.data.invoice_number} created as Draft`)
+              toast.error(`Send failed: ${sendResult.error ?? 'Unknown error'} — you can resend from the invoice list.`)
+            }
+          } else {
+            toast.success(`Invoice ${result.data?.invoice_number} created as Draft`)
+          }
+          setSendMode(false)
           resetForm()
           onClose()
         } else {
@@ -436,17 +451,29 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
               >
                 Cancel
               </button>
+              {!isCredit && (
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  onClick={() => setSendMode(false)}
+                  className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50 flex items-center gap-2 text-zinc-700"
+                >
+                  {isPending && !sendMode ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                  Save as Draft
+                </button>
+              )}
               <button
                 type="submit"
                 disabled={isPending}
+                onClick={() => setSendMode(!isCredit)}
                 className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 ${
                   isCredit
                     ? 'bg-purple-600 hover:bg-purple-700'
-                    : 'bg-zinc-900 hover:bg-zinc-800'
+                    : 'bg-blue-600 hover:bg-blue-700'
                 }`}
               >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                {isCredit ? 'Create Credit Note' : 'Save as Draft'}
+                {isPending && (sendMode || isCredit) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {isCredit ? 'Create Credit Note' : 'Create & Send'}
               </button>
             </div>
           </form>
