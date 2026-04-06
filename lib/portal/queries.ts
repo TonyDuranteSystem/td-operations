@@ -156,11 +156,12 @@ export async function getPortalBilling(accountId: string) {
     .order('issue_date', { ascending: false })
     .limit(50)
 
-  // Portal invoices (from client_invoices — official invoicing system)
+  // Portal invoices (from client_invoices — only TD-created invoices, not client's own sales)
   const { data: portalInvoices } = await supabaseAdmin
     .from('client_invoices')
     .select('id, invoice_number, status, currency, total, subtotal, issue_date, due_date, paid_date, message, notes, client_invoice_items(description, quantity, unit_price, amount)')
     .eq('account_id', accountId)
+    .eq('source', 'td_legacy')
     .order('issue_date', { ascending: false })
     .limit(50)
 

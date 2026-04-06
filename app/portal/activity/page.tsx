@@ -115,6 +115,7 @@ export default async function PortalActivityPage() {
       .from('client_invoices')
       .select('id, invoice_number, status, total, currency, created_at, updated_at')
       .eq('account_id', selectedAccountId)
+      .eq('source', 'client')
       .order('updated_at', { ascending: false })
       .limit(15)
 

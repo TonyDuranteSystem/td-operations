@@ -27,11 +27,12 @@ export default async function PortalInvoicesPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
   if (!selectedAccountId) redirect('/portal')
 
-  // Fetch invoices with customer name
+  // Fetch client's OWN sales invoices only (exclude TD-created legacy invoices)
   const { data: invoices } = await supabaseAdmin
     .from('client_invoices')
     .select('*, client_customers(name)')
     .eq('account_id', selectedAccountId)
+    .eq('source', 'client')
     .order('created_at', { ascending: false })
     .limit(100)
 
