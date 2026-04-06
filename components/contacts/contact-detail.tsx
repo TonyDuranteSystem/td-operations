@@ -374,7 +374,7 @@ export function ContactDetail({
         <InvoicesTab invoices={invoices} />
       )}
       {activeTab === 'documents' && (
-        <ContactDocumentsTab documents={documents} accounts={accounts} />
+        <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} />
       )}
       {activeTab === 'chat' && (
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
@@ -2010,12 +2010,47 @@ function formatFileSize(bytes: number): string {
 function ContactDocumentsTab({
   documents,
   accounts,
+  contactId,
 }: {
   documents: ContactDocumentRecord[]
   accounts: LinkedAccount[]
+  contactId: string
 }) {
   const [previewDoc, setPreviewDoc] = useState<ContactDocumentRecord | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
+  const [uploadType, setUploadType] = useState('Passport')
+  const [uploadCategory, setUploadCategory] = useState('Contacts')
   const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
+
+  const handleFileUpload = async (file: File) => {
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('contact_id', contactId)
+      formData.append('document_type', uploadType)
+      formData.append('category', uploadCategory)
+
+      const res = await fetch('/api/crm/admin-actions/upload-document', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail)
+        if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
+        setShowUpload(false)
+        window.location.reload()
+      } else {
+        toast.error(data.detail || 'Upload failed')
+      }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   // Group by category
   const grouped = documents.reduce<Record<string, ContactDocumentRecord[]>>((acc, doc) => {
@@ -2028,18 +2063,84 @@ function ContactDocumentsTab({
   const categoryOrder = ['Contacts', 'Company', 'Tax', 'Banking', 'Correspondence', 'Uncategorized']
   const sortedCategories = categoryOrder.filter(c => grouped[c])
 
+  const uploadButton = (
+    <button
+      onClick={() => setShowUpload(!showUpload)}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
+    >
+      <Paperclip className="h-3.5 w-3.5" />
+      Upload Document
+    </button>
+  )
+
+  const uploadPanel = showUpload && (
+    <div className="bg-white rounded-lg border p-4 space-y-3">
+      <div className="flex items-center gap-3">
+        <select
+          value={uploadType}
+          onChange={e => setUploadType(e.target.value)}
+          className="text-sm border rounded-lg px-3 py-1.5 bg-white"
+        >
+          <option value="Passport">Passport</option>
+          <option value="ID Document">ID Document</option>
+          <option value="EIN Letter">EIN Letter</option>
+          <option value="Articles of Organization">Articles of Organization</option>
+          <option value="Operating Agreement">Operating Agreement</option>
+          <option value="Bank Statement">Bank Statement</option>
+          <option value="Tax Return">Tax Return</option>
+          <option value="Other">Other</option>
+        </select>
+        <select
+          value={uploadCategory}
+          onChange={e => setUploadCategory(e.target.value)}
+          className="text-sm border rounded-lg px-3 py-1.5 bg-white"
+        >
+          <option value="Contacts">Contacts</option>
+          <option value="Company">Company</option>
+          <option value="Tax">Tax</option>
+          <option value="Banking">Banking</option>
+          <option value="Correspondence">Correspondence</option>
+        </select>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png"
+          onChange={e => {
+            const f = e.target.files?.[0]
+            if (f) handleFileUpload(f)
+          }}
+          disabled={uploading}
+          className="flex-1 text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
+        />
+        {uploading && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+      </div>
+      {uploadType === 'Passport' && (
+        <p className="text-xs text-muted-foreground">Passport uploads are automatically OCR&apos;d to extract passport number and expiry date.</p>
+      )}
+    </div>
+  )
+
   if (documents.length === 0) {
     return (
-      <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
-        <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
-        <p>No documents linked to this contact</p>
+      <div className="space-y-4">
+        <div className="flex justify-end">{uploadButton}</div>
+        {uploadPanel}
+        <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
+          <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
+          <p>No documents linked to this contact</p>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      <p className="text-sm text-muted-foreground">{documents.length} documents</p>
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{documents.length} documents</p>
+        {uploadButton}
+      </div>
+      {uploadPanel}
 
       {sortedCategories.map(category => (
         <div key={category} className="space-y-2">
