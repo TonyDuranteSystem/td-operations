@@ -19,11 +19,12 @@ export default async function FinancePage({
   const activeTab = searchParams.tab ?? 'clients'
   const selectedClientId = searchParams.client ?? null
 
-  // ── Fetch all clients with invoice summaries ──
+  // ── Fetch all TD invoices from payments table (source of truth for TD billing) ──
   const { data: invoiceSummary } = await supabaseAdmin
-    .from('client_invoices')
-    .select('account_id, status, total, amount_paid, amount_due')
-    .not('status', 'in', '("Cancelled","Split")')
+    .from('payments')
+    .select('account_id, invoice_status, total, amount_paid, amount_due')
+    .not('invoice_status', 'is', null)
+    .not('invoice_status', 'in', '("Cancelled","Split")')
 
   // Aggregate per account
   const clientMap: Record<string, {
@@ -45,20 +46,21 @@ export default async function FinancePage({
       }
     }
     const c = clientMap[inv.account_id]
+    const status = inv.invoice_status ?? ''
     c.invoice_count++
     c.total_invoiced += Number(inv.total ?? 0)
     c.total_paid += Number(inv.amount_paid ?? 0)
-    if (['Sent', 'Overdue', 'Partial'].includes(inv.status)) {
+    if (['Sent', 'Overdue', 'Partial'].includes(status)) {
       c.outstanding += Number(inv.amount_due ?? inv.total ?? 0)
     }
-    if (inv.status === 'Overdue') {
+    if (status === 'Overdue') {
       c.overdue += Number(inv.amount_due ?? inv.total ?? 0)
       c.overdue_count++
     }
-    if (inv.status === 'Partial') c.has_partial = true
+    if (status === 'Partial') c.has_partial = true
   }
 
-  // Get all accounts (including those with no invoices, so they can create new ones)
+  // Get all accounts
   const { data: allAccounts } = await supabaseAdmin
     .from('accounts')
     .select('id, company_name')
@@ -73,15 +75,35 @@ export default async function FinancePage({
     }),
   }))
 
-  // ── Fetch ALL invoices for flat list view ──
-  const { data: allInvoicesFlat } = await supabaseAdmin
-    .from('client_invoices')
-    .select('id, invoice_number, status, total, amount_paid, amount_due, currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
-    .not('status', 'in', '("Cancelled","Split")')
+  // ── Fetch ALL invoices for flat list view (from payments) ──
+  const { data: allPaymentsFlat } = await supabaseAdmin
+    .from('payments')
+    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .not('invoice_status', 'is', null)
+    .not('invoice_status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
     .limit(500)
 
-  // ── Fetch selected client's invoices ──
+  // Map payments to InvoiceRecord shape (rename invoice_status → status, amount_currency → currency)
+  const allInvoicesFlat: InvoiceRecord[] = (allPaymentsFlat ?? []).map(p => ({
+    id: p.id,
+    invoice_number: p.invoice_number ?? '',
+    status: p.invoice_status ?? 'Draft',
+    total: Number(p.total ?? 0),
+    amount_paid: Number(p.amount_paid ?? 0),
+    amount_due: Number(p.amount_due ?? 0),
+    currency: p.amount_currency ?? 'USD',
+    issue_date: p.issue_date,
+    due_date: p.due_date,
+    paid_date: p.paid_date,
+    notes: p.notes,
+    account_id: p.account_id,
+    contact_id: p.contact_id,
+    accounts: p.accounts as unknown as { company_name: string } | null,
+    contacts: p.contacts as unknown as { full_name: string } | null,
+  }))
+
+  // ── Fetch selected client's invoices (from payments) ──
   let clientInvoices: Array<Record<string, unknown>> = []
   let clientCreditNotes: Array<Record<string, unknown>> = []
   let clientAuditLog: Array<Record<string, unknown>> = []
@@ -89,10 +111,12 @@ export default async function FinancePage({
 
   if (selectedClientId) {
     const [invRes, cnRes, auditRes, payRes] = await Promise.all([
+      // Client invoices = payments with invoice_status + payment_items
       supabaseAdmin
-        .from('client_invoices')
-        .select('*, client_invoice_items(*), client_customers!customer_id(name, email)')
+        .from('payments')
+        .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, description, payment_items(*)')
         .eq('account_id', selectedClientId)
+        .not('invoice_status', 'is', null)
         .order('issue_date', { ascending: false }),
       supabaseAdmin
         .from('client_credit_notes')
@@ -102,11 +126,6 @@ export default async function FinancePage({
       supabaseAdmin
         .from('invoice_audit_log')
         .select('*')
-        .in('invoice_id', (await supabaseAdmin
-          .from('client_invoices')
-          .select('id')
-          .eq('account_id', selectedClientId)
-        ).data?.map(i => i.id) ?? [])
         .order('performed_at', { ascending: false })
         .limit(50),
       supabaseAdmin
@@ -117,9 +136,18 @@ export default async function FinancePage({
         .order('paid_date', { ascending: false, nullsFirst: false }),
     ])
 
-    clientInvoices = invRes.data ?? []
+    // Map payment records to the shape the UI expects (rename fields)
+    clientInvoices = (invRes.data ?? []).map(p => ({
+      ...p,
+      status: p.invoice_status,
+      currency: p.amount_currency,
+      client_invoice_items: p.payment_items ?? [],
+      client_customers: null,
+    }))
     clientCreditNotes = cnRes.data ?? []
-    clientAuditLog = auditRes.data ?? []
+    // Filter audit log for this client's invoices
+    const clientInvIds = new Set((invRes.data ?? []).map(i => i.id))
+    clientAuditLog = (auditRes.data ?? []).filter(a => clientInvIds.has((a as Record<string, unknown>).invoice_id as string))
     clientPaymentHistory = payRes.data ?? []
   }
 
@@ -149,23 +177,22 @@ export default async function FinancePage({
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
 
   const [agingRes, cashRes, paidInvoicesRes, recentAuditRes] = await Promise.all([
-    // Open invoices with due_date for aging buckets
+    // Open invoices with due_date for aging buckets (from payments)
     supabaseAdmin
-      .from('client_invoices')
-      .select('id, status, total, amount_due, due_date, account_id')
-      .in('status', ['Sent', 'Overdue', 'Partial'])
-      .not('status', 'in', '("Cancelled","Split")'),
-    // Cash received this month
+      .from('payments')
+      .select('id, invoice_status, total, amount_due, due_date, account_id')
+      .in('invoice_status', ['Sent', 'Overdue', 'Partial']),
+    // Cash received this month (from payments)
     supabaseAdmin
-      .from('client_invoices')
+      .from('payments')
       .select('amount_paid')
-      .eq('status', 'Paid')
+      .eq('invoice_status', 'Paid')
       .gte('paid_date', monthStart),
-    // Paid invoices for avg days to pay
+    // Paid invoices for avg days to pay (from payments)
     supabaseAdmin
-      .from('client_invoices')
+      .from('payments')
       .select('issue_date, paid_date')
-      .eq('status', 'Paid')
+      .eq('invoice_status', 'Paid')
       .not('paid_date', 'is', null)
       .not('issue_date', 'is', null)
       .order('paid_date', { ascending: false })
@@ -173,7 +200,7 @@ export default async function FinancePage({
     // Recent audit log for activity feed
     supabaseAdmin
       .from('invoice_audit_log')
-      .select('*, client_invoices!invoice_id(invoice_number, accounts:account_id(company_name))')
+      .select('*')
       .order('performed_at', { ascending: false })
       .limit(20),
   ])
@@ -210,12 +237,12 @@ export default async function FinancePage({
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
   const totalOutstanding = allInvoices
-    .filter(i => ['Sent', 'Overdue', 'Partial'].includes(i.status))
+    .filter(i => ['Sent', 'Overdue', 'Partial'].includes(i.invoice_status ?? ''))
     .reduce((s, i) => s + Number(i.amount_due ?? i.total ?? 0), 0)
   const totalOverdue = allInvoices
-    .filter(i => i.status === 'Overdue')
+    .filter(i => i.invoice_status === 'Overdue')
     .reduce((s, i) => s + Number(i.amount_due ?? i.total ?? 0), 0)
-  const overdueCount = allInvoices.filter(i => i.status === 'Overdue').length
+  const overdueCount = allInvoices.filter(i => i.invoice_status === 'Overdue').length
 
   return (
     <div className="h-full">
@@ -233,7 +260,7 @@ export default async function FinancePage({
         bankFeeds={bankFeeds}
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}
-        allInvoicesFlat={(allInvoicesFlat ?? []) as unknown as InvoiceRecord[]}
+        allInvoicesFlat={allInvoicesFlat}
       />
     </div>
   )

@@ -41,235 +41,228 @@ export async function createUnifiedInvoiceDraft(input: {
   })
 }
 
-// ── Invoice actions ──
+// ── Invoice actions (operate on payments table directly — source of truth for TD billing) ──
 
 export async function markInvoicePaid(
-  invoiceId: string,
+  paymentId: string,
   paymentMethod?: string
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
 
-    // Get the invoice to find linked payment
-    const { data: inv } = await supabaseAdmin
-      .from('client_invoices')
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
       .select('id, invoice_number, total, account_id')
-      .eq('id', invoiceId)
+      .eq('id', paymentId)
       .single()
-    if (!inv) throw new Error('Invoice not found')
+    if (!payment) throw new Error('Payment not found')
 
     const today = new Date().toISOString().split('T')[0]
 
-    // Find linked payment
-    const { data: payment } = await supabaseAdmin
-      .from('payments')
-      .select('id')
-      .eq('portal_invoice_id', invoiceId)
-      .limit(1)
-      .maybeSingle()
+    // Update payment record
+    await supabaseAdmin.from('payments').update({
+      status: 'Paid',
+      invoice_status: 'Paid',
+      amount_paid: payment.total,
+      amount_due: 0,
+      paid_date: today,
+      payment_method: paymentMethod || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', paymentId)
 
-    if (payment) {
-      // Use unified sync (updates BOTH client_invoices + payments)
-      await syncInvoiceStatus('payment', payment.id, 'Paid', today, Number(inv.total))
-      if (paymentMethod) {
-        await supabaseAdmin.from('payments').update({ payment_method: paymentMethod }).eq('id', payment.id)
-      }
-      // QB sync (non-blocking)
-      try {
-        const { syncPaymentToQB } = await import('@/lib/qb-sync')
-        syncPaymentToQB(payment.id, { paymentDate: today }).catch(() => {})
-      } catch { /* QB sync not critical */ }
-    } else {
-      // No linked payment — update client_invoices directly
-      await supabaseAdmin.from('client_invoices').update({
-        status: 'Paid', paid_date: today, amount_paid: inv.total, amount_due: 0, updated_at: new Date().toISOString(),
-      }).eq('id', invoiceId)
-    }
+    // Sync to client_expenses (portal mirror)
+    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
+    await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(payment.total))
+
+    // QB sync (non-blocking)
+    try {
+      const { syncPaymentToQB } = await import('@/lib/qb-sync')
+      syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
+    } catch { /* QB sync not critical */ }
 
     revalidatePath('/finance')
     revalidatePath('/payments')
   }, {
     action_type: 'update',
-    table_name: 'client_invoices',
-    record_id: invoiceId,
+    table_name: 'payments',
+    record_id: paymentId,
     summary: `Invoice marked as Paid${paymentMethod ? ` (${paymentMethod})` : ''}`,
   })
 }
 
-export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
+export async function voidInvoice(paymentId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const now = new Date().toISOString()
 
-    await supabaseAdmin.from('client_invoices').update({
-      status: 'Cancelled', updated_at: now,
-    }).eq('id', invoiceId)
-
-    // Update linked payment + void in QB
+    // Get payment for QB void
     const { data: payment } = await supabaseAdmin
       .from('payments')
       .select('id, qb_invoice_id')
-      .eq('portal_invoice_id', invoiceId)
-      .limit(1)
-      .maybeSingle()
-    if (payment) {
-      await supabaseAdmin.from('payments').update({
-        status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
-      }).eq('id', payment.id)
+      .eq('id', paymentId)
+      .single()
+    if (!payment) throw new Error('Payment not found')
 
-      // Void in QuickBooks (non-blocking)
-      if (payment.qb_invoice_id) {
-        try {
-          const { syncVoidToQB } = await import('@/lib/qb-sync')
-          syncVoidToQB(payment.id).catch(() => {})
-        } catch { /* QB not critical */ }
-      }
+    // Update payment
+    await supabaseAdmin.from('payments').update({
+      status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
+    }).eq('id', paymentId)
 
-      // Unlink any matched bank feeds pointing to this payment
-      await supabaseAdmin.from('td_bank_feeds').update({
-        matched_payment_id: null, match_confidence: null,
-        status: 'unmatched', updated_at: now,
-      }).eq('matched_payment_id', payment.id)
+    // Sync to client_expenses
+    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
+    await syncTDInvoiceStatus(paymentId, 'Cancelled')
+
+    // Void in QuickBooks (non-blocking)
+    if (payment.qb_invoice_id) {
+      try {
+        const { syncVoidToQB } = await import('@/lib/qb-sync')
+        syncVoidToQB(paymentId).catch(() => {})
+      } catch { /* QB not critical */ }
     }
+
+    // Unlink any matched bank feeds
+    await supabaseAdmin.from('td_bank_feeds').update({
+      matched_payment_id: null, match_confidence: null,
+      status: 'unmatched', updated_at: now,
+    }).eq('matched_payment_id', paymentId)
 
     revalidatePath('/finance')
     revalidatePath('/payments')
   }, {
     action_type: 'update',
-    table_name: 'client_invoices',
-    record_id: invoiceId,
+    table_name: 'payments',
+    record_id: paymentId,
     summary: 'Invoice voided/cancelled + QB void + bank feeds unlinked',
   })
 }
 
-export async function sendInvoiceReminder(invoiceId: string): Promise<ActionResult> {
+export async function sendInvoiceReminder(paymentId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
 
-    // Get invoice + customer email
-    const { data: inv } = await supabaseAdmin
-      .from('client_invoices')
-      .select('id, invoice_number, total, currency, amount_due, status, due_date, account_id, contact_id, client_customers!customer_id(email, name)')
-      .eq('id', invoiceId)
+    // Get payment + resolve client email from contact/account
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, total, amount_due, amount_currency, invoice_status, due_date, account_id, contact_id, reminder_count')
+      .eq('id', paymentId)
       .single()
-    if (!inv) throw new Error('Invoice not found')
+    if (!payment) throw new Error('Payment not found')
 
-    const customer = inv.client_customers as unknown as { email: string; name: string } | null
-    if (!customer?.email) throw new Error('No customer email found')
+    // Resolve client email from contact (primary) or account
+    let clientEmail = ''
+    let clientName = ''
+    if (payment.contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('full_name, email')
+        .eq('id', payment.contact_id)
+        .single()
+      if (contact) { clientName = contact.full_name; clientEmail = contact.email || '' }
+    }
+    if (!clientEmail && payment.account_id) {
+      const { data: link } = await supabaseAdmin
+        .from('account_contacts')
+        .select('contacts(full_name, email)')
+        .eq('account_id', payment.account_id)
+        .limit(1)
+        .maybeSingle()
+      if (link) {
+        const c = link.contacts as unknown as { full_name: string; email: string }
+        clientName = c.full_name; clientEmail = c.email || ''
+      }
+    }
+    if (!clientEmail) throw new Error('No client email found')
+
+    const currency = payment.amount_currency ?? 'USD'
+    const csym = currency === 'EUR' ? '€' : '$'
+    const amount = Number(payment.amount_due ?? payment.total)
+    const status = payment.invoice_status ?? 'Sent'
 
     // Send reminder email via Gmail API
     const { gmailPost } = await import('@/lib/gmail')
-    const subject = `Payment Reminder: Invoice ${inv.invoice_number} — ${inv.currency === 'EUR' ? '€' : '$'}${Number(inv.amount_due ?? inv.total).toLocaleString()}`
-    const body = `Dear ${customer.name},\n\nThis is a friendly reminder that invoice ${inv.invoice_number} for ${inv.currency === 'EUR' ? '€' : '$'}${Number(inv.amount_due ?? inv.total).toLocaleString()} is ${inv.status === 'Overdue' ? 'overdue' : 'due'}${inv.due_date ? ` (due date: ${inv.due_date})` : ''}.\n\nPlease arrange payment at your earliest convenience.\n\nBest regards,\nTony Durante LLC`
+    const subject = `Payment Reminder: Invoice ${payment.invoice_number} — ${csym}${amount.toLocaleString()}`
+    const body = `Dear ${clientName},\n\nThis is a friendly reminder that invoice ${payment.invoice_number} for ${csym}${amount.toLocaleString()} is ${status === 'Overdue' ? 'overdue' : 'due'}${payment.due_date ? ` (due date: ${payment.due_date})` : ''}.\n\nPlease arrange payment at your earliest convenience.\n\nBest regards,\nTony Durante LLC`
 
-    // Build RFC 2822 email
     const raw = Buffer.from(
-      `To: ${customer.email}\r\nFrom: support@tonydurante.us\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
+      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
     ).toString('base64url')
 
     await gmailPost('/messages/send', { raw })
 
     // Update reminder count
-    const { data: payment } = await supabaseAdmin
-      .from('payments')
-      .select('id, reminder_count')
-      .eq('portal_invoice_id', invoiceId)
-      .limit(1)
-      .maybeSingle()
-    if (payment) {
-      await supabaseAdmin.from('payments').update({
-        reminder_count: (payment.reminder_count ?? 0) + 1,
-        last_reminder_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq('id', payment.id)
-    }
+    await supabaseAdmin.from('payments').update({
+      reminder_count: (payment.reminder_count ?? 0) + 1,
+      last_reminder_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', paymentId)
 
     // Mark as Sent if still Draft
-    if (inv.status === 'Draft') {
-      await supabaseAdmin.from('client_invoices').update({
-        status: 'Sent', updated_at: new Date().toISOString(),
-      }).eq('id', invoiceId)
+    if (status === 'Draft') {
+      await supabaseAdmin.from('payments').update({
+        invoice_status: 'Sent', status: 'Pending', updated_at: new Date().toISOString(),
+      }).eq('id', paymentId)
+      // Sync to client_expenses
+      const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
+      await syncTDInvoiceStatus(paymentId, 'Sent')
     }
 
     revalidatePath('/finance')
   }, {
     action_type: 'update',
-    table_name: 'client_invoices',
-    record_id: invoiceId,
+    table_name: 'payments',
+    record_id: paymentId,
     summary: `Invoice reminder sent`,
   })
 }
 
 export async function updateInvoice(
-  invoiceId: string,
+  paymentId: string,
   updates: { description?: string; due_date?: string; notes?: string; message?: string; total?: number }
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const now = new Date().toISOString()
 
-    // Update client_invoices
-    const invUpdates: Record<string, unknown> = { updated_at: now }
-    if (updates.due_date !== undefined) invUpdates.due_date = updates.due_date || null
-    if (updates.notes !== undefined) invUpdates.notes = updates.notes || null
-    if (updates.message !== undefined) invUpdates.message = updates.message || null
+    // Update payments directly
+    const payUpdates: Record<string, unknown> = { updated_at: now }
+    if (updates.description !== undefined) payUpdates.description = updates.description
+    if (updates.due_date !== undefined) payUpdates.due_date = updates.due_date || null
+    if (updates.notes !== undefined) payUpdates.notes = updates.notes || null
+    if (updates.message !== undefined) payUpdates.message = updates.message
     if (updates.total !== undefined) {
-      invUpdates.total = updates.total
-      invUpdates.subtotal = updates.total
-      invUpdates.amount_due = updates.total
+      payUpdates.total = updates.total
+      payUpdates.amount = updates.total
+      payUpdates.subtotal = updates.total
+      payUpdates.amount_due = updates.total
     }
 
-    await supabaseAdmin.from('client_invoices').update(invUpdates).eq('id', invoiceId)
+    await supabaseAdmin.from('payments').update(payUpdates).eq('id', paymentId)
 
-    // Also update linked payment mirror + QB
-    const { data: payment } = await supabaseAdmin
-      .from('payments')
-      .select('id, qb_invoice_id')
-      .eq('portal_invoice_id', invoiceId)
-      .limit(1)
-      .maybeSingle()
-
-    if (payment) {
-      const payUpdates: Record<string, unknown> = { updated_at: now }
-      if (updates.description !== undefined) payUpdates.description = updates.description
-      if (updates.due_date !== undefined) payUpdates.due_date = updates.due_date || null
-      if (updates.notes !== undefined) payUpdates.notes = updates.notes || null
-      if (updates.total !== undefined) {
-        payUpdates.total = updates.total
-        payUpdates.amount = updates.total
-        payUpdates.amount_due = updates.total
-      }
-      if (updates.message !== undefined) payUpdates.message = updates.message
-      await supabaseAdmin.from('payments').update(payUpdates).eq('id', payment.id)
-
-      // Re-sync to QB if amount changed (non-blocking)
-      if (updates.total !== undefined && payment.qb_invoice_id) {
-        payUpdates.qb_sync_status = 'pending'
+    // Re-sync to QB if amount changed (non-blocking)
+    if (updates.total !== undefined) {
+      const { data: pay } = await supabaseAdmin.from('payments').select('qb_invoice_id').eq('id', paymentId).single()
+      if (pay?.qb_invoice_id) {
         try {
           const { syncInvoiceToQB } = await import('@/lib/qb-sync')
-          syncInvoiceToQB(payment.id).catch(() => {})
+          syncInvoiceToQB(paymentId).catch(() => {})
         } catch { /* QB not critical */ }
       }
     }
 
-    // Audit trail
-    try {
-      const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
-      logInvoiceAudit({
-        invoice_id: invoiceId,
-        action: 'edited',
-        new_values: updates,
-        performed_by: 'staff',
-      })
-    } catch { /* audit not critical */ }
+    // Also update client_expenses mirror
+    const expUpdates: Record<string, unknown> = { updated_at: now }
+    if (updates.due_date !== undefined) expUpdates.due_date = updates.due_date || null
+    if (updates.total !== undefined) { expUpdates.total = updates.total; expUpdates.subtotal = updates.total }
+    if (updates.notes !== undefined) expUpdates.notes = updates.notes
+    if (updates.description !== undefined) expUpdates.description = updates.description
+    await supabaseAdmin.from('client_expenses').update(expUpdates).eq('td_payment_id', paymentId)
 
     revalidatePath('/finance')
     revalidatePath('/payments')
   }, {
     action_type: 'update',
-    table_name: 'client_invoices',
-    record_id: invoiceId,
+    table_name: 'payments',
+    record_id: paymentId,
     summary: `Invoice updated: ${Object.keys(updates).join(', ')}`,
   })
 }
