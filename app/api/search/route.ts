@@ -122,7 +122,7 @@ export async function GET(request: NextRequest) {
       title: l.full_name,
       subtitle: [l.status, l.source].filter(Boolean).join(' \u00b7 '),
       type: 'lead' as const,
-      href: '/leads',
+      href: `/leads/${l.id}`,
       preview: {
         status: l.status,
         source: l.source,

@@ -4,13 +4,19 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
-  Loader2, FileText, Rocket,
+  Loader2, FileText, Rocket, Trash2, RotateCcw, UserX,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
 import { ActivateLeadDialog } from './activate-lead-dialog'
+import {
+  DeleteLeadDialog,
+  DeleteOfferDialog,
+  ResetOfferDialog,
+  DeletePortalUserDialog,
+} from './delete-lead-dialog'
 
 interface OfferData {
   token: string
@@ -36,6 +42,7 @@ interface LeadActionsProps {
   offer: OfferData | null
   activation: ActivationData | null
   isAdmin?: boolean
+  hasPortalUser?: boolean
 }
 
 export function LeadActions({
@@ -49,6 +56,7 @@ export function LeadActions({
   offer,
   activation,
   isAdmin = false,
+  hasPortalUser = false,
 }: LeadActionsProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -58,6 +66,12 @@ export function LeadActions({
   const [showConvert, setShowConvert] = useState(false)
   const [showLostReason, setShowLostReason] = useState(false)
   const [lostReason, setLostReason] = useState('')
+
+  // Delete/reset dialogs
+  const [showDeleteLead, setShowDeleteLead] = useState(false)
+  const [showDeleteOffer, setShowDeleteOffer] = useState(false)
+  const [showResetOffer, setShowResetOffer] = useState(false)
+  const [showDeletePortalUser, setShowDeletePortalUser] = useState(false)
 
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
@@ -243,6 +257,54 @@ export function LeadActions({
             </div>
           </div>
         )}
+
+        {/* ─── Danger Zone ─── */}
+        <div className="mt-5 pt-4 border-t border-red-200">
+          <h3 className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-3">Danger Zone</h3>
+          <div className="flex flex-wrap gap-2">
+            {/* Delete Offer (only if offer exists) */}
+            {hasOffer && (
+              <button
+                onClick={() => setShowDeleteOffer(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 transition-colors"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete Offer
+              </button>
+            )}
+
+            {/* Reset Offer (only if offer exists and not already draft) */}
+            {hasOffer && offer.status !== 'draft' && (
+              <button
+                onClick={() => setShowResetOffer(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Reset Offer
+              </button>
+            )}
+
+            {/* Delete Portal User (only if email exists and portal user detected) */}
+            {hasEmail && hasPortalUser && (
+              <button
+                onClick={() => setShowDeletePortalUser(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 transition-colors"
+              >
+                <UserX className="h-4 w-4" />
+                Delete Portal User
+              </button>
+            )}
+
+            {/* Delete Lead (always available for admin) */}
+            <button
+              onClick={() => setShowDeleteLead(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-red-600 text-white hover:bg-red-700 transition-colors"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Lead
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Dialogs */}
@@ -280,6 +342,41 @@ export function LeadActions({
         leadId={leadId}
         leadName={leadName}
       />
+
+      {/* Delete / Reset dialogs */}
+      <DeleteLeadDialog
+        open={showDeleteLead}
+        onClose={() => setShowDeleteLead(false)}
+        leadId={leadId}
+        leadName={leadName}
+      />
+
+      {hasOffer && (
+        <>
+          <DeleteOfferDialog
+            open={showDeleteOffer}
+            onClose={() => setShowDeleteOffer(false)}
+            offerToken={offer.token}
+            leadName={leadName}
+          />
+
+          <ResetOfferDialog
+            open={showResetOffer}
+            onClose={() => setShowResetOffer(false)}
+            offerToken={offer.token}
+            leadName={leadName}
+          />
+        </>
+      )}
+
+      {hasEmail && (
+        <DeletePortalUserDialog
+          open={showDeletePortalUser}
+          onClose={() => setShowDeletePortalUser(false)}
+          email={leadEmail!}
+          leadName={leadName}
+        />
+      )}
     </>
   )
 }

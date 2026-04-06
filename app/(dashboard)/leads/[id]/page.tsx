@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -85,6 +86,15 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     .limit(1)
     .maybeSingle()
 
+  // Check for portal user (admin-only, for delete button visibility)
+  let hasPortalUser = false
+  if (admin && lead.email) {
+    const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+    hasPortalUser = (list?.users ?? []).some(
+      (u: { email?: string }) => u.email?.toLowerCase() === lead.email.toLowerCase()
+    )
+  }
+
   const selectedServices: string[] = Array.isArray(offer?.selected_services) ? offer.selected_services : []
   const bundledPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
@@ -132,6 +142,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             status: activation.status,
           } : null}
           isAdmin={admin}
+          hasPortalUser={hasPortalUser}
         />
       </div>
 
