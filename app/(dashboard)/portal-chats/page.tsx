@@ -1600,7 +1600,7 @@ export default function PortalChatsPage() {
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
                     rows={1}
                     placeholder={isRecording ? 'Recording...' : 'Type a message...'}
-                    className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
+                    className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[300px] placeholder:text-zinc-400"
                   />
                   {/* Polish button — inside pill, shows when text */}
                   {replyText.trim() && (
