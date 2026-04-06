@@ -216,14 +216,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Notify client via portal (document is now visible in their portal)
+    // Notify client via portal notification + chat message + immediate email
+    const docLabel = isItinLetter ? 'Your ITIN letter is ready'
+      : isEinLetter ? 'Your EIN letter is ready'
+      : isPassport ? 'Your passport has been uploaded'
+      : `New document: ${documentType}`
+    const chatMsg = `${docLabel}\n\n${fileName} is now available in your portal Documents section.`
+
     try {
       const { createPortalNotification } = await import('@/lib/portal/notifications')
-      const docLabel = isItinLetter ? 'Your ITIN letter is ready'
-        : isEinLetter ? 'Your EIN letter is ready'
-        : isPassport ? 'Your passport has been uploaded'
-        : `New document: ${documentType}`
-
       await createPortalNotification({
         contact_id: contactId,
         account_id: accountId ?? undefined,
@@ -232,9 +233,61 @@ export async function POST(req: NextRequest) {
         body: `${fileName} is now available in your portal Documents section.`,
         link: '/portal/documents',
       })
-      sideEffects.push('Client notified via portal')
+      sideEffects.push('Portal notification sent')
     } catch {
-      // Non-critical — notification failure shouldn't block upload
+      // Non-critical
+    }
+
+    // Send portal chat message so client sees it in chat
+    try {
+      await supabaseAdmin.from('portal_messages').insert({
+        contact_id: contactId,
+        account_id: accountId,
+        sender_type: 'admin',
+        message: chatMsg,
+      })
+      sideEffects.push('Chat message sent to client')
+    } catch {
+      // Non-critical
+    }
+
+    // Send email immediately (don't rely on digest cron)
+    try {
+      const { data: contactForEmail } = await supabaseAdmin
+        .from('contacts')
+        .select('email, full_name, language')
+        .eq('id', contactId)
+        .single()
+
+      if (contactForEmail?.email) {
+        const { gmailPost } = await import('@/lib/gmail')
+        const clientName = contactForEmail.full_name?.split(' ')[0] || 'there'
+        const isItalian = contactForEmail.language === 'Italian'
+
+        const subject = isItalian
+          ? `Nuovo documento disponibile — ${docLabel}`
+          : `New document available — ${docLabel}`
+        const body = isItalian
+          ? `Ciao ${clientName},\n\n${fileName} è ora disponibile nella sezione Documenti del tuo portale.\n\nAccedi al portale: https://portal.tonydurante.us/portal/documents\n\nCordiali saluti,\nTony Durante LLC`
+          : `Hi ${clientName},\n\n${fileName} is now available in your portal Documents section.\n\nAccess your portal: https://portal.tonydurante.us/portal/documents\n\nBest regards,\nTony Durante LLC`
+
+        const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+        const rawEmail = [
+          'From: Tony Durante LLC <support@tonydurante.us>',
+          `To: ${contactForEmail.email}`,
+          `Subject: ${encodedSubject}`,
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=utf-8',
+          'Content-Transfer-Encoding: base64',
+          '',
+          Buffer.from(body).toString('base64'),
+        ].join('\r\n')
+
+        await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
+        sideEffects.push(`Email sent to ${contactForEmail.email}`)
+      }
+    } catch {
+      // Non-critical — email failure shouldn't block upload
     }
 
     // Clean up storage file (best-effort)
