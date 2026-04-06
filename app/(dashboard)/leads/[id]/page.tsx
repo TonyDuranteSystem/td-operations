@@ -10,6 +10,7 @@ import { format, parseISO } from 'date-fns'
 import { APP_BASE_URL } from '@/lib/config'
 import { isAdmin } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
+import { LeadNotesEditor } from './components/lead-notes-editor'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -375,20 +376,8 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </div>
         )}
 
-        {/* Notes */}
-        {lead.notes && (
-          <div className="bg-white rounded-lg border p-5 md:col-span-2">
-            <h2 className="text-sm font-semibold text-zinc-900 mb-3 flex items-center gap-2">
-              <MessageSquare className="h-4 w-4" />
-              Notes
-            </h2>
-            <div className="max-h-64 overflow-y-auto rounded-lg bg-zinc-50 p-4">
-              <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-sans leading-relaxed">
-                {lead.notes}
-              </pre>
-            </div>
-          </div>
-        )}
+        {/* Notes (editable) */}
+        <LeadNotesEditor leadId={lead.id} notes={lead.notes ?? ''} />
       </div>
     </div>
   )
