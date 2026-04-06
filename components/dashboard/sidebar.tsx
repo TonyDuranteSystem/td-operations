@@ -334,7 +334,7 @@ export function Sidebar({
       if (!item) return null
       // Apply live badges
       if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
-      if (item.id === 'tasks' && badgeCounts?.tasks) return { ...item, badge: badgeCounts.tasks }
+      // Tasks badge removed — daily work tracked via message action tags instead
       if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
       if (item.id === 'finance' && liveOverdue > 0) return { ...item, badge: liveOverdue }
       return item

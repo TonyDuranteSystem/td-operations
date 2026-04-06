@@ -1403,25 +1403,6 @@ export default function PortalChatsPage() {
                             <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
                           </DropdownMenu.Item>
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => setQuickCreate({ type: 'task', messageText: msg.message })}
-                          >
-                            <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Create Task
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => setQuickCreate({ type: 'sd', messageText: msg.message })}
-                          >
-                            <Truck className="h-3.5 w-3.5 text-zinc-400" /> Create Service
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.message })}
-                          >
-                            <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Create Invoice
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
                           <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
                             Tag Message
                           </DropdownMenu.Label>
@@ -1444,6 +1425,28 @@ export default function PortalChatsPage() {
                               </DropdownMenu.Item>
                             )
                           })}
+                          <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                          <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                            Create
+                          </DropdownMenu.Label>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                            onSelect={() => setQuickCreate({ type: 'task', messageText: msg.message })}
+                          >
+                            <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Task
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                            onSelect={() => setQuickCreate({ type: 'sd', messageText: msg.message })}
+                          >
+                            <Truck className="h-3.5 w-3.5 text-zinc-400" /> Service
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                            onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.message })}
+                          >
+                            <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
+                          </DropdownMenu.Item>
                         </DropdownMenu.Content>
                       </DropdownMenu.Portal>
                     </DropdownMenu.Root>
