@@ -12,6 +12,7 @@ import { NotificationBell } from '@/components/portal/notification-bell'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PortalSwRegister } from '@/components/portal/portal-sw-register'
+import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { cookies } from 'next/headers'
 import Script from 'next/script'
@@ -129,6 +130,7 @@ export default async function PortalLayout({
           )}
           {children}
         </main>
+        <PwaInstallPrompt />
         </div>
       </LocaleProvider>
       {/* Iubenda Cookie Consent Banner */}
