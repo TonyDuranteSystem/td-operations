@@ -194,6 +194,21 @@ export async function getPortalBilling(accountId: string) {
 }
 
 /**
+ * Get client expenses (incoming invoices: TD billing + third-party uploads).
+ * Used in the Expenses tab of the portal invoices page.
+ */
+export async function getPortalExpenses(accountId: string) {
+  const { data } = await supabaseAdmin
+    .from('client_expenses')
+    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, created_at')
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: false })
+    .limit(100)
+
+  return data ?? []
+}
+
+/**
  * Get active service_deliveries for this account to drive portal nav visibility.
  * Returns service names so the sidebar can show/hide sections.
  */
@@ -572,7 +587,7 @@ export async function getPortalActionItems(
       titleIt: `Paga Fattura ${inv.invoice_number || ''}`,
       description: `${amount} — ${isOverdue ? 'Overdue' : inv.due_date ? `Due ${inv.due_date}` : 'Payment pending'}`,
       descriptionIt: `${amount} — ${isOverdue ? 'Scaduta' : inv.due_date ? `Scadenza ${inv.due_date}` : 'Pagamento in sospeso'}`,
-      href: '/portal/billing',
+      href: '/portal/invoices?tab=expenses',
       priority,
       createdAt: inv.created_at,
     })

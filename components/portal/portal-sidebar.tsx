@@ -18,7 +18,6 @@ import {
   X,
   User,
   CalendarDays,
-  CreditCard,
   ChevronDown,
   PenSquare,
   PenLine,
@@ -90,7 +89,6 @@ const navGroups: NavGroup[] = [
   {
     key: 'nav.group.finance',
     items: [
-      { key: 'nav.billing', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
       { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
       { key: 'nav.customers', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
     ],
