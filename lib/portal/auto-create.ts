@@ -130,6 +130,10 @@ async function createFromEmail(
         .update({ portal_tier: tier })
         .eq('id', accountId)
     }
+    // Sync portal_tier to auth metadata (dashboard reads this to gate UI)
+    await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+      app_metadata: { ...existingUser.app_metadata, portal_tier: tier },
+    })
     return { success: true, alreadyExists: true, email, userId: existingUser.id }
   }
 
@@ -564,7 +568,7 @@ export async function upgradePortalTier(
     .update({ portal_tier: newTier })
     .eq('id', accountId)
 
-  // Also upgrade tier on all linked contacts (source of truth)
+  // Also upgrade tier on all linked contacts (source of truth) and their auth users
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id')
@@ -575,6 +579,22 @@ export async function upgradePortalTier(
       .from('contacts')
       .update({ portal_tier: newTier })
       .eq('id', link.contact_id)
+
+    // Sync to auth.users app_metadata so portal dashboard reads the correct tier
+    const { data: contactRow } = await supabaseAdmin
+      .from('contacts')
+      .select('email')
+      .eq('id', link.contact_id)
+      .single()
+    if (contactRow?.email) {
+      const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+      const authUser = users.find(u => u.email === contactRow.email)
+      if (authUser) {
+        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+          app_metadata: { ...authUser.app_metadata, portal_tier: newTier },
+        })
+      }
+    }
   }
 
   return { success: true, previousTier: account.portal_tier }
