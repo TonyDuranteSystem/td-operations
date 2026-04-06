@@ -70,7 +70,26 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       if (submitted.owner_email) contactUpdates.email = submitted.owner_email
       if (submitted.owner_phone) contactUpdates.phone = submitted.owner_phone
       if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
-      if (submitted.owner_country) contactUpdates.residency = submitted.owner_country
+      if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
+
+      // Build full address for residency
+      const addrParts = [
+        submitted.owner_street,
+        submitted.owner_city,
+        submitted.owner_state_province,
+        submitted.owner_zip,
+        submitted.owner_country,
+      ].filter(Boolean)
+      if (addrParts.length > 1) {
+        contactUpdates.residency = addrParts.join(', ')
+      } else if (submitted.owner_country) {
+        contactUpdates.residency = submitted.owner_country
+      }
+
+      // Mark passport as on file if uploaded
+      if (submitted.passport_owner) {
+        contactUpdates.passport_on_file = true
+      }
 
       const fieldCount = Object.keys(contactUpdates).filter(k => k !== "updated_at").length
       if (fieldCount > 0) {

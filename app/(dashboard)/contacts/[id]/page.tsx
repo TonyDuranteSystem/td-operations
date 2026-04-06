@@ -163,7 +163,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     status: string; signed_at: string | null; pdf_signed_drive_id: string | null
   }> = []
   if (accountIds.length > 0) {
-    const { data: ss4Data } = await supabase
+    // Use supabaseAdmin — ss4_applications has no staff RLS policy
+    const { data: ss4Data } = await supabaseAdmin
       .from('ss4_applications')
       .select('id, token, account_id, company_name, status, signed_at, pdf_signed_drive_id')
       .in('account_id', accountIds)
