@@ -208,3 +208,106 @@ export async function markFaxAsSent(
     side_effects,
   }
 }
+
+// ─── advanceFormationToStage ───────────────────────────────────────────────
+
+export async function advanceFormationToStage(
+  deliveryId: string,
+  targetStageName: string,
+  actor: string = 'system',
+  notes?: string,
+): Promise<{ advanced: boolean; detail: string; sideEffects: string[] }> {
+  const sideEffects: string[] = []
+
+  const { data: delivery } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name, service_type, stage, stage_order, stage_history, deal_id, account_id')
+    .eq('id', deliveryId)
+    .single()
+
+  if (!delivery) {
+    return { advanced: false, detail: 'Service delivery not found', sideEffects }
+  }
+
+  const { data: stages } = await supabaseAdmin
+    .from('pipeline_stages')
+    .select('*')
+    .eq('service_type', delivery.service_type)
+    .order('stage_order')
+
+  if (!stages?.length) {
+    return { advanced: false, detail: `No pipeline stages for ${delivery.service_type}`, sideEffects }
+  }
+
+  const targetStage = stages.find(
+    (s: { stage_name: string }) => s.stage_name.toLowerCase() === targetStageName.toLowerCase(),
+  )
+  if (!targetStage) {
+    return { advanced: false, detail: `Stage "${targetStageName}" not found`, sideEffects }
+  }
+
+  if ((delivery.stage_order || 0) >= targetStage.stage_order) {
+    return { advanced: false, detail: `Already at "${delivery.stage}" (order ${delivery.stage_order})`, sideEffects }
+  }
+
+  const historyEntry = {
+    from_stage: delivery.stage || 'New',
+    from_order: delivery.stage_order || 0,
+    to_stage: targetStage.stage_name,
+    to_order: targetStage.stage_order,
+    advanced_at: new Date().toISOString(),
+    notes: notes || `Advanced by ${actor}`,
+  }
+  const stageHistory = Array.isArray(delivery.stage_history)
+    ? [...delivery.stage_history, historyEntry]
+    : [historyEntry]
+
+  await supabaseAdmin
+    .from('service_deliveries')
+    .update({
+      stage: targetStage.stage_name,
+      stage_order: targetStage.stage_order,
+      stage_entered_at: new Date().toISOString(),
+      stage_history: stageHistory,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', delivery.id)
+
+  sideEffects.push(`Stage: ${delivery.stage} -> ${targetStage.stage_name}`)
+
+  // Create auto-tasks
+  if (targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
+    let created = 0
+    for (const taskDef of targetStage.auto_tasks as Array<{
+      title: string; assigned_to?: string; category?: string; priority?: string; description?: string
+    }>) {
+      const { error: tErr } = await supabaseAdmin.from('tasks').insert({
+        task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
+        assigned_to: taskDef.assigned_to || 'Luca',
+        category: taskDef.category || 'Internal',
+        priority: taskDef.priority || 'Normal',
+        description: taskDef.description || `Auto-created: Pipeline advanced to "${targetStage.stage_name}" by ${actor}.`,
+        status: 'To Do',
+        account_id: delivery.account_id,
+        deal_id: delivery.deal_id,
+        delivery_id: delivery.id,
+        stage_order: targetStage.stage_order,
+      })
+      if (!tErr) created++
+    }
+    if (created > 0) sideEffects.push(`${created} auto-tasks created`)
+  }
+
+  // Log
+  await supabaseAdmin.from('action_log').insert({
+    actor,
+    action_type: 'advance',
+    table_name: 'service_deliveries',
+    record_id: delivery.id,
+    account_id: delivery.account_id,
+    summary: `Pipeline advanced: ${delivery.stage || 'New'} -> ${targetStage.stage_name} (by ${actor})`,
+    details: { from_stage: delivery.stage, to_stage: targetStage.stage_name, notes },
+  })
+
+  return { advanced: true, detail: `Advanced to ${targetStage.stage_name}`, sideEffects }
+}

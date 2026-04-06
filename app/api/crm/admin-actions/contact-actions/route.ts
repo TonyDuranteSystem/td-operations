@@ -8,6 +8,7 @@
  *   advance_stage      — Advance a service delivery stage (full auto-chain)
  *   select_llc_name    — Choose one of 3 wizard name options as the official LLC name
  *   mark_fax_sent      — Mark SS-4 fax as sent to IRS + advance pipeline to EIN Submitted
+ *   enter_ein          — Set EIN on account + advance pipeline to Post-Formation
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -429,6 +430,90 @@ export async function POST(req: NextRequest) {
 
         const { markFaxAsSent } = await import("@/lib/pipeline-utils")
         result = await markFaxAsSent(ss4Id, "crm-admin", params?.notes as string | undefined)
+        break
+      }
+
+      // ─── ENTER EIN (received from IRS → update account + advance pipeline) ───
+      case "enter_ein": {
+        const einNumber = (params?.ein_number as string ?? "").trim()
+        const accountId = params?.account_id as string
+
+        if (!einNumber || !accountId) {
+          result = { success: false, detail: "Missing ein_number or account_id" }
+          break
+        }
+
+        // Validate EIN format (XX-XXXXXXX)
+        const einClean = einNumber.replace(/[^0-9-]/g, "")
+        if (!/^\d{2}-?\d{7}$/.test(einClean)) {
+          result = { success: false, detail: `Invalid EIN format: "${einNumber}". Expected: XX-XXXXXXX` }
+          break
+        }
+        const einFormatted = einClean.includes("-") ? einClean : `${einClean.slice(0, 2)}-${einClean.slice(2)}`
+
+        const einSideEffects: string[] = []
+
+        // 1. Update account with EIN
+        const { error: einErr } = await supabaseAdmin
+          .from("accounts")
+          .update({ ein_number: einFormatted, updated_at: new Date().toISOString() })
+          .eq("id", accountId)
+        if (einErr) {
+          result = { success: false, detail: `Failed to update account: ${einErr.message}` }
+          break
+        }
+        einSideEffects.push(`Account EIN set to ${einFormatted}`)
+
+        // 2. Update SS-4 status to done (if exists)
+        await supabaseAdmin
+          .from("ss4_applications")
+          .update({ status: "done", updated_at: new Date().toISOString() })
+          .eq("account_id", accountId)
+          .in("status", ["signed", "submitted"])
+        einSideEffects.push("SS-4 status → done")
+
+        // 3. Advance Company Formation pipeline to Post-Formation + Banking
+        const { data: formationSds } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("account_id", accountId)
+          .eq("service_type", "Company Formation")
+          .eq("status", "active")
+          .limit(1)
+
+        if (formationSds && formationSds.length > 0) {
+          // Advance pipeline using shared utility
+          const { advanceFormationToStage } = await import("@/lib/pipeline-utils")
+          const advResult = await advanceFormationToStage(
+            formationSds[0].id,
+            "Post-Formation + Banking",
+            "crm-admin",
+            `EIN received: ${einFormatted}`,
+          )
+          if (advResult.advanced) {
+            einSideEffects.push("Pipeline advanced to Post-Formation + Banking")
+            einSideEffects.push(...advResult.sideEffects)
+          } else {
+            einSideEffects.push(`Pipeline advance: ${advResult.detail}`)
+          }
+        }
+
+        // 4. Log
+        await supabaseAdmin.from("action_log").insert({
+          actor: "crm-admin",
+          action_type: "enter_ein",
+          table_name: "accounts",
+          record_id: accountId,
+          account_id: accountId,
+          summary: `EIN entered: ${einFormatted}`,
+          details: { ein_number: einFormatted },
+        })
+
+        result = {
+          success: true,
+          detail: `EIN ${einFormatted} saved. Pipeline advancing to Post-Formation.`,
+          side_effects: einSideEffects,
+        }
         break
       }
 
