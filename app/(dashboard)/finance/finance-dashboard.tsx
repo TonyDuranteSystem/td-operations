@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Users, Landmark, BarChart3 } from 'lucide-react'
+import { Users, Landmark, BarChart3, Receipt } from 'lucide-react'
 import { ClientsInvoicesTab } from './clients-invoices-tab'
 import { OverviewTab } from './overview-tab'
 import { BankFeedTab, type BankFeedRecord, type OpenInvoice } from './bank-feed-tab'
 import { AllInvoicesTab, type InvoiceRecord } from './all-invoices-tab'
+import { ExpensesTab, type TDExpenseRecord } from './expenses-tab'
 
 interface ClientSummary {
   id: string
@@ -35,10 +36,12 @@ interface Props {
   bankOpenInvoices: OpenInvoice[]
   bankFeedTotalCount: number
   allInvoicesFlat: InvoiceRecord[]
+  tdExpenses: TDExpenseRecord[]
 }
 
 const tabs = [
   { id: 'clients', label: 'Clients & Invoices', icon: Users, tooltip: 'Create and manage invoices for each client. Track payments, credits, and balances.' },
+  { id: 'expenses', label: 'Expenses', icon: Receipt, tooltip: 'TD operating expenses — vendor bills, filing fees, software, services.' },
   { id: 'bank', label: 'Bank Feed', icon: Landmark, tooltip: 'Match incoming bank transactions to open invoices. Auto-reconcile payments.' },
   { id: 'overview', label: 'Overview', icon: BarChart3, tooltip: 'Financial summary — aging buckets, outstanding totals, and recent activity.' },
 ]
@@ -47,7 +50,7 @@ export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
-  allInvoicesFlat,
+  allInvoicesFlat, tdExpenses,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -139,6 +142,9 @@ export function FinanceDashboard({
               )}
             </div>
           </div>
+        )}
+        {tab === 'expenses' && (
+          <ExpensesTab expenses={tdExpenses} />
         )}
         {tab === 'bank' && (
           <BankFeedTab

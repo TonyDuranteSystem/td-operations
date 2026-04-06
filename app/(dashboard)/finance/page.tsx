@@ -234,6 +234,19 @@ export default async function FinancePage({
 
   const recentAuditLog = recentAuditRes.data ?? []
 
+  // ── Fetch TD expenses ──
+  const { data: tdExpensesRaw } = await supabaseAdmin
+    .from('td_expenses')
+    .select('id, vendor_name, invoice_number, description, currency, total, issue_date, due_date, paid_date, status, payment_method, category, account_id, notes, accounts:account_id(company_name)')
+    .not('status', 'eq', 'Cancelled')
+    .order('created_at', { ascending: false })
+    .limit(500)
+
+  const tdExpenses = (tdExpensesRaw ?? []).map(e => ({
+    ...e,
+    accounts: e.accounts as unknown as { company_name: string } | null,
+  }))
+
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
   const totalOutstanding = allInvoices
@@ -261,6 +274,7 @@ export default async function FinancePage({
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}
         allInvoicesFlat={allInvoicesFlat}
+        tdExpenses={tdExpenses}
       />
     </div>
   )
