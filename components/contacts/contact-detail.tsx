@@ -7,7 +7,9 @@ import {
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
+  Stethoscope,
 } from 'lucide-react'
+import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
 import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -222,6 +224,7 @@ export function ContactDetail({
   wizardProgress = [],
 }: ContactDetailProps) {
   const [activeTab, setActiveTab] = useState('overview')
+  const [showDiagnostic, setShowDiagnostic] = useState(false)
 
   const makeContactSaver = (field: string) => async (value: string) => {
     const result = await updateContactField(contact.id, field, value, contact.updated_at)
@@ -261,6 +264,13 @@ export function ContactDetail({
             </div>
           </div>
         </div>
+        <button
+          onClick={() => setShowDiagnostic(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+        >
+          <Stethoscope className="h-3.5 w-3.5" />
+          Diagnose
+        </button>
       </div>
 
       {/* Journey Tracker */}
@@ -335,6 +345,13 @@ export function ContactDetail({
       {activeTab === 'activity' && (
         <ActivityTab conversations={conversations} />
       )}
+
+      <ContactDiagnosticDialog
+        open={showDiagnostic}
+        onClose={() => setShowDiagnostic(false)}
+        contactId={contact.id}
+        contactName={contact.full_name}
+      />
     </div>
   )
 }
