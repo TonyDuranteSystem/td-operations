@@ -543,13 +543,20 @@ export default function PortalChatsPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Auto-grow textarea
+  // Auto-grow textareas
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
     el.style.height = '0px'
     el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
   }, [replyText])
+
+  useEffect(() => {
+    const el = internalInputRef.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
+  }, [internalReplyText])
 
   const handleAdminFileSelect = (file: File) => {
     const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
@@ -1153,7 +1160,7 @@ export default function PortalChatsPage() {
                 rows={1}
                 placeholder={internalIsRecording ? 'Recording...' : 'Team message...'}
                 className={cn(
-                  "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none overflow-y-auto",
+                  "flex-1 min-w-0 px-4 py-3 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none overflow-y-auto max-h-[300px]",
                   internalIsRecording && "ring-2 ring-red-300 bg-red-50/50"
                 )}
               />
