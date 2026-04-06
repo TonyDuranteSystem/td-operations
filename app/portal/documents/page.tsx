@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts } from '@/lib/portal/queries'
+import { getPortalAccounts, getInvoiceArchive } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
@@ -9,6 +9,7 @@ import { DocumentUploadButton } from '@/components/portal/document-upload-button
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { FileText, Mail } from 'lucide-react'
+import { InvoiceArchive } from '@/components/portal/invoice-archive'
 
 export const dynamic = 'force-dynamic'
 
@@ -78,6 +79,9 @@ export default async function PortalDocumentsPage() {
 
   const unreadCount = (correspondence ?? []).filter(c => !c.read_at).length
 
+  // Fetch invoice archive documents
+  const invoiceArchive = selectedAccountId ? await getInvoiceArchive(selectedAccountId) : []
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -102,6 +106,11 @@ export default async function PortalDocumentsPage() {
           </div>
           <CorrespondenceList items={correspondence} />
         </div>
+      )}
+
+      {/* Invoice Archive — organized by year/month */}
+      {invoiceArchive.length > 0 && (
+        <InvoiceArchive items={invoiceArchive} />
       )}
 
       {/* Regular documents */}

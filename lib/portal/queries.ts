@@ -158,6 +158,23 @@ export async function getPortalExpenses(accountId: string) {
 }
 
 /**
+ * Get invoice archive documents (PDFs of both sales and expense invoices).
+ * Organized by year/month for display in the Documents tab.
+ */
+export async function getInvoiceArchive(accountId: string) {
+  const { data } = await supabaseAdmin
+    .from('client_invoice_documents')
+    .select('id, direction, invoice_number, counterparty_name, amount, currency, issue_date, file_url, file_name, year, month, sales_invoice_id, expense_id')
+    .eq('account_id', accountId)
+    .order('year', { ascending: false })
+    .order('month', { ascending: false })
+    .order('issue_date', { ascending: false })
+    .limit(500)
+
+  return data ?? []
+}
+
+/**
  * Get active service_deliveries for this account to drive portal nav visibility.
  * Returns service names so the sidebar can show/hide sections.
  */
