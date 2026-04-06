@@ -51,6 +51,7 @@ const PUBLIC_PREFIXES = [
   '/sign-document',
   '/api/signature-request',
   '/api/signature-request-signed',
+  '/api/offers',
   // OAuth and well-known
   '/.well-known',
   '/oauth',

@@ -605,14 +605,17 @@ export default function OfferPage() {
               <div className="offer-contract-cta">
                 <a href={`/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`}
                   className="offer-accept-btn"
-                  onClick={async (_e) => {
-                    // Save selections to DB before navigating
+                  onClick={async (e) => {
+                    e.preventDefault()
+                    // Save selections to DB BEFORE navigating (prevents race condition)
                     const allSelected = (o.services || [])
                       .filter(sv => !(sv as any).optional || selectedOptional.has(sv.name))
                       .map(sv => sv.name)
                     try {
                       await supabasePublic.from('offers').update({ selected_services: allSelected }).eq('token', token)
-                    } catch { /* non-blocking */ }
+                    } catch { /* best effort */ }
+                    // Navigate after save completes
+                    window.location.href = `/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`
                   }}
                 >&#9997;&#65039; {L.acceptAndSign}</a>
               </div>

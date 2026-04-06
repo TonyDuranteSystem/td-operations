@@ -55,27 +55,40 @@ export async function POST(req: NextRequest) {
       : null
     const paymentMethod = hasCheckoutLink ? gatewayType : hasBank ? "bank_transfer" : "unknown"
 
-    // Calculate total from cost_summary (first section = setup/initial payment)
-    let totalAmount = 0
+    // Parse cost_summary for currency detection and fallback amount
     const summaryArr = Array.isArray(offer.cost_summary)
       ? offer.cost_summary
       : typeof offer.cost_summary === "string"
         ? (() => { try { return JSON.parse(offer.cost_summary) } catch { return [] } })()
         : []
 
-    if (summaryArr.length > 0) {
-      // Use first section's total (setup payment the client needs to make)
-      const section = summaryArr[0]
-      const raw = section.total || section.total_label || ""
-      // Extract number: strip currency symbols, handle European format (€3.000 = 3000, €2,500 = 2500)
+    // Calculate total from selected_services (respects client's service selection)
+    let totalAmount = 0
+    const services = Array.isArray(offer.services) ? offer.services : []
+    const selectedServices: string[] = Array.isArray(offer.selected_services) ? offer.selected_services : []
+
+    for (const svc of services) {
+      const name = (svc as Record<string, unknown>).name as string || ""
+      const isOptional = !!(svc as Record<string, unknown>).optional
+      const isSelected = !isOptional || selectedServices.includes(name)
+      if (!isSelected) continue
+
+      const priceStr = String((svc as Record<string, unknown>).price || "0")
+      if (/\/(year|anno|month|mese)/i.test(priceStr)) continue
+      if (/includ|inclus/i.test(priceStr)) continue
+
+      const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
+      if (!isNaN(priceNum) && priceNum > 0) totalAmount += priceNum
+    }
+
+    // Fallback: if no parseable prices from services, use cost_summary[0].total
+    if (totalAmount === 0 && summaryArr.length > 0) {
+      const raw = summaryArr[0].total || summaryArr[0].total_label || ""
       const numStr = raw.replace(/[^0-9.,]/g, "").trim()
       if (numStr) {
-        // Detect European format: "3.000" (dot as thousands) vs "3,000" (comma as thousands)
-        // If has dot followed by 3 digits at end → European thousands separator
         if (/\.\d{3}$/.test(numStr) && !numStr.includes(",")) {
           totalAmount = parseFloat(numStr.replace(/\./g, ""))
         } else {
-          // Standard: remove commas, parse
           totalAmount = parseFloat(numStr.replace(",", ""))
         }
       }

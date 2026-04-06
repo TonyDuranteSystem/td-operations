@@ -506,10 +506,34 @@ export default function ContractPage() {
       }
       await supabasePublic.from('contracts').insert(contractData)
 
-      // Update offer status (retry)
+      // Recalculate correct amount from selected_services for bank_details
+      const svcList = Array.isArray(offer.services) ? offer.services : []
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const selSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services as string[] : [])
+      let correctTotal = 0
+      let correctCurrency = 'EUR'
+      for (const svc of svcList) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const isOpt = !!(svc as any).optional
+        const isSel = selSet.size > 0 ? (!isOpt || selSet.has(svc.name)) : !isOpt
+        if (!isSel) continue
+        const ps = String(svc.price || '0')
+        if (/\/(year|anno|month|mese)/i.test(ps) || /includ|inclus/i.test(ps)) continue
+        const pn = parseFloat(ps.replace(/[^0-9.]/g, ''))
+        if (!isNaN(pn) && pn > 0) {
+          correctTotal += pn
+          if (/\$|usd/i.test(ps)) correctCurrency = '$'
+          else if (/EUR/i.test(ps)) correctCurrency = 'EUR'
+        }
+      }
+
+      // Update offer status + recalculated bank amount (retry)
+      const bankUpdate = correctTotal > 0 && offer.bank_details
+        ? { bank_details: { ...offer.bank_details, amount: `${correctCurrency}${correctTotal.toLocaleString('en-US')}` } }
+        : {}
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed' }).eq('token', offer.token)
+          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed', payment_links: null, ...bankUpdate }).eq('token', offer.token)
           if (!pErr) break
         } catch { /* retry */ }
       }
