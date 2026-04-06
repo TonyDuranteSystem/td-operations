@@ -215,6 +215,120 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("account_create", "skipped", companyName ? "No contact_id" : "No LLC name in submitted data"))
   }
 
+  // ─── 2a.1. DRIVE FOLDER + PASSPORT PROCESSING ───
+  // Phase 1: Create contact-level Drive folder (Contacts/{Name}/)
+  // Documents will migrate to company folder when LLC name is selected (Phase 2)
+  let contactDriveFolderId: string | null = null
+  if (p.contact_id) {
+    try {
+      const { ensureContactFolder } = await import("@/lib/drive-folder-utils")
+      const contactName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token
+      const folderResult = await ensureContactFolder(p.contact_id, contactName)
+      contactDriveFolderId = folderResult.folderId
+
+      if (folderResult.created) {
+        result.steps.push(step("drive_folder", "ok", `Created: Contacts/${contactName}/`))
+      } else {
+        result.steps.push(step("drive_folder", "skipped", "Already exists"))
+      }
+
+      // Copy passport from Supabase Storage to Drive
+      const passportPath = submitted.passport_owner as string | undefined
+      if (passportPath && contactDriveFolderId) {
+        try {
+          const contactsSubfolder = folderResult.subfolders["2. Contacts"]
+          if (contactsSubfolder) {
+            const cleanPath = passportPath.replace(/^\/+/, "")
+            const { data: blob, error: dlErr } = await supabaseAdmin.storage
+              .from("onboarding-uploads")
+              .download(cleanPath)
+
+            if (dlErr || !blob) {
+              result.steps.push(step("passport_copy", "error", dlErr?.message || "Download failed"))
+            } else {
+              const { uploadBinaryToDrive } = await import("@/lib/google-drive")
+              const fileName = cleanPath.split("/").pop() || "passport.pdf"
+              const buffer = Buffer.from(await blob.arrayBuffer())
+              const mimeType = blob.type || "application/octet-stream"
+
+              const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, contactsSubfolder) as { id: string; name: string }
+              result.steps.push(step("passport_copy", "ok", `Uploaded to Drive: ${driveFile.id}`))
+
+              // OCR + MRZ extraction (skip HEIC — Document AI doesn't support it)
+              const ocrSupportedMimes = ["application/pdf", "image/jpeg", "image/png", "image/tiff", "image/gif", "image/bmp", "image/webp"]
+              if (ocrSupportedMimes.includes(mimeType)) {
+                try {
+                  const { ocrDriveFile } = await import("@/lib/docai")
+                  const { parsePassportFromOcr } = await import("@/lib/passport-processing")
+                  const ocrResult = await ocrDriveFile(driveFile.id)
+
+                  if (ocrResult.fullText) {
+                    const passportData = parsePassportFromOcr(ocrResult.fullText)
+
+                    // Update contact with extracted data
+                    const passportUpdates: Record<string, unknown> = {}
+                    if (passportData.passportNumber) passportUpdates.passport_number = passportData.passportNumber
+                    if (passportData.expiryDate) passportUpdates.passport_expiry_date = passportData.expiryDate
+                    if (passportData.dateOfBirth && !submitted.owner_dob) passportUpdates.date_of_birth = passportData.dateOfBirth
+
+                    if (Object.keys(passportUpdates).length > 0) {
+                      await supabaseAdmin
+                        .from("contacts")
+                        .update({ ...passportUpdates, updated_at: now })
+                        .eq("id", p.contact_id!)
+                      result.steps.push(step("passport_ocr", "ok", `Extracted: ${Object.keys(passportUpdates).join(", ")}`))
+                    } else {
+                      result.steps.push(step("passport_ocr", "ok", "OCR ran but no data extracted from MRZ"))
+                    }
+                  }
+                } catch (ocrErr) {
+                  result.steps.push(step("passport_ocr", "error", ocrErr instanceof Error ? ocrErr.message : String(ocrErr)))
+                }
+              } else {
+                // HEIC or unsupported format — create manual task
+                result.steps.push(step("passport_ocr", "skipped", `Unsupported format for OCR: ${mimeType}. Manual data entry needed.`))
+                await supabaseAdmin.from("tasks").insert({
+                  task_title: `Manual passport data entry: ${submitted.owner_first_name || ""} ${submitted.owner_last_name || ""}`,
+                  description: `Passport uploaded as ${mimeType} (not supported by OCR). Manually enter passport_number and passport_expiry_date on the contact record.`,
+                  assigned_to: "Luca",
+                  category: "Document",
+                  priority: "Normal",
+                  status: "To Do",
+                  ...(accountId ? { account_id: accountId } : {}),
+                  contact_id: p.contact_id,
+                })
+              }
+
+              // Create document record
+              await supabaseAdmin.from("documents").insert({
+                file_name: fileName,
+                drive_file_id: driveFile.id,
+                drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
+                document_type_name: "Passport",
+                category: 2,
+                category_name: "Contacts",
+                status: "classified",
+                contact_id: p.contact_id,
+                account_id: accountId,
+                portal_visible: true,
+              })
+              result.steps.push(step("passport_doc_record", "ok", "Document record created"))
+            }
+          } else {
+            result.steps.push(step("passport_copy", "error", "No '2. Contacts' subfolder found"))
+          }
+        } catch (passErr) {
+          result.steps.push(step("passport_copy", "error", passErr instanceof Error ? passErr.message : String(passErr)))
+        }
+      } else if (!passportPath) {
+        result.steps.push(step("passport_copy", "skipped", "No passport uploaded"))
+      }
+    } catch (driveErr) {
+      result.steps.push(step("drive_folder", "error", driveErr instanceof Error ? driveErr.message : String(driveErr)))
+    }
+    await updateJobProgress(job.id, result)
+  }
+
   // ─── 2b. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
   try {
     const sdContactId = p.contact_id

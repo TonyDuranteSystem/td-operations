@@ -397,6 +397,54 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Create company Drive folder + migrate files from contact folder
+        if (accountId) {
+          try {
+            const { ensureCompanyFolder, migrateContactToCompany } = await import("@/lib/drive-folder-utils")
+
+            // Get owner name for folder naming
+            const { data: ownerContact } = await supabaseAdmin
+              .from("contacts")
+              .select("first_name, last_name, gdrive_folder_url")
+              .eq("id", contact_id)
+              .single()
+            const ownerName = ownerContact
+              ? [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ")
+              : ""
+
+            const stateForFolder = state === "NM" ? "New Mexico" : state === "WY" ? "Wyoming" : state === "DE" ? "Delaware" : state === "FL" ? "Florida" : state
+
+            const companyResult = await ensureCompanyFolder(
+              accountId,
+              `${selectedName} LLC`,
+              stateForFolder,
+              ownerName,
+            )
+
+            if (companyResult.created) {
+              sideEffects.push(`Company Drive folder created`)
+
+              // Migrate files from contact folder if it exists
+              if (ownerContact?.gdrive_folder_url) {
+                const contactFolderMatch = (ownerContact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
+                if (contactFolderMatch) {
+                  const migrationResult = await migrateContactToCompany(contactFolderMatch[1], companyResult.folderId)
+                  if (migrationResult.moved > 0) {
+                    sideEffects.push(`${migrationResult.moved} file(s) migrated from contact folder`)
+                  }
+                  if (migrationResult.errors.length > 0) {
+                    sideEffects.push(`Migration warnings: ${migrationResult.errors.length}`)
+                  }
+                }
+              }
+            } else {
+              sideEffects.push("Company Drive folder already exists")
+            }
+          } catch (driveErr) {
+            sideEffects.push(`Drive folder error: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+          }
+        }
+
         // Log
         await supabaseAdmin.from("action_log").insert({
           actor: "crm-admin",
