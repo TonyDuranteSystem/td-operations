@@ -106,6 +106,7 @@ interface ContactRecord {
   portal_tier: string | null
   status: string | null
   notes: string | null
+  gdrive_folder_url: string | null
   created_at: string | null
   updated_at: string
 }
@@ -597,7 +598,7 @@ function OverviewTab({
       <OfferStatusCard offers={offers} pendingActivations={pendingActivations} />
 
       {/* Wizard Progress Card */}
-      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />
+      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactHasDriveFolder={!!contact.gdrive_folder_url} />
 
       {/* LLC Name Selection Card */}
       <LlcNameSelectionCard
@@ -1215,10 +1216,12 @@ function WizardProgressCard({
   wizardProgress,
   pendingActivations,
   contactId,
+  contactHasDriveFolder,
 }: {
   wizardProgress: WizardProgressRecord[]
   pendingActivations: PendingActivationRecord[]
   contactId: string
+  contactHasDriveFolder: boolean
 }) {
   const [processing, setProcessing] = useState(false)
   const primaryWizard = wizardProgress[0] ?? null
@@ -1345,14 +1348,21 @@ function WizardProgressCard({
           }
         </div>
         {primaryWizard.status === 'submitted' && (
-          <button
-            onClick={handleProcessDocs}
-            disabled={processing}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors"
-          >
-            {processing ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderOpen className="h-3 w-3" />}
-            Process Documents
-          </button>
+          contactHasDriveFolder ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700">
+              <CheckCircle2 className="h-3 w-3" />
+              Documents processed
+            </span>
+          ) : (
+            <button
+              onClick={handleProcessDocs}
+              disabled={processing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors"
+            >
+              {processing ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderOpen className="h-3 w-3" />}
+              Process Documents
+            </button>
+          )
         )}
       </div>
     </div>

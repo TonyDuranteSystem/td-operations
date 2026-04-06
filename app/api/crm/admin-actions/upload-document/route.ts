@@ -106,40 +106,16 @@ export async function POST(req: NextRequest) {
       .limit(1)
     const accountId = acLink?.[0]?.account_id ?? null
 
-    // Passport OCR
     const isPassport = (documentType as string).toLowerCase().includes('passport')
-    const ocrSupported = ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff', 'image/gif', 'image/bmp', 'image/webp']
-    let ocrData: Record<string, unknown> | null = null
 
-    if (isPassport && ocrSupported.includes(fileMime)) {
-      try {
-        const { ocrDriveFile } = await import('@/lib/docai')
-        const { parsePassportFromOcr } = await import('@/lib/passport-processing')
-        const ocrResult = await ocrDriveFile(driveFile.id)
-
-        if (ocrResult.fullText) {
-          const parsed = parsePassportFromOcr(ocrResult.fullText)
-          ocrData = parsed as unknown as Record<string, unknown>
-
-          const updates: Record<string, unknown> = { passport_on_file: true, updated_at: new Date().toISOString() }
-          if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
-          if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
-          if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
-
-          await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
-          const extracted = Object.keys(updates).filter(k => k !== 'passport_on_file' && k !== 'updated_at')
-          sideEffects.push(extracted.length > 0 ? `OCR extracted: ${extracted.join(', ')}` : 'OCR: no MRZ data found')
-        }
-      } catch (ocrErr) {
-        sideEffects.push(`OCR error: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`)
-      }
-    } else if (isPassport) {
+    // Mark passport on file immediately
+    if (isPassport) {
       await supabaseAdmin.from('contacts')
         .update({ passport_on_file: true, updated_at: new Date().toISOString() })
         .eq('id', contactId)
     }
 
-    // Create document record (dedup)
+    // Create document record FIRST (before OCR — so it's saved even if OCR crashes)
     const { data: existingDoc } = await supabaseAdmin
       .from('documents')
       .select('id')
@@ -162,7 +138,7 @@ export async function POST(req: NextRequest) {
       sideEffects.push('Document record created')
     }
 
-    // Log
+    // Log action BEFORE OCR (ensures it's recorded even if OCR times out)
     await supabaseAdmin.from('action_log').insert({
       actor: 'crm-admin',
       action_type: 'upload_document',
@@ -172,6 +148,39 @@ export async function POST(req: NextRequest) {
       summary: `Document uploaded: ${fileName} (${documentType})`,
       details: { file_name: fileName, document_type: documentType, category, contact_id: contactId },
     })
+
+    // Passport OCR (best-effort — file is already saved above)
+    let ocrData: Record<string, unknown> | null = null
+    const ocrSupported = ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff', 'image/gif', 'image/bmp', 'image/webp']
+
+    if (isPassport && ocrSupported.includes(fileMime)) {
+      try {
+        const { ocrDriveFile } = await import('@/lib/docai')
+        const { parsePassportFromOcr } = await import('@/lib/passport-processing')
+        const ocrResult = await ocrDriveFile(driveFile.id)
+
+        if (ocrResult.fullText) {
+          const parsed = parsePassportFromOcr(ocrResult.fullText)
+          ocrData = parsed as unknown as Record<string, unknown>
+
+          const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+          if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
+          if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
+          if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
+
+          const extracted = Object.keys(updates).filter(k => k !== 'updated_at')
+          if (extracted.length > 0) {
+            await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
+            sideEffects.push(`OCR extracted: ${extracted.join(', ')}`)
+          } else {
+            sideEffects.push('OCR ran but no MRZ data found')
+          }
+        }
+      } catch (ocrErr) {
+        const errMsg = ocrErr instanceof Error ? ocrErr.message : String(ocrErr)
+        sideEffects.push(`OCR skipped: ${errMsg.includes('too large') ? 'File too large for OCR (max 15MB). Reduce PDF size.' : errMsg}`)
+      }
+    }
 
     // Clean up storage file (best-effort)
     supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
