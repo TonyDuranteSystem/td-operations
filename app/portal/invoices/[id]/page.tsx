@@ -6,9 +6,10 @@ import Link from 'next/link'
 import {
   ArrowLeft, Download, Send, CheckCircle2, Loader2, FileText,
   Calendar, User, Receipt, Clock, Pencil, Bell, BookmarkPlus, X,
+  Ban, Copy, DollarSign,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoiceAsPaid, createTemplate } from '../actions'
+import { markInvoiceAsPaid, recordPartialPayment, voidInvoice, duplicateInvoice, createTemplate } from '../actions'
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
 import { PayNow } from '@/components/portal/pay-now'
@@ -36,6 +37,8 @@ interface InvoiceDetail {
   subtotal: number
   discount: number
   total: number
+  amount_paid: number | null
+  amount_due: number | null
   issue_date: string
   due_date: string | null
   paid_date: string | null
@@ -63,7 +66,7 @@ function fmtDate(d: string | null): string {
 
 export default function InvoiceDetailPage() {
   const params = useParams()
-  const _router = useRouter()
+  const router = useRouter()
   const invoiceId = params.id as string
 
   const { t, locale } = useLocale()
@@ -73,6 +76,9 @@ export default function InvoiceDetailPage() {
   const [sending, setSending] = useState(false)
   const [reminding, setReminding] = useState(false)
   const [showTemplateModal, setShowTemplateModal] = useState(false)
+  const [showPartialModal, setShowPartialModal] = useState(false)
+  const [showVoidConfirm, setShowVoidConfirm] = useState(false)
+  const [partialAmount, setPartialAmount] = useState('')
   const [templateName, setTemplateName] = useState('')
   const [savingTemplate, setSavingTemplate] = useState(false)
   const [isPending, startTransition] = useTransition()
@@ -178,6 +184,52 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  const handleVoid = () => {
+    startTransition(async () => {
+      const result = await voidInvoice(invoiceId)
+      if (result.success) {
+        setInvoice(prev => prev ? { ...prev, status: 'Cancelled' } : prev)
+        setShowVoidConfirm(false)
+        toast.success('Invoice voided')
+      } else {
+        toast.error(result.error ?? 'Failed to void')
+      }
+    })
+  }
+
+  const handleDuplicate = () => {
+    startTransition(async () => {
+      const result = await duplicateInvoice(invoiceId)
+      if (result.success && result.data) {
+        toast.success(`Duplicated as ${result.data.invoice_number}`)
+        router.push(`/portal/invoices/${result.data.id}/edit`)
+      } else {
+        toast.error(result.error ?? 'Failed to duplicate')
+      }
+    })
+  }
+
+  const handlePartialPayment = () => {
+    const amount = parseFloat(partialAmount)
+    if (isNaN(amount) || amount <= 0) {
+      toast.error('Enter a valid amount')
+      return
+    }
+    startTransition(async () => {
+      const result = await recordPartialPayment(invoiceId, amount, new Date().toISOString().split('T')[0])
+      if (result.success) {
+        setShowPartialModal(false)
+        setPartialAmount('')
+        // Reload invoice data
+        const res = await fetch(`/api/portal/invoices/${invoiceId}`)
+        if (res.ok) setInvoice(await res.json())
+        toast.success(`Partial payment of ${amount} recorded`)
+      } else {
+        toast.error(result.error ?? 'Failed to record payment')
+      }
+    })
+  }
+
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
@@ -275,8 +327,102 @@ export default function InvoiceDetailPage() {
             <BookmarkPlus className="h-4 w-4" />
             {t('invoices.saveAsTemplate')}
           </button>
+
+          {/* Duplicate — available for all statuses */}
+          <button
+            onClick={handleDuplicate}
+            disabled={isPending}
+            className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50 disabled:opacity-50"
+          >
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+            Duplicate
+          </button>
+
+          {/* Partial Payment — for Sent/Overdue */}
+          {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
+            <button
+              onClick={() => {
+                const remaining = Number(invoice.total) - (Number(invoice.amount_paid) || 0)
+                setPartialAmount(remaining.toFixed(2))
+                setShowPartialModal(true)
+              }}
+              className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50"
+            >
+              <DollarSign className="h-4 w-4" />
+              Partial Payment
+            </button>
+          )}
+
+          {/* Void — for Draft/Sent/Overdue */}
+          {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
+            <button
+              onClick={() => setShowVoidConfirm(true)}
+              className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50"
+            >
+              <Ban className="h-4 w-4" />
+              Void
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Void Confirmation Modal */}
+      {showVoidConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowVoidConfirm(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-red-700">Void Invoice</h3>
+              <button onClick={() => setShowVoidConfirm(false)} className="p-1 hover:bg-zinc-100 rounded"><X className="h-4 w-4" /></button>
+            </div>
+            <p className="text-sm text-zinc-600 mb-4">Are you sure you want to void <strong>{invoice.invoice_number}</strong>? This cannot be undone.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowVoidConfirm(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+              <button
+                onClick={handleVoid}
+                disabled={isPending}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                Void
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Partial Payment Modal */}
+      {showPartialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowPartialModal(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-zinc-900">Record Payment</h3>
+              <button onClick={() => setShowPartialModal(false)} className="p-1 hover:bg-zinc-100 rounded"><X className="h-4 w-4" /></button>
+            </div>
+            <label className="block text-sm text-zinc-600 mb-1">Amount received</label>
+            <input
+              type="number"
+              step="0.01"
+              value={partialAmount}
+              onChange={e => setPartialAmount(e.target.value)}
+              autoFocus
+              className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowPartialModal(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+              <button
+                onClick={handlePartialPayment}
+                disabled={isPending}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />}
+                Record
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Save as Template Modal */}
       {showTemplateModal && (

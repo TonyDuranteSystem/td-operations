@@ -235,6 +235,77 @@ export async function splitInvoice(
   })
 }
 
+// --- Void / Duplicate actions ---
+
+export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    // Verify status allows voiding
+    const { data: inv } = await supabaseAdmin
+      .from('client_invoices')
+      .select('status')
+      .eq('id', invoiceId)
+      .single()
+    if (!inv) throw new Error('Invoice not found')
+    if (!['Draft', 'Sent', 'Overdue'].includes(inv.status)) {
+      throw new Error(`Cannot void invoice with status '${inv.status}'`)
+    }
+
+    await supabaseAdmin
+      .from('client_invoices')
+      .update({ status: 'Cancelled', updated_at: new Date().toISOString() })
+      .eq('id', invoiceId)
+
+    const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
+    logInvoiceAudit({
+      invoice_id: invoiceId,
+      action: 'voided',
+      previous_values: { status: inv.status },
+      new_values: { status: 'Cancelled' },
+      performed_by: 'client',
+    })
+
+    revalidatePath('/portal/invoices')
+  }, {
+    action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
+    summary: 'Invoice voided by client',
+  })
+}
+
+export async function duplicateInvoice(invoiceId: string): Promise<ActionResult<{ id: string; invoice_number: string }>> {
+  return safeAction(async () => {
+    // Fetch source invoice with items
+    const { data: source } = await supabaseAdmin
+      .from('client_invoices')
+      .select('*, client_invoice_items(*)')
+      .eq('id', invoiceId)
+      .single()
+    if (!source) throw new Error('Invoice not found')
+
+    const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
+    const items = (source.client_invoice_items || []).map((item: { description: string; unit_price: number; quantity: number }) => ({
+      description: item.description,
+      unit_price: item.unit_price,
+      quantity: item.quantity,
+    }))
+
+    const result = await createUnifiedInvoice({
+      account_id: source.account_id || undefined,
+      contact_id: source.contact_id || undefined,
+      customer_id: source.customer_id || undefined,
+      line_items: items,
+      currency: source.currency as 'USD' | 'EUR',
+      notes: source.notes || undefined,
+      message: source.message || undefined,
+    })
+
+    revalidatePath('/portal/invoices')
+    return { id: result.invoiceId, invoice_number: result.invoiceNumber }
+  }, {
+    action_type: 'create', table_name: 'client_invoices', record_id: invoiceId,
+    summary: `Invoice duplicated from ${invoiceId}`,
+  })
+}
+
 // --- Template actions ---
 
 export async function createTemplate(input: CreateTemplateInput): Promise<ActionResult<{ id: string }>> {
