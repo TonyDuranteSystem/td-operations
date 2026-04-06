@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
-  Loader2, FileText, Rocket, Trash2, RotateCcw, UserX,
+  Loader2, FileText, Rocket, Trash2, RotateCcw, UserX, Send,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
@@ -73,12 +73,16 @@ export function LeadActions({
   const [showResetOffer, setShowResetOffer] = useState(false)
   const [showDeletePortalUser, setShowDeletePortalUser] = useState(false)
 
+  // Send offer state
+  const [sendingOffer, setSendingOffer] = useState(false)
+
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
   const isActivated = activation?.status === 'activated'
   const hasOffer = !!offer
   const hasEmail = !!leadEmail
   const isOfferSentOrBeyond = ['Offer Sent', 'Negotiating', 'Converted'].includes(leadStatus)
+  const isOfferDraft = hasOffer && offer.status === 'draft'
 
   // Sequential unlock logic
   const canCreateOffer = !hasOffer && !isConverted && !isLost
@@ -118,6 +122,37 @@ export function LeadActions({
         toast.error(err instanceof Error ? err.message : 'An error occurred')
       }
     })
+  }
+
+  const doSendOffer = async () => {
+    if (!offer?.token) return
+    if (!confirm(`Send offer ${offer.token} to ${leadEmail}?\n\nThis will create a portal login and email the client their credentials.`)) return
+
+    setSendingOffer(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/send-offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offer.token }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to send offer')
+        return
+      }
+
+      toast.success(data.message || 'Offer sent!')
+      if (data.portal_created) {
+        toast.success('Portal user created — client will receive login credentials')
+      }
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'An error occurred')
+    } finally {
+      setSendingOffer(false)
+    }
   }
 
   if (isConverted && isActivated) {
@@ -161,6 +196,18 @@ export function LeadActions({
             >
               <FileText className="h-4 w-4" />
               Create Offer
+            </button>
+          )}
+
+          {/* Send Offer (when offer exists in draft) */}
+          {isOfferDraft && hasEmail && (
+            <button
+              onClick={doSendOffer}
+              disabled={sendingOffer}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
+            >
+              {sendingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Send Offer
             </button>
           )}
 
