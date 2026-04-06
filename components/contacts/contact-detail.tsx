@@ -156,6 +156,41 @@ interface ContactInvoice {
   accounts: { company_name: string } | null
 }
 
+interface OfferRecord {
+  id: string
+  client_email: string
+  status: string
+  contract_type: string | null
+  services: unknown
+  bundled_pipelines: string[] | null
+  selected_services: unknown
+  created_at: string
+  viewed_at: string | null
+  expires_at: string | null
+}
+
+interface PendingActivationRecord {
+  id: string
+  client_email: string
+  status: string
+  signed_at: string | null
+  payment_confirmed_at: string | null
+  activated_at: string | null
+  payment_method: string | null
+  amount: number | null
+  currency: string | null
+}
+
+interface WizardProgressRecord {
+  id: string
+  contact_id: string
+  wizard_type: string
+  current_step: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
 interface ContactDetailProps {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -166,6 +201,9 @@ interface ContactDetailProps {
   lead: LeadOrigin | null
   portalAuth: PortalAuth
   today: string
+  offers: OfferRecord[]
+  pendingActivations: PendingActivationRecord[]
+  wizardProgress: WizardProgressRecord[]
 }
 
 // ─── Main Component ───
@@ -179,6 +217,9 @@ export function ContactDetail({
   invoices = [],
   lead,
   portalAuth,
+  offers = [],
+  pendingActivations = [],
+  wizardProgress = [],
 }: ContactDetailProps) {
   const [activeTab, setActiveTab] = useState('overview')
 
@@ -222,6 +263,16 @@ export function ContactDetail({
         </div>
       </div>
 
+      {/* Journey Tracker */}
+      <JourneyTracker
+        lead={lead}
+        offers={offers}
+        pendingActivations={pendingActivations}
+        wizardProgress={wizardProgress}
+        serviceDeliveries={serviceDeliveries}
+        contact={contact}
+      />
+
       {/* Tabs */}
       <div className="border-b">
         <div className="flex gap-1 overflow-x-auto">
@@ -264,6 +315,9 @@ export function ContactDetail({
           accounts={accounts}
           lead={lead}
           makeContactSaver={makeContactSaver}
+          offers={offers}
+          pendingActivations={pendingActivations}
+          wizardProgress={wizardProgress}
         />
       )}
       {activeTab === 'services' && (
@@ -292,11 +346,17 @@ function OverviewTab({
   accounts,
   lead,
   makeContactSaver,
+  offers,
+  pendingActivations,
+  wizardProgress,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
   lead: LeadOrigin | null
   makeContactSaver: (field: string) => (value: string) => Promise<{ success: boolean; error?: string }>
+  offers: OfferRecord[]
+  pendingActivations: PendingActivationRecord[]
+  wizardProgress: WizardProgressRecord[]
 }) {
   const [note, setNote] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -470,6 +530,485 @@ function OverviewTab({
             </div>
           </div>
         )}
+      </div>
+
+      {/* Offer Status Card */}
+      <OfferStatusCard offers={offers} pendingActivations={pendingActivations} />
+
+      {/* Wizard Progress Card */}
+      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} />
+    </div>
+  )
+}
+
+// ─── Journey Tracker ───
+
+type JourneyStepStatus = 'done' | 'current' | 'pending' | 'issue'
+
+interface JourneyStep {
+  label: string
+  status: JourneyStepStatus
+  detail?: string
+}
+
+const JOURNEY_STEP_STYLES: Record<JourneyStepStatus, { dot: string; line: string; text: string }> = {
+  done: { dot: 'bg-emerald-500', line: 'bg-emerald-500', text: 'text-emerald-700' },
+  current: { dot: 'bg-blue-500 ring-4 ring-blue-100', line: 'bg-zinc-200', text: 'text-blue-700' },
+  pending: { dot: 'bg-zinc-200', line: 'bg-zinc-200', text: 'text-zinc-400' },
+  issue: { dot: 'bg-amber-500 ring-4 ring-amber-100', line: 'bg-zinc-200', text: 'text-amber-700' },
+}
+
+function deriveJourneySteps({
+  lead,
+  offers,
+  pendingActivations,
+  wizardProgress,
+  serviceDeliveries,
+  contact,
+}: {
+  lead: LeadOrigin | null
+  offers: OfferRecord[]
+  pendingActivations: PendingActivationRecord[]
+  wizardProgress: WizardProgressRecord[]
+  serviceDeliveries: ServiceDelivery[]
+  contact: ContactRecord
+}): JourneyStep[] {
+  // Find the primary offer (most recent non-draft, or most recent)
+  const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
+  const primaryActivation = pendingActivations[0] ?? null
+  const primaryWizard = wizardProgress[0] ?? null
+  const formationSds = serviceDeliveries.filter(sd =>
+    sd.pipeline === 'Company Formation' || sd.service_type === 'Formation' ||
+    (sd.service_name ?? '').toLowerCase().includes('formation')
+  )
+  const hasActiveServices = serviceDeliveries.some(sd => sd.status === 'active')
+
+  // Formation stage ordering for "beyond Data Collection" check
+  const FORMATION_STAGE_ORDER = [
+    'Data Collection', 'State Filing', 'EIN Application', 'EIN Submitted', 'Post-Formation + Banking', 'Closing',
+  ]
+
+  const formationBeyondDataCollection = formationSds.some(sd => {
+    const idx = FORMATION_STAGE_ORDER.indexOf(sd.stage ?? '')
+    return idx > 0 // anything after Data Collection
+  })
+
+  // 1. Lead step
+  let leadStep: JourneyStep
+  if (!lead) {
+    leadStep = { label: 'Lead', status: 'pending', detail: 'No lead record' }
+  } else if (lead.status === 'Converted') {
+    leadStep = { label: 'Lead', status: 'done', detail: 'Converted' }
+  } else {
+    leadStep = { label: 'Lead', status: 'current', detail: lead.status ?? undefined }
+  }
+
+  // 2. Offer step
+  let offerStep: JourneyStep
+  if (!primaryOffer) {
+    offerStep = lead
+      ? { label: 'Offer', status: 'issue', detail: 'No offer found' }
+      : { label: 'Offer', status: 'pending' }
+  } else if (['signed', 'completed'].includes(primaryOffer.status)) {
+    offerStep = { label: 'Offer', status: 'done', detail: primaryOffer.contract_type ?? undefined }
+  } else if (['sent', 'viewed'].includes(primaryOffer.status)) {
+    offerStep = { label: 'Offer', status: 'current', detail: primaryOffer.status === 'viewed' ? 'Viewed by client' : 'Sent' }
+  } else {
+    offerStep = { label: 'Offer', status: 'current', detail: primaryOffer.status }
+  }
+
+  // 3. Signed step (from pending_activations.signed_at)
+  let signedStep: JourneyStep
+  if (primaryActivation?.signed_at) {
+    signedStep = { label: 'Signed', status: 'done', detail: formatDate(primaryActivation.signed_at.split('T')[0]) }
+  } else if (primaryOffer && ['signed', 'completed'].includes(primaryOffer.status)) {
+    // Offer marked signed/completed but no pending_activation — still count as signed
+    signedStep = { label: 'Signed', status: 'done' }
+  } else if (offerStep.status === 'done' || offerStep.status === 'current') {
+    signedStep = { label: 'Signed', status: 'pending', detail: 'Awaiting signature' }
+  } else {
+    signedStep = { label: 'Signed', status: 'pending' }
+  }
+
+  // 4. Paid step
+  let paidStep: JourneyStep
+  if (primaryActivation?.payment_confirmed_at) {
+    paidStep = { label: 'Paid', status: 'done', detail: primaryActivation.payment_method ?? undefined }
+  } else if (signedStep.status === 'done' && !primaryActivation?.payment_confirmed_at) {
+    // Signed but not paid — check if it's been too long
+    const signedDate = primaryActivation?.signed_at ? new Date(primaryActivation.signed_at) : null
+    const daysSinceSigned = signedDate ? Math.floor((Date.now() - signedDate.getTime()) / (1000 * 60 * 60 * 24)) : 0
+    if (daysSinceSigned > 7) {
+      paidStep = { label: 'Paid', status: 'issue', detail: `${daysSinceSigned}d since signing` }
+    } else {
+      paidStep = { label: 'Paid', status: 'current', detail: 'Awaiting payment' }
+    }
+  } else {
+    paidStep = { label: 'Paid', status: 'pending' }
+  }
+
+  // 5. Wizard step
+  let wizardStep: JourneyStep
+  if (primaryWizard?.status === 'submitted') {
+    wizardStep = { label: 'Wizard', status: 'done', detail: primaryWizard.wizard_type }
+  } else if (primaryWizard?.status === 'in_progress') {
+    wizardStep = { label: 'Wizard', status: 'current', detail: `Step ${primaryWizard.current_step}` }
+  } else if (paidStep.status === 'done' && !primaryWizard) {
+    // Paid but wizard not started — check how long
+    const paidDate = primaryActivation?.payment_confirmed_at ? new Date(primaryActivation.payment_confirmed_at) : null
+    const daysSincePaid = paidDate ? Math.floor((Date.now() - paidDate.getTime()) / (1000 * 60 * 60 * 24)) : 0
+    if (daysSincePaid > 3) {
+      wizardStep = { label: 'Wizard', status: 'issue', detail: `Not started (${daysSincePaid}d)` }
+    } else {
+      wizardStep = { label: 'Wizard', status: 'current', detail: 'Not started' }
+    }
+  } else {
+    wizardStep = { label: 'Wizard', status: 'pending' }
+  }
+
+  // 6. Service step (Formation/Onboarding progress)
+  let serviceStep: JourneyStep
+  if (formationSds.length > 0) {
+    const primaryFormation = formationSds[0]
+    if (primaryFormation.stage === 'Closing' || primaryFormation.status === 'completed') {
+      serviceStep = { label: 'Service', status: 'done', detail: 'Formation complete' }
+    } else if (formationBeyondDataCollection) {
+      serviceStep = { label: 'Service', status: 'current', detail: primaryFormation.stage ?? undefined }
+    } else if (primaryFormation.stage === 'Data Collection') {
+      serviceStep = { label: 'Service', status: 'current', detail: 'Data Collection' }
+    } else {
+      serviceStep = { label: 'Service', status: 'current', detail: primaryFormation.stage ?? undefined }
+    }
+  } else if (hasActiveServices) {
+    serviceStep = { label: 'Service', status: 'done', detail: 'Active services' }
+  } else {
+    serviceStep = { label: 'Service', status: 'pending' }
+  }
+
+  // 7. Active step
+  let activeStep: JourneyStep
+  if (contact.portal_tier === 'active' || contact.portal_tier === 'full') {
+    activeStep = { label: 'Active', status: 'done', detail: contact.portal_tier }
+  } else if (contact.portal_tier === 'onboarding') {
+    activeStep = { label: 'Active', status: 'current', detail: 'Onboarding' }
+  } else {
+    activeStep = { label: 'Active', status: 'pending' }
+  }
+
+  return [leadStep, offerStep, signedStep, paidStep, wizardStep, serviceStep, activeStep]
+}
+
+function JourneyTracker({
+  lead,
+  offers,
+  pendingActivations,
+  wizardProgress,
+  serviceDeliveries,
+  contact,
+}: {
+  lead: LeadOrigin | null
+  offers: OfferRecord[]
+  pendingActivations: PendingActivationRecord[]
+  wizardProgress: WizardProgressRecord[]
+  serviceDeliveries: ServiceDelivery[]
+  contact: ContactRecord
+}) {
+  const steps = deriveJourneySteps({ lead, offers, pendingActivations, wizardProgress, serviceDeliveries, contact })
+
+  return (
+    <div className="bg-white rounded-lg border p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Client Journey</h3>
+      </div>
+      {/* Desktop: horizontal pipeline */}
+      <div className="hidden sm:flex items-start gap-0">
+        {steps.map((step, i) => {
+          const styles = JOURNEY_STEP_STYLES[step.status]
+          return (
+            <div key={step.label} className="flex-1 flex flex-col items-center relative group">
+              {/* Connector line (before dot) */}
+              {i > 0 && (
+                <div className={cn(
+                  'absolute top-[11px] right-1/2 h-0.5 w-full',
+                  steps[i - 1].status === 'done' ? 'bg-emerald-500' : 'bg-zinc-200'
+                )} />
+              )}
+              {/* Dot */}
+              <div className={cn('relative z-10 w-[22px] h-[22px] rounded-full flex items-center justify-center shrink-0', styles.dot)}>
+                {step.status === 'done' && (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-white" />
+                )}
+                {step.status === 'current' && (
+                  <div className="w-2 h-2 rounded-full bg-white" />
+                )}
+                {step.status === 'issue' && (
+                  <span className="text-white text-[10px] font-bold">!</span>
+                )}
+              </div>
+              {/* Label */}
+              <span className={cn('text-xs font-medium mt-1.5', styles.text)}>{step.label}</span>
+              {/* Detail tooltip on hover */}
+              {step.detail && (
+                <span className={cn(
+                  'text-[10px] mt-0.5 max-w-[80px] text-center truncate',
+                  step.status === 'issue' ? 'text-amber-600' : 'text-muted-foreground'
+                )}>
+                  {step.detail}
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {/* Mobile: vertical compact list */}
+      <div className="sm:hidden space-y-2">
+        {steps.map(step => {
+          const styles = JOURNEY_STEP_STYLES[step.status]
+          return (
+            <div key={step.label} className="flex items-center gap-3">
+              <div className={cn('w-5 h-5 rounded-full flex items-center justify-center shrink-0', styles.dot)}>
+                {step.status === 'done' && <CheckCircle2 className="h-3 w-3 text-white" />}
+                {step.status === 'current' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                {step.status === 'issue' && <span className="text-white text-[9px] font-bold">!</span>}
+              </div>
+              <span className={cn('text-sm font-medium', styles.text)}>{step.label}</span>
+              {step.detail && (
+                <span className="text-xs text-muted-foreground ml-auto">{step.detail}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── Offer Status Card ───
+
+function OfferStatusCard({
+  offers,
+  pendingActivations,
+}: {
+  offers: OfferRecord[]
+  pendingActivations: PendingActivationRecord[]
+}) {
+  const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
+  const primaryActivation = pendingActivations[0] ?? null
+
+  if (!primaryOffer) {
+    return (
+      <div className="bg-white rounded-lg border p-5 space-y-2">
+        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Offer</h3>
+        <p className="text-sm text-muted-foreground">No offer found</p>
+      </div>
+    )
+  }
+
+  const OFFER_STATUS_COLORS: Record<string, string> = {
+    draft: 'bg-zinc-100 text-zinc-600',
+    sent: 'bg-blue-100 text-blue-700',
+    viewed: 'bg-purple-100 text-purple-700',
+    signed: 'bg-emerald-100 text-emerald-700',
+    completed: 'bg-emerald-100 text-emerald-700',
+  }
+
+  // Parse services from offer
+  const services = Array.isArray(primaryOffer.services)
+    ? (primaryOffer.services as Array<{ name?: string; description?: string; price?: string }>)
+    : []
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Offer</h3>
+        <div className="flex items-center gap-2">
+          {primaryOffer.contract_type && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded bg-zinc-100 text-zinc-600">
+              {primaryOffer.contract_type}
+            </span>
+          )}
+          <span className={cn('text-xs font-medium px-2 py-0.5 rounded', OFFER_STATUS_COLORS[primaryOffer.status] ?? 'bg-zinc-100')}>
+            {primaryOffer.status}
+          </span>
+        </div>
+      </div>
+
+      {/* Services list */}
+      {services.length > 0 && (
+        <div className="space-y-1">
+          {services.map((svc, i) => (
+            <div key={i} className="flex items-center justify-between text-sm">
+              <span className="text-zinc-700 truncate">{svc.name ?? svc.description ?? '—'}</span>
+              {svc.price && <span className="text-muted-foreground shrink-0 ml-2">{svc.price}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Bundled pipelines */}
+      {primaryOffer.bundled_pipelines && primaryOffer.bundled_pipelines.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-1">
+          {primaryOffer.bundled_pipelines.map(p => (
+            <span key={p} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-50 border text-zinc-500">
+              {p}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Payment info from pending_activation */}
+      {primaryActivation && (
+        <div className="border-t pt-2 mt-2 space-y-1 text-sm">
+          {primaryActivation.signed_at && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Signed</span>
+              <span>{formatDate(primaryActivation.signed_at.split('T')[0])}</span>
+            </div>
+          )}
+          {primaryActivation.payment_confirmed_at && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Payment confirmed</span>
+              <span>{formatDate(primaryActivation.payment_confirmed_at.split('T')[0])}</span>
+            </div>
+          )}
+          {primaryActivation.payment_method && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Method</span>
+              <span className="capitalize">{primaryActivation.payment_method}</span>
+            </div>
+          )}
+          {primaryActivation.amount != null && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount</span>
+              <span>
+                {primaryActivation.currency === 'EUR' ? '\u20AC' : '$'}
+                {Number(primaryActivation.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="text-xs text-muted-foreground pt-1">
+        Created {formatDate(primaryOffer.created_at.split('T')[0])}
+        {primaryOffer.viewed_at && ` · Viewed ${formatDate(primaryOffer.viewed_at.split('T')[0])}`}
+      </div>
+    </div>
+  )
+}
+
+// ─── Wizard Progress Card ───
+
+const WIZARD_STEP_LABELS: Record<string, string[]> = {
+  formation: ['Personal Info', 'Business Details', 'Documents', 'Review & Submit'],
+  onboarding: ['Personal Info', 'Company Details', 'Documents', 'Review & Submit'],
+}
+
+function WizardProgressCard({
+  wizardProgress,
+  pendingActivations,
+}: {
+  wizardProgress: WizardProgressRecord[]
+  pendingActivations: PendingActivationRecord[]
+}) {
+  const primaryWizard = wizardProgress[0] ?? null
+  const primaryActivation = pendingActivations[0] ?? null
+
+  if (!primaryWizard) {
+    // Show "not started" with days since payment if applicable
+    if (primaryActivation?.payment_confirmed_at) {
+      const daysSincePaid = Math.floor(
+        (Date.now() - new Date(primaryActivation.payment_confirmed_at).getTime()) / (1000 * 60 * 60 * 24)
+      )
+      return (
+        <div className="bg-white rounded-lg border p-5 space-y-2">
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Wizard</h3>
+          <div className="flex items-center gap-2">
+            <span className={cn(
+              'text-xs font-medium px-2 py-0.5 rounded',
+              daysSincePaid > 3 ? 'bg-amber-100 text-amber-700' : 'bg-zinc-100 text-zinc-600'
+            )}>
+              Not started
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {daysSincePaid}d since payment
+            </span>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="bg-white rounded-lg border p-5 space-y-2">
+        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Wizard</h3>
+        <p className="text-sm text-muted-foreground">No wizard data</p>
+      </div>
+    )
+  }
+
+  const totalSteps = WIZARD_STEP_LABELS[primaryWizard.wizard_type]?.length ?? 4
+  const stepLabels = WIZARD_STEP_LABELS[primaryWizard.wizard_type] ?? []
+  const progressPct = primaryWizard.status === 'submitted' ? 100 : Math.round((primaryWizard.current_step / totalSteps) * 100)
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Wizard</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium px-2 py-0.5 rounded bg-zinc-100 text-zinc-600">
+            {primaryWizard.wizard_type}
+          </span>
+          <span className={cn(
+            'text-xs font-medium px-2 py-0.5 rounded',
+            primaryWizard.status === 'submitted' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+          )}>
+            {primaryWizard.status === 'submitted' ? 'Submitted' : 'In progress'}
+          </span>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Step {primaryWizard.current_step} of {totalSteps}</span>
+          <span>{progressPct}%</span>
+        </div>
+        <div className="h-2 bg-zinc-100 rounded-full overflow-hidden">
+          <div
+            className={cn(
+              'h-full rounded-full transition-all',
+              primaryWizard.status === 'submitted' ? 'bg-emerald-500' : 'bg-blue-500'
+            )}
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Step labels */}
+      {stepLabels.length > 0 && (
+        <div className="grid grid-cols-4 gap-1">
+          {stepLabels.map((label, i) => {
+            const stepNum = i + 1
+            const isDone = primaryWizard.status === 'submitted' || stepNum < primaryWizard.current_step
+            const isCurrent = primaryWizard.status !== 'submitted' && stepNum === primaryWizard.current_step
+            return (
+              <div key={label} className="text-center">
+                <div className={cn(
+                  'text-[10px] font-medium',
+                  isDone ? 'text-emerald-600' : isCurrent ? 'text-blue-600' : 'text-zinc-400'
+                )}>
+                  {label}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="text-xs text-muted-foreground">
+        {primaryWizard.status === 'submitted'
+          ? `Submitted ${formatDate(primaryWizard.updated_at.split('T')[0])}`
+          : `Last updated ${formatDate(primaryWizard.updated_at.split('T')[0])}`
+        }
       </div>
     </div>
   )

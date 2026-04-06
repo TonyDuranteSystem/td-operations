@@ -19,7 +19,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   if (!contact) notFound()
 
   // Fetch related data in parallel
-  const [accountsResult, sdsResult, conversationsResult, leadResult, docsResult] = await Promise.all([
+  const [accountsResult, sdsResult, conversationsResult, leadResult, docsResult, offersResult, pendingActivationsResult, wizardProgressResult] = await Promise.all([
     // Linked accounts via junction
     supabase
       .from('account_contacts')
@@ -52,6 +52,24 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       .eq('contact_id', params.id)
       .order('category', { ascending: true })
       .order('file_name', { ascending: true }),
+    // Offers — by client_email or lead_id
+    supabase
+      .from('offers')
+      .select('id, client_email, status, contract_type, services, bundled_pipelines, selected_services, created_at, viewed_at, expires_at')
+      .eq('client_email', contact.email ?? '__no_match__')
+      .order('created_at', { ascending: false }),
+    // Pending activations — by client_email
+    supabase
+      .from('pending_activations')
+      .select('id, client_email, status, signed_at, payment_confirmed_at, activated_at, payment_method, amount, currency')
+      .eq('client_email', contact.email ?? '__no_match__')
+      .order('created_at', { ascending: false }),
+    // Wizard progress — by contact_id
+    supabase
+      .from('wizard_progress')
+      .select('id, contact_id, wizard_type, current_step, status, created_at, updated_at')
+      .eq('contact_id', params.id)
+      .order('updated_at', { ascending: false }),
   ])
 
   // Map linked accounts
@@ -123,6 +141,22 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     file_size: number | null; account_id: string | null
   }>
 
+  // Journey data
+  const offers = (offersResult.data ?? []) as Array<{
+    id: string; client_email: string; status: string; contract_type: string | null
+    services: unknown; bundled_pipelines: string[] | null; selected_services: unknown
+    created_at: string; viewed_at: string | null; expires_at: string | null
+  }>
+  const pendingActivations = (pendingActivationsResult.data ?? []) as Array<{
+    id: string; client_email: string; status: string; signed_at: string | null
+    payment_confirmed_at: string | null; activated_at: string | null
+    payment_method: string | null; amount: number | null; currency: string | null
+  }>
+  const wizardProgress = (wizardProgressResult.data ?? []) as Array<{
+    id: string; contact_id: string; wizard_type: string; current_step: number
+    status: string; created_at: string; updated_at: string
+  }>
+
   const conversations = (conversationsResult.data ?? []) as ConversationEntry[]
 
   // Portal auth status
@@ -157,6 +191,9 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         lead={leadResult.data}
         portalAuth={portalAuth}
         today={today}
+        offers={offers}
+        pendingActivations={pendingActivations}
+        wizardProgress={wizardProgress}
       />
     </div>
   )
