@@ -11,6 +11,7 @@
  *   enter_ein          — Set EIN on account + advance pipeline to Post-Formation
  *   process_documents  — Re-run Drive folder creation + passport processing for a contact
  *   cancel_service     — Cancel a service delivery (set status to cancelled)
+ *   ocr_document       — Run OCR on an existing document (passport→MRZ, ITIN→number extraction)
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -802,6 +803,114 @@ export async function POST(req: NextRequest) {
             `Service delivery set to cancelled`,
             closedTasks?.length ? `${closedTasks.length} linked task(s) closed` : "No linked tasks",
           ],
+        }
+        break
+      }
+
+      // ─── OCR DOCUMENT (run OCR on existing passport/ITIN in Drive) ───
+      case "ocr_document": {
+        const documentId = params?.document_id as string
+        if (!documentId) {
+          result = { success: false, detail: "Missing document_id" }
+          break
+        }
+
+        const { data: doc } = await supabaseAdmin
+          .from("documents")
+          .select("id, file_name, drive_file_id, document_type_name, contact_id")
+          .eq("id", documentId)
+          .single()
+
+        if (!doc || !doc.drive_file_id) {
+          result = { success: false, detail: "Document not found or no Drive file" }
+          break
+        }
+
+        const ocrSideEffects: string[] = []
+        const docType = (doc.document_type_name || "").toLowerCase()
+        const targetContactId = doc.contact_id || contact_id
+
+        try {
+          const { ocrDriveFile } = await import("@/lib/docai")
+          const ocrResult = await ocrDriveFile(doc.drive_file_id)
+
+          if (!ocrResult.fullText) {
+            result = { success: false, detail: "OCR returned no text" }
+            break
+          }
+
+          if (docType.includes("passport")) {
+            const { parsePassportFromOcr } = await import("@/lib/passport-processing")
+            const parsed = parsePassportFromOcr(ocrResult.fullText)
+
+            const updates: Record<string, unknown> = {
+              passport_on_file: true,
+              updated_at: new Date().toISOString(),
+            }
+            if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
+            if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
+            if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
+
+            await supabaseAdmin.from("contacts").update(updates).eq("id", targetContactId)
+
+            const extracted = Object.keys(updates).filter(k => k !== "passport_on_file" && k !== "updated_at")
+            ocrSideEffects.push(extracted.length > 0
+              ? `Passport OCR extracted: ${extracted.join(", ")}`
+              : "Passport OCR ran but no MRZ data found — check image quality")
+            if (parsed.passportNumber) ocrSideEffects.push(`Passport number: ${parsed.passportNumber}`)
+            if (parsed.expiryDate) ocrSideEffects.push(`Expiry: ${parsed.expiryDate}`)
+
+          } else if (docType.includes("itin")) {
+            const itinMatch = ocrResult.fullText.match(/\b(9\d{2}[- ]?\d{2}[- ]?\d{4})\b/)
+            if (itinMatch) {
+              const rawItin = itinMatch[1].replace(/[- ]/g, "")
+              const itinFormatted = `${rawItin.slice(0, 3)}-${rawItin.slice(3, 5)}-${rawItin.slice(5)}`
+
+              await supabaseAdmin.from("contacts").update({
+                itin_number: itinFormatted,
+                itin_issue_date: new Date().toISOString().split("T")[0],
+                updated_at: new Date().toISOString(),
+              }).eq("id", targetContactId)
+
+              ocrSideEffects.push(`ITIN extracted: ${itinFormatted}`)
+            } else {
+              ocrSideEffects.push("OCR ran but no ITIN number found (expected 9XX-XX-XXXX)")
+            }
+
+          } else if (docType.includes("ein")) {
+            const einMatch = ocrResult.fullText.match(/\b(\d{2}[- ]?\d{7})\b/)
+            if (einMatch) {
+              const rawEin = einMatch[1].replace(/[- ]/g, "")
+              const einFormatted = `${rawEin.slice(0, 2)}-${rawEin.slice(2)}`
+              ocrSideEffects.push(`EIN found: ${einFormatted} (use Enter EIN on SS-4 card to save)`)
+            } else {
+              ocrSideEffects.push("OCR ran but no EIN found (expected XX-XXXXXXX)")
+            }
+          } else {
+            ocrSideEffects.push(`OCR completed — ${ocrResult.fullText.length} chars extracted`)
+          }
+
+          // Log
+          await supabaseAdmin.from("action_log").insert({
+            actor: "crm-admin",
+            action_type: "ocr_document",
+            table_name: "documents",
+            record_id: documentId,
+            summary: `OCR ran on ${doc.file_name}: ${ocrSideEffects[0] || "completed"}`,
+            details: { document_id: documentId, file_name: doc.file_name, side_effects: ocrSideEffects },
+          })
+
+          result = {
+            success: true,
+            detail: ocrSideEffects[0] || "OCR completed",
+            side_effects: ocrSideEffects,
+          }
+        } catch (ocrErr) {
+          const errMsg = ocrErr instanceof Error ? ocrErr.message : String(ocrErr)
+          result = {
+            success: false,
+            detail: errMsg.includes("too large") ? "File too large for OCR (max 15MB)" : `OCR failed: ${errMsg}`,
+          }
         }
         break
       }

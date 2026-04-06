@@ -2074,6 +2074,30 @@ function ContactDocumentsTab({
   const [uploadType, setUploadType] = useState('Passport')
   const [uploadCategory, setUploadCategory] = useState('Contacts')
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [ocrRunning, setOcrRunning] = useState<string | null>(null)
+
+  const handleRunOcr = async (docId: string) => {
+    setOcrRunning(docId)
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId, action: 'ocr_document', params: { document_id: docId } }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail)
+        if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
+        window.location.reload()
+      } else {
+        toast.error(data.detail || 'OCR failed')
+      }
+    } catch {
+      toast.error('Network error')
+    } finally {
+      setOcrRunning(null)
+    }
+  }
 
   const handleDeleteDoc = async (docId: string, fileName: string) => {
     if (!confirm(`Delete "${fileName}"? This will trash it on Drive and remove the record.`)) return
@@ -2291,6 +2315,21 @@ function ContactDocumentsTab({
                   )}
                   {doc.drive_file_id && (
                     <Eye className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  {doc.drive_file_id && doc.document_type_name && /passport|itin|ein/i.test(doc.document_type_name) && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); handleRunOcr(doc.id) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleRunOcr(doc.id) } }}
+                      className={cn(
+                        'p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-colors',
+                        ocrRunning === doc.id && 'opacity-50 pointer-events-none'
+                      )}
+                      title="Run OCR"
+                    >
+                      {ocrRunning === doc.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    </span>
                   )}
                   <span
                     role="button"
