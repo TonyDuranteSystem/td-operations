@@ -1,17 +1,14 @@
 /**
  * Upload a document for a contact.
  *
- * POST (multipart/form-data):
- *   file: File
- *   contact_id: string
- *   document_type: string (e.g., "Passport", "ID Document", "EIN Letter")
- *   category: string ("Contacts", "Company", "Tax", "Banking", "Correspondence")
+ * Accepts JSON body (file already in Supabase Storage):
+ *   { contact_id, storage_path, file_name, mime_type, document_type, category }
  *
  * Flow:
- * 1. Upload file to contact's Drive folder (correct subfolder by category)
- * 2. If passport: OCR → parse MRZ → update contact record
- * 3. Create/update document record in DB
- * 4. Return { success, driveFileId, ocrData? }
+ * 1. Download from Supabase Storage
+ * 2. Upload to contact's Drive folder (correct subfolder by category)
+ * 3. If passport: OCR → parse MRZ → update contact record
+ * 4. Create document record in DB
  */
 
 export const maxDuration = 60
@@ -30,19 +27,28 @@ const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
 
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
-    const contactId = formData.get('contact_id') as string
-    const documentType = formData.get('document_type') as string || 'Other'
-    const category = formData.get('category') as string || 'Contacts'
+    const body = await req.json()
+    const { contact_id: contactId, storage_path: storagePath, file_name: fileName, mime_type: mimeType, document_type: documentType = 'Other', category = 'Contacts' } = body
 
-    if (!file || !contactId) {
-      return NextResponse.json({ success: false, detail: 'Missing file or contact_id' }, { status: 400 })
+    if (!contactId || !storagePath || !fileName) {
+      return NextResponse.json({ success: false, detail: 'Missing contact_id, storage_path, or file_name' }, { status: 400 })
     }
 
     const catInfo = CATEGORY_MAP[category] || CATEGORY_MAP.Correspondence
 
-    // Get contact's Drive folder
+    // Download from Supabase Storage
+    const { data: blob, error: dlErr } = await supabaseAdmin.storage
+      .from('onboarding-uploads')
+      .download(storagePath)
+
+    if (dlErr || !blob) {
+      return NextResponse.json({ success: false, detail: `Storage download failed: ${dlErr?.message || 'no data'}` }, { status: 500 })
+    }
+
+    const buffer = Buffer.from(await blob.arrayBuffer())
+    const fileMime = mimeType || blob.type || 'application/pdf'
+
+    // Get contact info
     const { data: contact } = await supabaseAdmin
       .from('contacts')
       .select('full_name, gdrive_folder_url')
@@ -53,16 +59,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, detail: 'Contact not found' }, { status: 404 })
     }
 
-    // Resolve Drive folder — contact folder or linked account folder
+    // Resolve Drive folder
     let driveFolderId: string | null = null
 
-    // Try contact's own folder first
     if (contact.gdrive_folder_url) {
       const match = (contact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
       if (match) driveFolderId = match[1]
     }
 
-    // If no contact folder, try linked account folder
     if (!driveFolderId) {
       const { data: acLinks } = await supabaseAdmin
         .from('account_contacts')
@@ -71,19 +75,16 @@ export async function POST(req: NextRequest) {
         .limit(1)
 
       const acct = acLinks?.[0]?.accounts as unknown as { drive_folder_id: string | null } | null
-      if (acct?.drive_folder_id) {
-        driveFolderId = acct.drive_folder_id
-      }
+      if (acct?.drive_folder_id) driveFolderId = acct.drive_folder_id
     }
 
-    // If still no folder, create one
     if (!driveFolderId) {
       const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
       const folderResult = await ensureContactFolder(contactId, contact.full_name || 'Unknown')
       driveFolderId = folderResult.folderId
     }
 
-    // Find the target subfolder
+    // Find target subfolder
     const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
     const foldersRes = await listFolderAnyDrive(driveFolderId)
     const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
@@ -93,12 +94,11 @@ export async function POST(req: NextRequest) {
     const uploadFolderId = targetFolder?.id || driveFolderId
 
     // Upload to Drive
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const driveFile = await uploadBinaryToDrive(file.name, buffer, file.type, uploadFolderId) as { id: string; name: string }
+    const driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
 
-    const sideEffects: string[] = [`Uploaded to Drive: ${file.name}`]
+    const sideEffects: string[] = [`Uploaded to Drive: ${fileName}`]
 
-    // Get linked account for document record
+    // Get linked account
     const { data: acLink } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id')
@@ -106,12 +106,12 @@ export async function POST(req: NextRequest) {
       .limit(1)
     const accountId = acLink?.[0]?.account_id ?? null
 
-    // If passport: OCR + parse
-    let ocrData: Record<string, unknown> | null = null
-    const isPassport = documentType.toLowerCase().includes('passport')
+    // Passport OCR
+    const isPassport = (documentType as string).toLowerCase().includes('passport')
     const ocrSupported = ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff', 'image/gif', 'image/bmp', 'image/webp']
+    let ocrData: Record<string, unknown> | null = null
 
-    if (isPassport && ocrSupported.includes(file.type)) {
+    if (isPassport && ocrSupported.includes(fileMime)) {
       try {
         const { ocrDriveFile } = await import('@/lib/docai')
         const { parsePassportFromOcr } = await import('@/lib/passport-processing')
@@ -121,20 +121,14 @@ export async function POST(req: NextRequest) {
           const parsed = parsePassportFromOcr(ocrResult.fullText)
           ocrData = parsed as unknown as Record<string, unknown>
 
-          // Update contact with extracted data
           const updates: Record<string, unknown> = { passport_on_file: true, updated_at: new Date().toISOString() }
           if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
           if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
           if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
 
           await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
-
           const extracted = Object.keys(updates).filter(k => k !== 'passport_on_file' && k !== 'updated_at')
-          if (extracted.length > 0) {
-            sideEffects.push(`OCR extracted: ${extracted.join(', ')}`)
-          } else {
-            sideEffects.push('OCR ran but no passport data found in MRZ')
-          }
+          sideEffects.push(extracted.length > 0 ? `OCR extracted: ${extracted.join(', ')}` : 'OCR: no MRZ data found')
         }
       } catch (ocrErr) {
         sideEffects.push(`OCR error: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`)
@@ -143,10 +137,9 @@ export async function POST(req: NextRequest) {
       await supabaseAdmin.from('contacts')
         .update({ passport_on_file: true, updated_at: new Date().toISOString() })
         .eq('id', contactId)
-      sideEffects.push('Passport marked on file (OCR not supported for this format)')
     }
 
-    // Create document record (dedup by drive_file_id)
+    // Create document record (dedup)
     const { data: existingDoc } = await supabaseAdmin
       .from('documents')
       .select('id')
@@ -155,7 +148,7 @@ export async function POST(req: NextRequest) {
 
     if (!existingDoc?.length) {
       await supabaseAdmin.from('documents').insert({
-        file_name: file.name,
+        file_name: fileName,
         drive_file_id: driveFile.id,
         drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
         document_type_name: documentType,
@@ -176,13 +169,16 @@ export async function POST(req: NextRequest) {
       table_name: 'documents',
       record_id: driveFile.id,
       account_id: accountId,
-      summary: `Document uploaded: ${file.name} (${documentType})`,
-      details: { file_name: file.name, document_type: documentType, category, contact_id: contactId },
+      summary: `Document uploaded: ${fileName} (${documentType})`,
+      details: { file_name: fileName, document_type: documentType, category, contact_id: contactId },
     })
+
+    // Clean up storage file (best-effort)
+    supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
 
     return NextResponse.json({
       success: true,
-      detail: `${file.name} uploaded to ${catInfo.subfolder}`,
+      detail: `${fileName} uploaded to ${catInfo.subfolder}`,
       driveFileId: driveFile.id,
       ocrData,
       side_effects: sideEffects,

@@ -2026,15 +2026,47 @@ function ContactDocumentsTab({
   const handleFileUpload = async (file: File) => {
     setUploading(true)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('contact_id', contactId)
-      formData.append('document_type', uploadType)
-      formData.append('category', uploadCategory)
+      // Step 1: Upload to Supabase Storage (bypasses Vercel 4.5MB body limit)
+      const storagePath = `crm-uploads/${contactId}/${Date.now()}_${file.name}`
+      const uploadRes = await fetch(`/api/storage/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'onboarding-uploads',
+          path: storagePath,
+          contentType: file.type,
+        }),
+      })
+      const { signedUrl } = await uploadRes.json()
 
+      if (!signedUrl) {
+        toast.error('Failed to get upload URL')
+        return
+      }
+
+      // Upload file directly to Supabase Storage via signed URL
+      const storageUpload = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      })
+      if (!storageUpload.ok) {
+        toast.error('File upload failed')
+        return
+      }
+
+      // Step 2: Call API with storage path (small JSON, no file in body)
       const res = await fetch('/api/crm/admin-actions/upload-document', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contact_id: contactId,
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type,
+          document_type: uploadType,
+          category: uploadCategory,
+        }),
       })
       const data = await res.json()
       if (data.success) {
@@ -2046,7 +2078,7 @@ function ContactDocumentsTab({
         toast.error(data.detail || 'Upload failed')
       }
     } catch {
-      toast.error('Network error')
+      toast.error('Upload error — check file size (max 50MB)')
     } finally {
       setUploading(false)
     }
