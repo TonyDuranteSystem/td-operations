@@ -7,7 +7,8 @@ import {
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
-  Stethoscope, Send, Zap, Bell, PlayCircle,
+  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
+  ChevronDown as ChevronDownIcon,
 } from 'lucide-react'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
 import { EditableField } from '@/components/accounts/editable-field'
@@ -1302,9 +1303,24 @@ function ChatTab({
   const [notifications, setNotifications] = useState<Array<{ id: string; type: string; title: string; body: string | null; created_at: string }>>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [draft, setDraft] = useState('')
+  const [pendingFile, setPendingFile] = useState<{ name: string; url?: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [polishing, setPolishing] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  // Auto-grow textarea
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+  }, [draft])
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -1329,8 +1345,28 @@ function ChatTab({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  const handleFileSelect = async (file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File too large (max 10 MB)')
+      return
+    }
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+      if (!res.ok) throw new Error('Upload failed')
+      const data = await res.json()
+      setPendingFile({ name: file.name, url: data.url })
+    } catch {
+      toast.error('File upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const handleSend = async () => {
-    if (!draft.trim() || sending) return
+    if ((!draft.trim() && !pendingFile) || sending) return
     setSending(true)
     try {
       const res = await fetch('/api/portal/chat', {
@@ -1338,7 +1374,8 @@ function ChatTab({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contact_id: contactId,
-          message: draft.trim(),
+          message: draft.trim() || (pendingFile ? `[Attachment: ${pendingFile.name}]` : ''),
+          ...(pendingFile?.url ? { attachment_url: pendingFile.url, attachment_name: pendingFile.name } : {}),
         }),
       })
       if (!res.ok) {
@@ -1346,11 +1383,56 @@ function ChatTab({
         throw new Error(err.error || `HTTP ${res.status}`)
       }
       setDraft('')
+      setPendingFile(null)
+      if (textareaRef.current) textareaRef.current.style.height = 'auto'
       await fetchMessages()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to send')
     } finally {
       setSending(false)
+    }
+  }
+
+  const handlePolish = async () => {
+    if (!draft.trim() || polishing) return
+    setPolishing(true)
+    try {
+      const res = await fetch('/api/portal/chat/polish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: draft }),
+      })
+      if (!res.ok) throw new Error('Polish failed')
+      const data = await res.json()
+      if (data.polished) setDraft(data.polished)
+    } catch {
+      toast.error('AI polish failed')
+    } finally {
+      setPolishing(false)
+    }
+  }
+
+  const handleSuggest = async () => {
+    if (suggesting) return
+    setSuggesting(true)
+    try {
+      // Build context from last few messages
+      const recentMsgs = messages.slice(-5).map(m => ({
+        role: m.sender_type === 'admin' ? 'admin' : 'client',
+        content: m.message,
+      }))
+      const res = await fetch('/api/portal/chat/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: recentMsgs, contact_id: contactId }),
+      })
+      if (!res.ok) throw new Error('Suggest failed')
+      const data = await res.json()
+      if (data.suggestion) setDraft(data.suggestion)
+    } catch {
+      toast.error('AI suggest failed')
+    } finally {
+      setSuggesting(false)
     }
   }
 
@@ -1371,7 +1453,7 @@ function ChatTab({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Messages */}
       <div className="bg-white rounded-lg border">
         {messages.length === 0 ? (
@@ -1428,10 +1510,43 @@ function ChatTab({
           </div>
         )}
 
-        {/* Send area */}
+        {/* Pending file preview */}
+        {pendingFile && (
+          <div className="mx-3 mb-2 flex items-center gap-2 p-2 bg-blue-50 rounded-lg text-sm">
+            <Paperclip className="h-4 w-4 text-blue-500 shrink-0" />
+            <span className="truncate text-blue-700">{pendingFile.name}</span>
+            <button onClick={() => setPendingFile(null)} className="ml-auto text-blue-400 hover:text-blue-600 shrink-0">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Send area — portal chat style */}
         <div className="border-t p-3">
-          <div className="flex gap-2">
+          <div className="flex items-end gap-2">
+            {/* Paperclip */}
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+              className={cn(
+                'p-2 rounded-full transition-colors shrink-0',
+                pendingFile
+                  ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
+                  : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
+              )}
+            >
+              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
+              className="hidden"
+            />
+            {/* Auto-growing textarea */}
             <textarea
+              ref={textareaRef}
               value={draft}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => {
@@ -1440,39 +1555,80 @@ function ChatTab({
                   handleSend()
                 }
               }}
-              placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-              rows={2}
-              className="flex-1 px-3 py-2 rounded-lg border text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              rows={1}
+              placeholder="Type a message... (Enter to send)"
+              className="flex-1 min-w-0 px-3 py-2.5 text-sm bg-transparent border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
             />
-            <button
-              onClick={handleSend}
-              disabled={!draft.trim() || sending}
-              className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors shrink-0"
-            >
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </button>
+            {/* AI Polish — appears when text typed */}
+            {draft.trim() && (
+              <button
+                onClick={handlePolish}
+                disabled={polishing}
+                className="p-2 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 disabled:opacity-50 transition-colors shrink-0"
+                title="AI Polish — clean up grammar"
+              >
+                {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+              </button>
+            )}
+            {/* AI Suggest — appears when no text */}
+            {!draft.trim() && messages.length > 0 && (
+              <button
+                onClick={handleSuggest}
+                disabled={suggesting}
+                className="p-2 rounded-full bg-violet-50 text-violet-500 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
+                title="AI Suggest — generate reply"
+              >
+                {suggesting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+              </button>
+            )}
+            {/* Send button */}
+            {sending ? (
+              <button disabled className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
+                <Loader2 className="h-5 w-5 animate-spin" />
+              </button>
+            ) : (draft.trim() || pendingFile) ? (
+              <button
+                onClick={handleSend}
+                disabled={uploading}
+                className="w-10 h-10 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center shrink-0 transition-colors"
+              >
+                <Send className="h-5 w-5" />
+              </button>
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-zinc-100 text-zinc-400 flex items-center justify-center shrink-0">
+                <Send className="h-5 w-5" />
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Notification History */}
+      {/* Notification History — collapsible */}
       {notifications.length > 0 && (
-        <div className="bg-white rounded-lg border p-4">
-          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
-            Notification History ({notifications.length})
-          </h3>
-          <div className="space-y-2">
-            {notifications.slice(0, 10).map(n => (
-              <div key={n.id} className="flex items-start gap-3 text-sm">
-                <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-2 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-medium text-zinc-800">{n.title}</p>
-                  {n.body && <p className="text-xs text-zinc-500 truncate">{n.body}</p>}
-                  <p className="text-[10px] text-zinc-400">{formatDateTime(n.created_at)}</p>
+        <div className="bg-white rounded-lg border">
+          <button
+            onClick={() => setNotifOpen(!notifOpen)}
+            className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
+          >
+            <span className="font-semibold text-xs text-muted-foreground uppercase tracking-wider">
+              Notification History ({notifications.length})
+            </span>
+            <ChevronDownIcon className={cn('h-4 w-4 text-zinc-400 transition-transform', notifOpen && 'rotate-180')} />
+          </button>
+          {notifOpen && (
+            <div className="border-t px-4 py-3 space-y-2">
+              {notifications.slice(0, 10).map(n => (
+                <div key={n.id} className="flex items-start gap-3 text-sm">
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-2 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="font-medium text-zinc-800">{n.title}</p>
+                    {n.body && <p className="text-xs text-zinc-500 truncate">{n.body}</p>}
+                    <p className="text-[10px] text-zinc-400">{formatDateTime(n.created_at)}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
