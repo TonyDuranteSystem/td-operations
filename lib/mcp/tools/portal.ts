@@ -692,14 +692,14 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
 
   server.tool(
     "portal_invoice_create",
-    `Create an invoice in the portal billing system (client_invoices table). The OFFICIAL invoicing system — use this instead of QB for new invoices.
+    `Create a TD LLC invoice TO a client (writes to payments + client_expenses). The OFFICIAL invoicing system — use this instead of QB for new invoices.
 
 Supports two scenarios:
 - **Contact-level** (pass contact_id): For setup fees, ITIN, or any payment before an account exists. The contact is the center — they pay before any LLC is created.
 - **Account-level** (pass account_id): For annual installments, recurring services on an existing LLC.
 - Both can be provided (contact pays for a specific company).
 
-Returns the created invoice with ID, number, total, and a link to the CRM payment record.
+Returns the created invoice with payment ID, number, total. The client sees this as an expense in their portal.
 
 Workflow: portal_invoice_create -> portal_invoice_send (email with PDF) -> client pays -> mark as paid.
 Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are receipts per rule P6).`,
@@ -726,7 +726,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
 
         const cur = currency || "USD"
 
-        // Resolve customer info
+        // Resolve customer info for display
         let customerName = ""
         let resolvedContactId = contact_id
         const resolvedAccountId = account_id
@@ -739,7 +739,6 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             .single()
           if (!contact) return { content: [{ type: "text" as const, text: `Contact ${contact_id} not found` }] }
           customerName = contact.full_name
-          // email resolved internally by createUnifiedInvoice
         }
 
         if (account_id) {
@@ -750,23 +749,20 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             .single()
           if (!account) return { content: [{ type: "text" as const, text: `Account ${account_id} not found` }] }
 
-          // If no contact_id, get primary contact from account
           if (!contact_id) {
             const { data: link } = await supabaseAdmin
               .from("account_contacts")
-              .select("contact_id, contacts(full_name, email)")
+              .select("contact_id, contacts(full_name)")
               .eq("account_id", account_id)
               .limit(1)
               .single()
             if (link) {
-              const c = link.contacts as unknown as { full_name: string; email: string }
               resolvedContactId = link.contact_id
-              customerName = c.full_name
-              // email resolved internally by createUnifiedInvoice
+              const c = link.contacts as unknown as { full_name: string }
+              if (!customerName) customerName = c.full_name
             }
           }
 
-          // Use company name as customer name for account invoices
           customerName = account.company_name
         }
 
@@ -774,11 +770,11 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
           return { content: [{ type: "text" as const, text: "Could not resolve customer name from contact or account" }] }
         }
 
-        // Create unified invoice (writes to BOTH client_invoices + payments with FK link)
-        const { createUnifiedInvoice } = await import("@/lib/portal/unified-invoice")
-        let result: Awaited<ReturnType<typeof createUnifiedInvoice>>
+        // Create TD invoice (writes to payments + client_expenses, NOT client_invoices)
+        const { createTDInvoice } = await import("@/lib/portal/td-invoice")
+        let result: Awaited<ReturnType<typeof createTDInvoice>>
         try {
-          result = await createUnifiedInvoice({
+          result = await createTDInvoice({
             account_id: resolvedAccountId || undefined,
             contact_id: resolvedContactId || undefined,
             line_items,
@@ -793,15 +789,10 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
           return { content: [{ type: "text" as const, text: `Failed to create invoice: ${err instanceof Error ? err.message : String(err)}` }] }
         }
 
-        const invoice = { id: result.invoiceId, invoice_number: result.invoiceNumber }
-        const payment = result.paymentId ? { id: result.paymentId } : null
-        const total = result.total
-        const status = result.status
-        const invoiceNumber = result.invoiceNumber
+        const { paymentId, invoiceNumber, total, status } = result
 
         // Auto-create Whop checkout plan for card payment (+5%)
         let whopUrl: string | null = null
-        let whopPlanId: string | null = null
         try {
           const whopKey = process.env.WHOP_API_KEY
           if (whopKey && !mark_as_paid) {
@@ -809,7 +800,6 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             const firstItem = line_items[0]?.description || "Invoice"
             const planTitle = `${firstItem} - ${customerName}`.substring(0, 80)
 
-            // Find a suitable product — use "LLC Onboarding" as default
             const prodRes = await fetch("https://api.whop.com/api/v1/products?company_id=biz_rssyD9YyMnXd7P&first=50", {
               headers: { Authorization: `Bearer ${whopKey}`, "Content-Type": "application/json" },
             })
@@ -836,13 +826,12 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
               if (planRes.ok) {
                 const plan = await planRes.json()
                 whopUrl = plan.purchase_url || `https://whop.com/checkout/${plan.id}`
-                whopPlanId = plan.id
 
-                // Store on invoice
+                // Store on payments record (not client_invoices)
                 await supabaseAdmin
-                  .from("client_invoices")
-                  .update({ whop_checkout_url: whopUrl, whop_plan_id: whopPlanId })
-                  .eq("id", invoice.id)
+                  .from("payments")
+                  .update({ whop_payment_id: plan.id })
+                  .eq("id", paymentId)
               }
             }
           }
@@ -852,13 +841,13 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
 
         await logAction({
           action_type: "create",
-          table_name: "client_invoices",
-          record_id: invoice.id,
+          table_name: "payments",
+          record_id: paymentId,
           account_id: resolvedAccountId || undefined,
-          summary: `Portal invoice ${invoiceNumber} created: ${cur} ${total.toFixed(2)} (${status})${whopUrl ? " + Whop checkout" : ""}`,
+          summary: `TD invoice ${invoiceNumber} created: ${cur} ${total.toFixed(2)} (${status})${whopUrl ? " + Whop checkout" : ""}`,
         })
 
-        // Notify client about new invoice (digest email)
+        // Notify client about new invoice
         if (!mark_as_paid && (resolvedAccountId || resolvedContactId)) {
           const { createPortalNotification } = await import("@/lib/portal/notifications")
           await createPortalNotification({
@@ -867,7 +856,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             type: "invoice",
             title: `New invoice ${invoiceNumber}`,
             body: `${cur === "EUR" ? "EUR" : "$"}${total.toFixed(2)}`,
-            link: "/portal/billing",
+            link: "/portal/invoices?tab=expenses",
           }).catch(() => {})
         }
 
@@ -882,8 +871,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
               `- Customer: ${customerName}`,
               `- Total: ${csym}${total.toFixed(2)}`,
               `- Status: ${status}`,
-              `- Invoice ID: ${invoice.id}`,
-              payment ? `- CRM Payment ID: ${payment.id}` : "",
+              `- Payment ID: ${paymentId}`,
               resolvedContactId ? `- Contact: ${resolvedContactId}` : "",
               resolvedAccountId ? `- Account: ${resolvedAccountId}` : "",
               whopUrl ? `- Card payment: ${whopUrl} (${csym}${cardAmount} with 5% fee)` : "",

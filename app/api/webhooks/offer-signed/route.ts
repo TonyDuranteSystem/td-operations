@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
-import { createUnifiedInvoice } from "@/lib/portal/unified-invoice"
+import { createTDInvoice } from "@/lib/portal/td-invoice"
 
 export async function POST(req: NextRequest) {
   try {
@@ -141,7 +141,7 @@ export async function POST(req: NextRequest) {
           return "USD" as const
         })()
 
-        const invoiceResult = await createUnifiedInvoice({
+        const invoiceResult = await createTDInvoice({
           contact_id: contactId,
           line_items: [{
             description: `${serviceLabel} Package - ${offer.client_name}`,
@@ -153,15 +153,15 @@ export async function POST(req: NextRequest) {
           notes: `Auto-created at contract signing. Offer: ${offer_token}`,
         })
 
-        invoiceId = invoiceResult.invoiceId
+        invoiceId = invoiceResult.paymentId
 
-        // Store invoice reference on pending_activation for dedup
+        // Store payment reference on pending_activation for dedup
         await supabase
           .from("pending_activations")
           .update({ portal_invoice_id: invoiceId })
           .eq("id", activation.id)
 
-        console.warn(`[offer-signed] Invoice ${invoiceResult.invoiceNumber} created for ${offer.client_name} (contact-only, unpaid)`)
+        console.warn(`[offer-signed] TD invoice ${invoiceResult.invoiceNumber} created for ${offer.client_name} (contact-only, unpaid)`)
       } else {
         console.warn(`[offer-signed] Skipped invoice: contactId=${contactId}, amount=${totalAmount}`)
       }

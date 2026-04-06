@@ -21,7 +21,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
-import { createUnifiedInvoice, syncInvoiceStatus } from "@/lib/portal/unified-invoice"
+import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
@@ -498,7 +499,7 @@ export async function POST(req: NextRequest) {
           : contractType === "itin" ? "ITIN Application"
           : "Service"
 
-        const invoiceResult = await createUnifiedInvoice({
+        const invoiceResult = await createTDInvoice({
           account_id: autoAccountId || undefined,
           contact_id: contactId || undefined,
           line_items: [{
@@ -513,10 +514,10 @@ export async function POST(req: NextRequest) {
           whop_payment_id: activation.whop_payment_id || null,
         })
 
-        // Store invoice reference on activation for traceability
+        // Store payment reference on activation for traceability
         await supabase
           .from("pending_activations")
-          .update({ portal_invoice_id: invoiceResult.invoiceId })
+          .update({ portal_invoice_id: invoiceResult.paymentId })
           .eq("id", pending_activation_id)
 
         steps.push({

@@ -4,8 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 
 /**
- * Create an invoice via the unified system (writes to BOTH client_invoices + payments).
- * This replaces the old createInvoice from payments/invoice-actions.ts which only wrote to payments.
+ * Create a TD LLC invoice TO a client (writes to payments + client_expenses).
+ * Staff creates these from the CRM dashboard.
  */
 export async function createUnifiedInvoiceDraft(input: {
   account_id: string
@@ -16,9 +16,9 @@ export async function createUnifiedInvoiceDraft(input: {
   items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order: number }>
 }): Promise<ActionResult<{ id: string; invoice_number: string }>> {
   return safeAction(async () => {
-    const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
+    const { createTDInvoice } = await import('@/lib/portal/td-invoice')
 
-    const result = await createUnifiedInvoice({
+    const result = await createTDInvoice({
       account_id: input.account_id,
       line_items: input.items.map(item => ({
         description: item.description,
@@ -32,12 +32,12 @@ export async function createUnifiedInvoiceDraft(input: {
 
     revalidatePath('/finance')
     revalidatePath('/payments')
-    return { id: result.invoiceId, invoice_number: result.invoiceNumber }
+    return { id: result.paymentId, invoice_number: result.invoiceNumber }
   }, {
     action_type: 'create',
-    table_name: 'client_invoices',
+    table_name: 'payments',
     account_id: input.account_id,
-    summary: `Invoice created (Draft) via unified system`,
+    summary: `TD invoice created (Draft) via CRM dashboard`,
   })
 }
 
