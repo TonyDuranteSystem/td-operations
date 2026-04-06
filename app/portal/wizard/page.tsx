@@ -92,22 +92,22 @@ export default async function WizardPage({
   // Collect ALL pending wizard types from service deliveries
   const pendingWizardTypes: { type: WizardType; label: string; serviceType: string }[] = []
 
-  if (!forcedType && accountId) {
-    const { data: sds } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('service_type')
-      .eq('account_id', accountId)
-      .in('status', ['active'])
-      .limit(10)
+  if (!forcedType && (accountId || contactId)) {
+    // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
+    const sdQuery = accountId
+      ? supabaseAdmin.from('service_deliveries').select('service_type').eq('account_id', accountId).in('status', ['active']).limit(10)
+      : supabaseAdmin.from('service_deliveries').select('service_type').eq('contact_id', contactId).in('status', ['active']).limit(10)
+
+    const { data: sds } = await sdQuery
 
     const types = (sds || []).map(s => s.service_type)
 
     // Check which wizard types have already been submitted
-    const { data: submittedWizards } = await supabaseAdmin
-      .from('wizard_progress')
-      .select('wizard_type, status')
-      .eq('account_id', accountId)
-      .in('status', ['submitted'])
+    const progressFilter = accountId
+      ? supabaseAdmin.from('wizard_progress').select('wizard_type, status').eq('account_id', accountId).in('status', ['submitted'])
+      : supabaseAdmin.from('wizard_progress').select('wizard_type, status').eq('contact_id', contactId).in('status', ['submitted'])
+
+    const { data: submittedWizards } = await progressFilter
 
     const submittedTypes = new Set((submittedWizards || []).map(w => w.wizard_type))
 

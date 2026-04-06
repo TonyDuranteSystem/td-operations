@@ -161,7 +161,7 @@ export async function GET(request: NextRequest) {
         title: c.full_name,
         subtitle: c.email ?? c.phone ?? '',
         type: 'contact',
-        href: companies[0]?.id ? `/accounts/${companies[0].id}` : '/accounts',
+        href: companies[0]?.id ? `/accounts/${companies[0].id}` : `/contacts/${c.id}`,
         preview: {
           email: c.email,
           phone: c.phone,
