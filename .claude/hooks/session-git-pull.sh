@@ -6,6 +6,9 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
+# Reset context-loaded flag — forces Claude to read session-context before editing code
+rm -f /tmp/claude-td-context-loaded
+
 # Check for uncommitted changes
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
   echo "⚠️ UNCOMMITTED CHANGES detected on this machine. Stashing before pull."
