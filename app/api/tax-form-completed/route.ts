@@ -184,10 +184,12 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
 <p style="font-size:12px;color:#6b7280">Token: ${sub.token} | Admin: ${APP_BASE_URL}/tax-form/${sub.token}?preview=td</p>
 </div>`
 
+      const taxSubject = `[TASK] Tax Form Completed - ${companyName} (${sub.tax_year})`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(taxSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
-        `Subject: [TASK] Tax Form Completed - ${companyName} (${sub.tax_year})\r\n` +
+        `Subject: ${encodedSubject}\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
         emailBody

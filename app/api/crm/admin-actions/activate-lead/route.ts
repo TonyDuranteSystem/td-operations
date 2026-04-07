@@ -113,10 +113,11 @@ export async function POST(req: NextRequest) {
             ? `Ciao ${lead.full_name.split(' ')[0]},\n\nIl tuo portale è pronto. Accedi per visualizzare la tua proposta.\n\nLink: https://portal.tonydurante.us\nEmail: ${lead.email}\nPassword temporanea: ${tempPassword}\n\nCambia la password dopo il primo accesso.\n\nA presto,\nTony Durante LLC`
             : `Hi ${lead.full_name.split(' ')[0]},\n\nYour portal is ready. Log in to review your proposal.\n\nLink: https://portal.tonydurante.us\nEmail: ${lead.email}\nTemporary password: ${tempPassword}\n\nPlease change your password after your first login.\n\nBest regards,\nTony Durante LLC`
 
+          const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
           const raw = Buffer.from(
             `From: Tony Durante LLC <support@tonydurante.us>\r\n` +
             `To: ${lead.email}\r\n` +
-            `Subject: ${subject}\r\n` +
+            `Subject: ${encodedSubject}\r\n` +
             `Content-Type: text/plain; charset=UTF-8\r\n\r\n` +
             body
           ).toString('base64url')

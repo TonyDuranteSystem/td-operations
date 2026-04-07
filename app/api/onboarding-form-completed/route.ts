@@ -344,10 +344,12 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
 <p style="font-size:12px;color:#6b7280">Form token: ${token} | Lead: ${leadName}</p>
 </div>`
 
+      const onboardingSubject = `[TASK] Onboarding data received - ${leadName} - ${companyName}`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(onboardingSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
-        `Subject: [TASK] Onboarding data received - ${leadName} - ${companyName}\r\n` +
+        `Subject: ${encodedSubject}\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
         emailBody
@@ -439,6 +441,7 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
       })
     } catch { /* non-blocking */ }
 
+    // eslint-disable-next-line no-console
     console.log(`[onboarding-form-completed] ${leadName}: ${results.length} steps. ${results.filter(r => r.status === "ok").length} ok, ${results.filter(r => r.status === "error").length} errors`)
 
     return NextResponse.json({ ok: true, results })

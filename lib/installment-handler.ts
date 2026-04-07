@@ -223,10 +223,12 @@ export async function onFirstInstallmentPaid(
     const { gmailPost } = await import("@/lib/gmail")
     const sdSummary = steps.map(s => `- ${s.step}: ${s.status} ${s.detail || ""}`).join("\n")
 
+    const installment1Subject = `[PAID] 1st Installment ${year} -- ${account.company_name}`
+    const encodedSubject = `=?utf-8?B?${Buffer.from(installment1Subject).toString("base64")}?=`
     const raw = Buffer.from(
       `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
       `To: support@tonydurante.us\r\n` +
-      `Subject: [PAID] 1st Installment ${year} -- ${account.company_name}\r\n` +
+      `Subject: ${encodedSubject}\r\n` +
       `MIME-Version: 1.0\r\n` +
       `Content-Type: text/html; charset=utf-8\r\n\r\n` +
       `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +
@@ -347,10 +349,12 @@ export async function onSecondInstallmentPaid(
   // ─── 3. Email team ───
   try {
     const { gmailPost } = await import("@/lib/gmail")
+    const installment2Subject = `[PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for India`
+    const encodedSubject2 = `=?utf-8?B?${Buffer.from(installment2Subject).toString("base64")}?=`
     const raw = Buffer.from(
       `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
       `To: support@tonydurante.us\r\n` +
-      `Subject: [PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for India\r\n` +
+      `Subject: ${encodedSubject2}\r\n` +
       `MIME-Version: 1.0\r\n` +
       `Content-Type: text/html; charset=utf-8\r\n\r\n` +
       `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +

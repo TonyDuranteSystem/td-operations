@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       if (lead) { clientName = lead.full_name; clientEmail = lead.email || "" }
     } else if (sub.contact_id) {
       const { data: contact } = await supabaseAdmin.from("contacts").select("full_name, email").eq("id", sub.contact_id).single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || "" }
+      if (contact) { clientName = contact.full_name; clientEmail = contact.email || "" } // eslint-disable-line @typescript-eslint/no-unused-vars
     }
 
     // Get company name if linked
@@ -329,10 +329,12 @@ export async function POST(req: NextRequest) {
 <p style="font-size:12px;color:#6b7280">Token: ${token} | Admin: ${APP_BASE_URL}/itin-form/${token}?preview=td</p>
 </div>`
 
+      const itinSubject = `[TASK] ITIN Form Completed - ${displayName}`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(itinSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
-        `Subject: [TASK] ITIN Form Completed - ${displayName}\r\n` +
+        `Subject: ${encodedSubject}\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
         emailBody
@@ -402,6 +404,7 @@ export async function POST(req: NextRequest) {
       })
     } catch { /* non-blocking */ }
 
+    // eslint-disable-next-line no-console
     console.log(`[itin-form-completed] ${displayName}: ${results.length} steps. ${results.filter(r => r.status === "ok").length} ok, ${results.filter(r => r.status === "error").length} errors`)
 
     return NextResponse.json({ ok: true, results })

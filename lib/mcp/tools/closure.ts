@@ -405,7 +405,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
     async ({ account_id, send_email }) => {
       try {
         const { PDFDocument } = await import("pdf-lib")
-        const { downloadFileBinary, uploadBinaryToDrive, listFolder, createFolder } = await import("@/lib/google-drive")
+        const { downloadFileBinary, uploadBinaryToDrive, listFolder, createFolder: _createFolder } = await import("@/lib/google-drive")
 
         // Get account + contact data
         const { data: acc } = await supabaseAdmin
@@ -427,8 +427,8 @@ Use gmail_send to send the link to the client after Antonio approves.`,
 
         const llcName = acc.company_name || ""
         const ownerName = contact?.full_name || ""
-        const ownerEmail = contact?.email || ""
-        const ownerPhone = contact?.phone || ""
+        const _ownerEmail = contact?.email || ""
+        const _ownerPhone = contact?.phone || ""
         const ein = acc.ein_number || ""
         const state = acc.state_of_formation || ""
         const formationDate = acc.formation_date || ""
@@ -602,10 +602,12 @@ Use gmail_send to send the link to the client after Antonio approves.`,
             }
             parts.push(`--${boundary}--`)
 
+            const closureDocsSubject = `Closure Documents: ${llcName} (${state})`
+            const encodedSubject = `=?utf-8?B?${Buffer.from(closureDocsSubject).toString("base64")}?=`
             const mimeMessage = [
               "From: Tony Durante LLC <support@tonydurante.us>",
               "To: support@tonydurante.us",
-              `Subject: Closure Documents: ${llcName} (${state})`,
+              `Subject: ${encodedSubject}`,
               "MIME-Version: 1.0",
               `Content-Type: multipart/mixed; boundary="${boundary}"`,
               "",

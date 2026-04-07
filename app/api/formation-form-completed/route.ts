@@ -301,10 +301,12 @@ export async function POST(req: NextRequest) {
           // Send notification email to Antonio
           try {
             const { gmailPost } = await import("@/lib/gmail")
+            const referralSubject = `[REFERRAL] Credit note needed - ${refCompanyName} referred ${leadName}`
+            const encodedReferralSubject = `=?utf-8?B?${Buffer.from(referralSubject).toString("base64")}?=`
             const raw = Buffer.from(
               `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
               `To: antonio.durante@tonydurante.us\r\n` +
-              `Subject: [REFERRAL] Credit note needed - ${refCompanyName} referred ${leadName}\r\n` +
+              `Subject: ${encodedReferralSubject}\r\n` +
               `MIME-Version: 1.0\r\n` +
               `Content-Type: text/html; charset=utf-8\r\n\r\n` +
               `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +
@@ -381,10 +383,12 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
 <p style="font-size:12px;color:#6b7280">Form token: ${token} | Lead: ${leadName}</p>
 </div>`
 
+      const formationSubject = `[TASK] Formation data received - ${leadName} - ${llcName1}`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(formationSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
-        `Subject: [TASK] Formation data received - ${leadName} - ${llcName1}\r\n` +
+        `Subject: ${encodedSubject}\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
         emailBody
@@ -482,6 +486,7 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
       })
     } catch { /* non-blocking */ }
 
+    // eslint-disable-next-line no-console
     console.log(`[formation-form-completed] ${leadName}: ${results.length} steps. ${results.filter(r => r.status === "ok").length} ok, ${results.filter(r => r.status === "error").length} errors`)
 
     return NextResponse.json({ ok: true, results })

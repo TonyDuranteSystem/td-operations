@@ -521,10 +521,11 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
         const fromEmail = as_user || DEFAULT_EMAIL()
 
         // Build RFC 2822 email
+        const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
         const headers = [
           `From: ${fromEmail}`,
           `To: ${to}`,
-          `Subject: ${subject}`,
+          `Subject: ${encodedSubject}`,
           "MIME-Version: 1.0",
         ]
         if (cc) headers.push(`Cc: ${cc}`)

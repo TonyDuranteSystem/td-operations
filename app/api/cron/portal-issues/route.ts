@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
   const mimeMessage = [
     'From: Tony Durante LLC <support@tonydurante.us>',
     'To: support@tonydurante.us',
-    `Subject: ${subject}`,
+    `Subject: =?utf-8?B?${Buffer.from(subject).toString("base64")}?=`,
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=UTF-8',
     '',

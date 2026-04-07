@@ -770,11 +770,13 @@ ${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
 <p style="font-size:12px;color:#6b7280">Activation ID: ${pending_activation_id} | Offer: ${activation.offer_token}</p>
 </div>`
 
+      const activationSubject = `[NEW CLIENT] ${activation.client_name} -- ${contractType} -- Payment Confirmed`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(activationSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
         `Cc: antonio.durante@tonydurante.us\r\n` +
-        `Subject: [NEW CLIENT] ${activation.client_name} -- ${contractType} -- Payment Confirmed\r\n` +
+        `Subject: ${encodedSubject}\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
         emailBody

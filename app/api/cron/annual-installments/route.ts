@@ -266,10 +266,12 @@ export async function GET(req: NextRequest) {
 ${skipped.length > 0 ? `<h3>Skipped:</h3><ul>${skipped.map(r => `<li>${r.company} — ${r.detail}</li>`).join("")}</ul>` : ""}
 </div>`
 
+        const billingSubject = `[BILLING] ${installmentLabel} ${year} -- ${created.length} invoices (${sentCount} sent)`
+        const encodedSubject = `=?utf-8?B?${Buffer.from(billingSubject).toString("base64")}?=`
         const raw = Buffer.from(
           `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
           `To: support@tonydurante.us\r\n` +
-          `Subject: [BILLING] ${installmentLabel} ${year} -- ${created.length} invoices (${sentCount} sent)\r\n` +
+          `Subject: ${encodedSubject}\r\n` +
           `MIME-Version: 1.0\r\n` +
           `Content-Type: text/html; charset=utf-8\r\n\r\n` +
           emailBody

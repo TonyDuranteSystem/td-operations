@@ -141,6 +141,25 @@ const result = await safeSend({
 
 Tools using this pattern: `lease_send`, `offer_send`. Future send tools MUST follow this.
 
+### Email Subject Encoding — RFC 2047 (MANDATORY)
+Every email constructed with raw MIME headers MUST encode the Subject using RFC 2047 base64.
+Non-ASCII characters (em-dashes, accented names, emojis) in raw Subject headers cause mojibake (`Ã¢Â€Â"`).
+
+**ALWAYS** do this before building the MIME message:
+```typescript
+const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+// Then use in MIME:
+`Subject: ${encodedSubject}\r\n`
+```
+
+**NEVER** put raw subject strings directly into MIME headers:
+```typescript
+// ❌ WRONG — will corrupt non-ASCII characters
+`Subject: ${subject}\r\n`
+```
+
+This applies to ALL email senders: API routes, cron jobs, MCP tools, server actions. No exceptions.
+
 ## Anti-Compaction Protocol — MANDATORY
 
 ### WHY THIS EXISTS

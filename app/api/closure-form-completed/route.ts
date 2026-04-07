@@ -211,10 +211,12 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
 <p style="font-size:12px;color:#6b7280">Form token: ${token} | Client: ${clientName} | LLC: ${llcName}</p>
 </div>`
 
+      const closureSubject = `[TASK] Closure request received - ${llcName} (${llcState})`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(closureSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
         `To: support@tonydurante.us\r\n` +
-        `Subject: [TASK] Closure request received - ${llcName} (${llcState})\r\n` +
+        `Subject: ${encodedSubject}\r\n` +
         `MIME-Version: 1.0\r\n` +
         `Content-Type: text/html; charset=utf-8\r\n\r\n` +
         emailBody
@@ -284,6 +286,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       })
     } catch { /* non-blocking */ }
 
+    // eslint-disable-next-line no-console
     console.log(`[closure-form-completed] ${llcName}: ${results.length} steps. ${results.filter(r => r.status === "ok").length} ok`)
 
     return NextResponse.json({ ok: true, results })

@@ -7,7 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { listFolder, findTaxFolder, findOrCreateYearFolder, downloadFileBinary } from "@/lib/google-drive"
+import { listFolder, findTaxFolder, findOrCreateYearFolder as _findOrCreateYearFolder, downloadFileBinary } from "@/lib/google-drive"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 
@@ -304,6 +304,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_form_create",
+    // eslint-disable-next-line no-template-curly-in-string
     "Create a tax data collection form for a client. Pre-fills owner info from contacts and LLC info from accounts. Returns the form URL (${APP_BASE_URL}/tax-form/{token}). Supported entity_type: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link to the client.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
@@ -1098,10 +1099,11 @@ export function registerTaxTools(server: McpServer) {
         const outerBoundary = `boundary_${Date.now()}`
         const altBoundary = `alt_boundary_${Date.now()}`
 
+        const encodedSubject = `=?utf-8?B?${Buffer.from(emailSubject).toString("base64")}?=`
         const mimeHeaders = [
           "From: Tony Durante LLC <support@tonydurante.us>",
           `To: ${toEmail}`,
-          `Subject: ${emailSubject}`,
+          `Subject: ${encodedSubject}`,
           "MIME-Version: 1.0",
           `Content-Type: multipart/mixed; boundary="${outerBoundary}"`,
         ]
