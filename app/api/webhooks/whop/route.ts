@@ -352,9 +352,9 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
       // Trigger Stage 0 activation via internal endpoint
       try {
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
           ? `https://${process.env.VERCEL_URL}`
-          : "http://localhost:3000"
+          : "http://localhost:3000")
         await fetch(`${baseUrl}/api/workflows/activate-service`, {
           method: "POST",
           headers: {

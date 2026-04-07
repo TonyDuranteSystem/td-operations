@@ -4,9 +4,9 @@ import Link from 'next/link'
 async function fetchInboxStats() {
   try {
     // Use internal fetch to the inbox stats API
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
       ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000'
+      : 'http://localhost:3000')
     const res = await fetch(`${baseUrl}/api/inbox/stats`, {
       cache: 'no-store',
     })
