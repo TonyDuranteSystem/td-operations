@@ -218,7 +218,8 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     let engLabel: string
     if (rawLabel.includes('jan') || rawLabel.includes('genn')) engLabel = 'First Installment (January)'
     else if (rawLabel.includes('jun') || rawLabel.includes('giugno')) engLabel = 'Second Installment (June)'
-    else engLabel = idx === 0 ? 'First Installment' : 'Second Installment'
+    else if (rawLabel.includes('annual') || rawLabel.includes('total') || rawLabel.includes('annuale')) engLabel = 'Annual Total'
+    else engLabel = idx === 0 ? 'First Installment' : idx === 1 ? 'Second Installment' : item.label || 'Additional'
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
 
