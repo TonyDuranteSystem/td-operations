@@ -104,7 +104,6 @@ export function CreateOfferDialog({
   const [catalog, setCatalog] = useState<CatalogService[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [createdOfferUrl, setCreatedOfferUrl] = useState<string | null>(null)
-  const [showPreview, setShowPreview] = useState(false)
 
   // Fetch service catalog from DB when dialog opens
   useEffect(() => {
@@ -348,8 +347,10 @@ export function CreateOfferDialog({
           return
         }
 
-        toast.success(`Offer created: ${data.token}`)
+        toast.success(`Draft offer created — opening preview`)
         setCreatedOfferUrl(data.offer_url)
+        // Auto-open the real offer page for preview
+        window.open(`${data.offer_url}?preview=td`, '_blank')
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'An error occurred')
@@ -379,117 +380,6 @@ export function CreateOfferDialog({
         </div>
 
         <div className="p-5 space-y-5">
-          {/* ── PREVIEW MODE ── */}
-          {showPreview && (
-            <div className="space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-2">
-                <ExternalLink className="h-4 w-4 text-amber-600 shrink-0" />
-                <p className="text-sm text-amber-800">Preview — this is what the client will see</p>
-              </div>
-
-              {/* Client */}
-              <div className="border rounded-lg p-4 space-y-1">
-                <p className="text-xs text-zinc-500 uppercase tracking-wide">Client</p>
-                <p className="text-sm font-semibold">{clientName}</p>
-                <p className="text-sm text-zinc-600">{clientEmail}</p>
-              </div>
-
-              {/* Services */}
-              <div className="border rounded-lg p-4 space-y-3">
-                <p className="text-xs text-zinc-500 uppercase tracking-wide">Services</p>
-                {selected.filter(s => s.price.trim()).map(s => {
-                  const svc = catalog.find(c => c.id === s.id)
-                  return (
-                    <div key={s.id} className="flex justify-between text-sm">
-                      <span>{svc?.name || s.id}</span>
-                      <span className="font-medium">{currencySymbol}{parseFloat(s.price || '0').toLocaleString('en-US')}</span>
-                    </div>
-                  )
-                })}
-                <div className="flex justify-between text-sm font-bold border-t pt-2">
-                  <span>Total</span>
-                  <span>{currencySymbol}{servicesTotalAmount.toLocaleString('en-US')}</span>
-                </div>
-              </div>
-
-              {/* Pre-conditions */}
-              {preconditions.filter(p => p.price.trim()).length > 0 && (
-                <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
-                  <p className="text-xs text-amber-700 uppercase tracking-wide">Pre-conditions</p>
-                  {preconditions.filter(p => p.price.trim()).map(p => (
-                    <div key={p.id} className="flex justify-between text-sm">
-                      <span>{p.id === 'custom' && p.customName ? p.customName : p.name}</span>
-                      <span className="font-medium">{currencySymbol}{parseFloat(p.price || '0').toLocaleString('en-US')}</span>
-                    </div>
-                  ))}
-                  <div className="flex justify-between text-sm font-bold border-t border-amber-300 pt-2">
-                    <span>Pre-conditions Total</span>
-                    <span>{currencySymbol}{preconditionsTotalAmount.toLocaleString('en-US')}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Annual Rates */}
-              {showAnnual && (installment1 || installment2) && (
-                <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 space-y-2">
-                  <p className="text-xs text-blue-700 uppercase tracking-wide">Annual Rates (Year 2+)</p>
-                  {installment1 && (
-                    <div className="flex justify-between text-sm">
-                      <span>1st Installment (January)</span>
-                      <span className="font-medium">{currencySymbol}{parseFloat(installment1).toLocaleString('en-US')}</span>
-                    </div>
-                  )}
-                  {installment2 && (
-                    <div className="flex justify-between text-sm">
-                      <span>2nd Installment (June)</span>
-                      <span className="font-medium">{currencySymbol}{parseFloat(installment2).toLocaleString('en-US')}</span>
-                    </div>
-                  )}
-                  {(installment1 || installment2) && (
-                    <div className="flex justify-between text-sm font-bold border-t border-blue-300 pt-2">
-                      <span>Annual Total</span>
-                      <span>{currencySymbol}{(parseFloat(installment1 || '0') + parseFloat(installment2 || '0')).toLocaleString('en-US')}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Payment + Settings */}
-              <div className="border rounded-lg p-4 space-y-2">
-                <p className="text-xs text-zinc-500 uppercase tracking-wide">Settings</p>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-zinc-500">Language:</span> <span className="font-medium">{language === 'it' ? 'Italian' : 'English'}</span></div>
-                  <div><span className="text-zinc-500">Currency:</span> <span className="font-medium">{currency}</span></div>
-                  <div><span className="text-zinc-500">Payment:</span> <span className="font-medium">{PAYMENT_TYPES.find(t => t.value === paymentType)?.label}</span></div>
-                  <div><span className="text-zinc-500">Bank:</span> <span className="font-medium">{BANK_OPTIONS.find(b => b.value === bankPreference)?.label}</span></div>
-                  <div><span className="text-zinc-500">Contract:</span> <span className="font-medium">{derivedContractType}</span></div>
-                  <div><span className="text-zinc-500">Pipelines:</span> <span className="font-medium">{derivedPipelines.join(', ') || 'none'}</span></div>
-                </div>
-              </div>
-
-              {/* Required Documents */}
-              {requiredDocs.length > 0 && (
-                <div className="border rounded-lg p-4 space-y-1">
-                  <p className="text-xs text-zinc-500 uppercase tracking-wide">Required Documents</p>
-                  <ul className="text-sm space-y-1">
-                    {requiredDocs.map(docId => {
-                      const doc = DOCUMENT_TYPES.find(d => d.id === docId)
-                      return <li key={docId} className="flex items-center gap-1.5"><FileText className="h-3 w-3 text-zinc-400" />{doc?.name || docId}</li>
-                    })}
-                  </ul>
-                </div>
-              )}
-
-              {/* Grand Total */}
-              <div className="bg-zinc-900 text-white rounded-lg p-4 flex justify-between items-center">
-                <span className="text-sm font-medium">Grand Total</span>
-                <span className="text-xl font-bold">{currencySymbol}{totalAmount.toLocaleString('en-US')}</span>
-              </div>
-            </div>
-          )}
-
-          {/* ── FORM MODE ── */}
-          {!showPreview && <>
           {/* Client info (locked) */}
           <div className="bg-zinc-50 rounded-lg p-3">
             <p className="text-xs text-muted-foreground mb-1">Client (from {sourceLabel} -- not editable)</p>
@@ -818,7 +708,6 @@ export function CreateOfferDialog({
               )}
             </div>
           )}
-          </>}
         </div>
 
         {/* Footer */}
@@ -845,23 +734,6 @@ export function CreateOfferDialog({
                 Done
               </button>
             </>
-          ) : showPreview ? (
-            <>
-              <button
-                onClick={() => setShowPreview(false)}
-                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
-              >
-                Back to Edit
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={isPending || selected.length === 0}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                Create Offer
-              </button>
-            </>
           ) : (
             <>
               <button
@@ -871,23 +743,12 @@ export function CreateOfferDialog({
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  if (selected.length === 0) { toast.error('Select at least one service'); return }
-                  if (!selected.some(s => s.price.trim())) { toast.error('Enter a price for at least one service'); return }
-                  setShowPreview(true)
-                }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md border border-blue-600 text-blue-600 hover:bg-blue-50"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Preview
-              </button>
-              <button
                 onClick={handleSubmit}
                 disabled={isPending || selected.length === 0}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                Create Offer
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                Create &amp; Preview
               </button>
             </>
           )}
