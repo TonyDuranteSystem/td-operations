@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import {
-  ArrowLeft, Building2, User, Mail, Phone, Globe, MapPin,
+  ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
   Plus, Search, Loader2, Stethoscope,
@@ -604,6 +604,15 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin }: { accoun
               </a>
             </div>
           )}
+          <div className="border-t pt-3 mt-1">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Referral</p>
+            <div className="grid gap-3">
+              <EditableField icon={Users} label="Referrer" value={account.referrer ?? ''} onSave={makeAccountSaver('referrer')} />
+              <EditableField icon={Users} label="Referred By (Account)" value={account.referred_by ?? ''} onSave={makeAccountSaver('referred_by')} />
+              <EditableField icon={CreditCard} label="Commission %" value={account.referral_commission_pct != null ? String(account.referral_commission_pct) : ''} onSave={makeAccountSaver('referral_commission_pct')} />
+              <EditableField icon={FileText} label="Referral Status" value={account.referral_status ?? ''} type="select" options={[{label: '—', value: ''}, {label: 'Pending', value: 'pending'}, {label: 'Converted', value: 'converted'}, {label: 'Credited', value: 'credited'}, {label: 'Paid', value: 'paid'}]} onSave={makeAccountSaver('referral_status')} />
+            </div>
+          </div>
         </div>
       </div>
 

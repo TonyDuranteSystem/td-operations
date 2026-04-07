@@ -74,6 +74,9 @@ export interface Account {
   cancellation_requested: boolean | null
   cancellation_date: string | null
   referrer: string | null
+  referred_by: string | null
+  referral_commission_pct: number | null
+  referral_status: string | null
   lead_source: string | null
   gdrive_folder_url: string | null
   drive_folder_id: string | null
