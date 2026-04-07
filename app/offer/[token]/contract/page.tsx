@@ -368,7 +368,8 @@ export default function ContractPage() {
         let engLabel: string
         if (rawLabel.includes('jan') || rawLabel.includes('genn')) engLabel = 'First Installment (January)'
         else if (rawLabel.includes('jun') || rawLabel.includes('giugno')) engLabel = 'Second Installment (June)'
-        else engLabel = idx === 0 ? 'First Installment' : 'Second Installment'
+        else if (rawLabel.includes('annual') || rawLabel.includes('total') || rawLabel.includes('annuale')) engLabel = 'Annual Total'
+        else engLabel = idx === 0 ? 'First Installment' : idx === 1 ? 'Second Installment' : item.label || 'Additional'
         parts.push(`${engLabel}: ${amt}`)
       }
       installments = parts.join(' -- ')

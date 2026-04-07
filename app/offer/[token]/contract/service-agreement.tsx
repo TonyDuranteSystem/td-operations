@@ -212,14 +212,16 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     const item = rc[idx]
     const amt = (item as any).amount || (item as any).price || ''
     const numAmt = parseFloat(String(amt).replace(/[^0-9.]/g, ''))
-    if (!isNaN(numAmt)) annualFeeNum += numAmt
     // Normalize labels to English for the legal document
     const rawLabel = (item.label || '').toLowerCase()
     let engLabel: string
+    const isTotal = rawLabel.includes('annual') || rawLabel.includes('total') || rawLabel.includes('annuale')
     if (rawLabel.includes('jan') || rawLabel.includes('genn')) engLabel = 'First Installment (January)'
     else if (rawLabel.includes('jun') || rawLabel.includes('giugno')) engLabel = 'Second Installment (June)'
-    else if (rawLabel.includes('annual') || rawLabel.includes('total') || rawLabel.includes('annuale')) engLabel = 'Annual Total'
+    else if (isTotal) engLabel = 'Annual Total'
     else engLabel = idx === 0 ? 'First Installment' : idx === 1 ? 'Second Installment' : item.label || 'Additional'
+    // Only sum installments, not the "Annual Total" summary line (avoids double-counting)
+    if (!isNaN(numAmt) && !isTotal) annualFeeNum += numAmt
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
 
