@@ -3,15 +3,10 @@ import { createClient } from '@/lib/supabase/server'
 import { isAdmin } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
+import { PartnerHeaderActions, type PartnerData, type ManagedAccount } from './components/partner-actions'
+import { ManagedClientsSection } from './components/managed-clients-section'
 
 export const dynamic = 'force-dynamic'
-
-const STATUS_COLORS: Record<string, string> = {
-  Active: 'bg-emerald-100 text-emerald-700',
-  Inactive: 'bg-zinc-100 text-zinc-600',
-  Closed: 'bg-red-100 text-red-700',
-  Suspended: 'bg-amber-100 text-amber-700',
-}
 
 export default async function PartnerDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
@@ -52,11 +47,10 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
     services = (sds ?? []) as typeof services
   }
 
-  const servicesByAccount = new Map<string, typeof services>()
+  const servicesByAccount: Record<string, typeof services> = {}
   for (const s of services) {
-    const existing = servicesByAccount.get(s.account_id) ?? []
-    existing.push(s)
-    servicesByAccount.set(s.account_id, existing)
+    if (!servicesByAccount[s.account_id]) servicesByAccount[s.account_id] = []
+    servicesByAccount[s.account_id].push(s)
   }
 
   // Fetch payments made by partner (contact_id)
@@ -76,6 +70,33 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
 
   const priceList = (partner.price_list ?? {}) as Record<string, number>
 
+  // Serialize partner data for client components
+  const partnerData: PartnerData = {
+    id: partner.id,
+    partner_name: partner.partner_name,
+    partner_email: partner.partner_email,
+    status: partner.status,
+    commission_model: partner.commission_model,
+    agreed_services: partner.agreed_services,
+    price_list: priceList,
+    notes: partner.notes,
+    contact: contact ? {
+      id: contact.id,
+      full_name: contact.full_name,
+      email: contact.email,
+      phone: contact.phone,
+      language: contact.language,
+    } : null,
+  }
+
+  const managedAccounts: ManagedAccount[] = (accounts ?? []).map(a => ({
+    id: a.id,
+    company_name: a.company_name,
+    status: a.status,
+    entity_type: a.entity_type,
+    state_of_formation: a.state_of_formation,
+  }))
+
   return (
     <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
@@ -83,17 +104,20 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
         <Link href="/partners" className="text-zinc-400 hover:text-zinc-600">
           <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold">{partner.partner_name}</h1>
           <p className="text-sm text-muted-foreground">
             {contact?.full_name ?? 'No contact'} · {partner.partner_email ?? contact?.email ?? '—'}
           </p>
         </div>
-        <span className={`ml-auto text-xs font-medium px-3 py-1 rounded-full ${
-          partner.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-600'
+        <span className={`text-xs font-medium px-3 py-1 rounded-full ${
+          partner.status === 'active' ? 'bg-emerald-100 text-emerald-700'
+            : partner.status === 'suspended' ? 'bg-amber-100 text-amber-700'
+            : 'bg-zinc-100 text-zinc-600'
         }`}>
           {partner.status}
         </span>
+        <PartnerHeaderActions partner={partnerData} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -165,52 +189,12 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
         </div>
       </div>
 
-      {/* Managed Clients */}
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <div className="px-5 py-3 border-b bg-zinc-50">
-          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-            Managed Clients ({accounts?.length ?? 0})
-          </h3>
-        </div>
-        <div className="hidden md:grid md:grid-cols-[1fr,120px,120px,100px,1fr] gap-3 px-4 py-2 border-b text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          <span>Company</span>
-          <span>Type</span>
-          <span>State</span>
-          <span>Status</span>
-          <span>Active Services</span>
-        </div>
-        {(accounts ?? []).map(a => {
-          const acctServices = servicesByAccount.get(a.id) ?? []
-          return (
-            <Link
-              key={a.id}
-              href={`/accounts/${a.id}`}
-              className="grid grid-cols-1 md:grid-cols-[1fr,120px,120px,100px,1fr] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center"
-            >
-              <div>
-                <div className="font-medium text-sm">{a.company_name}</div>
-                {a.ein_number && <div className="text-xs text-muted-foreground">EIN: {a.ein_number}</div>}
-              </div>
-              <div className="text-xs text-muted-foreground">{a.entity_type ?? '—'}</div>
-              <div className="text-xs text-muted-foreground">{a.state_of_formation ?? '—'}</div>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded w-fit ${STATUS_COLORS[a.status ?? ''] ?? 'bg-zinc-100 text-zinc-600'}`}>
-                {a.status ?? '—'}
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {acctServices.map((s, i) => (
-                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
-                    {s.service_type}: {s.stage}
-                  </span>
-                ))}
-                {acctServices.length === 0 && <span className="text-xs text-zinc-400">No active services</span>}
-              </div>
-            </Link>
-          )
-        })}
-        {(accounts ?? []).length === 0 && (
-          <div className="p-8 text-center text-sm text-muted-foreground">No managed clients yet</div>
-        )}
-      </div>
+      {/* Managed Clients — interactive */}
+      <ManagedClientsSection
+        partner={partnerData}
+        accounts={managedAccounts}
+        servicesByAccount={servicesByAccount}
+      />
     </div>
   )
 }

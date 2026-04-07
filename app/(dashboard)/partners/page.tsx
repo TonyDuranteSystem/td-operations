@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isAdmin } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import { PartnersHeader } from './components/partners-header'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,14 +39,7 @@ export default async function PartnersPage() {
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Partners</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {partners?.length ?? 0} partners managing client accounts
-          </p>
-        </div>
-      </div>
+      <PartnersHeader count={partners?.length ?? 0} />
 
       <div className="bg-white rounded-lg border overflow-hidden">
         <div className="hidden md:grid md:grid-cols-[1fr,1fr,120px,120px,1fr,100px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
