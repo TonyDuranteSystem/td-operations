@@ -10,6 +10,7 @@ import { safeAction, type ActionResult } from '@/lib/server-action'
 export async function createExpense(input: {
   account_id: string
   vendor_name: string
+  vendor_id?: string
   invoice_number?: string
   description?: string
   currency: 'USD' | 'EUR'
@@ -18,6 +19,9 @@ export async function createExpense(input: {
   due_date?: string
   category?: string
   notes?: string
+  attachment_url?: string
+  attachment_name?: string
+  source?: 'manual' | 'upload'
 }): Promise<ActionResult<{ id: string }>> {
   return safeAction(async () => {
     // Generate internal reference
@@ -50,9 +54,12 @@ export async function createExpense(input: {
         issue_date: input.issue_date || new Date().toISOString().split('T')[0],
         due_date: input.due_date || null,
         status: 'Pending',
-        source: 'manual',
+        source: input.source || 'manual',
         category: input.category || 'General',
         notes: input.notes || null,
+        vendor_id: input.vendor_id || null,
+        attachment_url: input.attachment_url || null,
+        attachment_name: input.attachment_name || null,
       })
       .select('id')
       .single()

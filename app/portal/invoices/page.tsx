@@ -9,10 +9,13 @@ import { cookies } from 'next/headers'
 import { InvoiceList } from '@/components/portal/invoice-list'
 import { ExpenseList } from '@/components/portal/expense-list'
 import { TemplateList } from '@/components/portal/template-list'
-import { Receipt, Plus, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
+import { VendorList } from '@/components/portal/vendor-list'
+import { ExpensesHeader } from '@/components/portal/expenses-header'
+import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2 } from 'lucide-react'
 import { t, getLocale } from '@/lib/portal/i18n'
 import Link from 'next/link'
 import { listTemplates } from './actions'
+import { listVendors } from './vendor-actions'
 
 export default async function PortalInvoicesPage({
   searchParams,
@@ -33,11 +36,11 @@ export default async function PortalInvoicesPage({
   if (!selectedAccountId) redirect('/portal')
 
   const params = await searchParams
-  const activeTab = params.tab === 'expenses' ? 'expenses' : 'sales'
+  const activeTab = params.tab === 'expenses' ? 'expenses' : params.tab === 'vendors' ? 'vendors' : 'sales'
   const locale = getLocale(user)
 
-  // Fetch data for both tabs in parallel
-  const [salesResult, expenses, templates] = await Promise.all([
+  // Fetch data for all tabs in parallel
+  const [salesResult, expenses, templates, vendors] = await Promise.all([
     supabaseAdmin
       .from('client_invoices')
       .select('*, client_customers(name)')
@@ -47,6 +50,7 @@ export default async function PortalInvoicesPage({
       .limit(100),
     getPortalExpenses(selectedAccountId),
     listTemplates(selectedAccountId),
+    listVendors(selectedAccountId),
   ])
 
   const invoices = salesResult.data ?? []
@@ -93,6 +97,9 @@ export default async function PortalInvoicesPage({
             {t('invoices.new', locale)}
           </Link>
         )}
+        {activeTab === 'expenses' && (
+          <ExpensesHeader accountId={selectedAccountId} vendors={vendors} locale={locale} />
+        )}
       </div>
 
       {/* Tabs */}
@@ -123,6 +130,20 @@ export default async function PortalInvoicesPage({
           {t('invoices.tabExpenses', locale)}
           {expenseStats.total > 0 && (
             <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{expenseStats.total}</span>
+          )}
+        </Link>
+        <Link
+          href="/portal/invoices?tab=vendors"
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+            activeTab === 'vendors'
+              ? 'bg-white text-zinc-900 shadow-sm'
+              : 'text-zinc-600 hover:text-zinc-900'
+          }`}
+        >
+          <Building2 className="h-4 w-4" />
+          {locale === 'it' ? 'Fornitori' : 'Vendors'}
+          {vendors.length > 0 && (
+            <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{vendors.length}</span>
           )}
         </Link>
       </div>
@@ -196,6 +217,11 @@ export default async function PortalInvoicesPage({
             <ExpenseList expenses={expenses} locale={locale} />
           )}
         </>
+      )}
+
+      {/* ── Vendors Tab ── */}
+      {activeTab === 'vendors' && (
+        <VendorList vendors={vendors} accountId={selectedAccountId} locale={locale} />
       )}
     </div>
   )
