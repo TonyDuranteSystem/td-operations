@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Send, Loader2 } from 'lucide-react'
+import { X, Send, Loader2, Sparkles } from 'lucide-react'
 
 interface ComposeDialogProps {
   open: boolean
   onClose: () => void
-  // Pre-fill for forwarding
   prefillTo?: string
   prefillSubject?: string
   prefillBody?: string
@@ -25,9 +24,11 @@ export function ComposeDialog({
   const [subject, setSubject] = useState(prefillSubject)
   const [body, setBody] = useState(prefillBody)
   const [showCc, setShowCc] = useState(false)
+  const [aiInstruction, setAiInstruction] = useState('')
+  const [showAi, setShowAi] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
   const queryClient = useQueryClient()
 
-  // Sync prefill props when they change (e.g., forward opens with new data)
   useEffect(() => { setTo(prefillTo) }, [prefillTo])
   useEffect(() => { setSubject(prefillSubject) }, [prefillSubject])
   useEffect(() => { setBody(prefillBody) }, [prefillBody])
@@ -51,16 +52,46 @@ export function ComposeDialog({
       return res.json()
     },
     onSuccess: () => {
-      // Reset form
       setTo('')
       setCc('')
       setSubject('')
       setBody('')
-      // Refresh conversations to show sent message
+      setAiInstruction('')
+      setShowAi(false)
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       onClose()
     },
   })
+
+  const handleAiCompose = async () => {
+    if (aiLoading || !aiInstruction.trim()) return
+    setAiLoading(true)
+    try {
+      const res = await fetch('/api/inbox/ai-compose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instruction: aiInstruction,
+          to: to || undefined,
+          subject: subject || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'AI compose failed')
+      }
+      const data = await res.json()
+      if (data.draft) {
+        setBody(data.draft)
+        setShowAi(false)
+        setAiInstruction('')
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   if (!open) return null
 
@@ -70,13 +101,58 @@ export function ComposeDialog({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b">
           <h2 className="text-sm font-semibold text-zinc-900">New Email</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-zinc-100 text-zinc-500"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAi(!showAi)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                showAi
+                  ? 'bg-violet-100 text-violet-700'
+                  : 'bg-zinc-100 text-zinc-600 hover:bg-violet-50 hover:text-violet-600'
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              AI Draft
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1 rounded hover:bg-zinc-100 text-zinc-500"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
+
+        {/* AI Instruction Panel */}
+        {showAi && (
+          <div className="px-5 py-3 bg-violet-50 border-b">
+            <p className="text-xs text-violet-600 mb-2">
+              Describe what you want to say and AI will draft the email:
+            </p>
+            <div className="flex items-end gap-2">
+              <textarea
+                value={aiInstruction}
+                onChange={(e) => setAiInstruction(e.target.value)}
+                placeholder='e.g., "Tell them their LLC is ready and they need to sign the OA"'
+                rows={2}
+                className="flex-1 text-sm rounded-lg border border-violet-200 px-3 py-2 outline-none
+                  focus:ring-2 focus:ring-violet-400 focus:border-transparent
+                  placeholder:text-violet-400 resize-none bg-white"
+              />
+              <button
+                onClick={handleAiCompose}
+                disabled={aiLoading || !aiInstruction.trim()}
+                className="shrink-0 px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium
+                  hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {aiLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  'Generate'
+                )}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Form */}
         <div className="flex-1 overflow-y-auto">

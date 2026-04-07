@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Send } from 'lucide-react'
+import { Send, Sparkles, Loader2 } from 'lucide-react'
 import type { InboxConversation } from '@/lib/types'
 
 interface ComposeReplyProps {
@@ -11,6 +11,7 @@ interface ComposeReplyProps {
 
 export function ComposeReply({ conversation }: ComposeReplyProps) {
   const [message, setMessage] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
   const queryClient = useQueryClient()
 
   const sendMutation = useMutation({
@@ -32,7 +33,6 @@ export function ComposeReply({ conversation }: ComposeReplyProps) {
     },
     onSuccess: () => {
       setMessage('')
-      // Refetch messages to show the sent message
       queryClient.invalidateQueries({
         queryKey: ['inbox-messages', conversation.id],
       })
@@ -50,6 +50,32 @@ export function ComposeReply({ conversation }: ComposeReplyProps) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    }
+  }
+
+  const handleAiSuggest = async () => {
+    if (aiLoading) return
+    setAiLoading(true)
+    try {
+      // Extract threadId from conversation.id (format: "gmail:threadId")
+      const threadId = conversation.id.replace('gmail:', '')
+      const res = await fetch('/api/inbox/ai-suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'AI suggestion failed')
+      }
+      const data = await res.json()
+      if (data.suggestion) {
+        setMessage(data.suggestion)
+      }
+    } catch {
+      // Silently fail — AI is optional
+    } finally {
+      setAiLoading(false)
     }
   }
 
@@ -73,6 +99,23 @@ export function ComposeReply({ conversation }: ComposeReplyProps) {
             placeholder:text-zinc-400 max-h-32"
           style={{ minHeight: '42px' }}
         />
+
+        {/* AI Suggest button — only for Gmail */}
+        {conversation.channel === 'gmail' && (
+          <button
+            onClick={handleAiSuggest}
+            disabled={aiLoading}
+            className="shrink-0 p-2.5 rounded-xl bg-violet-100 text-violet-600 hover:bg-violet-200
+              disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            title="AI Draft Reply"
+          >
+            {aiLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+          </button>
+        )}
 
         <button
           onClick={handleSend}
