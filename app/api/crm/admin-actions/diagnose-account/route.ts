@@ -131,20 +131,13 @@ export async function GET(req: NextRequest) {
         ? supabaseAdmin.from("banking_submissions").select("id, token, status, provider, submitted_data")
           .eq("contact_id", contactId)
         : { data: [] },
-      // Auth user — check portal_account flag + verify in auth.users
+      // Auth user — check via listUsers API (reliable, not dependent on portal_account flag)
       Promise.resolve().then(async () => {
         if (!contactEmail) return { data: [] as { id: string; email: string }[] }
-        // First check account.portal_account flag (reliable)
-        if (account.portal_account) {
-          return { data: [{ id: "from-flag", email: contactEmail }] }
-        }
-        // Fallback: check auth.users directly
         try {
-          const { data } = await supabaseAdmin.rpc("exec_sql", {
-            query: `SELECT id::text, email FROM auth.users WHERE LOWER(email) = LOWER('${contactEmail.replace(/'/g, "''")}') LIMIT 1`
-          })
-          const rows = Array.isArray(data) ? data : (data as { rows?: unknown[] })?.rows || []
-          return { data: rows as { id: string; email: string }[] }
+          const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+          const found = (list?.users ?? []).find(u => u.email?.toLowerCase() === contactEmail.toLowerCase())
+          return { data: found ? [{ id: found.id, email: found.email || contactEmail }] : [] as { id: string; email: string }[] }
         } catch {
           return { data: [] as { id: string; email: string }[] }
         }
@@ -638,15 +631,19 @@ export async function GET(req: NextRequest) {
     const contactTier = primaryContact?.portal_tier || null
     const accountTier = account.portal_tier || null
 
+    // Check if auth user exists but portal_account flag is missing (half-setup)
+    const portalHalfSetup = authUser && !account.portal_account
     checks.push({
       id: "portal_user",
       category: "Portal",
       label: "Portal auth user",
-      status: authUser ? "ok" : "error",
-      detail: authUser ? `Exists (${authUser.email})` : "No portal login — client cannot access portal",
-      fix: !authUser && contactEmail ? {
+      status: authUser ? (portalHalfSetup ? "warning" : "ok") : "error",
+      detail: authUser
+        ? (portalHalfSetup ? `Auth user exists (${authUser.email}) but portal_account flag not set — portal may not work correctly` : `Exists (${authUser.email})`)
+        : "No portal login — client cannot access portal",
+      fix: (!authUser || portalHalfSetup) && contactEmail ? {
         action: "create_portal_user",
-        label: "Create portal login",
+        label: portalHalfSetup ? "Repair portal setup" : "Create portal login",
         params: { contact_id: contactId, email: contactEmail },
         description: "Creates (or repairs) a portal login for this client. Sets full auth metadata, portal_account flag on accounts, and sends welcome email with credentials.",
         impact: ["Auth user is created or repaired with full metadata (contact_id, account_ids, portal_tier)", "portal_account flag set on all linked accounts", "Welcome email with temp password sent automatically", "Client can log in at portal.tonydurante.us"],
