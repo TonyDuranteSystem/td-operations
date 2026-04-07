@@ -453,13 +453,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         </div>
       )}
 
-      {/* Documents to Sign Panel */}
-      <DocumentsPanel
-        accountId={account.id}
-        isAdmin={true}
-        onGenerateOA={() => setShowOADialog(true)}
-        onGenerateLease={() => setShowLeaseDialog(true)}
-        onGenerateSS4={() => setShowSS4Dialog(true)}
+      {/* Account Journey Tracker — TOP priority, shows current lifecycle state */}
+      <AccountJourney
+        offer={offer ? { token: offer.token, status: offer.status, contract_type: offer.contract_type, created_at: offer.created_at, view_count: offer.view_count, viewed_at: offer.viewed_at, cost_summary: offer.cost_summary } : null}
+        pendingActivation={pendingActivation}
+        wizardProgress={wizardProgress}
+        serviceDeliveries={serviceDeliveriesRaw}
+        accountType={account.account_type ?? null}
+        portalTier={(account as unknown as Record<string, unknown>).portal_tier as string ?? null}
       />
 
       {/* Offer Panel */}
@@ -472,14 +473,13 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         isAdmin={isAdmin}
       />
 
-      {/* Account Journey Tracker */}
-      <AccountJourney
-        offer={offer ? { token: offer.token, status: offer.status, contract_type: offer.contract_type, created_at: offer.created_at, view_count: offer.view_count, viewed_at: offer.viewed_at, cost_summary: offer.cost_summary } : null}
-        pendingActivation={pendingActivation}
-        wizardProgress={wizardProgress}
-        serviceDeliveries={serviceDeliveriesRaw}
-        accountType={account.account_type ?? null}
-        portalTier={(account as unknown as Record<string, unknown>).portal_tier as string ?? null}
+      {/* Documents to Sign Panel */}
+      <DocumentsPanel
+        accountId={account.id}
+        isAdmin={true}
+        onGenerateOA={() => setShowOADialog(true)}
+        onGenerateLease={() => setShowLeaseDialog(true)}
+        onGenerateSS4={() => setShowSS4Dialog(true)}
       />
 
       {/* Generate Document Dialogs */}
