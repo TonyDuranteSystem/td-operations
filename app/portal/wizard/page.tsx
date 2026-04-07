@@ -15,7 +15,7 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 
-const VALID_WIZARD_TYPES = ['onboarding', 'formation', 'banking', 'closure', 'itin', 'tax'] as const
+const VALID_WIZARD_TYPES = ['onboarding', 'formation', 'banking', 'banking_payset', 'banking_relay', 'closure', 'itin', 'tax'] as const
 type WizardType = typeof VALID_WIZARD_TYPES[number]
 
 function isValidWizardType(type: string | undefined): type is WizardType {
@@ -116,7 +116,8 @@ export default async function WizardPage({
       pendingWizardTypes.push({ type: 'formation', label: 'LLC Formation', serviceType: 'Company Formation' })
     }
     if (types.includes('Banking Fintech')) {
-      pendingWizardTypes.push({ type: 'banking', label: 'Banking Application', serviceType: 'Banking Fintech' })
+      pendingWizardTypes.push({ type: 'banking_payset', label: 'Payset (EUR)', serviceType: 'Banking Fintech' })
+      pendingWizardTypes.push({ type: 'banking_relay', label: 'Relay (USD)', serviceType: 'Banking Fintech' })
     }
     if (types.includes('Company Closure')) {
       pendingWizardTypes.push({ type: 'closure', label: 'Company Closure', serviceType: 'Company Closure' })
@@ -318,7 +319,7 @@ export default async function WizardPage({
         </div>
       )}
       {/* Banking partner referral links — shown above the wizard when type is banking */}
-      {wizardType === 'banking' && (
+      {(wizardType === 'banking' || wizardType === 'banking_payset' || wizardType === 'banking_relay') && (
         <div className="mb-6 border rounded-lg bg-white p-5">
           <h3 className="text-sm font-semibold text-zinc-800 mb-1">
             {locale === 'it' ? 'Apri un conto bancario USA' : 'Open a US Bank Account'}

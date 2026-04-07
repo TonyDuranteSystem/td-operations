@@ -119,11 +119,21 @@ export default function ServiceDetailPage() {
     )
   }
 
+  // Map service type to wizard URL (only for Data Collection stage)
+  const WIZARD_URL_MAP: Record<string, string> = {
+    'Banking Fintech': '/portal/wizard',
+    'Company Formation': '/portal/wizard?type=formation',
+    'ITIN': '/portal/wizard?type=itin',
+    'ITIN Renewal': '/portal/wizard?type=itin',
+    'Tax Return': '/portal/wizard?type=tax',
+    'Company Closure': '/portal/wizard?type=closure',
+    'Client Onboarding': '/portal/wizard?type=onboarding',
+  }
+  const currentStage = service.timeline.find(s => s.status === 'current')
+  const isDataCollection = currentStage?.name?.toLowerCase().includes('data collection')
+  const wizardUrl = isDataCollection ? WIZARD_URL_MAP[service.service_type] ?? null : null
+
   const statusConfig = STATUS_CONFIG[service.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG['Not Started']
-  const StatusIcon = statusConfig.icon
-  const progress = service.current_step && service.total_steps
-    ? Math.round((service.current_step / service.total_steps) * 100)
-    : 0
   const completedStages = service.timeline.filter(s => s.status === 'completed').length
   const totalStages = service.timeline.length
 
@@ -242,6 +252,14 @@ export default function ServiceDetailPage() {
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
                           CURRENT
                         </span>
+                      )}
+                      {stage.status === 'current' && wizardUrl && (
+                        <Link
+                          href={wizardUrl}
+                          className="text-xs font-medium text-blue-600 hover:text-blue-700 ml-auto"
+                        >
+                          Start Application &rarr;
+                        </Link>
                       )}
                     </div>
                     {stage.description && (
