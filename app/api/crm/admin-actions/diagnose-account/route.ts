@@ -302,7 +302,30 @@ export async function GET(req: NextRequest) {
         },
       })
     } else {
-      // Zero payments — offer may be completed (transition client paid externally)
+      // Zero payments — check bank feeds and pending_activations before flagging error
+      // A matched bank feed means Finance already confirmed the money arrived
+      let matchedFeed: { amount: number; currency: string; transaction_date: string; source: string; sender_name: string } | null = null
+
+      // Check 1: pending_activation with payment_confirmed_at (cron already verified payment)
+      const hasPendingConfirmation = pending?.payment_confirmed_at != null
+
+      // Check 2: td_bank_feeds with status=matched where sender matches company name
+      if (account.company_name) {
+        const companyWords = account.company_name.replace(/\s*(LLC|INC|CORP|LTD)\.?\s*/gi, "").trim()
+        if (companyWords.length >= 3) {
+          const { data: feeds } = await supabaseAdmin
+            .from("td_bank_feeds")
+            .select("amount, currency, transaction_date, source, sender_name")
+            .eq("status", "matched")
+            .ilike("sender_name", `%${companyWords}%`)
+            .order("transaction_date", { ascending: false })
+            .limit(1)
+          if (feeds && feeds.length > 0) {
+            matchedFeed = feeds[0]
+          }
+        }
+      }
+
       // Parse offer amount for the fix button
       let offerAmount = 0
       let offerCurrency: "EUR" | "USD" = "EUR"
@@ -323,34 +346,76 @@ export async function GET(req: NextRequest) {
         if (firstPrice.includes("$")) offerCurrency = "USD"
       }
 
-      checks.push({
-        id: "payment_received",
-        category: "Payments",
-        label: "Setup payment",
-        status: "error",
-        detail: "No payments found" + (offer?.status === "completed" ? " — offer is completed, payment may have been received externally" : ""),
-        fix: offer?.status === "completed" ? {
-          action: "record_payment",
-          label: offerAmount > 0 ? `Record ${offerCurrency === "EUR" ? "€" : "$"}${offerAmount.toLocaleString()} payment` : "Record payment",
-          params: {
-            account_id: accountId,
-            contact_id: contactId,
-            amount: offerAmount || null,
-            currency: offerCurrency,
-            payment_method: offer.payment_type === "bank_transfer" ? "Wire Transfer" : "Card",
-            description: `Setup fee — ${offer.token}`,
-            offer_token: offer.token,
+      // Use bank feed data for amount/currency if available (more accurate than offer parsing)
+      const fixAmount = matchedFeed ? matchedFeed.amount : (offerAmount || null)
+      const fixCurrency = matchedFeed ? (matchedFeed.currency === "USD" ? "USD" : "EUR") as "EUR" | "USD" : offerCurrency
+      const fixPaidDate = matchedFeed?.transaction_date || undefined
+
+      if (matchedFeed || hasPendingConfirmation) {
+        // Payment was received (bank feed matched or pending activation confirmed) but no payment record created
+        const feedDetail = matchedFeed
+          ? `${matchedFeed.currency} ${matchedFeed.amount.toLocaleString()} received via ${matchedFeed.source} on ${matchedFeed.transaction_date}`
+          : `Payment confirmed on ${pending?.payment_confirmed_at?.split("T")[0]}`
+
+        checks.push({
+          id: "payment_received",
+          category: "Payments",
+          label: "Setup payment",
+          status: "warning",
+          detail: `Bank feed matched but no payment record — ${feedDetail}`,
+          fix: {
+            action: "record_payment",
+            label: fixAmount ? `Record ${fixCurrency === "EUR" ? "€" : "$"}${Number(fixAmount).toLocaleString()} payment` : "Record payment",
+            params: {
+              account_id: accountId,
+              contact_id: contactId,
+              amount: fixAmount,
+              currency: fixCurrency,
+              payment_method: offer?.payment_type === "bank_transfer" ? "Wire Transfer" : (pending?.payment_method || "Wire Transfer"),
+              description: `Setup fee — ${offer?.token || "onboarding"}`,
+              offer_token: offer?.token || undefined,
+              paid_date: fixPaidDate,
+            },
+            description: `Creates a payment record for ${fixAmount ? `${fixCurrency === "EUR" ? "€" : "$"}${Number(fixAmount).toLocaleString()}` : "the setup fee"} as Paid on ${fixPaidDate || "today"}. Links this to the matched bank feed.`,
+            impact: [
+              "A new payment row will be created in the payments table linked to this account",
+              `Payment will be marked as Paid with date ${fixPaidDate || "today"}`,
+              "Diagnostic will show green after this fix",
+              "Finance bank feed and diagnostic will be in sync",
+            ],
+            risk: "safe" as const,
           },
-          description: `Creates a new payment record for ${offerAmount > 0 ? `${offerCurrency === "EUR" ? "€" : "$"}${offerAmount.toLocaleString()}` : "the setup fee"} as Paid via ${offer.payment_type === "bank_transfer" ? "Wire Transfer" : "Card"}.`,
-          impact: [
-            "A new payment row will be created in the payments table linked to this account",
-            "Payment will be marked as Paid with today's date",
-            "Finance dashboard will reflect this payment",
-            "Does NOT create a client invoice — invoice must be created separately if needed",
-          ],
-          risk: "moderate" as const,
-        } : undefined,
-      })
+        })
+      } else {
+        checks.push({
+          id: "payment_received",
+          category: "Payments",
+          label: "Setup payment",
+          status: "error",
+          detail: "No payments found" + (offer?.status === "completed" ? " — offer is completed, payment may have been received externally" : ""),
+          fix: offer?.status === "completed" ? {
+            action: "record_payment",
+            label: offerAmount > 0 ? `Record ${offerCurrency === "EUR" ? "€" : "$"}${offerAmount.toLocaleString()} payment` : "Record payment",
+            params: {
+              account_id: accountId,
+              contact_id: contactId,
+              amount: offerAmount || null,
+              currency: offerCurrency,
+              payment_method: offer.payment_type === "bank_transfer" ? "Wire Transfer" : "Card",
+              description: `Setup fee — ${offer.token}`,
+              offer_token: offer.token,
+            },
+            description: `Creates a new payment record for ${offerAmount > 0 ? `${offerCurrency === "EUR" ? "€" : "$"}${offerAmount.toLocaleString()}` : "the setup fee"} as Paid via ${offer.payment_type === "bank_transfer" ? "Wire Transfer" : "Card"}.`,
+            impact: [
+              "A new payment row will be created in the payments table linked to this account",
+              "Payment will be marked as Paid with today's date",
+              "Finance dashboard will reflect this payment",
+              "Does NOT create a client invoice — invoice must be created separately if needed",
+            ],
+            risk: "moderate" as const,
+          } : undefined,
+        })
+      }
     }
 
     if (overduePayments.length > 0) {
@@ -796,6 +861,33 @@ export async function POST(req: NextRequest) {
           })
           .select("id")
           .single()
+
+        // Link matched bank feeds to this new payment record
+        if (newPayment?.id && params.account_id) {
+          const { data: acct } = await supabaseAdmin
+            .from("accounts")
+            .select("company_name")
+            .eq("id", params.account_id as string)
+            .single()
+          if (acct?.company_name) {
+            const companyWords = acct.company_name.replace(/\s*(LLC|INC|CORP|LTD)\.?\s*/gi, "").trim()
+            if (companyWords.length >= 3) {
+              await supabaseAdmin
+                .from("td_bank_feeds")
+                .update({
+                  matched_payment_id: newPayment.id,
+                  match_confidence: "diagnostic",
+                  matched_at: new Date().toISOString(),
+                  matched_by: "staff",
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("status", "matched")
+                .is("matched_payment_id", null)
+                .ilike("sender_name", `%${companyWords}%`)
+            }
+          }
+        }
+
         const amt = params.amount ? `${params.currency === "USD" ? "$" : "€"}${Number(params.amount).toLocaleString()}` : "unknown amount"
         result = { success: !error, detail: error ? error.message : `Payment recorded: ${amt} (${newPayment?.id?.slice(0, 8)})` }
         break
