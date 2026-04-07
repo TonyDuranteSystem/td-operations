@@ -49,10 +49,10 @@ When Antonio says "riprendiamo", "dove eravamo", "continua", "resume", or starts
    - `SELECT id, title, status, progress_log, updated_at FROM dev_tasks WHERE status = 'done' ORDER BY updated_at DESC LIMIT 3` — recently completed (to know what was JUST done)
 3. Check `git status` and recent commits — code state
 4. Present a summary organized as:
-   - "Ultimo lavoro completato:" — what was just finished (from recent done tasks)
-   - "In sospeso:" — what's still pending (in_progress/todo)
-   - "Prossimi passi:" — extract from progress_log PENDING entries of the most recent task
-   Then ask "Su cosa lavoriamo?"
+   - "Last completed:" — what was just finished (from recent done tasks)
+   - "Pending:" — what's still pending (in_progress/todo)
+   - "Next steps:" — extract from progress_log PENDING entries of the most recent task
+   Then ask "What do we work on?"
 Do this AUTOMATICALLY without Antonio having to explain what was being worked on.
 
 ## Critical Code Rules
@@ -202,7 +202,7 @@ Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summa
 
 ### Key tables for dev context
 - `dev_tasks` — Issue tracker for development work (NOT client tasks)
-  - **REGOLA**: Prima di INSERT su dev_tasks, fare SELECT per verificare che non esista già un task sullo stesso argomento. Se esiste → UPDATE. Mai duplicare.
+  - **RULE**: Before INSERT on dev_tasks, always SELECT first to check if a task on the same topic already exists. If it does → UPDATE. Never duplicate.
 - `session_checkpoints` — Quick saves from session_checkpoint tool
 - `action_log` — Automatic audit trail of all MCP write operations
 - `system_docs` — Session context, project-state, tech-stack
@@ -210,6 +210,15 @@ Rule: agent writes results to Supabase BEFORE returning. Chat gets compact summa
 
 ### Claude.ai equivalent
 For Claude.ai (MCP), the same system exists as middleware in `lib/mcp/reminder.ts` — it injects reminders directly into tool responses after 5/10/15 calls. The `session_checkpoint` MCP tool saves to `session_checkpoints` and resets the counter.
+
+## Verify Before Claiming — MANDATORY
+Before making ANY technical claim about how the system works (data flow, architecture, what a feature does, why something is broken), you MUST:
+1. **Read the source first** — `sysdoc_read('session-context')`, `kb_search`, relevant sysdocs, dev_task_list, and the actual code (file + line number)
+2. **Show your evidence** — Every claim must cite file + line, or table + column, or doc + section. No citation = don't say it.
+3. **Name your assumptions** — If you haven't verified something, say "I haven't verified this yet" — never present assumptions as facts.
+4. **Challenge your first answer** — Root cause is usually 2-3 layers deep. Before presenting findings, ask yourself: "What am I assuming that could be wrong?"
+
+This rule applies to EVERY conversation — not just audits, not just when asked. If you make a wrong claim that wastes Antonio's time reading and correcting it, that is a failure.
 
 ## Check Before Acting — MANDATORY
 Before proposing or executing ANY client-facing action (sending emails, creating documents, advancing pipelines):
@@ -223,7 +232,7 @@ The `gmail_send` tool has built-in duplicate detection (7-day window on same rec
 Every client-facing action MUST be followed by an IMMEDIATE CRM update in the SAME operation. Never wait to be asked.
 Client-facing actions include: sending emails, creating/uploading documents, generating forms, changing statuses, making calls.
 What to update:
-1. **Account notes** — append a dated log entry (e.g., "2026-03-17: OA + ICA inviati per revisione")
+1. **Account notes** — append a dated log entry (e.g., "2026-03-17: OA + ICA sent for review")
 2. **Task** — create or update a task reflecting the current status (e.g., "Waiting" for client response)
 3. **Record status** — update relevant record statuses (e.g., offer sent, lease sent, OA viewed)
 If you send an email and don't update the CRM, that action is INCOMPLETE. Antonio should NEVER have to remind you.

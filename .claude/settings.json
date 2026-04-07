@@ -59,7 +59,7 @@
           },
           {
             "type": "prompt",
-            "prompt": "Session starting. MANDATORY FIRST STEP: Read the git pull result above — if it pulled new commits, acknowledge what changed. Then follow CLAUDE.md Session Start protocol: (1) sysdoc_read('session-context'), (2) query dev_tasks for BOTH pending work (status in_progress/todo) AND recently completed (status done, ORDER BY updated_at DESC LIMIT 3) so you know what was JUST done, (3) git status + recent commits. Present: 'Ultimo lavoro completato' + 'In sospeso' + 'Prossimi passi' (from progress_log PENDING of most recent task). Then ask 'Su cosa lavoriamo?'",
+            "prompt": "Session starting. MANDATORY FIRST STEP: Read the git pull result above — if it pulled new commits, acknowledge what changed. Then follow CLAUDE.md Session Start protocol: (1) sysdoc_read('session-context'), (2) query dev_tasks for BOTH pending work (status in_progress/todo) AND recently completed (status done, ORDER BY updated_at DESC LIMIT 3) so you know what was JUST done, (3) git status + recent commits. Present: 'Last completed' + 'Pending' + 'Next steps' (from progress_log PENDING of most recent task). Then ask 'What do we work on?'",
             "timeout": 60
           }
         ]

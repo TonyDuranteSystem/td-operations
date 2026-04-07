@@ -37,11 +37,12 @@ export async function GET(req: NextRequest) {
 
     // ─── Step 1: Get pending wire transfer activations ───────────────
 
+    // Match ALL awaiting_payment activations regardless of payment_method.
+    // Clients often select 'stripe' at signing but pay via bank transfer.
     const { data: pendingList, error: pErr } = await supabase
       .from("pending_activations")
       .select("*")
       .eq("status", "awaiting_payment")
-      .eq("payment_method", "bank_transfer")
 
     if (pErr) {
       console.error("[check-wire] Failed to query pending_activations:", pErr.message)

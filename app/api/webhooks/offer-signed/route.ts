@@ -123,13 +123,14 @@ export async function POST(req: NextRequest) {
 
     console.warn(`[offer-signed] Created pending_activation ${activation.id} for ${offer.client_name} (${paymentMethod})`)
 
-    // ─── CREATE INVOICE AT SIGNING (contact-only, unpaid) ───
-    // Invoice is for the PERSON (contact_id). Account doesn't exist yet.
-    // When the account is created later (formation/onboarding wizard), account_id gets backfilled.
-    let invoiceId: string | null = null
+    // ─── LEAD → CONTACT AT SIGNING ───
+    // When a lead signs the contract, they become a Contact.
+    // This enables invoice creation (needs contactId) and enables the matcher
+    // to link payments via INV number. activate-service is idempotent — it
+    // checks if contact exists before creating, so no duplication risk.
+    let contactId: string | null = null
     try {
-      // Resolve contact_id from offer's client_email
-      let contactId: string | null = null
+      // First check if contact already exists by email
       if (offer.client_email) {
         const { data: existingContact } = await supabase
           .from("contacts")
@@ -140,6 +141,59 @@ export async function POST(req: NextRequest) {
         contactId = existingContact?.id || null
       }
 
+      // If no contact exists and we have a lead, create the contact from lead data
+      if (!contactId && offer.lead_id) {
+        const { data: lead } = await supabase
+          .from("leads")
+          .select("full_name, email, phone, language, citizenship, date_of_birth, gender")
+          .eq("id", offer.lead_id)
+          .single()
+
+        if (lead && lead.email) {
+          const { data: newContact, error: contactErr } = await supabase
+            .from("contacts")
+            .insert({
+              full_name: lead.full_name,
+              email: lead.email,
+              phone: lead.phone,
+              language: lead.language === "Italian" ? "it" : "en",
+              citizenship: lead.citizenship || null,
+              date_of_birth: lead.date_of_birth || null,
+              gender: lead.gender || null,
+              role: "Owner",
+              status: "active",
+            })
+            .select("id")
+            .single()
+
+          if (newContact) {
+            contactId = newContact.id
+
+            // Update lead: mark as converted
+            await supabase
+              .from("leads")
+              .update({
+                converted_to_contact_id: contactId,
+                status: "Converted",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", offer.lead_id)
+
+            console.warn(`[offer-signed] Contact created from lead: ${contactId} for ${lead.full_name}`)
+          } else {
+            console.error("[offer-signed] Failed to create contact from lead:", contactErr?.message)
+          }
+        }
+      }
+    } catch (contactConvErr) {
+      console.error("[offer-signed] Lead→Contact conversion failed:", contactConvErr instanceof Error ? contactConvErr.message : String(contactConvErr))
+    }
+
+    // ─── CREATE INVOICE AT SIGNING (contact-only, unpaid) ───
+    // Invoice is for the PERSON (contact_id). Account doesn't exist yet.
+    // When the account is created later (formation/onboarding wizard), account_id gets backfilled.
+    let invoiceId: string | null = null
+    try {
       if (contactId && totalAmount > 0) {
         const contractType = offer.contract_type || "formation"
         const serviceLabel = contractType === "formation" ? "LLC Formation"
@@ -173,6 +227,22 @@ export async function POST(req: NextRequest) {
           .from("pending_activations")
           .update({ portal_invoice_id: invoiceId })
           .eq("id", activation.id)
+
+        // ─── INV NUMBER IN BANK TRANSFER REFERENCE ───
+        // Inject the INV number into the offer's bank_details.reference so the
+        // checkout page shows it to the client. When they pay via wire, the memo
+        // will contain the INV number and the matcher gets an exact match.
+        if (invoiceResult.invoiceNumber && offer.bank_details) {
+          const bankDetails = typeof offer.bank_details === "string"
+            ? JSON.parse(offer.bank_details)
+            : { ...offer.bank_details }
+          bankDetails.reference = `${invoiceResult.invoiceNumber} - ${offer.client_name}`
+          await supabase
+            .from("offers")
+            .update({ bank_details: bankDetails })
+            .eq("token", offer_token)
+          console.warn(`[offer-signed] Bank reference updated with ${invoiceResult.invoiceNumber}`)
+        }
 
         console.warn(`[offer-signed] TD invoice ${invoiceResult.invoiceNumber} created for ${offer.client_name} (contact-only, unpaid)`)
       } else {
