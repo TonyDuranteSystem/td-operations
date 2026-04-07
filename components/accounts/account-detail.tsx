@@ -131,6 +131,9 @@ function ContactsSection({
   const [searching, setSearching] = useState(false)
   const [linking, setLinking] = useState(false)
   const [selectedRole, setSelectedRole] = useState('owner')
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [newEmail, setNewEmail] = useState('')
+  const [creating, setCreating] = useState(false)
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query)
@@ -146,6 +149,30 @@ function ContactsSection({
       setSearchResults([])
     } finally {
       setSearching(false)
+    }
+  }
+
+  const handleCreateAndLink = async () => {
+    if (!searchQuery.trim()) return
+    setCreating(true)
+    try {
+      const { createAndLinkContact } = await import('@/app/(dashboard)/accounts/actions')
+      const result = await createAndLinkContact(account.id, searchQuery.trim(), newEmail.trim() || null, selectedRole)
+      if (result.success) {
+        toast.success(`${searchQuery.trim()} created and linked as ${selectedRole}`)
+        setShowSearch(false)
+        setShowCreateForm(false)
+        setSearchQuery('')
+        setNewEmail('')
+        setSearchResults([])
+        window.location.reload()
+      } else {
+        toast.error(result.error ?? 'Failed to create contact')
+      }
+    } catch {
+      toast.error('Failed to create contact')
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -241,7 +268,46 @@ function ContactsSection({
             </div>
           )}
           {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
-            <p className="text-xs text-zinc-400 py-1">No contacts found</p>
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-400 py-1">No contacts found</p>
+              {!showCreateForm ? (
+                <button
+                  onClick={() => setShowCreateForm(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Create &quot;{searchQuery.trim()}&quot; as new contact
+                </button>
+              ) : (
+                <div className="p-3 bg-white border rounded-lg space-y-2">
+                  <p className="text-xs font-medium">Create new contact: <span className="text-blue-600">{searchQuery.trim()}</span></p>
+                  <input
+                    type="email"
+                    value={newEmail}
+                    onChange={e => setNewEmail(e.target.value)}
+                    placeholder="Email (optional)"
+                    className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    autoFocus
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCreateAndLink}
+                      disabled={creating}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                      Create & Link
+                    </button>
+                    <button
+                      onClick={() => setShowCreateForm(false)}
+                      className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

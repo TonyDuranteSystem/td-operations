@@ -226,3 +226,46 @@ export async function unlinkContactFromAccount(
     summary: `Unlinked contact ${contactId} from account ${accountId}`,
   })
 }
+
+export async function createAndLinkContact(
+  accountId: string,
+  fullName: string,
+  email: string | null,
+  role: string = 'owner',
+): Promise<ActionResult & { contactId?: string }> {
+  const supabase = createClient()
+
+  // Parse name into first/last
+  const parts = fullName.trim().split(/\s+/)
+  const firstName = parts[0] || ''
+  const lastName = parts.slice(1).join(' ') || ''
+
+  // Create the contact
+  const { data: contact, error: createErr } = await supabase
+    .from('contacts')
+    .insert({
+      full_name: fullName.trim(),
+      first_name: firstName,
+      last_name: lastName,
+      email: email || null,
+      status: 'active',
+    })
+    .select('id')
+    .single()
+
+  if (createErr || !contact) {
+    return { success: false, error: createErr?.message || 'Failed to create contact' }
+  }
+
+  // Link to the account
+  const { error: linkErr } = await supabase
+    .from('account_contacts')
+    .insert({ account_id: accountId, contact_id: contact.id, role })
+
+  if (linkErr) {
+    return { success: false, error: linkErr.message }
+  }
+
+  revalidatePath(`/accounts/${accountId}`)
+  return { success: true, contactId: contact.id }
+}
