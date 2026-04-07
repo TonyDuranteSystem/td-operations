@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
 
@@ -16,11 +17,11 @@ export default function ResetPasswordPage() {
   const searchParams = useSearchParams()
 
   useEffect(() => {
-    const supabase = createClient()
     const code = searchParams.get('code')
 
-    // PKCE flow: exchange code for session
+    // ─── PKCE flow: exchange code for session (legacy, kept as fallback) ───
     if (code) {
+      const supabase = createClient()
       supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
         if (error) {
           setSessionError('Reset link expired or already used. Please request a new one.')
@@ -32,22 +33,31 @@ export default function ResetPasswordPage() {
       return
     }
 
-    // Implicit flow: Supabase auto-processes #access_token hash fragment.
-    // Listen for auth state changes to detect when session is ready.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    // ─── Implicit flow: Supabase sends #access_token&type=recovery in hash ───
+    // Use a vanilla Supabase client that auto-detects hash fragments.
+    // The @supabase/ssr client stores auth in cookies; the vanilla client
+    // processes hash fragments and fires onAuthStateChange events.
+    const implicitClient = createSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { flowType: 'implicit', detectSessionInUrl: true, persistSession: true } }
+    )
+
+    const { data: { subscription } } = implicitClient.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) {
         setSessionReady(true)
       }
     })
 
-    // Also check if session already exists (e.g. hash already processed)
-    supabase.auth.getSession().then(({ data }) => {
+    // Also check via SSR client if session already exists (e.g. came through auth callback)
+    const ssrClient = createClient()
+    ssrClient.auth.getSession().then(({ data }) => {
       if (data.session) {
         setSessionReady(true)
       }
     })
 
-    // Timeout: if no session after 5 seconds, show error
+    // Timeout: if no session after 8 seconds, show error
     const timeout = setTimeout(() => {
       setSessionReady(prev => {
         if (!prev) {
@@ -55,7 +65,7 @@ export default function ResetPasswordPage() {
         }
         return prev
       })
-    }, 5000)
+    }, 8000)
 
     return () => {
       subscription.unsubscribe()
@@ -75,12 +85,25 @@ export default function ResetPasswordPage() {
     }
 
     setLoading(true)
-    const supabase = createClient()
-    const { error } = await supabase.auth.updateUser({ password })
+
+    // Try updating via both clients — one will have the session
+    const ssrClient = createClient()
+    const implicitClient = createSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { flowType: 'implicit', persistSession: true } }
+    )
+
+    // Try SSR client first (has session from auth callback), then implicit
+    let result = await ssrClient.auth.updateUser({ password })
+    if (result.error) {
+      result = await implicitClient.auth.updateUser({ password })
+    }
+
     setLoading(false)
 
-    if (error) {
-      toast.error(error.message)
+    if (result.error) {
+      toast.error(result.error.message)
     } else {
       // Clear must_change_password flag if it was set
       await fetch('/api/portal/onboarding-complete', {

@@ -2,8 +2,20 @@
 
 import { useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { createClient } from '@supabase/supabase-js'
 import Link from 'next/link'
+
+// Use a plain Supabase client (implicit flow) for password reset.
+// The default @supabase/ssr client uses PKCE which stores a code_verifier
+// cookie — that cookie gets lost during the Supabase redirect chain,
+// causing "Reset link expired" errors on every browser/device.
+function getResetClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { flowType: 'implicit', persistSession: false } }
+  )
+}
 
 export default function ForgotPasswordPage() {
   const searchParams = useSearchParams()
@@ -21,11 +33,11 @@ export default function ForgotPasswordPage() {
     setError('')
     setLoading(true)
 
-    const supabase = createClient()
-    // Route through server-side auth callback to avoid PKCE code_verifier cookie
-    // issues on mobile (email opens in different browser context, cookie is lost)
+    const supabase = getResetClient()
+    // Implicit flow: Supabase will redirect with #access_token=...&type=recovery
+    // in the hash fragment — no code_verifier cookie needed
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://portal.tonydurante.us/portal/auth/callback?next=/portal/reset-password',
+      redirectTo: 'https://portal.tonydurante.us/portal/reset-password',
     })
 
     setLoading(false)
