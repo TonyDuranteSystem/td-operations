@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote } from 'lucide-react'
+import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 // ── Service catalog: loaded from DB ──
@@ -103,6 +103,7 @@ export function CreateOfferDialog({
   const [isPending, startTransition] = useTransition()
   const [catalog, setCatalog] = useState<CatalogService[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
+  const [createdOfferUrl, setCreatedOfferUrl] = useState<string | null>(null)
 
   // Fetch service catalog from DB when dialog opens
   useEffect(() => {
@@ -347,7 +348,7 @@ export function CreateOfferDialog({
         }
 
         toast.success(`Offer created: ${data.token}`)
-        onClose()
+        setCreatedOfferUrl(data.offer_url)
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'An error occurred')
@@ -709,20 +710,46 @@ export function CreateOfferDialog({
 
         {/* Footer */}
         <div className="flex justify-end gap-3 p-5 border-t">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={isPending || selected.length === 0}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-            Create Offer
-          </button>
+          {createdOfferUrl ? (
+            <>
+              <div className="flex items-center gap-2 text-sm text-emerald-700 mr-auto">
+                <CheckCircle2 className="h-4 w-4" />
+                Offer created
+              </div>
+              <a
+                href={`${createdOfferUrl}?preview=td`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md border border-blue-600 text-blue-600 hover:bg-blue-50"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Preview Offer
+              </a>
+              <button
+                onClick={() => { setCreatedOfferUrl(null); onClose() }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Done
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={isPending || selected.length === 0}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                Create Offer
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
