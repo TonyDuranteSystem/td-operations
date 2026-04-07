@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   FileText,
   Receipt,
+  Building2,
   MessageCircle,
   Activity,
   BookOpen,
@@ -55,6 +56,7 @@ interface NavItem {
   visibilityKey?: keyof PortalNavVisibility // if set, item only shows when this flag is true
   tierOnly?: string[] // if set, only show for these tiers
   wizardDynamic?: boolean // if true, also show when hasWizardPending is true
+  partnerOnly?: boolean // if true, only show for partner portal
 }
 
 interface NavGroup {
@@ -68,6 +70,8 @@ const topItems: NavItem[] = [
   { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
   { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
+  { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
+  { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
 ]
@@ -288,6 +292,11 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {/* Top items (filtered by tier + role) */}
           {topItems.filter(item => {
+            const isPartner = isPartnerPortal(portalRole)
+            // Partner-only items: show only for partners
+            if (item.partnerOnly) return isPartner
+            // Non-partner items with tierOnly: hide for partners
+            if (item.tierOnly && isPartner) return false
             // Referrals: gate with tier feature visibility
             if (item.key === 'nav.referrals') {
               return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)

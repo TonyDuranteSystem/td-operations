@@ -73,9 +73,11 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
   ],
 }
 
-// Partner portal features — partners only see referral management + basic comms
+// Partner portal features — partners see clients, invoices, referrals + basic comms
 const PARTNER_FEATURES = [
   'dashboard',
+  'partnerClients',
+  'partnerInvoices',
   'referralManagement',
   'chat',
   'profile',
