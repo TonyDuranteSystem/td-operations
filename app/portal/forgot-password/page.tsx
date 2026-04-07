@@ -1,13 +1,19 @@
 'use client'
 
 import { useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
 export default function ForgotPasswordPage() {
+  const searchParams = useSearchParams()
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(
+    searchParams.get('error') === 'expired'
+      ? 'Reset link expired or already used. Please request a new one.'
+      : ''
+  )
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -16,10 +22,10 @@ export default function ForgotPasswordPage() {
     setLoading(true)
 
     const supabase = createClient()
-    // Always redirect to the canonical portal domain — window.location.origin
-    // varies across our 4 domains and may not be in Supabase's redirect allowlist
+    // Route through server-side auth callback to avoid PKCE code_verifier cookie
+    // issues on mobile (email opens in different browser context, cookie is lost)
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://portal.tonydurante.us/portal/reset-password',
+      redirectTo: 'https://portal.tonydurante.us/portal/auth/callback?next=/portal/reset-password',
     })
 
     setLoading(false)
