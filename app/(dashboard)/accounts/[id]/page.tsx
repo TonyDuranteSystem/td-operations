@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
 import { isAdmin } from '@/lib/auth'
@@ -34,6 +35,17 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .single()
 
   if (!account) notFound()
+
+  // Fetch partner name if linked
+  let partnerName: string | null = null
+  if (account.partner_id) {
+    const { data: partner } = await supabaseAdmin
+      .from('client_partners')
+      .select('partner_name')
+      .eq('id', account.partner_id)
+      .single()
+    partnerName = partner?.partner_name ?? null
+  }
 
   // Fetch related data in parallel
   const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult] = await Promise.all([
@@ -135,6 +147,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         today={today}
         isAdmin={admin}
         offer={offer}
+        partnerName={partnerName}
       />
     </div>
   )

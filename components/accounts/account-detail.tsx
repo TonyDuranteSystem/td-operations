@@ -112,6 +112,7 @@ interface AccountDetailProps {
   today: string
   isAdmin?: boolean
   offer?: OfferData | null
+  partnerName?: string | null
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -290,7 +291,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null }: AccountDetailProps) {
   const [activeTab, setActiveTab] = useState('panoramica')
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
@@ -466,7 +467,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'panoramica' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} />
       )}
       {activeTab === 'servizi' && (
         <ServiziTab services={services} today={today} />
@@ -553,7 +554,7 @@ function InstallmentBadge({ match }: { match: Payment | null }) {
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin, partnerName }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null }) {
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
 
@@ -628,13 +629,27 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin }: { accoun
             </div>
           )}
           <div className="border-t pt-3 mt-1">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Referral</p>
-            <div className="grid gap-3">
-              <EditableField icon={Users} label="Referrer" value={account.referrer ?? ''} onSave={makeAccountSaver('referrer')} />
-              <EditableField icon={Users} label="Referred By (Account)" value={account.referred_by ?? ''} onSave={makeAccountSaver('referred_by')} />
-              <EditableField icon={CreditCard} label="Commission %" value={account.referral_commission_pct != null ? String(account.referral_commission_pct) : ''} onSave={makeAccountSaver('referral_commission_pct')} />
-              <EditableField icon={FileText} label="Referral Status" value={account.referral_status ?? ''} type="select" options={[{label: '—', value: ''}, {label: 'Pending', value: 'pending'}, {label: 'Converted', value: 'converted'}, {label: 'Credited', value: 'credited'}, {label: 'Paid', value: 'paid'}]} onSave={makeAccountSaver('referral_status')} />
-            </div>
+            {partnerName ? (
+              <>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Partnership</p>
+                <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <Users className="h-5 w-5 text-blue-600 shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium text-blue-800">Managed by {partnerName}</div>
+                    <div className="text-xs text-blue-600">Invoices for this account go to the partner</div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Referral</p>
+                <div className="grid gap-3">
+                  <EditableField icon={Users} label="Referrer" value={account.referrer ?? ''} onSave={makeAccountSaver('referrer')} />
+                  <EditableField icon={CreditCard} label="Commission %" value={account.referral_commission_pct != null ? String(account.referral_commission_pct) : ''} onSave={makeAccountSaver('referral_commission_pct')} />
+                  <EditableField icon={FileText} label="Referral Status" value={account.referral_status ?? ''} type="select" options={[{label: '—', value: ''}, {label: 'Pending', value: 'pending'}, {label: 'Converted', value: 'converted'}, {label: 'Credited', value: 'credited'}, {label: 'Paid', value: 'paid'}]} onSave={makeAccountSaver('referral_status')} />
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>

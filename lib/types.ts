@@ -77,6 +77,7 @@ export interface Account {
   referred_by: string | null
   referral_commission_pct: number | null
   referral_status: string | null
+  partner_id: string | null
   lead_source: string | null
   gdrive_folder_url: string | null
   drive_folder_id: string | null
