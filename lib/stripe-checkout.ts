@@ -45,13 +45,14 @@ export async function createStripeCheckoutSession(params: {
   clientEmail?: string
   offerToken?: string
   leadId?: string
+  invoiceNumber?: string
 }): Promise<StripeCheckoutResult> {
   const stripe = getStripe()
   if (!stripe) {
     return { success: false, error: "STRIPE_SECRET_KEY not set" }
   }
 
-  const { clientName, amount, currency, contractType, serviceName, clientEmail, offerToken, leadId } = params
+  const { clientName, amount, currency, contractType, serviceName, clientEmail, offerToken, leadId, invoiceNumber } = params
 
   const productName = serviceName
     || (contractType === "formation" ? "LLC Formation"
@@ -86,6 +87,7 @@ export async function createStripeCheckoutSession(params: {
         client_name: clientName,
         client_email: clientEmail || "",
         contract_type: contractType,
+        invoice_number: invoiceNumber || "",
         source: "td-operations",
       },
       success_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-success?session_id={CHECKOUT_SESSION_ID}`,

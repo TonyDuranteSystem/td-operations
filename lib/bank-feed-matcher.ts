@@ -450,6 +450,38 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
     }
 
+    // Check if this invoice is linked to a pending_activation → trigger activation chain
+    const { data: pendingAct } = await supabaseAdmin
+      .from("pending_activations")
+      .select("id, status")
+      .eq("portal_invoice_id", paymentId)
+      .eq("status", "awaiting_payment")
+      .maybeSingle()
+
+    if (pendingAct) {
+      await supabaseAdmin
+        .from("pending_activations")
+        .update({
+          status: "payment_confirmed",
+          payment_confirmed_at: now,
+          updated_at: now,
+        })
+        .eq("id", pendingAct.id)
+
+      // Trigger activate-service (non-blocking)
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:3000")
+      fetch(`${baseUrl}/api/workflows/activate-service`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
+        },
+        body: JSON.stringify({ pending_activation_id: pendingAct.id }),
+      }).catch(() => {})
+    }
+
     return {
       matched: true,
       paymentId,

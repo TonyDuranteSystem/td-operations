@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
-import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
+import { safeAction, type ActionResult } from '@/lib/server-action'
 import {
   createInvoiceSchema,
   createCreditNoteSchema,
@@ -185,6 +185,39 @@ export async function markInvoicePaid(
       paymentDate: today,
       paymentMethod: paymentMethod,
     }).catch(() => {})
+
+    // Check if this invoice is linked to a pending_activation → trigger activation chain
+    const adminSupabase = (await import('@/lib/supabase-admin')).supabaseAdmin
+    const { data: pendingAct } = await adminSupabase
+      .from('pending_activations')
+      .select('id, status')
+      .eq('portal_invoice_id', paymentId)
+      .eq('status', 'awaiting_payment')
+      .maybeSingle()
+
+    if (pendingAct) {
+      await adminSupabase
+        .from('pending_activations')
+        .update({
+          status: 'payment_confirmed',
+          payment_confirmed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', pendingAct.id)
+
+      // Trigger activate-service (non-blocking)
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3000')
+      fetch(`${baseUrl}/api/workflows/activate-service`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
+        },
+        body: JSON.stringify({ pending_activation_id: pendingAct.id }),
+      }).catch(() => {})
+    }
 
     revalidatePath('/payments')
     revalidatePath('/accounts')

@@ -87,6 +87,23 @@ export async function POST(req: NextRequest) {
     const cardAmount = Math.round(total * 1.05) // 5% card surcharge
     const currencySymbol = currency === "eur" ? "EUR" : "$"
 
+    // Fetch invoice number from pending_activation (created at signing)
+    let invoiceNumber: string | undefined
+    const { data: activation } = await supabase
+      .from("pending_activations")
+      .select("portal_invoice_id")
+      .eq("offer_token", token)
+      .maybeSingle()
+
+    if (activation?.portal_invoice_id) {
+      const { data: inv } = await supabase
+        .from("payments")
+        .select("invoice_number")
+        .eq("id", activation.portal_invoice_id)
+        .single()
+      invoiceNumber = inv?.invoice_number || undefined
+    }
+
     // Create Stripe Checkout session
     const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
     const stripeResult = await createStripeCheckoutSession({
@@ -98,6 +115,7 @@ export async function POST(req: NextRequest) {
       clientEmail: offer.client_email || undefined,
       offerToken: token,
       leadId: offer.lead_id || undefined,
+      invoiceNumber,
     })
 
     if (!stripeResult.success || !stripeResult.checkoutUrl) {

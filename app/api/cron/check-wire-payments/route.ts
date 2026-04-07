@@ -285,6 +285,100 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ─── Step 7b: Match pending activations against td_bank_feeds (Airwallex, Mercury, Plaid) ───
+    // Step 7 above only checks QB deposits. This covers all other bank feeds.
+    if (pendingList && pendingList.length > 0) {
+      const stillPending = pendingList.filter(p => p.status === "awaiting_payment" && p.amount)
+      if (stillPending.length > 0) {
+        const { data: recentFeeds } = await supabase
+          .from("td_bank_feeds")
+          .select("id, amount, currency, sender_name, sender_reference, memo, transaction_date, source")
+          .eq("status", "unmatched")
+          .order("transaction_date", { ascending: false })
+          .limit(200)
+
+        for (const pending of stillPending) {
+          const pendingAmount = parseFloat(pending.amount)
+          const clientNameLower = (pending.client_name || "").toLowerCase()
+
+          for (const feed of recentFeeds || []) {
+            const feedAmount = parseFloat(String(feed.amount || 0))
+            const feedText = `${feed.sender_name || ""} ${feed.sender_reference || ""} ${feed.memo || ""}`.toLowerCase()
+
+            const amountDiff = Math.abs(feedAmount - pendingAmount)
+            const exactAmount = amountDiff < 1
+            const tolerance = pendingAmount * 0.05
+            const amountMatch = amountDiff <= tolerance
+            const nameMatch = clientNameLower && feedText.includes(clientNameLower.split(" ")[0])
+
+            if (exactAmount || (amountMatch && nameMatch)) {
+              console.warn(`[check-wire] BANK FEED MATCH: ${pending.client_name} — ${feed.source} ${feedAmount} (${feed.transaction_date})`)
+
+              const { data: feedUpdated } = await supabase
+                .from("pending_activations")
+                .update({
+                  status: "payment_confirmed",
+                  payment_confirmed_at: new Date().toISOString(),
+                  notes: `Matched ${feed.source} feed ${feedAmount} ${feed.currency || ""} on ${feed.transaction_date}`,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", pending.id)
+                .eq("status", "awaiting_payment")
+                .select("id, lead_id")
+
+              if (!feedUpdated || feedUpdated.length === 0) continue
+
+              // Mark bank feed as matched
+              await supabase
+                .from("td_bank_feeds")
+                .update({ status: "matched", matched_by: "auto", updated_at: new Date().toISOString() })
+                .eq("id", feed.id)
+
+              if (feedUpdated[0].lead_id) {
+                await supabase
+                  .from("leads")
+                  .update({ status: "Converted", updated_at: new Date().toISOString() })
+                  .eq("id", feedUpdated[0].lead_id)
+              }
+
+              // Mark portal invoice as Paid if exists
+              const { data: actWithInv } = await supabase
+                .from("pending_activations")
+                .select("portal_invoice_id")
+                .eq("id", pending.id)
+                .single()
+
+              if (actWithInv?.portal_invoice_id) {
+                try {
+                  const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
+                  const today = new Date().toISOString().split("T")[0]
+                  await syncInvoiceStatus("invoice", actWithInv.portal_invoice_id, "Paid", today, feedAmount)
+                } catch { /* non-blocking */ }
+              }
+
+              // Trigger activate-service
+              const baseUrl2 = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`
+              try {
+                await fetch(`${baseUrl2}/api/workflows/activate-service`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.API_SECRET_TOKEN}`,
+                  },
+                  body: JSON.stringify({ pending_activation_id: pending.id }),
+                })
+              } catch (e) {
+                console.error("[check-wire] Failed to trigger activation from bank feed:", e)
+              }
+
+              activationMatched++
+              break
+            }
+          }
+        }
+      }
+    }
+
     const totalMatched = invoiceMatched + activationMatched
 
     console.warn(`[check-wire] Done. Feeds: ${newFeedCount + airwallexFeedCount} new. Invoices matched: ${invoiceMatched}. Activations matched: ${activationMatched}.`)
