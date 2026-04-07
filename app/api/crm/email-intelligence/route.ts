@@ -36,7 +36,7 @@ export async function GET() {
   try {
     // 1. Fetch unread primary inbox threads (last 7 days, external senders only)
     const gmailResult = await gmailGet('/threads', {
-      q: 'is:unread -from:tonydurante.us -from:noreply -from:no-reply -from:notifications -from:mailer-daemon category:primary newer_than:7d',
+      q: 'is:unread -from:tonydurante.us -from:noreply -from:no-reply -from:notifications -from:mailer-daemon newer_than:7d',
       maxResults: '20',
     })
 
