@@ -68,6 +68,35 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
     }
   }
 
+  // Fetch referrals where this partner is the referrer
+  interface ReferralRow {
+    id: string
+    referred_name: string
+    status: string
+    commission_amount: number | null
+    commission_currency: string | null
+    commission_type: string | null
+    commission_pct: number | null
+    paid_amount: number | null
+    created_at: string
+    referred_account: { company_name: string } | null
+  }
+  let referrals: ReferralRow[] = []
+  let totalCommission = 0
+  let totalCommissionPaid = 0
+  if (contact?.id) {
+    const { data: refs } = await supabaseAdmin
+      .from('referrals')
+      .select('id, referred_name, status, commission_amount, commission_currency, commission_type, commission_pct, paid_amount, created_at, referred_account:accounts!referrals_referred_account_id_fkey(company_name)')
+      .eq('referrer_contact_id', contact.id)
+      .order('created_at', { ascending: false })
+    referrals = (refs ?? []) as unknown as ReferralRow[]
+    for (const r of referrals) {
+      totalCommission += Number(r.commission_amount) || 0
+      totalCommissionPaid += Number(r.paid_amount) || 0
+    }
+  }
+
   const priceList = (partner.price_list ?? {}) as Record<string, number>
 
   // Serialize partner data for client components
@@ -160,18 +189,72 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
         {/* Financials */}
         <div className="bg-white rounded-lg border p-5 space-y-4">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Financials</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-emerald-50 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-emerald-700">${totalPaid.toLocaleString()}</div>
-              <div className="text-xs text-emerald-600">Total Paid</div>
-            </div>
-            <div className={`rounded-lg p-3 text-center ${totalOutstanding > 0 ? 'bg-amber-50' : 'bg-zinc-50'}`}>
-              <div className={`text-2xl font-bold ${totalOutstanding > 0 ? 'text-amber-700' : 'text-zinc-400'}`}>
-                ${totalOutstanding.toLocaleString()}
+
+          {/* Invoices — what partner pays TD */}
+          {(totalPaid > 0 || totalOutstanding > 0) && (
+            <>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Invoices</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-emerald-50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-emerald-700">${totalPaid.toLocaleString()}</div>
+                  <div className="text-xs text-emerald-600">Paid to TD</div>
+                </div>
+                <div className={`rounded-lg p-3 text-center ${totalOutstanding > 0 ? 'bg-amber-50' : 'bg-zinc-50'}`}>
+                  <div className={`text-2xl font-bold ${totalOutstanding > 0 ? 'text-amber-700' : 'text-zinc-400'}`}>
+                    ${totalOutstanding.toLocaleString()}
+                  </div>
+                  <div className={`text-xs ${totalOutstanding > 0 ? 'text-amber-600' : 'text-zinc-400'}`}>Outstanding</div>
+                </div>
               </div>
-              <div className={`text-xs ${totalOutstanding > 0 ? 'text-amber-600' : 'text-zinc-400'}`}>Outstanding</div>
+            </>
+          )}
+
+          {/* Referral Commissions — what TD owes the partner */}
+          {referrals.length > 0 && (
+            <div className={totalPaid > 0 || totalOutstanding > 0 ? 'border-t pt-3 mt-2' : ''}>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Referral Commissions</p>
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="bg-blue-50 rounded-lg p-2.5 text-center">
+                  <div className="text-lg font-bold text-blue-700">{referrals.length}</div>
+                  <div className="text-[10px] text-blue-600">Referrals</div>
+                </div>
+                <div className={`rounded-lg p-2.5 text-center ${totalCommission - totalCommissionPaid > 0 ? 'bg-amber-50' : 'bg-zinc-50'}`}>
+                  <div className={`text-lg font-bold ${totalCommission - totalCommissionPaid > 0 ? 'text-amber-700' : 'text-zinc-400'}`}>
+                    &euro;{(totalCommission - totalCommissionPaid).toLocaleString()}
+                  </div>
+                  <div className={`text-[10px] ${totalCommission - totalCommissionPaid > 0 ? 'text-amber-600' : 'text-zinc-400'}`}>TD Owes</div>
+                </div>
+                <div className="bg-emerald-50 rounded-lg p-2.5 text-center">
+                  <div className="text-lg font-bold text-emerald-700">&euro;{totalCommissionPaid.toLocaleString()}</div>
+                  <div className="text-[10px] text-emerald-600">Paid Out</div>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {referrals.map(r => {
+                  const statusColor = r.status === 'converted' ? 'bg-blue-100 text-blue-700'
+                    : r.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
+                    : r.status === 'credited' ? 'bg-violet-100 text-violet-700'
+                    : 'bg-amber-100 text-amber-700'
+                  return (
+                    <div key={r.id} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${statusColor}`}>{r.status}</span>
+                        <span className="text-muted-foreground">{r.referred_name}</span>
+                      </div>
+                      <span className="font-medium">
+                        {r.commission_amount ? `€${r.commission_amount}` : r.commission_pct ? `${r.commission_pct}%` : 'TBD'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* No financial data at all */}
+          {totalPaid === 0 && totalOutstanding === 0 && referrals.length === 0 && (
+            <div className="text-center text-sm text-muted-foreground py-4">No financial data yet</div>
+          )}
 
           {Object.keys(priceList).length > 0 && (
             <div className="border-t pt-3 mt-2">
