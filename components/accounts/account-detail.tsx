@@ -7,7 +7,7 @@ import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Plus, Search, Loader2, Stethoscope,
+  Plus, Search, Loader2, Stethoscope, X,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -579,7 +579,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} />
       )}
       {activeTab === 'servizi' && (
-        <ServiziTab services={services} today={today} />
+        <ServiziTab services={services} today={today} accountId={account.id} />
       )}
       {activeTab === 'pagamenti' && (
         <PagamentiTab payments={payments} today={today} />
@@ -840,17 +840,27 @@ function _InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label
 
 /* ── Servizi Tab ───────────────────────────────────── */
 
-function ServiziTab({ services, today }: { services: Service[]; today: string }) {
+function ServiziTab({ services, today, accountId }: { services: Service[]; today: string; accountId: string }) {
+  const router = useRouter()
   const active = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
   const completed = services.filter(s => s.status === 'Completed' || s.status === 'Cancelled')
+  const [showAddService, setShowAddService] = useState(false)
 
   return (
     <div className="space-y-6">
       {/* Active services */}
       <div className="space-y-2">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          Active ({active.length})
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+            Active ({active.length})
+          </h3>
+          <button
+            onClick={() => setShowAddService(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-md hover:bg-zinc-50"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add Service
+          </button>
+        </div>
         {active.length === 0 ? (
           <p className="text-sm text-muted-foreground">No active services</p>
         ) : (
@@ -875,7 +885,88 @@ function ServiziTab({ services, today }: { services: Service[]; today: string })
           </div>
         </div>
       )}
+      <AddServiceDialog open={showAddService} onClose={() => { setShowAddService(false); router.refresh() }} accountId={accountId} existingTypes={services.map(s => s.service_type)} />
     </div>
+  )
+}
+
+const SERVICE_TYPES = [
+  'Company Formation', 'Tax Return', 'EIN', 'ITIN', 'Banking Fintech',
+  'Annual Renewal', 'CMRA Mailing Address', 'State RA Renewal', 'State Annual Report',
+  'Company Closure', 'Client Onboarding',
+]
+
+function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
+  open: boolean; onClose: () => void; accountId: string; existingTypes: string[]
+}) {
+  const [serviceType, setServiceType] = useState('')
+  const [notes, setNotes] = useState('')
+  const [creating, setCreating] = useState(false)
+
+  if (!open) return null
+
+  const handleCreate = async () => {
+    if (!serviceType) { toast.error('Select a service type'); return }
+    setCreating(true)
+    const res = await fetch('/api/crm/admin-actions/create-service', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId, service_type: serviceType, notes: notes.trim() || undefined }),
+    })
+    const data = await res.json()
+    setCreating(false)
+    if (data.success) {
+      toast.success(`${serviceType} created`)
+      setServiceType('')
+      setNotes('')
+      onClose()
+    } else {
+      toast.error(data.error ?? 'Failed to create service')
+    }
+  }
+
+  const handleClose = () => { setServiceType(''); setNotes(''); onClose() }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/50" onClick={handleClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-4 border-b">
+            <h2 className="text-lg font-semibold">Add Service</h2>
+            <button onClick={handleClose} className="p-1 rounded hover:bg-zinc-100"><X className="h-5 w-5" /></button>
+          </div>
+          <div className="px-6 py-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Service Type *</label>
+              <select value={serviceType} onChange={e => setServiceType(e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Select...</option>
+                {SERVICE_TYPES.map(t => (
+                  <option key={t} value={t} disabled={existingTypes.includes(t)}>
+                    {t}{existingTypes.includes(t) ? ' (exists)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Notes</label>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+                placeholder="Optional notes..."
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={handleClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">Cancel</button>
+              <button onClick={handleCreate} disabled={creating || !serviceType}
+                className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-2">
+                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
 
