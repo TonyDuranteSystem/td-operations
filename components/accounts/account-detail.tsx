@@ -474,7 +474,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Account Journey Tracker */}
       <AccountJourney
-        offer={offer ? { token: offer.token, status: offer.status, contract_type: offer.contract_type, created_at: offer.created_at } : null}
+        offer={offer ? { token: offer.token, status: offer.status, contract_type: offer.contract_type, created_at: offer.created_at, view_count: offer.view_count, viewed_at: offer.viewed_at, cost_summary: offer.cost_summary } : null}
         pendingActivation={pendingActivation}
         wizardProgress={wizardProgress}
         serviceDeliveries={serviceDeliveriesRaw}
