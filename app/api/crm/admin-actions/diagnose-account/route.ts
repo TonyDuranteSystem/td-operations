@@ -955,19 +955,44 @@ export async function POST(req: NextRequest) {
       }
 
       case "create_portal_user": {
+        // Fetch contact details for proper metadata
+        const { data: contactForPortal } = await supabaseAdmin
+          .from("contacts")
+          .select("full_name, email, portal_tier")
+          .eq("id", params.contact_id)
+          .single()
+
+        // Fetch account_ids linked to this contact
+        const { data: contactAccounts } = await supabaseAdmin
+          .from("accounts")
+          .select("id")
+          .eq("primary_contact_id", params.contact_id)
+
+        const accountIds = (contactAccounts || []).map((a: { id: string }) => a.id)
+        const portalTier = contactForPortal?.portal_tier || "active"
+
         const { data: newUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-          email: params.email as string,
+          email: (contactForPortal?.email || params.email) as string,
           password: `TD-${Date.now().toString(36)}!`,
           email_confirm: true,
-          user_metadata: { full_name: params.full_name || "Client" },
+          app_metadata: {
+            role: "client",
+            contact_id: params.contact_id,
+            portal_tier: portalTier,
+            ...(accountIds.length > 0 ? { account_ids: accountIds } : {}),
+          },
+          user_metadata: {
+            full_name: contactForPortal?.full_name || params.full_name || "Client",
+            must_change_password: true,
+          },
         })
         if (!authErr && newUser) {
           await supabaseAdmin
             .from("contacts")
-            .update({ portal_tier: "lead", updated_at: new Date().toISOString() })
+            .update({ portal_tier: portalTier, updated_at: new Date().toISOString() })
             .eq("id", params.contact_id)
         }
-        result = { success: !authErr, detail: authErr ? authErr.message : "Portal user created" }
+        result = { success: !authErr, detail: authErr ? authErr.message : "Portal user created with full metadata" }
         break
       }
 
