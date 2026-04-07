@@ -16,8 +16,10 @@ export default function ForgotPasswordPage() {
     setLoading(true)
 
     const supabase = createClient()
+    // Always redirect to the canonical portal domain — window.location.origin
+    // varies across our 4 domains and may not be in Supabase's redirect allowlist
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/portal/reset-password`,
+      redirectTo: 'https://portal.tonydurante.us/portal/reset-password',
     })
 
     setLoading(false)
