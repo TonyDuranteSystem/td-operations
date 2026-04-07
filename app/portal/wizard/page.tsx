@@ -289,15 +289,22 @@ export default async function WizardPage({
 
   return (
     <div className="px-4 py-6 lg:px-8">
-      {/* Show form selector when multiple wizards are pending */}
-      {wizardList.length > 1 && !forcedType && (
+      {/* Show form selector when multiple wizards are pending (exclude banking — handled by provider picker) */}
+      {(() => {
+        const nonBankingWizards = wizardList.filter(w => w.type !== 'banking_payset' && w.type !== 'banking_relay')
+        const hasBanking = wizardList.some(w => w.type === 'banking_payset' || w.type === 'banking_relay')
+        const showableTabs = hasBanking ? [...nonBankingWizards, { type: 'banking_payset' as const, label: locale === 'it' ? 'Banking' : 'Banking', serviceType: 'Banking Fintech', submitted: wizardList.filter(w => w.type === 'banking_payset' || w.type === 'banking_relay').every(w => w.submitted) }] : nonBankingWizards
+        return showableTabs.length > 1 && !forcedType ? (
         <div className="mb-6 border rounded-lg bg-white p-4">
           <p className="text-sm font-medium text-zinc-700 mb-3">
             {locale === 'it' ? 'Moduli da compilare:' : 'Forms to complete:'}
           </p>
           <div className="flex flex-wrap gap-2">
-            {wizardList.map(w => {
-              const isCurrent = w.type === wizardType
+            {showableTabs.map(w => {
+              const isBankingTab = w.type === 'banking_payset' && hasBanking
+              const isCurrent = isBankingTab
+                ? (wizardType === 'banking_payset' || wizardType === 'banking_relay' || wizardType === 'banking')
+                : w.type === wizardType
               return (
                 <a
                   key={w.type}
@@ -317,58 +324,113 @@ export default async function WizardPage({
             })}
           </div>
         </div>
-      )}
-      {/* Banking partner referral links — shown above the wizard when type is banking */}
+        ) : null
+      })()}
+      {/* Banking Setup — Provider picker + referral links + recommendation */}
       {(wizardType === 'banking' || wizardType === 'banking_payset' || wizardType === 'banking_relay') && (
-        <div className="mb-6 border rounded-lg bg-white p-5">
-          <h3 className="text-sm font-semibold text-zinc-800 mb-1">
-            {locale === 'it' ? 'Apri un conto bancario USA' : 'Open a US Bank Account'}
-          </h3>
-          <p className="text-xs text-zinc-500 mb-4">
-            {locale === 'it'
-              ? 'Puoi aprire direttamente un conto tramite i nostri partner bancari. Clicca il link e segui la procedura.'
-              : 'You can open an account directly through our banking partners. Click the link and follow the application process.'}
-          </p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {/* Mercury (USD) */}
+        <div className="mb-6 space-y-4">
+          {/* Header */}
+          <div>
+            <h2 className="text-lg font-bold text-zinc-900">
+              {locale === 'it' ? 'Configurazione Bancaria' : 'Banking Setup'}
+            </h2>
+            <p className="text-sm text-zinc-500">
+              {locale === 'it' ? 'Scegli come aprire il tuo conto bancario aziendale' : 'Choose how you want to open your business bank account'}
+            </p>
+          </div>
+
+          {/* Provider picker — Relay + Payset */}
+          <div className="grid gap-4 sm:grid-cols-2">
             <a
-              href="https://mercury.com/r/tonydurante"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center"
+              href="/portal/wizard?type=banking_relay"
+              className={`relative block rounded-xl border-2 p-5 transition-all ${
+                wizardType === 'banking_relay'
+                  ? 'border-blue-500 bg-blue-50/50 shadow-sm'
+                  : 'border-zinc-200 bg-white hover:border-blue-400 hover:bg-blue-50/30'
+              }`}
             >
-              <span className="text-base font-bold text-zinc-900">Mercury</span>
-              <span className="text-xs text-zinc-500">USD {locale === 'it' ? 'Conto USA' : 'US Account'}</span>
-              <span className="text-xs font-medium text-blue-600">
-                {locale === 'it' ? 'Apri conto' : 'Open account'} &rarr;
+              <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 mb-3">
+                {locale === 'it' ? 'CE NE OCCUPIAMO NOI' : 'WE HANDLE IT'}
               </span>
+              <h3 className="text-lg font-bold text-zinc-900">Relay</h3>
+              <p className="text-sm text-zinc-500 mb-2">USD {locale === 'it' ? 'Conto Aziendale' : 'Business Account'}</p>
+              <p className="text-xs text-zinc-600 leading-relaxed">
+                {locale === 'it'
+                  ? 'Inviamo la richiesta per te. Compila i tuoi dati e ci occupiamo di tutto il resto.'
+                  : 'We submit the application on your behalf. Fill in your details and we take care of the rest.'}
+              </p>
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-300 text-lg">&rarr;</span>
             </a>
-            {/* Airwallex (Multi-currency) */}
             <a
-              href="https://partners.airwallex.com/149l8vgnmr5o"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center"
+              href="/portal/wizard?type=banking_payset"
+              className={`relative block rounded-xl border-2 p-5 transition-all ${
+                wizardType === 'banking_payset'
+                  ? 'border-blue-500 bg-blue-50/50 shadow-sm'
+                  : 'border-zinc-200 bg-white hover:border-blue-400 hover:bg-blue-50/30'
+              }`}
             >
+              <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 mb-3">
+                {locale === 'it' ? 'CE NE OCCUPIAMO NOI' : 'WE HANDLE IT'}
+              </span>
+              <h3 className="text-lg font-bold text-zinc-900">Payset</h3>
+              <p className="text-sm text-zinc-500 mb-2">EUR IBAN {locale === 'it' ? 'Conto' : 'Account'}</p>
+              <p className="text-xs text-zinc-600 leading-relaxed">
+                {locale === 'it'
+                  ? 'Conto bancario europeo per ricevere pagamenti in EUR. Inviamo la richiesta per te.'
+                  : 'European bank account for receiving EUR payments. We submit the application for you.'}
+              </p>
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-300 text-lg">&rarr;</span>
+            </a>
+          </div>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 h-px bg-zinc-200" />
+            <span className="text-xs text-zinc-400 font-medium uppercase tracking-wide">
+              {locale === 'it' ? 'Oppure richiedi direttamente' : 'Or apply directly'}
+            </span>
+            <div className="flex-1 h-px bg-zinc-200" />
+          </div>
+
+          {/* Self-service referral links */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <a href="https://mercury.com/r/tonydurante" target="_blank" rel="noopener noreferrer"
+              className="flex flex-col items-center gap-1.5 rounded-lg border border-zinc-200 p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
+              <span className="text-base font-bold text-zinc-900">Mercury</span>
+              <span className="text-xs text-zinc-500">USD {locale === 'it' ? 'Conto' : 'Account'}</span>
+              <span className="text-xs font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
+            </a>
+            <a href="https://partners.airwallex.com/149l8vgnmr5o" target="_blank" rel="noopener noreferrer"
+              className="flex flex-col items-center gap-1.5 rounded-lg border border-zinc-200 p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
               <span className="text-base font-bold text-zinc-900">Airwallex</span>
               <span className="text-xs text-zinc-500">{locale === 'it' ? 'Multi-valuta' : 'Multi-currency'}</span>
-              <span className="text-xs font-medium text-blue-600">
-                {locale === 'it' ? 'Apri conto' : 'Open account'} &rarr;
-              </span>
+              <span className="text-xs font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
             </a>
-            {/* Verto (FX / Multi-currency) */}
-            <a
-              href="https://platform043033.typeform.com/to/LCVzVO9f"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center"
-            >
+            <a href="https://platform043033.typeform.com/to/LCVzVO9f" target="_blank" rel="noopener noreferrer"
+              className="flex flex-col items-center gap-1.5 rounded-lg border border-zinc-200 p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
               <span className="text-base font-bold text-zinc-900">Verto</span>
               <span className="text-xs text-zinc-500">{locale === 'it' ? 'Multi-valuta / FX' : 'Multi-currency / FX'}</span>
-              <span className="text-xs font-medium text-blue-600">
-                {locale === 'it' ? 'Apri conto' : 'Open account'} &rarr;
-              </span>
+              <span className="text-xs font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
             </a>
+          </div>
+
+          {/* Recommendation banner */}
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-start gap-3">
+            <span className="text-lg mt-0.5">💬</span>
+            <div>
+              <p className="text-sm font-semibold text-emerald-800">
+                {locale === 'it' ? 'Il nostro consiglio' : 'Our recommendation'}
+              </p>
+              <p className="text-sm text-emerald-700 leading-relaxed mt-1">
+                {locale === 'it'
+                  ? 'Dalla nostra esperienza, consigliamo vivamente di richiedere il maggior numero possibile di conti bancari. Le banche FinTech possono cambiare le condizioni o bloccare i conti senza preavviso — avere più conti attivi significa avere sempre un Piano B e non bloccare mai la tua attività. Ti invitiamo a richiedere tutte le opzioni sopra. Hai bisogno di aiuto? Scrivici nella '
+                  : 'From our experience, we strongly recommend applying to as many banks as possible. FinTech banks can change policies or freeze accounts without warning — having multiple active accounts means you always have a Plan B and your business is never stuck. We invite you to apply for all options above. Need help? Reach out in the '}
+                <a href="/portal/chat" className="font-semibold text-emerald-800 underline">
+                  {locale === 'it' ? 'Chat del Portale' : 'Portal Chat'}
+                </a>
+                {locale === 'it' ? ' in qualsiasi momento.' : ' anytime.'}
+              </p>
+            </div>
           </div>
         </div>
       )}
