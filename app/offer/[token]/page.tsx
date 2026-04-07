@@ -61,6 +61,7 @@ const LABELS = {
     contactPayment: 'Write to us in the App to proceed with payment.',
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
+    totalDueToday: 'Total Due Today',
   },
   it: {
     title: 'Offerta Consulenziale',
@@ -115,6 +116,7 @@ const LABELS = {
     contactPayment: 'Scrivici nella App per procedere con il pagamento.',
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
+    totalDueToday: 'Totale Dovuto Oggi',
   },
 }
 
@@ -167,11 +169,12 @@ export default function OfferPage() {
 
   const L = LABELS[lang]
 
-  // Dynamic total based on selected optional services
+  // Dynamic total based on selected optional services + pre-conditions
   const dynamicTotal = useMemo(() => {
     if (!offer || !offer.services) return null
     const services = Array.isArray(offer.services) ? offer.services : []
-    let total = 0
+    let servicesTotal = 0
+    let preconditionsTotal = 0
     let currency = 'EUR'
     for (const svc of services) {
       const isOpt = !!(svc as any).optional
@@ -183,15 +186,36 @@ export default function OfferPage() {
       if (/includ|inclus/i.test(priceStr)) continue
       const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
       if (!isNaN(priceNum) && priceNum > 0) {
-        total += priceNum
+        servicesTotal += priceNum
         if (/\$|usd/i.test(priceStr)) currency = '$'
         else if (/EUR/i.test(priceStr)) currency = 'EUR'
       }
     }
+    // Include pre-conditions from cost_summary (e.g. unpaid taxes)
+    // These are non-service one-time charges the client must pay upfront
+    const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
+    for (const group of costSummary) {
+      // Skip the first group (setup fees) — already counted from services
+      // Pre-condition groups have labels like "Pre-conditions (to be resolved)"
+      if (!/pre.?condition/i.test(group.label || '')) continue
+      for (const item of (group.items || [])) {
+        const priceStr = String(item.price || '0')
+        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
+        if (!isNaN(priceNum) && priceNum > 0) {
+          preconditionsTotal += priceNum
+        }
+      }
+    }
+    const total = servicesTotal + preconditionsTotal
     if (total <= 0) return null
     const symbol = currency === '$' ? '$' : 'EUR'
     return {
       total,
+      servicesTotal,
+      preconditionsTotal,
+      // servicesFormatted is for the Setup Fee line in cost summary
+      servicesFormatted: `${symbol}${servicesTotal.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
+      // formatted/cardFormatted include everything (services + pre-conditions) for the payment section
       formatted: `${symbol}${total.toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
       cardFormatted: `${symbol}${Math.round(total * 1.05).toLocaleString('en-US', { minimumFractionDigits: 0 })}`,
     }
@@ -517,11 +541,20 @@ export default function OfferPage() {
                     <div className="offer-riepilogo-total">
                       <span>{r.total_label || L.total}</span>
                       <span style={i === 0 && dynamicTotal ? { transition: 'all 0.3s' } : undefined}>
-                        {i === 0 && dynamicTotal ? dynamicTotal.formatted : r.total}
+                        {i === 0 && dynamicTotal ? dynamicTotal.servicesFormatted : r.total}
                       </span>
                     </div>
                   </div>
                 ))}
+                {/* Grand total when pre-conditions add to the payment */}
+                {dynamicTotal && dynamicTotal.preconditionsTotal > 0 && (
+                  <div style={{ marginTop: 16, paddingTop: 12, borderTop: '2px solid var(--offer-blue)' }}>
+                    <div className="offer-riepilogo-total" style={{ fontSize: 16 }}>
+                      <span style={{ fontWeight: 700 }}>{L.totalDueToday}</span>
+                      <span style={{ fontWeight: 700, transition: 'all 0.3s' }}>{dynamicTotal.formatted}</span>
+                    </div>
+                  </div>
+                )}
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
