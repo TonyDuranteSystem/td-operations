@@ -1,9 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
+import { BackButton } from '@/components/ui/back-button'
 import {
-  ArrowLeft, User, Mail, Phone, Globe, MessageSquare,
+  User, Mail, Phone, Globe, MessageSquare,
   Calendar, Tag, ExternalLink, FileText, CreditCard, CheckCircle2,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
@@ -103,9 +103,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     <div className="p-6 lg:p-8 max-w-5xl">
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/leads" className="p-2 rounded-lg hover:bg-zinc-100 transition-colors">
-          <ArrowLeft className="h-5 w-5 text-zinc-600" />
-        </Link>
+        <BackButton />
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">{lead.full_name}</h1>

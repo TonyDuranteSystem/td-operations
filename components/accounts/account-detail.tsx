@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
@@ -385,6 +386,7 @@ function ContactsSection({
 }
 
 export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [] }: AccountDetailProps) {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState('panoramica')
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
@@ -404,12 +406,12 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start gap-4">
-        <Link
-          href="/accounts"
+        <button
+          onClick={() => router.back()}
           className="mt-1 p-1.5 rounded-lg hover:bg-zinc-100 transition-colors"
         >
           <ArrowLeft className="h-5 w-5" />
-        </Link>
+        </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
             <EditableField label="" value={account.company_name} onSave={async (v) => { const r = await updateAccountField(account.id, 'company_name', v, account.updated_at); if (r.success) toast.success('Saved'); else toast.error(r.error ?? 'Failed'); return r }} className="text-2xl font-semibold tracking-tight" />

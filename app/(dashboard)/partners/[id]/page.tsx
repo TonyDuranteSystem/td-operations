@@ -5,6 +5,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { PartnerHeaderActions, type PartnerData, type ManagedAccount } from './components/partner-actions'
 import { ManagedClientsSection } from './components/managed-clients-section'
+import { BackButton } from '@/components/ui/back-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -130,9 +131,7 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
     <div className="p-6 lg:p-8 space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Link href="/partners" className="text-zinc-400 hover:text-zinc-600">
-          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-        </Link>
+        <BackButton />
         <div className="flex-1">
           <h1 className="text-2xl font-bold">{partner.partner_name}</h1>
           <p className="text-sm text-muted-foreground">

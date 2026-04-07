@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, User, Mail, Phone, Globe, MapPin,
@@ -245,6 +246,7 @@ export function ContactDetail({
   wizardProgress = [],
   ss4Applications = [],
 }: ContactDetailProps) {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
   const [showDiagnostic, setShowDiagnostic] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
@@ -263,9 +265,9 @@ export function ContactDetail({
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Link href="/contacts" className="p-2 rounded-lg hover:bg-zinc-100 transition-colors">
+          <button onClick={() => router.back()} className="p-2 rounded-lg hover:bg-zinc-100 transition-colors">
             <ArrowLeft className="h-5 w-5" />
-          </Link>
+          </button>
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold">{contact.full_name}</h1>
