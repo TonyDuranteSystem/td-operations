@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
     try {
       const { gmailPost } = await import("@/lib/gmail")
       const subject = `Document Signed: ${sigReq.document_name} — ${account?.company_name || "Unknown"}`
+      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
       const body = [
         `${contact?.full_name || "Client"} has signed: ${sigReq.document_name}`,
         `Company: ${account?.company_name || "Unknown"}`,
@@ -117,7 +118,7 @@ export async function POST(req: NextRequest) {
       const rawEmail = [
         `From: support@tonydurante.us`,
         `To: support@tonydurante.us`,
-        `Subject: ${subject}`,
+        `Subject: ${encodedSubject}`,
         `Content-Type: text/plain; charset=UTF-8`,
         ``,
         body,

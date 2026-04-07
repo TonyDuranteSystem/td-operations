@@ -76,12 +76,13 @@ export async function POST(request: NextRequest) {
     `
 
     const subject = `Issue Resolved — ${companyName}`
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
 
     // Build MIME message
     const mimeMessage = [
       `From: Tony Durante LLC <support@tonydurante.us>`,
       `To: ${issue.user_email}`,
-      `Subject: ${subject}`,
+      `Subject: ${encodedSubject}`,
       'MIME-Version: 1.0',
       'Content-Type: text/html; charset=UTF-8',
       '',

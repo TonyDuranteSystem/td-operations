@@ -228,8 +228,9 @@ Tony Durante LLC
 support@tonydurante.us`
 
     const { gmailPost } = await import('@/lib/gmail')
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
     const raw = Buffer.from(
-      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
+      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${encodedSubject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
     ).toString('base64url')
 
     await gmailPost('/messages/send', { raw })
@@ -304,8 +305,9 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
     const subject = `Payment Reminder: Invoice ${payment.invoice_number} — ${csym}${amount.toLocaleString()}`
     const body = `Dear ${clientName},\n\nThis is a friendly reminder that invoice ${payment.invoice_number} for ${csym}${amount.toLocaleString()} is ${status === 'Overdue' ? 'overdue' : 'due'}${payment.due_date ? ` (due date: ${payment.due_date})` : ''}.\n\nPlease arrange payment at your earliest convenience.\n\nBest regards,\nTony Durante LLC`
 
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
     const raw = Buffer.from(
-      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
+      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${encodedSubject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
     ).toString('base64url')
 
     await gmailPost('/messages/send', { raw })
