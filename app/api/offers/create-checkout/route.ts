@@ -73,9 +73,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Include pre-conditions from cost_summary (e.g. unpaid taxes, filing fees)
+    const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
+    for (const group of costSummary) {
+      if (!/pre.?condition/i.test(group.label || "")) continue
+      for (const item of (group.items || [])) {
+        const priceStr = String(item.price || "0")
+        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
+        if (!isNaN(priceNum) && priceNum > 0) total += priceNum
+      }
+    }
+
     // Fallback: if no parseable prices, use cost_summary[0].total
-    if (total === 0 && Array.isArray(offer.cost_summary) && offer.cost_summary.length > 0) {
-      const firstTotal = String(offer.cost_summary[0]?.total || "0")
+    if (total === 0 && costSummary.length > 0) {
+      const firstTotal = String(costSummary[0]?.total || "0")
       total = parseFloat(firstTotal.replace(/[^0-9.]/g, ""))
       if (/\$|usd/i.test(firstTotal)) currency = "usd"
     }

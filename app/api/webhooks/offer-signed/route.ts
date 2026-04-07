@@ -81,6 +81,16 @@ export async function POST(req: NextRequest) {
       if (!isNaN(priceNum) && priceNum > 0) totalAmount += priceNum
     }
 
+    // Include pre-conditions from cost_summary (e.g. unpaid taxes, filing fees)
+    for (const group of summaryArr) {
+      if (!/pre.?condition/i.test(group.label || "")) continue
+      for (const item of (group.items || [])) {
+        const priceStr = String(item.price || "0")
+        const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ""))
+        if (!isNaN(priceNum) && priceNum > 0) totalAmount += priceNum
+      }
+    }
+
     // Fallback: if no parseable prices from services, use cost_summary[0].total
     if (totalAmount === 0 && summaryArr.length > 0) {
       const raw = summaryArr[0].total || summaryArr[0].total_label || ""
