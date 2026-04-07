@@ -4,6 +4,7 @@ import { isAdmin } from '@/lib/auth'
 import { CardSkeleton } from '@/components/dashboard/card-skeleton'
 import { CardErrorBoundary } from '@/components/dashboard/card-error-boundary'
 import { NeedsAttentionCard } from '@/components/dashboard/cards/needs-attention'
+import { EmailIntelligenceCard } from '@/components/dashboard/cards/email-intelligence'
 import { TodayEventsCard } from '@/components/dashboard/cards/today-events'
 import { RecentActivityCard } from '@/components/dashboard/cards/recent-activity'
 import { UnreadMessagesCard } from '@/components/dashboard/cards/unread-messages'
@@ -24,10 +25,10 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Row 1: Needs Attention (wide) + Today */}
+        {/* Row 1: Email Assistant (wide) + Today */}
         <div className="lg:col-span-2">
-          <CardErrorBoundary fallbackTitle="Needs Attention">
-            <NeedsAttentionCard />
+          <CardErrorBoundary fallbackTitle="Email Assistant">
+            <EmailIntelligenceCard />
           </CardErrorBoundary>
         </div>
 
@@ -37,12 +38,10 @@ export default async function DashboardPage() {
           </Suspense>
         </CardErrorBoundary>
 
-        {/* Row 2: Recent Activity (wide) + Unread Messages */}
+        {/* Row 2: Needs Attention (wide) + Unread Messages */}
         <div className="lg:col-span-2">
-          <CardErrorBoundary fallbackTitle="Recent Activity">
-            <Suspense fallback={<CardSkeleton title="Recent Activity" />}>
-              <RecentActivityCard />
-            </Suspense>
+          <CardErrorBoundary fallbackTitle="Needs Attention">
+            <NeedsAttentionCard />
           </CardErrorBoundary>
         </div>
 
@@ -52,16 +51,25 @@ export default async function DashboardPage() {
           </Suspense>
         </CardErrorBoundary>
 
-        {/* Row 3: Deadlines + Pending Forms + Recent Payments (admin) */}
-        <CardErrorBoundary fallbackTitle="Upcoming Deadlines">
-          <Suspense fallback={<CardSkeleton title="Upcoming Deadlines" />}>
-            <UpcomingDeadlinesCard />
-          </Suspense>
-        </CardErrorBoundary>
+        {/* Row 3: Recent Activity (wide) + Pending Forms */}
+        <div className="lg:col-span-2">
+          <CardErrorBoundary fallbackTitle="Recent Activity">
+            <Suspense fallback={<CardSkeleton title="Recent Activity" />}>
+              <RecentActivityCard />
+            </Suspense>
+          </CardErrorBoundary>
+        </div>
 
         <CardErrorBoundary fallbackTitle="Pending Forms">
           <Suspense fallback={<CardSkeleton title="Pending Forms" />}>
             <PendingFormsCard />
+          </Suspense>
+        </CardErrorBoundary>
+
+        {/* Row 4: Deadlines + Payments (admin) */}
+        <CardErrorBoundary fallbackTitle="Upcoming Deadlines">
+          <Suspense fallback={<CardSkeleton title="Upcoming Deadlines" />}>
+            <UpcomingDeadlinesCard />
           </Suspense>
         </CardErrorBoundary>
 
