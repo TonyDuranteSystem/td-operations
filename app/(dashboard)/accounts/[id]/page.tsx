@@ -48,7 +48,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   }
 
   // Fetch related data in parallel
-  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult] = await Promise.all([
+  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult, , wizardProgressResult] = await Promise.all([
     // Contacts via junction table
     supabase
       .from('account_contacts')
@@ -93,6 +93,16 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Pending activation (for journey tracker — fetched after offer token is known)
+    Promise.resolve({ data: null }),
+    // Wizard progress (for journey tracker)
+    supabaseAdmin
+      .from('wizard_progress')
+      .select('status, current_step, wizard_type, updated_at, account_id')
+      .eq('account_id', params.id)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
@@ -134,6 +144,39 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     required_documents: Array<{ id: string; name: string }> | null
   } | null
 
+  // Fetch pending activation for this offer (if exists)
+  let pendingActivation: {
+    signed_at: string | null
+    payment_confirmed_at: string | null
+    payment_method: string | null
+    activated_at: string | null
+    status: string | null
+  } | null = null
+
+  if (offer?.token) {
+    const { data: pa } = await supabaseAdmin
+      .from('pending_activations')
+      .select('signed_at, payment_confirmed_at, payment_method, activated_at, status')
+      .eq('offer_token', offer.token)
+      .maybeSingle()
+    pendingActivation = pa
+  }
+
+  const wizardProgress = wizardProgressResult.data as {
+    status: string
+    current_step: number
+    wizard_type: string
+    updated_at: string
+  } | null
+
+  // Service deliveries for journey (need stage/pipeline data)
+  const serviceDeliveriesRaw = (servicesResult.data ?? []).map(sd => ({
+    status: sd.status,
+    stage: sd.stage ?? null,
+    pipeline: null as string | null,
+    service_name: sd.service_name ?? sd.service_type ?? null,
+  }))
+
   return (
     <div className="p-6 lg:p-8">
       <AccountDetail
@@ -148,6 +191,9 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         isAdmin={admin}
         offer={offer}
         partnerName={partnerName}
+        pendingActivation={pendingActivation}
+        wizardProgress={wizardProgress}
+        serviceDeliveriesRaw={serviceDeliveriesRaw}
       />
     </div>
   )

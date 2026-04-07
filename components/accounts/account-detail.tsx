@@ -20,6 +20,7 @@ import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/componen
 import { FileManager } from './file-manager'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
+import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
@@ -113,6 +114,25 @@ interface AccountDetailProps {
   isAdmin?: boolean
   offer?: OfferData | null
   partnerName?: string | null
+  pendingActivation?: {
+    signed_at: string | null
+    payment_confirmed_at: string | null
+    payment_method: string | null
+    activated_at: string | null
+    status: string | null
+  } | null
+  wizardProgress?: {
+    status: string
+    current_step: number
+    wizard_type: string
+    updated_at: string
+  } | null
+  serviceDeliveriesRaw?: Array<{
+    status: string | null
+    stage: string | null
+    pipeline: string | null
+    service_name: string | null
+  }>
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -357,7 +377,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [] }: AccountDetailProps) {
   const [activeTab, setActiveTab] = useState('panoramica')
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
@@ -450,6 +470,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         clientLanguage={primaryContact?.language}
         offer={offer}
         isAdmin={isAdmin}
+      />
+
+      {/* Account Journey Tracker */}
+      <AccountJourney
+        offer={offer ? { token: offer.token, status: offer.status, contract_type: offer.contract_type, created_at: offer.created_at } : null}
+        pendingActivation={pendingActivation}
+        wizardProgress={wizardProgress}
+        serviceDeliveries={serviceDeliveriesRaw}
+        accountType={account.account_type ?? null}
+        portalTier={(account as unknown as Record<string, unknown>).portal_tier as string ?? null}
       />
 
       {/* Generate Document Dialogs */}

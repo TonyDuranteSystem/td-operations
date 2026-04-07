@@ -12,6 +12,9 @@ import { UpcomingDeadlinesCard } from '@/components/dashboard/cards/upcoming-dea
 import { PendingFormsCard } from '@/components/dashboard/cards/pending-forms'
 import { RecentPaymentsCard } from '@/components/dashboard/cards/recent-payments'
 import { DevToolsPanel } from '@/components/dashboard/dev-tools-panel'
+import { OperationsPipelineCard } from '@/components/dashboard/cards/operations-pipeline'
+import { ActiveOnboardingsCard } from '@/components/dashboard/cards/active-onboardings'
+import { RevenuePipelineCard } from '@/components/dashboard/cards/revenue-pipeline'
 
 export default async function DashboardPage() {
   const supabase = createClient()
@@ -25,6 +28,24 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Row 0: Operations Pipeline (full width) */}
+        <div className="lg:col-span-3">
+          <CardErrorBoundary fallbackTitle="Operations Pipeline">
+            <OperationsPipelineCard />
+          </CardErrorBoundary>
+        </div>
+
+        {/* Row 0b: Active Onboardings (wide) + Revenue Pipeline */}
+        <div className="lg:col-span-2">
+          <CardErrorBoundary fallbackTitle="Active Onboardings">
+            <ActiveOnboardingsCard />
+          </CardErrorBoundary>
+        </div>
+
+        <CardErrorBoundary fallbackTitle="Revenue Pipeline">
+          <RevenuePipelineCard />
+        </CardErrorBoundary>
+
         {/* Row 1: Email Assistant (wide) + Today */}
         <div className="lg:col-span-2">
           <CardErrorBoundary fallbackTitle="Email Assistant">
