@@ -1242,7 +1242,7 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
         // Fetch messages
         let query = supabaseAdmin
           .from("portal_messages")
-          .select("id, sender_type, sender_name, message, attachment_url, attachment_name, read_at, created_at")
+          .select("id, sender_type, sender_id, message, attachment_url, attachment_name, read_at, created_at, contact_id, contacts:contact_id(full_name)")
           .order("created_at", { ascending: false })
           .limit(msgLimit)
 
@@ -1264,7 +1264,9 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
 
         // Format messages
         const formatted = sorted.map(m => {
-          const sender = m.sender_type === "client" ? `Client${m.sender_name ? ` (${m.sender_name})` : ""}` : `Admin${m.sender_name ? ` (${m.sender_name})` : ""}`
+          const contactData = (m as any).contacts as { full_name: string } | null
+          const senderLabel = contactData?.full_name || null
+          const sender = m.sender_type === "client" ? `Client${senderLabel ? ` (${senderLabel})` : ""}` : `Admin${senderLabel ? ` (${senderLabel})` : ""}`
           const time = new Date(m.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
           const readStatus = m.sender_type === "client" && !m.read_at ? " 🔴 UNREAD" : ""
           const attachment = m.attachment_url ? `\n   📎 Attachment: ${m.attachment_name || "file"} — ${m.attachment_url}` : ""
