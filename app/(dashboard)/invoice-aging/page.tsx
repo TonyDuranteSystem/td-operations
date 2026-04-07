@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { InvoiceAgingTable } from './invoice-aging-table'
 
 export default async function InvoiceAgingPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) redirect('/login')
+  if (!user || !isDashboardUser(user)) redirect('/login')
 
   // Fetch all non-Draft, non-Cancelled invoices with customer + account info
   const { data: invoices } = await supabase

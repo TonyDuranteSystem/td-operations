@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { PaymentBoard } from '@/components/payments/payment-board'
 
 export default async function PaymentsPage({
@@ -9,7 +9,7 @@ export default async function PaymentsPage({
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const admin = isAdmin(user)
+  const admin = isDashboardUser(user)
   const today = new Date().toISOString().split('T')[0]
   const activeTab = searchParams.tab ?? 'overdue'
 

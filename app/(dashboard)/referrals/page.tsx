@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { ReferralsDashboard } from './referrals-dashboard'
 
@@ -32,7 +32,7 @@ export interface ReferralRow {
 export default async function ReferralsPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) redirect('/login')
+  if (!user || !isDashboardUser(user)) redirect('/login')
 
   // Fetch all referrals with joined names
   const { data: rawReferrals } = await supabaseAdmin

@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 interface DocumentRecord {
@@ -24,7 +24,7 @@ interface DocumentRecord {
 export default async function AccountDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const admin = user ? isAdmin(user) : false
+  const admin = user ? isDashboardUser(user) : false
   const today = new Date().toISOString().split('T')[0]
 
   // Fetch account

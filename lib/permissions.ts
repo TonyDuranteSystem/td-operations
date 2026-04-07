@@ -1,7 +1,10 @@
 /**
  * Team Permission Layer — Phase E
  *
- * Controls which actions team members (Luca) vs admin (Antonio) can perform.
+ * Controls which actions CRM users (admin + team) can perform.
+ * Team members have the SAME permissions as admin for all CRM actions.
+ * Only Dev Tools and Team Management pages remain admin-only (via middleware).
+ *
  * Checked at BOTH levels:
  *   - UI: buttons only render if canPerform returns true
  *   - API: routes return 403 if canPerform returns false
@@ -10,14 +13,22 @@
  */
 
 import type { User } from "@supabase/supabase-js"
-import { isAdmin } from "./auth"
+import { isAdmin, isDashboardUser } from "./auth"
 
 // ─── Action types ───
 
+/** Actions that only admin can do (system-level) */
 export type AdminAction =
+  | "test_setup"
+  | "test_cleanup"
+  | "team_management"
+
+/** Actions any CRM user (admin + team) can do */
+export type TeamAction =
   | "confirm_payment"
   | "convert_lead"
   | "create_offer"
+  | "create_lead"
   | "activate_lead"
   | "mark_lost"
   | "place_client"
@@ -32,12 +43,6 @@ export type AdminAction =
   | "void_invoice"
   | "mark_payment_paid"
   | "delete_record"
-  | "test_setup"
-  | "test_cleanup"
-  | "team_management"
-
-export type TeamAction =
-  | "create_lead"
   | "advance_stage"
   | "mark_task_done"
   | "create_task"
@@ -52,21 +57,12 @@ export type TeamAction =
 
 export type CrmAction = AdminAction | TeamAction
 
-// ─── Team-allowed actions ───
+// ─── Admin-only actions (system/dev only) ───
 
-const TEAM_ALLOWED: ReadonlySet<string> = new Set<TeamAction>([
-  "create_lead",
-  "advance_stage",
-  "mark_task_done",
-  "create_task",
-  "edit_task",
-  "log_call",
-  "add_note",
-  "upload_document",
-  "send_chat",
-  "view_data",
-  "reassign_task",
-  "update_lead_status",
+const ADMIN_ONLY: ReadonlySet<string> = new Set<AdminAction>([
+  "test_setup",
+  "test_cleanup",
+  "team_management",
 ])
 
 // ─── Permission check ───
@@ -74,13 +70,15 @@ const TEAM_ALLOWED: ReadonlySet<string> = new Set<TeamAction>([
 /**
  * Check if a user can perform a given CRM action.
  * - Admin: can do everything
- * - Team: can only do actions in TEAM_ALLOWED
+ * - Team: can do everything EXCEPT admin-only system actions
  * - Client / unauthenticated: nothing
  */
 export function canPerform(user: User | null, action: CrmAction): boolean {
   if (!user) return false
   if (isAdmin(user)) return true
-  return TEAM_ALLOWED.has(action)
+  if (!isDashboardUser(user)) return false
+  // Team can do everything except admin-only system actions
+  return !ADMIN_ONLY.has(action)
 }
 
 /**

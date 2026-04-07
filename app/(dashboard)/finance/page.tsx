@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin, isDashboardUser } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
 import type { InvoiceRecord } from './all-invoices-tab'
@@ -15,7 +15,7 @@ export default async function FinancePage({
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isDashboardUser(user)) redirect('/login')
-  const userIsAdmin = isAdmin(user)
+  const userIsAdmin = isDashboardUser(user)
 
   const activeTab = searchParams.tab ?? 'clients'
   const selectedClientId = searchParams.client ?? null

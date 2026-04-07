@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { PartnersHeader } from './components/partners-header'
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic'
 export default async function PartnersPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) redirect('/login')
+  if (!user || !isDashboardUser(user)) redirect('/login')
 
   const { data: partners } = await supabaseAdmin
     .from('client_partners')

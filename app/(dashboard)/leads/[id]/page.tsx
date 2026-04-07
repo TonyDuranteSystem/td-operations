@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { APP_BASE_URL } from '@/lib/config'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
 import { LeadNotesEditor } from './components/lead-notes-editor'
 
@@ -59,7 +59,7 @@ function formatCurrency(amount: number | null, currency?: string | null): string
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const admin = user ? isAdmin(user) : false
+  const admin = user ? isDashboardUser(user) : false
 
   const { data: lead } = await supabase
     .from('leads')

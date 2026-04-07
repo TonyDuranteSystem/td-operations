@@ -1,6 +1,6 @@
 import { Suspense } from 'react'
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isDashboardUser } from '@/lib/auth'
 import { CardSkeleton } from '@/components/dashboard/card-skeleton'
 import { CardErrorBoundary } from '@/components/dashboard/card-error-boundary'
 import { NeedsAttentionCard } from '@/components/dashboard/cards/needs-attention'
@@ -19,7 +19,7 @@ import { RevenuePipelineCard } from '@/components/dashboard/cards/revenue-pipeli
 export default async function DashboardPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const admin = isAdmin(user)
+  const admin = isDashboardUser(user)
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6">
