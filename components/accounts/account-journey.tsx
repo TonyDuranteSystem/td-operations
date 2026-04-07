@@ -46,6 +46,12 @@ export interface AccountJourneyProps {
   }>
   accountType: string | null
   portalTier: string | null
+  /** Account status (Active, Inactive, Lead, Prospect) */
+  accountStatus?: string | null
+  /** Account creation date — used for existing clients without offers */
+  accountCreatedAt?: string | null
+  /** Whether setup payment has been made (derived from payments) */
+  hasSetupPayment?: boolean
 }
 
 // --- Constants ---
@@ -79,11 +85,16 @@ function formatDateTime(dateStr: string): string {
 // --- Derivation logic ---
 
 function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
-  const { offer, pendingActivation, wizardProgress, serviceDeliveries, accountType, portalTier } = props
+  const { offer, pendingActivation, wizardProgress, serviceDeliveries, accountType, portalTier, accountStatus, accountCreatedAt, hasSetupPayment } = props
   const steps: JourneyStep[] = []
 
+  // Detect if this is an existing client without an offer (pre-offer-system)
+  const isExistingClient = !offer && accountType === 'Client' && accountStatus === 'Active'
+
   // 1. Offer step
-  if (!offer) {
+  if (!offer && isExistingClient) {
+    steps.push({ label: 'Offer', status: 'done', detail: 'Pre-system', tooltip: ['Client onboarded before offer system', accountCreatedAt ? `Account created: ${formatShortDate(accountCreatedAt)}` : 'Creation date: N/A'] })
+  } else if (!offer) {
     steps.push({ label: 'Offer', status: 'pending', tooltip: ['No offer created yet'] })
   } else if (['signed', 'completed'].includes(offer.status)) {
     const tooltip = [`Token: ${offer.token}`, `Type: ${offer.contract_type ?? 'N/A'}`]
@@ -127,7 +138,9 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
   const offerDone = offer && ['signed', 'completed'].includes(offer.status)
   const offerSentOrViewed = offer && ['sent', 'viewed'].includes(offer.status)
 
-  if (pendingActivation?.signed_at) {
+  if (isExistingClient) {
+    steps.push({ label: 'Signed', status: 'done', detail: 'Pre-system', tooltip: ['Contract completed before offer system'] })
+  } else if (pendingActivation?.signed_at) {
     const tooltip = [`Signed: ${formatDateTime(pendingActivation.signed_at)}`]
     const daysSince = daysBetween(pendingActivation.signed_at)
     if (daysSince > 0) tooltip.push(`${daysSince}d ago`)
@@ -148,7 +161,11 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
   const signedStep = steps[1]
   const isSigned = signedStep.status === 'done'
 
-  if (pendingActivation?.payment_confirmed_at) {
+  if (isExistingClient && hasSetupPayment) {
+    steps.push({ label: 'Paid', status: 'done', tooltip: ['Setup payment confirmed'] })
+  } else if (isExistingClient) {
+    steps.push({ label: 'Paid', status: 'done', detail: 'Pre-system', tooltip: ['Payment completed before offer system'] })
+  } else if (pendingActivation?.payment_confirmed_at) {
     const tooltip = [
       `Paid: ${formatDateTime(pendingActivation.payment_confirmed_at)}`,
       `Method: ${pendingActivation.payment_method ?? 'N/A'}`,
@@ -172,7 +189,17 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
   // 4. Onboarding step
   const isPaid = steps[2].status === 'done'
 
-  if (wizardProgress?.status === 'submitted') {
+  if (isExistingClient && !wizardProgress) {
+    // Existing client — check if they have an onboarding service delivery
+    const onboardingSd = serviceDeliveries.find(sd => sd.service_name?.toLowerCase().includes('onboarding'))
+    if (onboardingSd && onboardingSd.status === 'completed') {
+      steps.push({ label: 'Onboarding', status: 'done', tooltip: ['Onboarding completed'] })
+    } else if (onboardingSd) {
+      steps.push({ label: 'Onboarding', status: 'current', detail: onboardingSd.stage ?? 'In progress', tooltip: [`Onboarding: ${onboardingSd.stage ?? 'In progress'}`] })
+    } else {
+      steps.push({ label: 'Onboarding', status: 'done', detail: 'Pre-system', tooltip: ['Client was onboarded before portal wizard'] })
+    }
+  } else if (wizardProgress?.status === 'submitted') {
     steps.push({
       label: 'Onboarding',
       status: 'done',
@@ -288,8 +315,10 @@ export function AccountJourney(props: AccountJourneyProps) {
   const steps = deriveAccountJourneySteps(props)
   const [hoveredStep, setHoveredStep] = useState<string | null>(null)
 
-  // Only show if there's an offer (no journey to show for accounts with no offers)
-  if (!props.offer) return null
+  // Show journey for any active account or any account with an offer
+  const hasServices = props.serviceDeliveries.length > 0
+  const isActive = props.accountStatus === 'Active'
+  if (!props.offer && !hasServices && !isActive) return null
 
   return (
     <div className="bg-white rounded-lg border p-5">

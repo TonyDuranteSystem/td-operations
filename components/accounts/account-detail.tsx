@@ -461,6 +461,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         serviceDeliveries={serviceDeliveriesRaw}
         accountType={account.account_type ?? null}
         portalTier={(account as unknown as Record<string, unknown>).portal_tier as string ?? null}
+        accountStatus={account.status ?? null}
+        accountCreatedAt={account.created_at ?? null}
+        hasSetupPayment={payments.some(p => p.status === 'Paid' && (p.description?.toLowerCase().includes('setup') || p.period === 'One-Time'))}
       />
 
       {/* Offer Panel */}
