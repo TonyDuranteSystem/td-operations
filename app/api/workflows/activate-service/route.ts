@@ -226,6 +226,27 @@ export async function POST(req: NextRequest) {
       autoAccountId = lead?.account_id || null
     }
 
+    // ─── STEP 1.6: Auto-upgrade account_type if offer has annual services ──
+    if (autoAccountId && (contractType === "formation" || contractType === "onboarding")) {
+      const { data: currentAcct } = await supabase
+        .from("accounts")
+        .select("account_type")
+        .eq("id", autoAccountId)
+        .single()
+
+      if (currentAcct && currentAcct.account_type !== "Client") {
+        await supabase
+          .from("accounts")
+          .update({ account_type: "Client", updated_at: new Date().toISOString() })
+          .eq("id", autoAccountId)
+        steps.push({
+          step: "upgrade_account_type",
+          status: "done",
+          detail: `Account type changed from "${currentAcct.account_type}" to "Client" (annual management offer)`,
+        })
+      }
+    }
+
     // ─── STEP 2: Service Deliveries from bundled_pipelines (AUTO) ─────
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
     const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
