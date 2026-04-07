@@ -35,9 +35,9 @@ export type AdminAction =
   | "test_setup"
   | "test_cleanup"
   | "team_management"
-  | "create_lead"
 
 export type TeamAction =
+  | "create_lead"
   | "advance_stage"
   | "mark_task_done"
   | "create_task"
@@ -55,6 +55,7 @@ export type CrmAction = AdminAction | TeamAction
 // ─── Team-allowed actions ───
 
 const TEAM_ALLOWED: ReadonlySet<string> = new Set<TeamAction>([
+  "create_lead",
   "advance_stage",
   "mark_task_done",
   "create_task",

@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!canPerform(user, "create_lead")) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+    return NextResponse.json({ error: "Access denied" }, { status: 403 })
   }
 
   try {
