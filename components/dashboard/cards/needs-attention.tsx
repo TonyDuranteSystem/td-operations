@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Calendar,
   Tag,
+  UserPlus,
   CheckCircle2,
   Loader2,
   RefreshCw,
@@ -26,6 +27,7 @@ const TYPE_CONFIG: Record<AttentionItem['type'], { icon: React.ElementType; labe
   unanswered_message: { icon: MessageSquare, label: 'Message' },
   deadline: { icon: Calendar, label: 'Deadline' },
   action_item: { icon: Tag, label: 'Action' },
+  lead_followup: { icon: UserPlus, label: 'Lead' },
 }
 
 const URGENCY_STYLES = {

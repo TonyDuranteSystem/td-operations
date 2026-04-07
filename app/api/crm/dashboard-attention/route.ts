@@ -6,7 +6,7 @@ import { differenceInDays, differenceInHours } from 'date-fns'
 
 export interface AttentionItem {
   id: string
-  type: 'awaiting_payment' | 'ready_to_onboard' | 'overdue_invoice' | 'stuck_service' | 'unmatched_payment' | 'unanswered_message' | 'deadline' | 'action_item'
+  type: 'awaiting_payment' | 'ready_to_onboard' | 'overdue_invoice' | 'stuck_service' | 'unmatched_payment' | 'unanswered_message' | 'deadline' | 'action_item' | 'lead_followup'
   urgency: 'red' | 'amber' | 'green'
   title: string
   subtitle: string
@@ -27,6 +27,8 @@ export async function GET() {
 
   const now = new Date()
   const today = now.toISOString().split('T')[0]
+  // Max 90 days overdue — anything older is stale data, not real work
+  const maxOverdueDate = new Date(now.getTime() - 90 * 86400000).toISOString().split('T')[0]
   const items: AttentionItem[] = []
 
   // Run all queries in parallel
@@ -39,6 +41,7 @@ export async function GET() {
     unansweredMessages,
     upcomingDeadlines,
     openActions,
+    activeLeads,
   ] = await Promise.all([
     // 1. Signed but not paid (> 3 days)
     supabaseAdmin
@@ -55,12 +58,13 @@ export async function GET() {
       .not('payment_confirmed_at', 'is', null)
       .is('activated_at', null),
 
-    // 3. Overdue invoices
+    // 3. Overdue invoices (max 90 days)
     supabaseAdmin
       .from('payments')
       .select('id, invoice_number, amount, currency, due_date, account_id, accounts(company_name)')
       .eq('status', 'pending')
       .lt('due_date', today)
+      .gt('due_date', maxOverdueDate)
       .order('due_date', { ascending: true })
       .limit(15),
 
@@ -89,12 +93,14 @@ export async function GET() {
       .order('created_at', { ascending: false })
       .limit(50),
 
-    // 7. Deadlines due within 7 days
+    // 7. Deadlines: only upcoming 7 days + overdue max 90 days, only Active accounts
     supabaseAdmin
       .from('deadlines')
-      .select('id, deadline_type, due_date, status, account_id, accounts(company_name)')
+      .select('id, deadline_type, due_date, status, account_id, accounts!inner(company_name, status)')
       .in('status', ['Pending', 'Overdue'])
+      .gt('due_date', maxOverdueDate)
       .lte('due_date', new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0])
+      .eq('accounts.status', 'Active')
       .order('due_date', { ascending: true })
       .limit(15),
 
@@ -110,6 +116,14 @@ export async function GET() {
       .neq('action_type', 'done')
       .order('created_at', { ascending: false })
       .limit(15),
+
+    // 9. Active leads needing follow-up
+    supabaseAdmin
+      .from('leads')
+      .select('id, full_name, email, status, source, created_at, updated_at')
+      .in('status', ['New', 'Call Done', 'Offer Sent', 'Negotiating'])
+      .order('created_at', { ascending: false })
+      .limit(20),
   ])
 
   // --- Process results ---
@@ -218,9 +232,7 @@ export async function GET() {
   }
 
   // 6. Unanswered portal messages (> 24h)
-  // For each client message, check if there's a newer admin reply in the same account/contact
   const clientMessages = unansweredMessages.data ?? []
-  // Group by account/contact, keep only the latest client msg per group
   const latestByGroup = new Map<string, typeof clientMessages[0]>()
   for (const msg of clientMessages) {
     const key = msg.account_id ?? msg.contact_id ?? msg.id
@@ -251,7 +263,7 @@ export async function GET() {
     })
   }
 
-  // 7. Deadlines
+  // 7. Deadlines (already filtered: Active accounts only, max 90d overdue)
   for (const dl of upcomingDeadlines.data ?? []) {
     const dueDate = dl.due_date ? new Date(dl.due_date) : null
     if (!dueDate) continue
@@ -296,12 +308,38 @@ export async function GET() {
     })
   }
 
+  // 9. Leads needing follow-up
+  for (const lead of activeLeads.data ?? []) {
+    const createdAt = new Date(lead.created_at)
+    const days = differenceInDays(now, createdAt)
+    const lastTouch = lead.updated_at ? differenceInDays(now, new Date(lead.updated_at)) : days
+
+    // Urgency based on status + time since last touch
+    let urgency: AttentionItem['urgency'] = 'green'
+    if (lead.status === 'New' && days > 1) urgency = 'red'
+    else if (lead.status === 'New') urgency = 'amber'
+    else if (lead.status === 'Call Done' && lastTouch > 3) urgency = 'red'
+    else if (lead.status === 'Call Done') urgency = 'amber'
+    else if (lead.status === 'Offer Sent' && lastTouch > 5) urgency = 'red'
+    else if (lead.status === 'Offer Sent') urgency = 'amber'
+    else if (lead.status === 'Negotiating' && lastTouch > 3) urgency = 'amber'
+
+    items.push({
+      id: `lead-${lead.id}`,
+      type: 'lead_followup',
+      urgency,
+      title: `Lead: ${lead.full_name}`,
+      subtitle: `${lead.status}${lead.source ? ` via ${lead.source}` : ''} — ${days}d since first contact`,
+      age: `${days}d`,
+      link: `/leads?id=${lead.id}`,
+    })
+  }
+
   // Sort: red first, then amber, then green. Within same urgency, longest age first.
   const urgencyOrder = { red: 0, amber: 1, green: 2 }
   items.sort((a, b) => {
     const uDiff = urgencyOrder[a.urgency] - urgencyOrder[b.urgency]
     if (uDiff !== 0) return uDiff
-    // Parse age for secondary sort (rough: extract number)
     const ageNum = (s: string) => {
       const m = s.match(/(\d+)/)
       return m ? parseInt(m[1], 10) : 0
