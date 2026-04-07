@@ -1,32 +1,25 @@
 'use client'
 
-import { useState, useTransition, useMemo } from 'react'
+import { useState, useEffect, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 
-// ── Service catalog: each service maps to a pipeline + contract type ──
-const SERVICE_CATALOG = [
-  // Annual management services (formation/onboarding contract)
-  { id: 'company_formation', name: 'Company Formation', pipeline: 'Company Formation', contractType: 'formation', hasAnnual: true, category: 'primary' },
-  { id: 'client_onboarding', name: 'Client Onboarding', pipeline: 'Client Onboarding', contractType: 'onboarding', hasAnnual: true, category: 'primary' },
-  // Standalone services (lightweight contracts)
-  { id: 'tax_return', name: 'Tax Return', pipeline: 'Tax Return', contractType: 'tax_return', hasAnnual: false, category: 'standalone' },
-  { id: 'itin', name: 'ITIN Application', pipeline: 'ITIN', contractType: 'itin', hasAnnual: false, category: 'standalone' },
-  // Add-on services (bundled with primary)
-  { id: 'ein', name: 'EIN Application', pipeline: 'EIN', contractType: null, hasAnnual: false, category: 'addon' },
-  { id: 'banking', name: 'Banking (Fintech)', pipeline: 'Banking Fintech', contractType: null, hasAnnual: false, category: 'addon' },
-  { id: 'cmra', name: 'CMRA Mailing Address', pipeline: 'CMRA Mailing Address', contractType: null, hasAnnual: false, category: 'addon' },
-  { id: 'annual_renewal', name: 'Annual Renewal', pipeline: 'Annual Renewal', contractType: null, hasAnnual: false, category: 'addon' },
-  { id: 'closure', name: 'Company Closure', pipeline: 'Company Closure', contractType: null, hasAnnual: false, category: 'standalone' },
-  { id: 'public_notary', name: 'Public Notary', pipeline: null, contractType: null, hasAnnual: false, category: 'addon' },
-  { id: 'shipping', name: 'Shipping', pipeline: null, contractType: null, hasAnnual: false, category: 'addon' },
-] as const
-
-type ServiceId = typeof SERVICE_CATALOG[number]['id']
+// ── Service catalog: loaded from DB ──
+interface CatalogService {
+  id: string
+  slug: string
+  name: string
+  pipeline: string | null
+  contract_type: string | null
+  has_annual: boolean
+  category: string
+  default_price: number | null
+  default_currency: string | null
+}
 
 interface SelectedService {
-  id: ServiceId
+  id: string
   price: string
 }
 
@@ -108,6 +101,32 @@ export function CreateOfferDialog({
 }: CreateOfferDialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  const [catalog, setCatalog] = useState<CatalogService[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+
+  // Fetch service catalog from DB when dialog opens
+  useEffect(() => {
+    if (!open || catalog.length > 0) return
+    setCatalogLoading(true)
+    fetch('/api/service-catalog')
+      .then(r => r.json())
+      .then(d => {
+        const services = (d.services ?? []) as Array<Record<string, unknown>>
+        setCatalog(services.map(s => ({
+          id: (s.slug as string) || (s.id as string),
+          slug: (s.slug as string) || '',
+          name: s.name as string,
+          pipeline: (s.pipeline as string | null) ?? null,
+          contract_type: (s.contract_type as string | null) ?? null,
+          has_annual: (s.has_annual as boolean) ?? false,
+          category: (s.category as string) || 'addon',
+          default_price: s.default_price != null ? Number(s.default_price) : null,
+          default_currency: (s.default_currency as string | null) ?? null,
+        })))
+      })
+      .catch(() => toast.error('Failed to load service catalog'))
+      .finally(() => setCatalogLoading(false))
+  }, [open, catalog.length])
 
   const [language, setLanguage] = useState(
     clientLanguage === 'Italian' || clientLanguage === 'it' ? 'it' : 'en'
@@ -138,24 +157,24 @@ export function CreateOfferDialog({
   // ── Derived values ──
   const derivedContractType = useMemo(() => {
     for (const s of selected) {
-      const catalog = SERVICE_CATALOG.find(c => c.id === s.id)
-      if (catalog?.contractType) return catalog.contractType
+      const svc = catalog.find(c => c.id === s.id)
+      if (svc?.contract_type) return svc.contract_type
     }
     return 'formation'
-  }, [selected])
+  }, [selected, catalog])
 
   const derivedPipelines = useMemo(() => {
     return selected
-      .map(s => SERVICE_CATALOG.find(c => c.id === s.id)?.pipeline)
+      .map(s => catalog.find(c => c.id === s.id)?.pipeline)
       .filter((p): p is string => !!p)
-  }, [selected])
+  }, [selected, catalog])
 
   const showAnnual = useMemo(() => {
     return selected.some(s => {
-      const catalog = SERVICE_CATALOG.find(c => c.id === s.id)
-      return catalog?.hasAnnual
+      const svc = catalog.find(c => c.id === s.id)
+      return svc?.has_annual
     })
-  }, [selected])
+  }, [selected, catalog])
 
   const servicesTotalAmount = selected.reduce((sum, s) => {
     const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
@@ -169,21 +188,24 @@ export function CreateOfferDialog({
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
-  const toggleService = (id: ServiceId) => {
+  const toggleService = (id: string) => {
     setSelected(prev => {
       const exists = prev.find(s => s.id === id)
       if (exists) return prev.filter(s => s.id !== id)
-      return [...prev, { id, price: '' }]
+      // Pre-fill price from catalog default if available
+      const svc = catalog.find(c => c.id === id)
+      const defaultPrice = svc?.default_price != null ? String(svc.default_price) : ''
+      return [...prev, { id, price: defaultPrice }]
     })
   }
 
-  const updatePrice = (id: ServiceId, price: string) => {
+  const updatePrice = (id: string, price: string) => {
     setSelected(prev =>
       prev.map(s => s.id === id ? { ...s, price } : s)
     )
   }
 
-  const isSelected = (id: ServiceId) => selected.some(s => s.id === id)
+  const isSelected = (id: string) => selected.some(s => s.id === id)
 
   const toggleDoc = (docId: string) => {
     setRequiredDocs(prev =>
@@ -226,13 +248,13 @@ export function CreateOfferDialog({
         const servicesJson = selected
           .filter(s => s.price.trim())
           .map(s => {
-            const catalog = SERVICE_CATALOG.find(c => c.id === s.id)!
+            const svc_cat = catalog.find(c => c.id === s.id)
             const svc: Record<string, unknown> = {
-              name: catalog.name,
+              name: svc_cat?.name || s.id,
               price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
             }
-            if (catalog.contractType) svc.contract_type = catalog.contractType
-            if (catalog.pipeline) svc.pipeline_type = catalog.pipeline
+            if (svc_cat?.contract_type) svc.contract_type = svc_cat.contract_type
+            if (svc_cat?.pipeline) svc.pipeline_type = svc_cat.pipeline
             return svc
           })
 
@@ -335,9 +357,9 @@ export function CreateOfferDialog({
 
   if (!open) return null
 
-  const primaryServices = SERVICE_CATALOG.filter(s => s.category === 'primary')
-  const standaloneServices = SERVICE_CATALOG.filter(s => s.category === 'standalone')
-  const addonServices = SERVICE_CATALOG.filter(s => s.category === 'addon')
+  const primaryServices = catalog.filter(s => s.category === 'primary')
+  const standaloneServices = catalog.filter(s => s.category === 'standalone')
+  const addonServices = catalog.filter(s => s.category === 'addon')
   const sourceLabel = accountId ? 'account' : 'lead'
 
   return (
@@ -368,6 +390,13 @@ export function CreateOfferDialog({
           {/* Services -- grouped by category */}
           <div>
             <label className="block text-sm font-semibold mb-3">What is the client buying?</label>
+
+            {catalogLoading && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading services...
+              </div>
+            )}
 
             <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2">Annual Management</p>
             <div className="space-y-2 mb-4">
@@ -709,7 +738,7 @@ function ServiceRow({
   onToggle,
   onPriceChange,
 }: {
-  service: typeof SERVICE_CATALOG[number]
+  service: { id: string; name: string }
   isSelected: boolean
   price: string
   currencySymbol: string

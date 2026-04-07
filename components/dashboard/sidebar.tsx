@@ -31,6 +31,7 @@ import {
   Target,
   Wrench,
   Share2,
+  Package,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -90,6 +91,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },
   { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList, tooltip: 'Kanban board for manual and auto-generated tasks. Use message tags for daily work instead.' },
+  { id: 'service-catalog', name: 'Service Catalog', href: '/service-catalog', icon: Package, tooltip: 'Manage services available for offers and invoices — add, edit, and configure service types.' },
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, tooltip: 'Client portal management — create portal users, send invitations.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
