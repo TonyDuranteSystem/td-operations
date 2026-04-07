@@ -1,13 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { gmailGet, getHeader } from '@/lib/gmail'
 import { NextResponse } from 'next/server'
 import { differenceInDays, differenceInHours } from 'date-fns'
 
 export interface AttentionItem {
   id: string
-  type: 'awaiting_payment' | 'ready_to_onboard' | 'overdue_invoice' | 'stuck_service' | 'unmatched_payment' | 'unanswered_message' | 'unanswered_email' | 'deadline' | 'action_item' | 'lead_followup'
+  type: 'awaiting_payment' | 'ready_to_onboard' | 'overdue_invoice' | 'stuck_service' | 'unmatched_payment' | 'unanswered_message' | 'deadline' | 'action_item' | 'lead_followup'
   urgency: 'red' | 'amber' | 'green'
   title: string
   subtitle: string
@@ -264,61 +263,8 @@ export async function GET() {
     })
   }
 
-  // 6b. Unanswered Gmail emails (unread, from external senders)
-  try {
-    // Fetch unread threads from support@ inbox (exclude sent, drafts, internal)
-    const gmailResult = await gmailGet('/threads', {
-      q: 'is:unread -from:tonydurante.us -from:noreply -from:no-reply -from:notifications category:primary',
-      maxResults: '15',
-    })
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const threads = (gmailResult?.threads ?? []) as any[]
-
-    if (threads.length > 0) {
-      // Fetch metadata for each thread (batch first 10)
-      const threadDetails = await Promise.all(
-        threads.slice(0, 10).map(async (t: { id: string }) => {
-          try {
-            const thread = await gmailGet(`/threads/${t.id}`, { format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] })
-            return thread
-          } catch {
-            return null
-          }
-        })
-      )
-
-      for (const thread of threadDetails) {
-        if (!thread?.messages?.length) continue
-        const lastMsg = thread.messages[thread.messages.length - 1]
-        const headers = lastMsg?.payload?.headers ?? []
-        const from = getHeader(headers, 'From') ?? ''
-        const subject = getHeader(headers, 'Subject') ?? '(no subject)'
-        const dateStr = getHeader(headers, 'Date') ?? ''
-
-        // Skip if last message is from us (we already replied)
-        if (from.includes('tonydurante.us')) continue
-
-        const senderName = from.replace(/<[^>]+>/, '').trim().replace(/"/g, '') || from
-        const emailDate = dateStr ? new Date(dateStr) : new Date()
-        const hours = differenceInHours(now, emailDate)
-        const days = Math.floor(hours / 24)
-
-        items.push({
-          id: `gmail-${thread.id}`,
-          type: 'unanswered_email',
-          urgency: hours > 48 ? 'red' : hours > 12 ? 'amber' : 'green',
-          title: `Email: ${senderName}`,
-          subtitle: subject.slice(0, 80),
-          age: days > 0 ? `${days}d` : `${hours}h`,
-          link: `/inbox?thread=${thread.id}`,
-        })
-      }
-    }
-  } catch {
-    // Gmail API failure is non-critical — skip silently
-  }
-
   // 7. Deadlines (already filtered: Active accounts only, max 90d overdue)
+  // Note: Gmail emails are handled by the Email Intelligence card (AI-classified)
   for (const dl of upcomingDeadlines.data ?? []) {
     const dueDate = dl.due_date ? new Date(dl.due_date) : null
     if (!dueDate) continue

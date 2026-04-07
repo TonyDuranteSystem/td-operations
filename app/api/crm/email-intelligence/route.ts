@@ -2,7 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailGet, extractBody, getHeader } from '@/lib/gmail'
-import { callAI } from '@/lib/portal/ai-provider'
 import { NextResponse } from 'next/server'
 
 export interface EmailIntelligenceItem {
@@ -47,9 +46,9 @@ export async function GET() {
       return NextResponse.json({ items: [], count: 0 })
     }
 
-    // 2. Fetch full content for each thread (max 12 to stay within API limits)
+    // 2. Fetch metadata for each thread (max 8 — keep fast)
     const threadDetails = await Promise.all(
-      threads.slice(0, 12).map(async (t: { id: string }) => {
+      threads.slice(0, 8).map(async (t: { id: string }) => {
         try {
           return await gmailGet(`/threads/${t.id}`, { format: 'full' })
         } catch {
@@ -138,8 +137,28 @@ Subject: ${e.subject}
 Body: ${e.body.slice(0, 400)}`
     }).join('\n\n---\n\n')
 
-    const classificationResult = await callAI({
-      systemPrompt: `You are an email triage AI for Tony Durante LLC, a US business formation and tax consulting company.
+    // Direct Anthropic call with 15s timeout (callAI has 5s — too short for batch)
+    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (!apiKey) {
+      return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
+    }
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15_000)
+
+    let classificationText = ''
+    try {
+      const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1500,
+          system: `You are an email triage AI for Tony Durante LLC, a US business formation and tax consulting company.
 
 CLASSIFY each email into one of these categories:
 - new_lead: Someone asking about services (LLC formation, tax consulting, ITIN, etc.) who is NOT an existing client
@@ -156,10 +175,27 @@ For each email, provide:
 
 RESPOND ONLY with a JSON array. No markdown, no explanation. Example:
 [{"email_index":1,"category":"new_lead","summary":"Asking about LLC formation in Wyoming","suggested_action":"Schedule a call or send service offer","urgency":"high"}]`,
-      userPrompt: emailSummaries,
-      maxTokens: 1500,
-      temperature: 0.3,
-    })
+          messages: [{ role: 'user', content: emailSummaries }],
+          temperature: 0.3,
+        }),
+        signal: controller.signal,
+      })
+
+      if (!aiRes.ok) {
+        throw new Error(`Anthropic ${aiRes.status}`)
+      }
+
+      const aiData = await aiRes.json()
+      classificationText = aiData.content?.[0]?.text?.trim() ?? ''
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    if (!classificationText) {
+      throw new Error('Empty AI response')
+    }
+
+    const classificationResult = { text: classificationText, provider: 'anthropic' as const }
 
     // 6. Parse AI response
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

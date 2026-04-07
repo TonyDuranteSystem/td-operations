@@ -33,12 +33,12 @@ export async function RecentActivityCard() {
 
   // Fetch recent events from action_log
   const [actionsResult, paymentsResult, signaturesResult] = await Promise.all([
-    // Action log entries (emails, form submissions, stage advances)
+    // Action log entries — only meaningful business events
     supabaseAdmin
       .from('action_log')
       .select('id, action_type, table_name, summary, account_id, created_at')
       .gte('created_at', since)
-      .neq('action_type', 'cron_error')
+      .in('action_type', ['email', 'email_sent', 'form_submitted', 'form_completed', 'stage_advance', 'stage_advanced', 'create', 'offer_sent', 'offer_signed', 'payment_confirmed', 'ocr_document'])
       .order('created_at', { ascending: false })
       .limit(20),
 
