@@ -37,8 +37,13 @@
             "timeout": 5
           },
           {
+            "type": "command",
+            "command": "bash .claude/hooks/assumption-check.sh",
+            "timeout": 5
+          },
+          {
             "type": "prompt",
-            "prompt": "Check both hook outputs above. (1) SAVE: If SAVE_NEEDED=true, run session_checkpoint with summary + next_steps. (2) QA: If 'QA REQUIRED' appeared, you MUST test the deployed changes in Chrome BEFORE telling Antonio it's done. Open the browser, navigate to the page, screenshot, interact, verify. If you haven't done browser QA yet, tell Antonio you need to test first.",
+            "prompt": "Check ALL hook outputs above. (1) ASSUMPTIONS: Review the assumption check. Scan your LAST response — did you make ANY technical claim (how something works, why something failed, what a tool/table/route does) WITHOUT citing file+line, table+column, or tool output? If YES: immediately say 'I stated [X] without verifying — let me check' and then READ the actual code/data before continuing. Do NOT proceed with other tasks until uncited claims are corrected. (2) SAVE: If SAVE_NEEDED=true, run session_checkpoint. (3) QA: If 'QA REQUIRED' appeared, test in Chrome before declaring done.",
             "timeout": 60
           }
         ]
