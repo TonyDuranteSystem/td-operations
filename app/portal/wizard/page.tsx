@@ -317,6 +317,60 @@ export default async function WizardPage({
           </div>
         </div>
       )}
+      {/* Banking partner referral links — shown above the wizard when type is banking */}
+      {wizardType === 'banking' && (
+        <div className="mb-6 border rounded-lg bg-white p-5">
+          <h3 className="text-sm font-semibold text-zinc-800 mb-1">
+            {locale === 'it' ? 'Apri un conto bancario USA' : 'Open a US Bank Account'}
+          </h3>
+          <p className="text-xs text-zinc-500 mb-4">
+            {locale === 'it'
+              ? 'Puoi aprire direttamente un conto tramite i nostri partner bancari. Clicca il link e segui la procedura.'
+              : 'You can open an account directly through our banking partners. Click the link and follow the application process.'}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {/* Mercury (USD) */}
+            <a
+              href="https://mercury.com/r/tonydurante"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center"
+            >
+              <span className="text-base font-bold text-zinc-900">Mercury</span>
+              <span className="text-xs text-zinc-500">USD {locale === 'it' ? 'Conto USA' : 'US Account'}</span>
+              <span className="text-xs font-medium text-blue-600">
+                {locale === 'it' ? 'Apri conto' : 'Open account'} &rarr;
+              </span>
+            </a>
+            {/* Airwallex (Multi-currency) */}
+            <a
+              href="https://partners.airwallex.com/149l8vgnmr5o"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center"
+            >
+              <span className="text-base font-bold text-zinc-900">Airwallex</span>
+              <span className="text-xs text-zinc-500">{locale === 'it' ? 'Multi-valuta' : 'Multi-currency'}</span>
+              <span className="text-xs font-medium text-blue-600">
+                {locale === 'it' ? 'Apri conto' : 'Open account'} &rarr;
+              </span>
+            </a>
+            {/* Verto (FX / Multi-currency) */}
+            <a
+              href="https://platform043033.typeform.com/to/LCVzVO9f"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-col items-center gap-2 rounded-lg border border-zinc-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition-colors text-center"
+            >
+              <span className="text-base font-bold text-zinc-900">Verto</span>
+              <span className="text-xs text-zinc-500">{locale === 'it' ? 'Multi-valuta / FX' : 'Multi-currency / FX'}</span>
+              <span className="text-xs font-medium text-blue-600">
+                {locale === 'it' ? 'Apri conto' : 'Open account'} &rarr;
+              </span>
+            </a>
+          </div>
+        </div>
+      )}
       <WizardClient
         wizardType={wizardType}
         entityType={entityType}
