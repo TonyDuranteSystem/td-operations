@@ -26,6 +26,16 @@ Before making ANY technical claim about how the system works (data flow, archite
 4. Challenge your first answer — root cause is usually 2-3 layers deep. Ask yourself: "What am I assuming that could be wrong?"
 This applies to EVERY conversation. If you make a wrong claim that wastes time reading and correcting, that is a failure.
 
+## Verify Before Acting — MANDATORY
+
+Before presenting options, asking questions, or proposing actions that involve client data:
+1. **Query the database FIRST** — never ask Antonio "does this client have X?" when you can check yourself. Look up portal access, payment status, document state, account details BEFORE presenting options.
+2. **Never assume — verify** — if you need a fact to make a decision (does the client have portal access? was the email already sent? is there an existing offer?), QUERY the system. Do not guess, do not ask Antonio to confirm things you can check programmatically.
+3. **Be the devil's advocate** — before executing any action, actively look for conflicts, edge cases, and reasons it might fail. Check: is there a duplicate? Was this already done? Will this break something else? Surface problems BEFORE they happen, not after.
+4. **Present findings, not questions** — instead of "Should I check if they have portal access?", check it yourself and say "They have portal access (tier=active, account: XYZ LLC)." Antonio's time is not for answering questions the system can answer.
+
+This rule exists because lazy questions waste Antonio's time. Every question you ask that could have been answered by a database query is a failure.
+
 ## Data Architecture — THE FOUNDATION
 
 CONTACT = the person. The center of everything. A Contact is ONE person who may own one or more companies. Portal access (portal_tier) lives on the Contact.

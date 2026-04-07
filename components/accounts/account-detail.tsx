@@ -19,6 +19,7 @@ import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/pl
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
 import { CorrespondenceUpload } from './correspondence-upload'
+import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
@@ -89,6 +90,17 @@ interface DocumentRecord {
   portal_visible: boolean
 }
 
+interface OfferData {
+  token: string
+  status: string
+  contract_type: string | null
+  cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+  view_count: number
+  viewed_at: string | null
+  created_at: string
+  required_documents: Array<{ id: string; name: string }> | null
+}
+
 interface AccountDetailProps {
   account: Account
   contacts: Contact[]
@@ -99,6 +111,7 @@ interface AccountDetailProps {
   documents?: DocumentRecord[]
   today: string
   isAdmin?: boolean
+  offer?: OfferData | null
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -277,7 +290,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null }: AccountDetailProps) {
   const [activeTab, setActiveTab] = useState('panoramica')
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
@@ -360,6 +373,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         onGenerateOA={() => setShowOADialog(true)}
         onGenerateLease={() => setShowLeaseDialog(true)}
         onGenerateSS4={() => setShowSS4Dialog(true)}
+      />
+
+      {/* Offer Panel */}
+      <AccountOfferPanel
+        accountId={account.id}
+        companyName={account.company_name}
+        clientEmail={primaryContact?.email || ''}
+        clientLanguage={primaryContact?.language}
+        offer={offer}
+        isAdmin={isAdmin}
       />
 
       {/* Generate Document Dialogs */}

@@ -36,7 +36,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   if (!account) notFound()
 
   // Fetch related data in parallel
-  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult] = await Promise.all([
+  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult] = await Promise.all([
     // Contacts via junction table
     supabase
       .from('account_contacts')
@@ -73,6 +73,14 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size, portal_visible')
       .eq('account_id', params.id)
       .order('processed_at', { ascending: false }),
+    // Offer (latest for this account)
+    supabase
+      .from('offers')
+      .select('token, status, contract_type, cost_summary, view_count, viewed_at, created_at, required_documents')
+      .eq('account_id', params.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
@@ -103,6 +111,16 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   const deals: Deal[] = (dealsResult.data ?? []).map(d => ({ ...d, account_id: params.id })) as Deal[]
   const taxReturns: TaxReturn[] = (taxReturnsResult.data ?? []) as TaxReturn[]
   const documents = (documentsResult.data ?? []) as DocumentRecord[]
+  const offer = offerResult.data as {
+    token: string
+    status: string
+    contract_type: string | null
+    cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+    view_count: number
+    viewed_at: string | null
+    created_at: string
+    required_documents: Array<{ id: string; name: string }> | null
+  } | null
 
   return (
     <div className="p-6 lg:p-8">
@@ -116,6 +134,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         documents={documents}
         today={today}
         isAdmin={admin}
+        offer={offer}
       />
     </div>
   )

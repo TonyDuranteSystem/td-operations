@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const {
       lead_id,
+      account_id,
       client_name,
       client_email,
       language,
@@ -29,37 +30,54 @@ export async function POST(req: NextRequest) {
       bundled_pipelines,
       referrer_name,
       referrer_type,
+      required_documents,
     } = body
 
-    if (!lead_id || !client_name || !client_email) {
-      return NextResponse.json({ error: 'lead_id, client_name, and client_email are required' }, { status: 400 })
+    if (!client_name || !client_email) {
+      return NextResponse.json({ error: 'client_name and client_email are required' }, { status: 400 })
+    }
+
+    if (!lead_id && !account_id) {
+      return NextResponse.json({ error: 'Either lead_id or account_id is required' }, { status: 400 })
     }
 
     if (!services || !cost_summary) {
       return NextResponse.json({ error: 'services and cost_summary are required' }, { status: 400 })
     }
 
-    // Check lead exists
-    const { data: lead, error: leadErr } = await supabaseAdmin
-      .from('leads')
-      .select('id, full_name, email')
-      .eq('id', lead_id)
-      .single()
+    // Validate lead or account exists
+    if (lead_id) {
+      const { data: lead, error: leadErr } = await supabaseAdmin
+        .from('leads')
+        .select('id, full_name, email')
+        .eq('id', lead_id)
+        .single()
 
-    if (leadErr || !lead) {
-      return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
+      if (leadErr || !lead) {
+        return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
+      }
     }
 
-    // Check if offer already exists for this lead
-    const { data: existing } = await supabaseAdmin
-      .from('offers')
-      .select('token')
-      .eq('lead_id', lead_id)
-      .limit(1)
-      .maybeSingle()
+    if (account_id) {
+      const { data: acct, error: acctErr } = await supabaseAdmin
+        .from('accounts')
+        .select('id, company_name')
+        .eq('id', account_id)
+        .single()
+
+      if (acctErr || !acct) {
+        return NextResponse.json({ error: 'Account not found' }, { status: 404 })
+      }
+    }
+
+    // Check if offer already exists for this lead/account
+    const duplicateQuery = supabaseAdmin.from('offers').select('token').limit(1)
+    if (lead_id) duplicateQuery.eq('lead_id', lead_id)
+    else duplicateQuery.eq('account_id', account_id)
+    const { data: existing } = await duplicateQuery.maybeSingle()
 
     if (existing) {
-      return NextResponse.json({ error: `Offer already exists for this lead: ${existing.token}` }, { status: 409 })
+      return NextResponse.json({ error: `Offer already exists: ${existing.token}` }, { status: 409 })
     }
 
     // Generate token: firstname-lastname-year
@@ -108,7 +126,9 @@ export async function POST(req: NextRequest) {
         recurring_costs: recurring_costs || null,
         bundled_pipelines: bundled_pipelines || [],
         bank_details,
-        lead_id,
+        lead_id: lead_id || null,
+        account_id: account_id || null,
+        required_documents: required_documents || null,
         referrer_name: referrer_name || null,
         referrer_type: referrer_type || null,
         view_count: 0,
@@ -121,12 +141,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: offerErr.message }, { status: 500 })
     }
 
-    // Update lead with offer link
+    // Update lead/account with offer link
     const offerUrl = `${APP_BASE_URL}/offer/${offer.token}/${offer.access_code || ''}`
-    await supabaseAdmin
-      .from('leads')
-      .update({ offer_link: offerUrl, offer_status: 'Draft' })
-      .eq('id', lead_id)
+    if (lead_id) {
+      await supabaseAdmin
+        .from('leads')
+        .update({ offer_link: offerUrl, offer_status: 'Draft' })
+        .eq('id', lead_id)
+    }
 
     // Auto-create Whop plan if checkout + whop gateway (Stripe checkout is deferred to sign time)
     let whopCheckoutUrl: string | null = null
@@ -171,7 +193,7 @@ export async function POST(req: NextRequest) {
       table_name: 'offers',
       record_id: token,
       summary: `Offer created via CRM: ${client_name} (${token})`,
-      details: { lead_id, contract_type, payment_type, payment_gateway, bank_preference, bundled_pipelines, source: 'crm-button' },
+      details: { lead_id, account_id, contract_type, payment_type, payment_gateway, bank_preference, bundled_pipelines, required_documents, source: 'crm-button' },
     })
 
     return NextResponse.json({
