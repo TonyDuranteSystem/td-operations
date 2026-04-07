@@ -134,7 +134,7 @@ export async function getPortalDeadlines(accountId: string) {
 export async function getPortalPayments(accountId: string) {
   const { data } = await supabaseAdmin
     .from('payments')
-    .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, installment')
+    .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, installment, invoice_number, invoice_status')
     .eq('account_id', accountId)
     .order('due_date', { ascending: false })
     .limit(20)

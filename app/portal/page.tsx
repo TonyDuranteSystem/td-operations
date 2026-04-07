@@ -5,7 +5,8 @@ import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
-import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, CreditCard, Mail, Phone, User } from 'lucide-react'
+import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User } from 'lucide-react'
+import { PaymentHistory } from '@/components/portal/payment-history'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
@@ -26,12 +27,6 @@ function formatDate(d: string | null): string {
   } catch {
     return d
   }
-}
-
-function formatCurrency(amount: number | null, currency?: string | null): string {
-  if (amount == null) return '\u2014'
-  const c = currency === 'EUR' ? '\u20AC' : '$'
-  return `${c}${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -370,32 +365,7 @@ export default async function PortalDashboardPage() {
         </div>
 
         {/* Payment History */}
-        <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.paymentHistory', locale)}</h2>
-          {payments.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
-              <CreditCard className="h-8 w-8 mb-2" />
-              <p className="text-sm">{t('dashboard.noPayments', locale)}</p>
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {payments.slice(0, 8).map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium truncate text-xs">{p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || '\u2014')}</p>
-                    <p className="text-xs text-zinc-500">{p.due_date ? formatDate(p.due_date) : '\u2014'}</p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[p.status ?? ''] ?? 'bg-zinc-100')}>
-                      {p.status}
-                    </span>
-                    <span className="text-xs font-medium">{formatCurrency(p.amount, p.amount_currency)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <PaymentHistory payments={payments} title={t('dashboard.paymentHistory', locale)} />
 
         {/* Tax Returns */}
         {taxReturns.length > 0 && (
