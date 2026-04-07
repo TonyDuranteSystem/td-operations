@@ -37,7 +37,7 @@ export async function onFirstInstallmentPaid(
   // Get account details
   const { data: account } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, entity_type, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date")
+    .select("id, company_name, entity_type, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date")
     .eq("id", accountId)
     .single()
 
@@ -154,6 +154,13 @@ export async function onFirstInstallmentPaid(
   try {
     const taxYear = year - 1 // Filing for previous year
 
+    // Skip if company didn't exist during the tax year
+    // A company formed in 2026 doesn't need a 2025 tax return
+    const formationYear = account.formation_date ? new Date(account.formation_date).getFullYear() : null
+    if (formationYear && formationYear > taxYear) {
+      steps.push({ step: "tax_sd", status: "skipped", detail: `Company formed ${account.formation_date} — did not exist in ${taxYear}` })
+    } else {
+
     const { data: existingTr } = await supabaseAdmin
       .from("service_deliveries")
       .select("id")
@@ -214,6 +221,7 @@ export async function onFirstInstallmentPaid(
         steps.push({ step: "tax_return_record", status: "ok", detail: `Created for ${taxYear} (${returnType})` })
       }
     }
+    } // close formation_date guard
   } catch (e) {
     steps.push({ step: "tax_sd", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }

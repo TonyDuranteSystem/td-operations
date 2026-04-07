@@ -475,7 +475,16 @@ export async function GET(req: NextRequest) {
     }
 
     // Check for missing bundled pipelines
+    const currentYear = new Date().getFullYear()
+    const formationYear = account.formation_date ? new Date(account.formation_date).getFullYear() : null
+
     for (const pipeline of bundledPipelines) {
+      // Skip Tax Return check if company was formed in the current year or later
+      // (they don't need a return for a year they didn't exist)
+      if (pipeline === "Tax Return" && formationYear && formationYear >= currentYear) {
+        continue
+      }
+
       const exists = services.some(s => s.service_type === pipeline)
       if (!exists) {
         checks.push({
