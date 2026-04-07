@@ -236,7 +236,7 @@ export async function POST(request: Request) {
         amount,
         amount_currency: currency,
         payment_method: payment_method || "wire",
-        payment_date: payment_date || new Date().toISOString().split("T")[0],
+        paid_date: payment_date || new Date().toISOString().split("T")[0],
         status: "paid",
         notes: payment_reference ? `Ref: ${payment_reference}` : undefined,
         is_test: lead.is_test || false,
