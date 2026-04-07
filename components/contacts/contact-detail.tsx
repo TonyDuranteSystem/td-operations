@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
+import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { EditableField } from '@/components/accounts/editable-field'
@@ -166,12 +167,14 @@ interface ContactInvoice {
 
 interface OfferRecord {
   id: string
+  token: string
   client_email: string
   status: string
   contract_type: string | null
   services: unknown
   bundled_pipelines: string[] | null
   selected_services: unknown
+  cost_summary: unknown
   created_at: string
   viewed_at: string | null
   expires_at: string | null
@@ -302,6 +305,7 @@ export function ContactDetail({
         pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}
         serviceDeliveries={serviceDeliveries}
+        lead={lead}
       />
 
       {/* Journey Tracker */}
@@ -627,6 +631,7 @@ function QuickActionsBar({
   pendingActivations,
   wizardProgress,
   serviceDeliveries,
+  lead,
 }: {
   contact: ContactRecord
   portalAuth: PortalAuth
@@ -634,9 +639,11 @@ function QuickActionsBar({
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
   serviceDeliveries: ServiceDelivery[]
+  lead: LeadOrigin | null
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [advanceDialog, setAdvanceDialog] = useState<{ id: string; name: string; stage: string } | null>(null)
+  const [showConfirmPayment, setShowConfirmPayment] = useState(false)
 
   const hasWizard = wizardProgress.length > 0
   const activeSds = serviceDeliveries.filter(sd => sd.status === 'active')
@@ -647,8 +654,10 @@ function QuickActionsBar({
   const showResendWelcome = portalAuth.exists && !portalAuth.lastLogin
   const showWizardReminder = contact.portal_tier === 'onboarding' && !hasWizard && (hasPaidOffer || pendingActivations.some(pa => pa.payment_confirmed_at))
   const showAdvanceStage = activeSds.length > 0
+  const awaitingPayment = pendingActivations.find(pa => pa.status === 'awaiting_payment')
+  const showConfirmPaymentBtn = !!awaitingPayment && !!lead
 
-  const hasActions = showCreatePortal || showResendWelcome || showWizardReminder || showAdvanceStage
+  const hasActions = showCreatePortal || showResendWelcome || showWizardReminder || showAdvanceStage || showConfirmPaymentBtn
 
   const handlePortalAction = async (action: string, extra?: Record<string, string>) => {
     setLoading(action)
@@ -803,7 +812,32 @@ function QuickActionsBar({
             </div>
           </div>
         )}
+        {showConfirmPaymentBtn && (
+          <button
+            onClick={() => setShowConfirmPayment(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+          >
+            <CreditCard className="h-3.5 w-3.5" />
+            Confirm Payment
+          </button>
+        )}
       </div>
+
+      {/* Confirm Payment Dialog */}
+      {showConfirmPayment && lead && (
+        <ConfirmPaymentDialog
+          open={showConfirmPayment}
+          onClose={() => setShowConfirmPayment(false)}
+          leadId={lead.id}
+          leadName={contact.full_name ?? lead.full_name}
+          offer={offers[0] ? {
+            token: offers[0].token,
+            contract_type: offers[0].contract_type,
+            bundled_pipelines: offers[0].bundled_pipelines,
+            cost_summary: (offers[0].cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
+          } : null}
+        />
+      )}
 
       {/* Advance Stage Confirmation Dialog */}
       {advanceDialog && (

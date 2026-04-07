@@ -55,7 +55,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Offers — by client_email or lead_id
     supabase
       .from('offers')
-      .select('id, client_email, status, contract_type, services, bundled_pipelines, selected_services, created_at, viewed_at, expires_at')
+      .select('id, token, client_email, status, contract_type, services, bundled_pipelines, selected_services, cost_summary, created_at, viewed_at, expires_at')
       .eq('client_email', contact.email ?? '__no_match__')
       .order('created_at', { ascending: false }),
     // Pending activations — by client_email
@@ -143,9 +143,9 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
 
   // Journey data
   const offers = (offersResult.data ?? []) as Array<{
-    id: string; client_email: string; status: string; contract_type: string | null
+    id: string; token: string; client_email: string; status: string; contract_type: string | null
     services: unknown; bundled_pipelines: string[] | null; selected_services: unknown
-    created_at: string; viewed_at: string | null; expires_at: string | null
+    cost_summary: unknown; created_at: string; viewed_at: string | null; expires_at: string | null
   }>
   const pendingActivations = (pendingActivationsResult.data ?? []) as Array<{
     id: string; client_email: string; status: string; signed_at: string | null
