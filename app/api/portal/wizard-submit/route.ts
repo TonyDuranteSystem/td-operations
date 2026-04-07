@@ -17,8 +17,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
-import { enqueueJob, completeJob, failJob } from '@/lib/jobs/queue'
-import type { Job } from '@/lib/jobs/queue'
+import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 
 /** Extract file upload paths from wizard data */
 function extractUploadPaths(data: Record<string, unknown>): string[] {
@@ -176,6 +175,88 @@ export async function POST(req: NextRequest) {
         console.error('[wizard-submit] Submission upsert failed:', subErr.message)
       }
       submissionId = sub?.id || null
+    }
+
+    // ─── 4b. BANKING WIZARD — PDF + Drive + Notifications (inline, no background job) ───
+    if (wizard_type === 'banking_payset' || wizard_type === 'banking_relay') {
+      const provider = wizard_type === 'banking_relay' ? 'Relay (USD)' : 'Payset (EUR)'
+
+      // Get account Drive folder
+      let driveFolderId: string | null = null
+      let compName = companyName
+      if (account_id) {
+        const { data: acct } = await supabaseAdmin
+          .from('accounts')
+          .select('drive_folder_id, company_name')
+          .eq('id', account_id)
+          .single()
+        driveFolderId = acct?.drive_folder_id ?? null
+        if (!compName) compName = acct?.company_name ?? ''
+      }
+
+      // Generate PDF + save to Drive
+      if (driveFolderId) {
+        try {
+          const { saveFormToDrive } = await import('@/lib/form-to-drive')
+          const uploadPaths = extractUploadPaths(data)
+          const result = await saveFormToDrive(wizard_type, data, uploadPaths, driveFolderId, {
+            token: submissionToken || wizard_type,
+            submittedAt: new Date().toISOString(),
+            companyName: compName,
+          })
+
+          // Create document record for the summary PDF
+          if (result.summaryFileId) {
+            const slug = compName.replace(/\s+/g, '_')
+            await supabaseAdmin.from('documents').insert({
+              file_name: `Banking_${wizard_type === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
+              drive_file_id: result.summaryFileId,
+              document_type_name: 'Banking Application',
+              category: 4, // Banking
+              confidence: 'high',
+              status: 'classified',
+              account_id: account_id || null,
+              contact_id: contact_id || null,
+            })
+          }
+        } catch (e) {
+          console.error('[wizard-submit] Banking PDF/Drive error:', e)
+        }
+      }
+
+      // Portal chat notification — message to the account
+      if (account_id) {
+        try {
+          await supabaseAdmin.from('portal_messages').insert({
+            account_id,
+            sender_type: 'system',
+            sender_id: null,
+            message: `Banking application submitted: ${provider}. Our team will review and submit it on your behalf.`,
+          })
+        } catch (e) {
+          console.error('[wizard-submit] Chat notification error:', e)
+        }
+      }
+
+      // CRM task for staff
+      if (account_id) {
+        try {
+          await supabaseAdmin.from('tasks').insert({
+            task_title: `Review banking application (${provider}) — ${compName}`,
+            assigned_to: 'Luca',
+            status: 'To Do',
+            priority: 'High',
+            category: 'KYC',
+            description: `Client submitted ${provider} banking application via portal wizard. Review the data and submit to the provider.`,
+            account_id,
+            created_by: 'System',
+          })
+        } catch (e) {
+          console.error('[wizard-submit] Task creation error:', e)
+        }
+      }
+
+      return NextResponse.json({ success: true, provider: wizard_type })
     }
 
     // ─── 5. ENQUEUE BACKGROUND JOB (Auto-Chain) ───

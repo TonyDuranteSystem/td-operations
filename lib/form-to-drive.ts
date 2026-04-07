@@ -316,6 +316,98 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
       },
     ],
   },
+
+  banking_payset: {
+    bucket: "onboarding-uploads",
+    driveSubfolder: "4. Banking",
+    pdfTitle: "Banking Application — Payset (EUR IBAN)",
+    filePrefix: "Banking_Payset",
+    sections: [
+      {
+        title: "Personal Information",
+        fields: [
+          { key: "first_name", label: "First Name" },
+          { key: "last_name", label: "Last Name" },
+          { key: "personal_street", label: "Street Address" },
+          { key: "personal_city", label: "City" },
+          { key: "personal_state_province", label: "State/Province" },
+          { key: "personal_zip", label: "ZIP/Postal Code" },
+          { key: "personal_country", label: "Country of Residence" },
+        ],
+      },
+      {
+        title: "Business Information",
+        fields: [
+          { key: "business_name", label: "Business Name (LLC)" },
+          { key: "business_street", label: "Business Address" },
+          { key: "business_city", label: "Business City" },
+          { key: "business_state_province", label: "Business State/Province" },
+          { key: "business_zip", label: "Business ZIP" },
+          { key: "business_country", label: "Business Country" },
+          { key: "business_type", label: "Business Type" },
+          { key: "us_physical_presence", label: "US Physical Presence" },
+          { key: "business_model", label: "Business Model" },
+          { key: "products_services", label: "Products/Services" },
+          { key: "operating_countries", label: "Operating Countries" },
+          { key: "website_url", label: "Website" },
+          { key: "phone", label: "Phone" },
+          { key: "email", label: "Email" },
+          { key: "crypto_transactions", label: "Cryptocurrency Transactions" },
+          { key: "monthly_volume", label: "Expected Monthly Volume (EUR)" },
+        ],
+      },
+    ],
+  },
+
+  banking_relay: {
+    bucket: "onboarding-uploads",
+    driveSubfolder: "4. Banking",
+    pdfTitle: "Banking Application — Relay (USD Business Account)",
+    filePrefix: "Banking_Relay",
+    sections: [
+      {
+        title: "Business Information",
+        fields: [
+          { key: "business_name", label: "Business Name (LLC)" },
+          { key: "phone", label: "Phone" },
+          { key: "email", label: "Email" },
+          { key: "ein", label: "EIN Number" },
+          { key: "business_description", label: "Business Description" },
+          { key: "avg_monthly_revenue", label: "Average Monthly Revenue (USD)" },
+          { key: "other_us_bank", label: "Other US Bank Account" },
+        ],
+      },
+      {
+        title: "Owner Information",
+        fields: [
+          { key: "first_name", label: "First Name" },
+          { key: "last_name", label: "Last Name" },
+          { key: "personal_street", label: "Street Address" },
+          { key: "personal_city", label: "City" },
+          { key: "personal_state", label: "State/Province" },
+          { key: "personal_zip", label: "ZIP/Postal Code" },
+          { key: "personal_phone", label: "Personal Phone" },
+          { key: "personal_email", label: "Personal Email" },
+          { key: "equity_pct", label: "Ownership %" },
+          { key: "has_partner", label: "Has Business Partner" },
+        ],
+      },
+      {
+        title: "Partner Information",
+        fields: [
+          { key: "partner_first_name", label: "Partner First Name" },
+          { key: "partner_last_name", label: "Partner Last Name" },
+          { key: "partner_street", label: "Partner Address" },
+          { key: "partner_city", label: "Partner City" },
+          { key: "partner_state", label: "Partner State" },
+          { key: "partner_zip", label: "Partner ZIP" },
+          { key: "partner_phone", label: "Partner Phone" },
+          { key: "partner_email", label: "Partner Email" },
+          { key: "partner_equity_pct", label: "Partner Ownership %" },
+        ],
+      },
+    ],
+  },
 }
 
 // ─── Generate Summary PDF ───
