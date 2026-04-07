@@ -2,7 +2,7 @@
 
 import { useState, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Loader2, X, Upload } from 'lucide-react'
+import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 
 // ── Service catalog: each service maps to a pipeline + contract type ──
@@ -65,6 +65,23 @@ const DOCUMENT_TYPES = [
   { id: 'other', name: 'Other Document' },
 ] as const
 
+// ── Pre-conditions: issues that must be resolved before onboarding ──
+const PRECONDITION_PRESETS = [
+  { id: 'de_franchise_tax', name: 'Unpaid Delaware Franchise Tax' },
+  { id: 'wy_reinstatement', name: 'Wyoming Company Reinstatement' },
+  { id: 'nm_reinstatement', name: 'New Mexico Company Reinstatement' },
+  { id: 'annual_report_overdue', name: 'Overdue Annual Report' },
+  { id: 'ra_renewal', name: 'Registered Agent Renewal' },
+  { id: 'custom', name: 'Other (custom)' },
+] as const
+
+interface PreconditionItem {
+  id: string
+  name: string
+  price: string
+  customName?: string
+}
+
 interface CreateOfferDialogProps {
   open: boolean
   onClose: () => void
@@ -110,6 +127,12 @@ export function CreateOfferDialog({
   // Required documents
   const [requiredDocs, setRequiredDocs] = useState<string[]>([])
 
+  // Pre-conditions (issues with prices)
+  const [preconditions, setPreconditions] = useState<PreconditionItem[]>([])
+
+  // Admin notes (internal only)
+  const [adminNotes, setAdminNotes] = useState('')
+
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
 
   // ── Derived values ──
@@ -134,10 +157,17 @@ export function CreateOfferDialog({
     })
   }, [selected])
 
-  const totalAmount = selected.reduce((sum, s) => {
+  const servicesTotalAmount = selected.reduce((sum, s) => {
     const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
     return sum + (isNaN(n) ? 0 : n)
   }, 0)
+
+  const preconditionsTotalAmount = preconditions.reduce((sum, p) => {
+    const n = parseFloat(p.price.replace(/[^0-9.]/g, ''))
+    return sum + (isNaN(n) ? 0 : n)
+  }, 0)
+
+  const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
   const toggleService = (id: ServiceId) => {
     setSelected(prev => {
@@ -159,6 +189,23 @@ export function CreateOfferDialog({
     setRequiredDocs(prev =>
       prev.includes(docId) ? prev.filter(d => d !== docId) : [...prev, docId]
     )
+  }
+
+  const togglePrecondition = (presetId: string) => {
+    setPreconditions(prev => {
+      const exists = prev.find(p => p.id === presetId)
+      if (exists) return prev.filter(p => p.id !== presetId)
+      const preset = PRECONDITION_PRESETS.find(p => p.id === presetId)
+      return [...prev, { id: presetId, name: preset?.name || presetId, price: '' }]
+    })
+  }
+
+  const updatePreconditionPrice = (id: string, price: string) => {
+    setPreconditions(prev => prev.map(p => p.id === id ? { ...p, price } : p))
+  }
+
+  const updatePreconditionName = (id: string, customName: string) => {
+    setPreconditions(prev => prev.map(p => p.id === id ? { ...p, customName } : p))
   }
 
   // ── Submit ──
@@ -190,15 +237,37 @@ export function CreateOfferDialog({
           })
 
         const costItems = servicesJson.map(s => ({
-          name: s.name,
-          price: s.price,
+          name: s.name as string,
+          price: s.price as string,
         }))
 
-        const costSummary = [{
+        const costSummary: Array<{ label: string; total: string; items: Array<{ name: string; price: string }> }> = [{
           label: 'Setup Fee',
-          total: `${currencySymbol}${totalAmount.toLocaleString('en-US')}`,
+          total: `${currencySymbol}${servicesTotalAmount.toLocaleString('en-US')}`,
           items: costItems,
         }]
+
+        // Add preconditions as a separate cost group
+        const activePreconditions = preconditions.filter(p => p.price.trim())
+        if (activePreconditions.length > 0) {
+          const preItems = activePreconditions.map(p => ({
+            name: p.id === 'custom' && p.customName ? p.customName : p.name,
+            price: `${currencySymbol}${p.price.replace(/[^0-9.]/g, '')}`,
+          }))
+          costSummary.push({
+            label: 'Pre-conditions (to be resolved)',
+            total: `${currencySymbol}${preconditionsTotalAmount.toLocaleString('en-US')}`,
+            items: preItems,
+          })
+        }
+
+        // Build issues JSONB from preconditions (shown to client on offer page)
+        const issuesJson = activePreconditions.length > 0
+          ? activePreconditions.map(p => ({
+              title: p.id === 'custom' && p.customName ? p.customName : p.name,
+              description: `${currencySymbol}${p.price.replace(/[^0-9.]/g, '')} -- must be resolved before onboarding can proceed.`,
+            }))
+          : null
 
         let recurringCosts = null
         if (showAnnual && (installment1 || installment2)) {
@@ -243,6 +312,8 @@ export function CreateOfferDialog({
             referrer_name: referrerName || null,
             referrer_type: referrerType || null,
             required_documents: requiredDocsJson,
+            issues: issuesJson,
+            admin_notes: adminNotes.trim() || null,
           }),
         })
 
@@ -488,6 +559,86 @@ export function CreateOfferDialog({
             </div>
           </div>
 
+          {/* Pre-conditions / Issues */}
+          <div>
+            <label className="block text-sm font-semibold mb-2 flex items-center gap-1.5">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              Pre-conditions (issues to resolve before onboarding)
+            </label>
+            <div className="space-y-2">
+              {PRECONDITION_PRESETS.map(preset => {
+                const active = preconditions.find(p => p.id === preset.id)
+                return (
+                  <div key={preset.id}>
+                    <div
+                      className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-amber-50 border-amber-300'
+                          : 'bg-white border-zinc-200 hover:border-zinc-300'
+                      }`}
+                      onClick={() => { if (!active) togglePrecondition(preset.id) }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!active}
+                        onChange={() => togglePrecondition(preset.id)}
+                        onClick={e => e.stopPropagation()}
+                        className="h-4 w-4 rounded border-zinc-300 text-amber-600 focus:ring-amber-500"
+                      />
+                      <span className={`flex-1 text-sm ${active ? 'font-medium text-zinc-900' : 'text-zinc-600'}`}>
+                        {preset.name}
+                      </span>
+                      {active && (
+                        <div className="relative" onClick={e => e.stopPropagation()}>
+                          <span className="absolute left-2.5 top-1.5 text-sm text-zinc-400">{currencySymbol}</span>
+                          <input
+                            type="text"
+                            value={active.price}
+                            onChange={e => updatePreconditionPrice(preset.id, e.target.value)}
+                            placeholder="0"
+                            autoFocus
+                            className="w-28 pl-6 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {/* Custom name input for "Other" */}
+                    {active && preset.id === 'custom' && (
+                      <input
+                        type="text"
+                        value={active.customName || ''}
+                        onChange={e => updatePreconditionName('custom', e.target.value)}
+                        placeholder="Describe the issue..."
+                        className="mt-1 w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {preconditionsTotalAmount > 0 && (
+              <div className="flex justify-between items-center bg-amber-50 rounded-lg p-2 mt-2">
+                <span className="text-xs font-medium text-amber-800">Pre-conditions subtotal</span>
+                <span className="text-sm font-bold text-amber-900">{currencySymbol}{preconditionsTotalAmount.toLocaleString('en-US')}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Admin Notes (internal only) */}
+          <div>
+            <label className="block text-sm font-semibold mb-2 flex items-center gap-1.5">
+              <StickyNote className="h-4 w-4 text-zinc-500" />
+              Admin Notes (internal -- not shown to client)
+            </label>
+            <textarea
+              value={adminNotes}
+              onChange={e => setAdminNotes(e.target.value)}
+              rows={3}
+              placeholder="Internal notes about this offer, pricing decisions, call context..."
+              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+          </div>
+
           {/* Auto-derived summary */}
           {selected.length > 0 && (
             <div className="bg-blue-50 rounded-lg p-3 text-sm space-y-1">
@@ -511,6 +662,16 @@ export function CreateOfferDialog({
               {requiredDocs.length > 0 && (
                 <p className="text-xs text-blue-800">
                   Docs required: <span className="font-medium">{requiredDocs.length}</span>
+                </p>
+              )}
+              {preconditions.length > 0 && (
+                <p className="text-xs text-blue-800">
+                  Pre-conditions: <span className="font-medium">{preconditions.length} ({currencySymbol}{preconditionsTotalAmount.toLocaleString('en-US')})</span>
+                </p>
+              )}
+              {adminNotes.trim() && (
+                <p className="text-xs text-blue-800">
+                  Admin notes: <span className="font-medium">included</span>
                 </p>
               )}
             </div>

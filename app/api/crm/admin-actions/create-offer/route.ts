@@ -31,6 +31,8 @@ export async function POST(req: NextRequest) {
       referrer_name,
       referrer_type,
       required_documents,
+      issues,
+      admin_notes,
     } = body
 
     if (!client_name || !client_email) {
@@ -129,6 +131,8 @@ export async function POST(req: NextRequest) {
         lead_id: lead_id || null,
         account_id: account_id || null,
         required_documents: required_documents || null,
+        issues: issues || null,
+        admin_notes: admin_notes || null,
         referrer_name: referrer_name || null,
         referrer_type: referrer_type || null,
         view_count: 0,
