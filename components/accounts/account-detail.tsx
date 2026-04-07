@@ -629,16 +629,16 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin, partnerNam
             </div>
           )}
           <div className="border-t pt-3 mt-1">
-            {partnerName ? (
+            {partnerName && account.partner_id ? (
               <>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Partnership</p>
-                <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <Link href={`/partners/${account.partner_id}`} className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200 hover:bg-blue-100 transition-colors group">
                   <Users className="h-5 w-5 text-blue-600 shrink-0" />
                   <div>
-                    <div className="text-sm font-medium text-blue-800">Managed by {partnerName}</div>
-                    <div className="text-xs text-blue-600">Invoices for this account go to the partner</div>
+                    <div className="text-sm font-medium text-blue-800 group-hover:underline">Managed by {partnerName}</div>
+                    <div className="text-xs text-blue-600">Click to view partner details</div>
                   </div>
-                </div>
+                </Link>
               </>
             ) : (
               <>
