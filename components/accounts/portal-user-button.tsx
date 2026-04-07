@@ -30,7 +30,7 @@ export function PortalUserButton({ accountId, portalAccount }: PortalUserButtonP
       const res = await fetch('/api/portal/admin/create-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId }),
+        body: JSON.stringify({ account_id: accountId, resend: true }),
       })
       const data = await res.json()
 

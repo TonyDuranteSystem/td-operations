@@ -583,8 +583,8 @@ export async function GET(req: NextRequest) {
         action: "create_portal_user",
         label: "Create portal login",
         params: { contact_id: contactId, email: contactEmail, full_name: contact.full_name },
-        description: "Creates a Supabase Auth user so the client can log in to the portal. A temporary password is generated.",
-        impact: ["A new auth user is created", "Client can log in to portal.tonydurante.us", "Contact portal_tier set to 'lead'", "Credentials must be shared manually or via welcome email"],
+        description: "Creates (or repairs) a portal login for this client. Sets full auth metadata, portal_account flag on accounts, and sends welcome email with credentials.",
+        impact: ["Auth user is created or repaired with full metadata (contact_id, account_ids, portal_tier)", "portal_account flag set on all linked accounts", "Welcome email with temp password sent automatically", "Client can log in at portal.tonydurante.us"],
         risk: "high",
       } : undefined,
     })
@@ -865,37 +865,125 @@ export async function POST(req: NextRequest) {
           .eq("id", params.contact_id)
           .single()
 
-        // Fetch account_ids linked to this contact
-        const { data: contactAccounts } = await supabaseAdmin
-          .from("accounts")
-          .select("id")
-          .eq("primary_contact_id", params.contact_id)
+        // Fetch account_ids via junction table (not primary_contact_id)
+        const { data: contactAccountLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id")
+          .eq("contact_id", params.contact_id)
 
-        const accountIds = (contactAccounts || []).map((a: { id: string }) => a.id)
+        const portalAccountIds = (contactAccountLinks || []).map((a: { account_id: string }) => a.account_id)
         const portalTier = contactForPortal?.portal_tier || "active"
+        const portalEmail = (contactForPortal?.email || params.email) as string
+        const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
 
-        const { data: newUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-          email: (contactForPortal?.email || params.email) as string,
-          password: `TD-${Date.now().toString(36)}!`,
-          email_confirm: true,
-          app_metadata: {
-            role: "client",
-            contact_id: params.contact_id,
-            portal_tier: portalTier,
-            ...(accountIds.length > 0 ? { account_ids: accountIds } : {}),
-          },
-          user_metadata: {
-            full_name: contactForPortal?.full_name || params.full_name || "Client",
-            must_change_password: true,
-          },
-        })
-        if (!authErr && newUser) {
-          await supabaseAdmin
-            .from("contacts")
-            .update({ portal_tier: portalTier, updated_at: new Date().toISOString() })
-            .eq("id", params.contact_id)
+        // Check if user already exists
+        const { data: existingPortalList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+        const existingPortalUser = (existingPortalList?.users ?? []).find(u => u.email === portalEmail)
+
+        if (existingPortalUser) {
+          // Fix metadata on existing user
+          await supabaseAdmin.auth.admin.updateUserById(existingPortalUser.id, {
+            password: tempPassword,
+            app_metadata: {
+              ...existingPortalUser.app_metadata,
+              role: "client",
+              contact_id: params.contact_id,
+              portal_tier: portalTier,
+              ...(portalAccountIds.length > 0 ? { account_ids: portalAccountIds } : {}),
+            },
+            user_metadata: {
+              ...existingPortalUser.user_metadata,
+              full_name: contactForPortal?.full_name || "Client",
+              must_change_password: true,
+            },
+          })
+        } else {
+          const { error: authErr } = await supabaseAdmin.auth.admin.createUser({
+            email: portalEmail,
+            password: tempPassword,
+            email_confirm: true,
+            app_metadata: {
+              role: "client",
+              contact_id: params.contact_id,
+              portal_tier: portalTier,
+              ...(portalAccountIds.length > 0 ? { account_ids: portalAccountIds } : {}),
+            },
+            user_metadata: {
+              full_name: contactForPortal?.full_name || params.full_name || "Client",
+              must_change_password: true,
+            },
+          })
+          if (authErr) {
+            result = { success: false, detail: authErr.message }
+            break
+          }
         }
-        result = { success: !authErr, detail: authErr ? authErr.message : "Portal user created with full metadata" }
+
+        // Update contact tier
+        await supabaseAdmin
+          .from("contacts")
+          .update({ portal_tier: portalTier, updated_at: new Date().toISOString() })
+          .eq("id", params.contact_id)
+
+        // Set portal_account flag on all linked accounts
+        if (portalAccountIds.length > 0) {
+          await supabaseAdmin
+            .from("accounts")
+            .update({
+              portal_account: true,
+              portal_tier: portalTier,
+              portal_created_date: new Date().toISOString().split("T")[0],
+            })
+            .in("id", portalAccountIds)
+        }
+
+        // Send welcome email with credentials
+        try {
+          const { gmailPost } = await import("@/lib/gmail")
+          const { PORTAL_BASE_URL } = await import("@/lib/config")
+          const loginUrl = `${PORTAL_BASE_URL}/portal/login`
+          const html = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <div style="background: #18181b; padding: 20px; border-radius: 12px 12px 0 0;">
+                <h1 style="color: white; margin: 0; font-size: 18px;">Welcome to Tony Durante Portal</h1>
+              </div>
+              <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+                <p>Hi ${contactForPortal?.full_name || "there"},</p>
+                <p>Your portal account has been created. Here are your login credentials:</p>
+                <div style="background: #f4f4f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                  <p style="margin: 0 0 8px;"><strong>Email:</strong> ${portalEmail}</p>
+                  <p style="margin: 0;"><strong>Temporary Password:</strong> ${tempPassword}</p>
+                </div>
+                <p>You will be asked to change your password on first login.</p>
+                <a href="${loginUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 8px;">
+                  Login to Portal
+                </a>
+              </div>
+            </div>
+          `
+          const subject = "Your Tony Durante Portal Account"
+          const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+          const boundary = `boundary_${Date.now()}`
+          const rawEmail = [
+            "From: Tony Durante <support@tonydurante.us>",
+            `To: ${portalEmail}`,
+            `Subject: ${encodedSubject}`,
+            "MIME-Version: 1.0",
+            `Content-Type: multipart/alternative; boundary="${boundary}"`,
+            "",
+            `--${boundary}`,
+            "Content-Type: text/html; charset=UTF-8",
+            "Content-Transfer-Encoding: base64",
+            "",
+            Buffer.from(html).toString("base64"),
+            `--${boundary}--`,
+          ].join("\r\n")
+          await gmailPost("/messages/send", { raw: Buffer.from(rawEmail).toString("base64url") })
+        } catch (emailErr) {
+          console.error("Welcome email failed:", emailErr)
+        }
+
+        result = { success: true, detail: existingPortalUser ? "Portal user repaired + credentials resent" : "Portal user created + welcome email sent" }
         break
       }
 

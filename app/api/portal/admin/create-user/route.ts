@@ -64,8 +64,27 @@ export async function POST(request: NextRequest) {
 
   if (existingUser) {
     // User already exists — verify/fix metadata and optionally resend credentials
+    // Get all linked account IDs for this contact
+    const { data: allLinks } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id')
+      .eq('contact_id', targetContactId)
+    const allAccountIds = (allLinks ?? []).map(l => l.account_id)
+
+    // Get contact's portal_tier
+    const { data: contactFull } = await supabaseAdmin
+      .from('contacts')
+      .select('portal_tier')
+      .eq('id', targetContactId)
+      .single()
+    const effectiveTier = contactFull?.portal_tier || 'active'
+
     const meta = existingUser.app_metadata || {}
-    const needsFix = meta.contact_id !== targetContactId || meta.role !== 'client'
+    const currentAccountIds = Array.isArray(meta.account_ids) ? meta.account_ids : []
+    const needsFix = meta.contact_id !== targetContactId
+      || meta.role !== 'client'
+      || meta.portal_tier !== effectiveTier
+      || JSON.stringify(currentAccountIds.sort()) !== JSON.stringify(allAccountIds.sort())
 
     if (needsFix) {
       await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
@@ -73,18 +92,30 @@ export async function POST(request: NextRequest) {
           ...meta,
           role: 'client',
           contact_id: targetContactId,
+          portal_tier: effectiveTier,
+          ...(allAccountIds.length > 0 ? { account_ids: allAccountIds } : {}),
         },
       })
     }
 
-    // Ensure portal flags are set on account
+    // Ensure portal flags are set on ALL linked accounts
+    const accountIdsToUpdate = allAccountIds.length > 0 ? allAccountIds : [account_id]
     await supabaseAdmin
       .from('accounts')
       .update({
         portal_account: true,
+        portal_tier: effectiveTier,
         portal_created_date: new Date().toISOString().split('T')[0],
       })
-      .eq('id', account_id)
+      .in('id', accountIdsToUpdate)
+
+    // Ensure contact has portal_tier set
+    if (!contactFull?.portal_tier) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
+        .eq('id', targetContactId)
+    }
 
     if (resend) {
       // Generate new temp password and resend welcome email
