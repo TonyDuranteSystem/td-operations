@@ -6,7 +6,7 @@ import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
-import { isAdmin } from '@/lib/auth'
+import { isAdmin, isDashboardUser } from '@/lib/auth'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
@@ -92,10 +92,11 @@ export default async function DashboardLayout({
   }
 
   const admin = isAdmin(user)
+  const dashboardUser = isDashboardUser(user)
   const badgeCounts = await getBadgeCounts(supabase)
 
   // Check if AI agent is enabled for this user
-  let showAiAgent = admin // Admin always sees it
+  let showAiAgent = dashboardUser
   if (!admin) {
     const { data: aiSetting } = await supabaseAdmin
       .from('app_settings')

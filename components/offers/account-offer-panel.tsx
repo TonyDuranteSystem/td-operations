@@ -43,7 +43,7 @@ export function AccountOfferPanel({
   clientEmail,
   clientLanguage,
   offer,
-  isAdmin,
+  isAdmin: _isAdmin,
 }: AccountOfferPanelProps) {
   const router = useRouter()
   const [showCreateOffer, setShowCreateOffer] = useState(false)
@@ -51,7 +51,7 @@ export function AccountOfferPanel({
   const [deletingOffer, setDeletingOffer] = useState(false)
   const [resettingOffer, setResettingOffer] = useState(false)
 
-  if (!isAdmin) return null
+  // Offer panel visible to all dashboard users (admin + team)
 
   const hasOffer = !!offer
   const isOfferDraft = hasOffer && offer.status === 'draft'

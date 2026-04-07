@@ -661,7 +661,7 @@ function InstallmentBadge({ match }: { match: Payment | null }) {
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin, partnerName }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null }) {
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
 
@@ -798,8 +798,8 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin, partnerNam
         )}
       </div>
 
-      {/* Deals — admin only (shows financial amounts) */}
-      {isAdmin && deals.length > 0 && (
+      {/* Deals */}
+      {deals.length > 0 && (
         <div className="bg-white rounded-lg border p-5 space-y-4 lg:col-span-2">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
             Deals ({deals.length})

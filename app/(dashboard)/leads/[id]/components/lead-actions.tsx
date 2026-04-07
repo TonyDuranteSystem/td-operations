@@ -41,7 +41,7 @@ interface LeadActionsProps {
   leadReferrerType?: string | null
   offer: OfferData | null
   activation: ActivationData | null
-  isAdmin?: boolean
+  isAdmin?: boolean // kept for interface compat, no longer gates UI
   hasPortalUser?: boolean
 }
 
@@ -55,7 +55,7 @@ export function LeadActions({
   leadReferrerType,
   offer,
   activation,
-  isAdmin = false,
+  isAdmin: _isAdmin = false,
   hasPortalUser = false,
 }: LeadActionsProps) {
   const router = useRouter()
@@ -165,21 +165,10 @@ export function LeadActions({
     )
   }
 
-  // Team members can see lead details but not perform admin actions
-  if (!isAdmin) {
-    return (
-      <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4">
-        <p className="text-sm text-zinc-600">
-          Lead actions are admin-only. Contact Antonio to manage this lead.
-        </p>
-      </div>
-    )
-  }
-
   return (
     <>
       <div className="bg-white rounded-lg border p-5">
-        <h2 className="text-sm font-semibold text-zinc-900 mb-4">Admin Actions</h2>
+        <h2 className="text-sm font-semibold text-zinc-900 mb-4">Actions</h2>
 
         <div className="flex flex-wrap gap-2">
           {/* Step 1: Create Offer */}
