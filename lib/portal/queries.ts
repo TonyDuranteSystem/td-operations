@@ -149,7 +149,7 @@ export async function getPortalPayments(accountId: string) {
 export async function getPortalExpenses(accountId: string) {
   const { data } = await supabaseAdmin
     .from('client_expenses')
-    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, created_at')
+    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, td_payment_id, created_at')
     .eq('account_id', accountId)
     .order('created_at', { ascending: false })
     .limit(100)

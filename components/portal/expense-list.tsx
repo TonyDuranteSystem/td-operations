@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { Search, FileText, Building2, Upload, PenLine } from 'lucide-react'
+import { Search, FileText, Building2, Upload, PenLine, Download, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface Expense {
   id: string
@@ -21,6 +22,7 @@ interface Expense {
   category: string | null
   attachment_url: string | null
   attachment_name: string | null
+  td_payment_id: string | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -46,6 +48,28 @@ function fmtDate(d: string | null): string {
 export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale: string }) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+
+  const handleDownloadPdf = async (exp: Expense) => {
+    if (!exp.td_payment_id) return
+    setDownloadingId(exp.id)
+    try {
+      const res = await fetch(`/api/portal/payments/${exp.td_payment_id}/pdf`)
+      if (!res.ok) throw new Error('Failed to generate PDF')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${exp.invoice_number ?? 'invoice'}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('PDF downloaded')
+    } catch {
+      toast.error('Failed to download PDF')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
 
   const isIt = locale === 'it'
 
@@ -96,13 +120,14 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
 
       {/* Table */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="hidden md:grid md:grid-cols-[1fr,120px,100px,90px,80px,80px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
+        <div className="hidden md:grid md:grid-cols-[1fr,120px,100px,90px,80px,80px,40px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
           <span>{isIt ? 'Fornitore' : 'Vendor'}</span>
           <span>{isIt ? 'N. Fattura' : 'Invoice #'}</span>
           <span className="text-right">{isIt ? 'Importo' : 'Amount'}</span>
           <span>{isIt ? 'Data' : 'Date'}</span>
           <span>{isIt ? 'Stato' : 'Status'}</span>
           <span>{isIt ? 'Fonte' : 'Source'}</span>
+          <span></span>
         </div>
         {filtered.length === 0 ? (
           <div className="p-8 text-center">
@@ -116,7 +141,7 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
             const src = SOURCE_CONFIG[exp.source] || SOURCE_CONFIG.manual
             const SourceIcon = src.icon
             return (
-              <div key={exp.id} className="grid grid-cols-1 md:grid-cols-[1fr,120px,100px,90px,80px,80px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
+              <div key={exp.id} className="grid grid-cols-1 md:grid-cols-[1fr,120px,100px,90px,80px,80px,40px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-medium truncate">{exp.vendor_name}</span>
                   {exp.attachment_url && (
@@ -143,6 +168,22 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
                     <SourceIcon className="h-3 w-3" />
                     {src.label}
                   </span>
+                </span>
+                <span className="flex justify-center">
+                  {exp.td_payment_id ? (
+                    <button
+                      onClick={() => handleDownloadPdf(exp)}
+                      disabled={downloadingId === exp.id}
+                      className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-blue-600 disabled:opacity-50"
+                      title={isIt ? 'Scarica PDF' : 'Download PDF'}
+                    >
+                      {downloadingId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    </button>
+                  ) : exp.attachment_url ? (
+                    <a href={exp.attachment_url} target="_blank" rel="noopener noreferrer" className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-blue-600">
+                      <Download className="h-4 w-4" />
+                    </a>
+                  ) : null}
                 </span>
               </div>
             )
