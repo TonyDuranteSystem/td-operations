@@ -95,14 +95,12 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .maybeSingle(),
     // Pending activation (for journey tracker — fetched after offer token is known)
     Promise.resolve({ data: null }),
-    // Wizard progress (for journey tracker)
+    // Wizard progress (for journey tracker — fetch ALL wizards)
     supabaseAdmin
       .from('wizard_progress')
-      .select('status, current_step, wizard_type, updated_at, account_id')
+      .select('status, current_step, wizard_type, updated_at, account_id, data')
       .eq('account_id', params.id)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .order('updated_at', { ascending: false }),
   ])
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
@@ -162,12 +160,15 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     pendingActivation = pa
   }
 
-  const wizardProgress = wizardProgressResult.data as {
+  const allWizardEntries = (wizardProgressResult.data ?? []) as Array<{
     status: string
     current_step: number
     wizard_type: string
     updated_at: string
-  } | null
+    data: Record<string, unknown> | null
+  }>
+  // For backward compat: wizardProgress = the most recent submitted/in_progress wizard
+  const wizardProgress = allWizardEntries.length > 0 ? allWizardEntries[0] : null
 
   // Service deliveries for journey (need stage/pipeline data)
   const serviceDeliveriesRaw = (servicesResult.data ?? []).map(sd => ({
@@ -194,6 +195,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         pendingActivation={pendingActivation}
         wizardProgress={wizardProgress}
         serviceDeliveriesRaw={serviceDeliveriesRaw}
+        allWizards={allWizardEntries}
       />
     </div>
   )

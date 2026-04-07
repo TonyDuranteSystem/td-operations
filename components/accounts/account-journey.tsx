@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { CheckCircle2 } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { CheckCircle2, Download, Clock, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // --- Types ---
@@ -38,6 +38,14 @@ export interface AccountJourneyProps {
     wizard_type: string
     updated_at: string
   } | null
+  /** All wizard submissions for this account */
+  allWizards?: Array<{
+    wizard_type: string
+    status: string
+    current_step: number
+    updated_at: string
+    data: Record<string, unknown> | null
+  }>
   serviceDeliveries: Array<{
     status: string | null
     stage: string | null
@@ -429,6 +437,160 @@ export function AccountJourney(props: AccountJourneyProps) {
           )
         })}
       </div>
+
+      {/* Wizard Submissions */}
+      <WizardCards wizards={props.allWizards ?? []} serviceDeliveries={props.serviceDeliveries} />
+    </div>
+  )
+}
+
+// --- Wizard helpers ---
+
+const WIZARD_LABELS: Record<string, string> = {
+  onboarding: 'Onboarding',
+  formation: 'LLC Formation',
+  banking: 'Banking',
+  itin: 'ITIN Application',
+  tax: 'Tax Return',
+  closure: 'Company Closure',
+}
+
+const WIZARD_EXPECTED: Record<string, string> = {
+  'Banking Fintech': 'banking',
+  'ITIN': 'itin',
+  'ITIN Renewal': 'itin',
+  'Tax Return': 'tax',
+  'Company Formation': 'formation',
+  'Company Closure': 'closure',
+}
+
+interface WizardCardEntry {
+  wizard_type: string
+  label: string
+  status: 'submitted' | 'in_progress' | 'pending'
+  updated_at: string | null
+  data: Record<string, unknown> | null
+}
+
+function WizardCards({ wizards, serviceDeliveries }: {
+  wizards: AccountJourneyProps['allWizards']
+  serviceDeliveries: AccountJourneyProps['serviceDeliveries']
+}) {
+  // Build list: completed wizards + pending wizards (from services that expect a wizard)
+  const entries: WizardCardEntry[] = []
+  const coveredTypes = new Set<string>()
+
+  // Add actual wizard submissions
+  for (const w of wizards ?? []) {
+    coveredTypes.add(w.wizard_type)
+    entries.push({
+      wizard_type: w.wizard_type,
+      label: WIZARD_LABELS[w.wizard_type] ?? w.wizard_type,
+      status: w.status === 'submitted' ? 'submitted' : 'in_progress',
+      updated_at: w.updated_at,
+      data: w.data,
+    })
+  }
+
+  // Add pending wizards from active services that expect a wizard but don't have one
+  for (const sd of serviceDeliveries) {
+    const serviceType = sd.service_name ?? ''
+    // Match by exact key OR partial match (service_name includes company name, e.g. "Banking Fintech — ATCOACHING LLC")
+    const mappedType = WIZARD_EXPECTED[serviceType] ?? Object.entries(WIZARD_EXPECTED).find(([key]) => serviceType.startsWith(key))?.[1]
+    if (mappedType && !coveredTypes.has(mappedType) && sd.status === 'active') {
+      coveredTypes.add(mappedType)
+      entries.push({
+        wizard_type: mappedType,
+        label: WIZARD_LABELS[mappedType] ?? mappedType,
+        status: 'pending',
+        updated_at: null,
+        data: null,
+      })
+    }
+  }
+
+  if (entries.length === 0) return null
+
+  // Sort: submitted first, then in_progress, then pending
+  const order = { submitted: 0, in_progress: 1, pending: 2 }
+  entries.sort((a, b) => order[a.status] - order[b.status])
+
+  return (
+    <div className="mt-4 border-t pt-4">
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+        Client Wizard Submissions
+      </h4>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {entries.map((entry) => (
+          <WizardCard key={entry.wizard_type} entry={entry} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function WizardCard({ entry }: { entry: WizardCardEntry }) {
+  const downloadData = useCallback(() => {
+    if (!entry.data || Object.keys(entry.data).length === 0) return
+    // Format data as readable text
+    const lines: string[] = [`${entry.label} — Submitted Data`, '='.repeat(40), '']
+    for (const [key, value] of Object.entries(entry.data)) {
+      const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+      const val = typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')
+      // Skip file paths (storage references)
+      if (typeof value === 'string' && value.startsWith('onboarding/')) {
+        lines.push(`${label}: [File uploaded]`)
+      } else {
+        lines.push(`${label}: ${val}`)
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${entry.wizard_type}_data_${new Date().toISOString().split('T')[0]}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [entry])
+
+  const statusConfig = {
+    submitted: { icon: CheckCircle2, bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700', badge: 'bg-emerald-100 text-emerald-700', label: 'Submitted' },
+    in_progress: { icon: Clock, bg: 'bg-blue-50 border-blue-200', text: 'text-blue-700', badge: 'bg-blue-100 text-blue-700', label: 'In Progress' },
+    pending: { icon: AlertTriangle, bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-700', label: 'Not Started' },
+  }
+
+  const config = statusConfig[entry.status]
+  const Icon = config.icon
+
+  return (
+    <div className={cn('flex items-center gap-3 rounded-lg border px-3 py-2.5', config.bg)}>
+      <Icon className={cn('h-4 w-4 shrink-0', config.text)} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium truncate">{entry.label}</span>
+          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', config.badge)}>
+            {config.label}
+          </span>
+        </div>
+        {entry.updated_at && (
+          <span className="text-[10px] text-muted-foreground">
+            {formatShortDate(entry.updated_at)}
+          </span>
+        )}
+      </div>
+      {entry.status === 'submitted' && entry.data && Object.keys(entry.data).length > 0 && (
+        <button
+          onClick={downloadData}
+          className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
+          title="Download submitted data"
+        >
+          <Download className="h-3 w-3" />
+          Export
+        </button>
+      )}
+      {entry.status === 'pending' && (
+        <span className="shrink-0 text-[10px] text-amber-600 font-medium">Awaiting client</span>
+      )}
     </div>
   )
 }
