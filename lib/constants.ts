@@ -15,8 +15,74 @@ export const SERVICE_TYPE = [
   'Company Closure', 'Client Offboarding', 'Support',
 ] as const
 
+// SERVICE_STATUS is the old services table ENUM — kept for backward compat
 export const SERVICE_STATUS = [
   'Not Started', 'In Progress', 'Waiting Client', 'Waiting Third Party', 'Completed', 'Cancelled',
+] as const
+
+// SD_STATUS is the canonical set for service_deliveries (enforced by CHECK constraint)
+export const SD_STATUS = [
+  'active', 'blocked', 'completed', 'cancelled',
+] as const
+
+export const OFFER_STATUS = [
+  'draft', 'sent', 'viewed', 'signed', 'completed', 'expired',
+] as const
+
+export const LEASE_STATUS = [
+  'draft', 'sent', 'viewed', 'signed',
+] as const
+
+export const OA_STATUS = [
+  'draft', 'sent', 'viewed', 'signed', 'partially_signed',
+] as const
+
+export const SS4_STATUS = [
+  'draft', 'awaiting_signature', 'signed', 'submitted', 'done', 'fax_failed',
+] as const
+
+export const DEADLINE_STATUS = [
+  'Pending', 'Completed', 'Filed', 'Not Started', 'Overdue',
+] as const
+
+export const DOCUMENT_STATUS = [
+  'classified', 'unclassified', 'error', 'pending',
+] as const
+
+export const CLIENT_INVOICE_STATUS = [
+  'Draft', 'Sent', 'Paid', 'Partial', 'Cancelled', 'Overdue',
+] as const
+
+export const CLIENT_EXPENSE_STATUS = [
+  'Pending', 'Paid', 'Overdue', 'Cancelled',
+] as const
+
+export const SUBMISSION_STATUS = [
+  'pending', 'opened', 'completed', 'reviewed',
+] as const
+
+export const PENDING_ACTIVATION_STATUS = [
+  'awaiting_payment', 'payment_confirmed', 'activated',
+] as const
+
+export const REFERRAL_STATUS = [
+  'pending', 'converted', 'credited', 'paid', 'cancelled',
+] as const
+
+export const SIGNATURE_REQUEST_STATUS = [
+  'draft', 'awaiting_signature', 'signed',
+] as const
+
+export const WIZARD_STATUS = [
+  'in_progress', 'submitted',
+] as const
+
+export const PORTAL_TIER = [
+  'lead', 'onboarding', 'active',
+] as const
+
+export const PORTAL_ROLE = [
+  'client', 'partner',
 ] as const
 
 export const DEAL_STAGE = [
@@ -85,6 +151,21 @@ export type TaxReturnStatus = (typeof TAX_RETURN_STATUS)[number]
 export type ConversationChannel = (typeof CONVERSATION_CHANNEL)[number]
 export type ConversationStatus = (typeof CONVERSATION_STATUS)[number]
 export type OfferStatus = (typeof OFFER_STATUS)[number]
+export type SdStatus = (typeof SD_STATUS)[number]
+export type LeaseStatus = (typeof LEASE_STATUS)[number]
+export type OaStatus = (typeof OA_STATUS)[number]
+export type Ss4Status = (typeof SS4_STATUS)[number]
+export type DeadlineStatus = (typeof DEADLINE_STATUS)[number]
+export type DocumentStatus = (typeof DOCUMENT_STATUS)[number]
+export type ClientInvoiceStatus = (typeof CLIENT_INVOICE_STATUS)[number]
+export type ClientExpenseStatus = (typeof CLIENT_EXPENSE_STATUS)[number]
+export type SubmissionStatus = (typeof SUBMISSION_STATUS)[number]
+export type PendingActivationStatus = (typeof PENDING_ACTIVATION_STATUS)[number]
+export type ReferralStatus = (typeof REFERRAL_STATUS)[number]
+export type SignatureRequestStatus = (typeof SIGNATURE_REQUEST_STATUS)[number]
+export type WizardStatus = (typeof WIZARD_STATUS)[number]
+export type PortalTier = (typeof PORTAL_TIER)[number]
+export type PortalRole = (typeof PORTAL_ROLE)[number]
 
 // Badge color mappings
 export const STATUS_COLORS: Record<string, string> = {
@@ -116,6 +197,30 @@ export const STATUS_COLORS: Record<string, string> = {
   'High': 'bg-orange-100 text-orange-800',
   'Normal': 'bg-blue-100 text-blue-800',
   'Low': 'bg-zinc-100 text-zinc-800',
+  // SD status (lowercase)
+  'active': 'bg-emerald-100 text-emerald-800',
+  'blocked': 'bg-red-100 text-red-800',
+  'completed': 'bg-emerald-100 text-emerald-800',
+  'cancelled': 'bg-zinc-100 text-zinc-800',
+  // Form/document status (lowercase)
+  'draft': 'bg-zinc-100 text-zinc-800',
+  'sent': 'bg-blue-100 text-blue-800',
+  'viewed': 'bg-amber-100 text-amber-800',
+  'signed': 'bg-emerald-100 text-emerald-800',
+  'partially_signed': 'bg-amber-100 text-amber-800',
+  'classified': 'bg-emerald-100 text-emerald-800',
+  'unclassified': 'bg-amber-100 text-amber-800',
+  'error': 'bg-red-100 text-red-800',
+  'submitted': 'bg-blue-100 text-blue-800',
+  'reviewed': 'bg-emerald-100 text-emerald-800',
+  'converted': 'bg-emerald-100 text-emerald-800',
+  'credited': 'bg-purple-100 text-purple-800',
+  // Pending activation
+  'awaiting_payment': 'bg-amber-100 text-amber-800',
+  'payment_confirmed': 'bg-blue-100 text-blue-800',
+  'activated': 'bg-emerald-100 text-emerald-800',
+  // Deadline
+  'Filed': 'bg-emerald-100 text-emerald-800',
 }
 
 // Service tracker slugs — URL path → DB service_type
