@@ -13,8 +13,10 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { syncInvoiceStatus } from '@/lib/portal/unified-invoice'
+import { logCron } from '@/lib/cron-log'
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     // Verify cron secret
     const authHeader = req.headers.get('authorization')
@@ -140,12 +142,15 @@ export async function GET(req: NextRequest) {
 
     console.warn(`[invoice-overdue] Done: ${results.marked_overdue} marked overdue, ${results.reminders_sent} reminders sent`)
 
+    logCron({ endpoint: '/api/cron/invoice-overdue', status: 'success', duration_ms: Date.now() - startTime, details: results })
+
     return NextResponse.json({
       message: 'Invoice overdue check complete',
       ...results,
     })
   } catch (err) {
     console.error('[invoice-overdue] Error:', err)
+    logCron({ endpoint: '/api/cron/invoice-overdue', status: 'error', duration_ms: Date.now() - startTime, error_message: err instanceof Error ? err.message : String(err) })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },
       { status: 500 }

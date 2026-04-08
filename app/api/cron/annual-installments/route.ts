@@ -25,8 +25,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { generateInvoiceNumber } from "@/lib/invoice-number"
+import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   // Auth check
   const authHeader = req.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -288,6 +290,8 @@ ${skipped.length > 0 ? `<h3>Skipped:</h3><ul>${skipped.map(r => `<li>${r.company
       details: { installment: installmentNumber, year, results, sendResults },
     })
 
+    logCron({ endpoint: "/api/cron/annual-installments", status: "success", duration_ms: Date.now() - startTime, details: { installment: installmentLabel, year, created: created.length, sent: sendResults.filter(r => r.sent).length, skipped: skipped.length } })
+
     return NextResponse.json({
       ok: true,
       installment: installmentLabel,
@@ -301,6 +305,7 @@ ${skipped.length > 0 ? `<h3>Skipped:</h3><ul>${skipped.map(r => `<li>${r.company
     })
   } catch (err) {
     console.error("[annual-installments]", err)
+    logCron({ endpoint: "/api/cron/annual-installments", status: "error", duration_ms: Date.now() - startTime, error_message: err instanceof Error ? err.message : String(err) })
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }

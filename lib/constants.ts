@@ -130,9 +130,7 @@ export const CONVERSATION_STATUS = [
   'New', 'Proposed', 'Approved', 'Sent', 'Archived',
 ] as const
 
-export const OFFER_STATUS = [
-  'Draft', 'Sent', 'Viewed', 'Accepted', 'Rejected', 'Expired', 'Negotiating',
-] as const
+// OFFER_STATUS moved above (line ~28) with actual DB values (lowercase)
 
 // TypeScript types
 export type AccountStatus = (typeof ACCOUNT_STATUS)[number]

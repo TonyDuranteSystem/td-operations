@@ -18,8 +18,9 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logCron } from "@/lib/cron-log"
 
-interface DeadlineCheck {
+interface _DeadlineCheck {
   type: string
   description: string
   deadline: string // YYYY-MM-DD
@@ -28,6 +29,7 @@ interface DeadlineCheck {
 }
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   const authHeader = req.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -239,9 +241,12 @@ export async function GET(req: NextRequest) {
       details: { date: today, results },
     })
 
+    logCron({ endpoint: "/api/cron/deadline-reminders", status: "success", duration_ms: Date.now() - startTime, details: { date: today, results } })
+
     return NextResponse.json({ ok: true, date: today, results })
   } catch (err) {
     console.error("[deadline-reminders]", err)
+    logCron({ endpoint: "/api/cron/deadline-reminders", status: "error", duration_ms: Date.now() - startTime, error_message: err instanceof Error ? err.message : String(err) })
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }
