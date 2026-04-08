@@ -175,7 +175,9 @@ export function RealtimeNotifications() {
       .subscribe()
 
     // ─── Listen for business events in action_log ─────────
-    // Server-side filter: only business events, not MCP tool CRUD (60-300/day)
+    // No server-side filter — client-side filtering for business events only.
+    // Volume is ~60-300/day total, client silently ignores non-matching types.
+    const NOTIFY_TYPES = new Set(['payment_confirmed', 'ss4_signed', 'lease_signed', 'oa_signed', 'oa_partial_signed', 'form_submitted', 'form_completed'])
     const actionLogChannel = supabase
       .channel('global-action-log')
       .on(
@@ -184,10 +186,11 @@ export function RealtimeNotifications() {
           event: 'INSERT',
           schema: 'public',
           table: 'action_log',
-          filter: 'action_type=in.(payment_confirmed,ss4_signed,lease_signed,oa_signed,oa_partial_signed,form_submitted,form_completed)',
         },
         (payload) => {
           const actionType = payload.new?.action_type as string
+          if (!NOTIFY_TYPES.has(actionType)) return // Skip non-business events silently
+
           const summary = (payload.new?.summary as string)?.slice(0, 80) || actionType
           const accountId = payload.new?.account_id as string | null
           const contactId = payload.new?.contact_id as string | null
