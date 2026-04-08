@@ -91,7 +91,7 @@ export async function createStripeCheckoutSession(params: {
         source: "td-operations",
       },
       success_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-cancelled`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-cancelled${offerToken ? `?token=${encodeURIComponent(offerToken)}` : ""}`,
     })
 
     console.warn(`[stripe-checkout] Created session ${session.id} for ${clientName}: ${currency.toUpperCase()} ${amount}`)

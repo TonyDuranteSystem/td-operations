@@ -62,6 +62,9 @@ const LABELS = {
     payByCard: 'Pay by Card',
     payByTransfer: 'Bank Transfer',
     totalDueToday: 'Total Due Today',
+    paymentReceived: 'Payment received — thank you!',
+    paymentReceivedMessage: 'We will begin working on your service right away. You can track progress in your portal.',
+    goToPortal: 'Go to Portal',
   },
   it: {
     title: 'Offerta Consulenziale',
@@ -117,6 +120,9 @@ const LABELS = {
     payByCard: 'Paga con Carta',
     payByTransfer: 'Bonifico Bancario',
     totalDueToday: 'Totale Dovuto Oggi',
+    paymentReceived: 'Pagamento ricevuto — grazie!',
+    paymentReceivedMessage: 'Inizieremo subito a lavorare sul tuo servizio. Puoi seguire i progressi nel tuo portale.',
+    goToPortal: 'Vai al Portale',
   },
 }
 
@@ -366,7 +372,8 @@ export default function OfferPageWithCode() {
 
   const o = offer
   const isSigned = o.status === 'signed' || o.status === 'completed'
-  const _ptype = o.payment_type || 'none'
+  const isCompleted = o.status === 'completed'
+  const needsPayment = o.status === 'signed'
 
   // Compute dynamic payment amount based on optional service selections
   const dynamicPaymentAmount = (() => {
@@ -647,8 +654,17 @@ export default function OfferPageWithCode() {
 
             {isSigned && <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>}
 
-            {/* SIGNED — Interactive payment buttons */}
-            {isSigned && (o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
+            {/* COMPLETED — Payment already received */}
+            {isCompleted && (
+              <div style={{ marginBottom: 24 }}>
+                <p style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>&#127881; {L.paymentReceived}</p>
+                <p style={{ fontSize: 15, opacity: 0.9, marginBottom: 20 }}>{L.paymentReceivedMessage}</p>
+                <a href="https://portal.tonydurante.us/portal" className="offer-cta-button">{L.goToPortal}</a>
+              </div>
+            )}
+
+            {/* SIGNED BUT NOT PAID — Interactive payment buttons */}
+            {needsPayment && (o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
               <>
                 <p style={{ fontSize: 15, opacity: 0.9, marginBottom: 24 }}>
                   {lang === 'it' ? L.proceedPayment : L.proceedPayment}
