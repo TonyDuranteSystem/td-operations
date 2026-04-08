@@ -218,6 +218,46 @@ export async function GET(req: NextRequest) {
     const unlinkedLeads = emailLeads.filter(l => !seenLeadIds.has(l.id))
     const allLeads = [...linkedLeads, ...unlinkedLeads]
 
+    // ── Second pass: fetch offers/pending by lead emails + lead IDs ──
+    // This catches the Mocellin case where lead email ≠ contact email
+    const leadEmails = allLeads.map(l => l.email).filter(Boolean).filter(e => !allEmails.includes(e))
+    const leadIds = allLeads.map(l => l.id)
+
+    if (leadEmails.length > 0 || leadIds.length > 0) {
+      const [extraOffersResult, extraPendingResult] = await Promise.all([
+        // Offers by lead email or lead_id
+        supabaseAdmin.from("offers")
+          .select("id, token, status, contract_type, bundled_pipelines, client_email, client_name, lead_id, account_id, payment_type, services")
+          .or([
+            ...leadEmails.map(e => `client_email.ilike.${e}`),
+            ...leadIds.map(id => `lead_id.eq.${id}`),
+          ].join(","))
+          .order("created_at", { ascending: false }),
+        // Pending activations by lead email or lead_id
+        supabaseAdmin.from("pending_activations")
+          .select("id, offer_token, lead_id, client_name, client_email, amount, currency, payment_method, status, signed_at, payment_confirmed_at, activated_at, prepared_steps, confirmation_mode, portal_invoice_id, notes")
+          .or([
+            ...leadEmails.map(e => `client_email.ilike.${e}`),
+            ...leadIds.map(id => `lead_id.eq.${id}`),
+          ].join(","))
+          .order("created_at", { ascending: false }),
+      ])
+      // Merge extra offers (deduplicate by id)
+      const existingOfferIds = new Set((offersResult.data ?? []).map((o: { id: string }) => o.id))
+      for (const o of (extraOffersResult.data ?? []) as { id: string }[]) {
+        if (!existingOfferIds.has(o.id)) {
+          ;(offersResult.data as unknown[])?.push(o)
+        }
+      }
+      // Merge extra pending activations
+      const existingPaIds = new Set((pendingResult.data ?? []).map((p: { id: string }) => p.id))
+      for (const p of (extraPendingResult.data ?? []) as { id: string }[]) {
+        if (!existingPaIds.has(p.id)) {
+          ;(pendingResult.data as unknown[])?.push(p)
+        }
+      }
+    }
+
     const offers = (offersResult.data ?? []) as Array<{
       id: string; token: string; status: string; contract_type: string | null
       bundled_pipelines: string[] | null; client_email: string; client_name: string
@@ -323,6 +363,37 @@ export async function GET(req: NextRequest) {
         const unlinkedNameLeads = (nameLeads ?? []).filter(
           l => l.converted_to_contact_id !== contactId && !allEmails.includes(l.email?.toLowerCase() ?? "")
         )
+
+        // Fetch offers/pending for name-matched leads too
+        if (unlinkedNameLeads.length > 0) {
+          const nameLeadEmails = unlinkedNameLeads.map(l => l.email).filter(Boolean) as string[]
+          const nameLeadIds = unlinkedNameLeads.map(l => l.id)
+          const orParts = [
+            ...nameLeadEmails.map(e => `client_email.ilike.${e}`),
+            ...nameLeadIds.map(id => `lead_id.eq.${id}`),
+          ]
+          if (orParts.length > 0) {
+            const [nlOffersResult, nlPendingResult] = await Promise.all([
+              supabaseAdmin.from("offers")
+                .select("id, token, status, contract_type, bundled_pipelines, client_email, client_name, lead_id, account_id, payment_type, services")
+                .or(orParts.join(","))
+                .order("created_at", { ascending: false }),
+              supabaseAdmin.from("pending_activations")
+                .select("id, offer_token, lead_id, client_name, client_email, amount, currency, payment_method, status, signed_at, payment_confirmed_at, activated_at, prepared_steps, confirmation_mode, portal_invoice_id, notes")
+                .or(orParts.join(","))
+                .order("created_at", { ascending: false }),
+            ])
+            const existingOfferIds2 = new Set(offers.map(o => o.id))
+            for (const o of (nlOffersResult.data ?? []) as typeof offers[number][]) {
+              if (!existingOfferIds2.has(o.id)) offers.push(o)
+            }
+            const existingPaIds2 = new Set(pendingActivations.map(p => p.id))
+            for (const p of (nlPendingResult.data ?? []) as typeof pendingActivations[number][]) {
+              if (!existingPaIds2.has(p.id)) pendingActivations.push(p)
+            }
+          }
+        }
+
         for (const lead of unlinkedNameLeads) {
           globalChecks.push({
             id: `lead_name_${lead.id.slice(0, 8)}`,
