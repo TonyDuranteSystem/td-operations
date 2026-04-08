@@ -332,6 +332,20 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
       console.warn(`[whop-webhook] Matched pending_activation ${pending.id} — triggering Stage 0 automation`)
 
+      // Log to action_log for CRM Recent Activity + realtime notifications
+      try {
+        await getSupabase().from("action_log").insert({
+          actor: "system",
+          action_type: "payment_confirmed",
+          table_name: "pending_activations",
+          record_id: pending.id,
+          account_id: accountId || null,
+          contact_id: contactId || null,
+          summary: `Payment confirmed via Whop: ${currency} ${total} — ${clientName || email || "unknown"}`,
+          details: { payment_method: "whop", amount: total, currency, email, product_title: productTitle },
+        })
+      } catch { /* non-blocking */ }
+
       // If pending_activation has a portal_invoice_id (created at signing), mark it Paid
       const { data: activationWithInvoice } = await getSupabase()
         .from("pending_activations")

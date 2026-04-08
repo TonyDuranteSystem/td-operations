@@ -343,6 +343,20 @@ export async function POST(req: NextRequest) {
       results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
+    // Log to action_log for CRM Recent Activity + realtime notifications
+    try {
+      await supabaseAdmin.from("action_log").insert({
+        actor: "system",
+        action_type: "ss4_signed",
+        table_name: "ss4_applications",
+        record_id: ss4.id,
+        account_id: ss4.account_id || null,
+        contact_id: ss4.contact_id || null,
+        summary: `SS-4 signed: ${ss4.company_name} — ready to fax to IRS`,
+        details: { token, company_name: ss4.company_name, entity_type: ss4.entity_type },
+      })
+    } catch { /* non-blocking */ }
+
     return NextResponse.json({ ok: true, results })
   } catch (err) {
     console.error("[ss4-signed]", err)

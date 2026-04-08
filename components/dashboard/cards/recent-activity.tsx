@@ -36,9 +36,9 @@ export async function RecentActivityCard() {
     // Action log entries — only meaningful business events
     supabaseAdmin
       .from('action_log')
-      .select('id, action_type, table_name, summary, account_id, created_at')
+      .select('id, action_type, table_name, summary, account_id, contact_id, created_at')
       .gte('created_at', since)
-      .in('action_type', ['email', 'email_sent', 'form_submitted', 'form_completed', 'stage_advance', 'stage_advanced', 'create', 'offer_sent', 'offer_signed', 'payment_confirmed', 'ocr_document'])
+      .in('action_type', ['email', 'email_sent', 'form_submitted', 'form_completed', 'stage_advance', 'stage_advanced', 'create', 'offer_sent', 'offer_signed', 'payment_confirmed', 'ocr_document', 'ss4_signed', 'lease_signed', 'oa_signed', 'oa_partial_signed'])
       .order('created_at', { ascending: false })
       .limit(20),
 
@@ -103,6 +103,8 @@ export async function RecentActivityCard() {
     if (a.action_type === 'email' || a.action_type === 'email_sent') icon = 'email'
     else if (a.action_type === 'form_submitted' || a.action_type === 'form_completed') icon = 'form'
     else if (a.action_type === 'stage_advance' || a.action_type === 'stage_advanced') icon = 'stage'
+    else if (a.action_type === 'payment_confirmed') icon = 'payment'
+    else if (['ss4_signed', 'lease_signed', 'oa_signed', 'oa_partial_signed', 'offer_signed'].includes(a.action_type)) icon = 'signed'
 
     events.push({
       id: `act-${a.id}`,
@@ -110,7 +112,7 @@ export async function RecentActivityCard() {
       title: a.summary?.slice(0, 80) || a.action_type,
       subtitle: a.table_name ?? '',
       time: a.created_at,
-      link: a.account_id ? `/accounts/${a.account_id}` : '/',
+      link: a.account_id ? `/accounts/${a.account_id}` : a.contact_id ? `/contacts/${a.contact_id}` : '/',
     })
   }
 

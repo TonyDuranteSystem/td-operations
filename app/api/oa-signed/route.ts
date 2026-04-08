@@ -210,6 +210,22 @@ export async function POST(req: NextRequest) {
       results.push({ step: "drive_upload", status: "skipped", detail: `Partial signing (${oa.signed_count}/${oa.total_signers}) — Drive upload deferred until all sign` })
     }
 
+    // Log to action_log for CRM Recent Activity + realtime notifications
+    try {
+      await supabaseAdmin.from("action_log").insert({
+        actor: "system",
+        action_type: isFullySigned ? "oa_signed" : "oa_partial_signed",
+        table_name: "oa_agreements",
+        record_id: oa.id,
+        account_id: oa.account_id || null,
+        contact_id: oa.contact_id || null,
+        summary: isFullySigned
+          ? `Operating Agreement signed: ${oa.company_name}`
+          : `OA partial sign: ${oa.company_name} (${oa.signed_count}/${oa.total_signers})`,
+        details: { token, company_name: oa.company_name, entity_type: oa.entity_type, is_fully_signed: isFullySigned },
+      })
+    } catch { /* non-blocking */ }
+
     return NextResponse.json({ ok: true, results })
   } catch (err) {
     console.error("[oa-signed]", err)

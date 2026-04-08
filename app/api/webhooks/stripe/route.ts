@@ -338,6 +338,20 @@ async function handleCheckoutCompleted(session: StripeSession) {
 
       console.warn(`[stripe-webhook] Matched pending_activation ${pending.id} — triggering activation`)
 
+      // Log to action_log for CRM Recent Activity + realtime notifications
+      try {
+        await getSupabase().from("action_log").insert({
+          actor: "system",
+          action_type: "payment_confirmed",
+          table_name: "pending_activations",
+          record_id: pending.id,
+          account_id: accountId || null,
+          contact_id: contactId || null,
+          summary: `Payment confirmed via Stripe: ${currency} ${total} — ${clientName || email || "unknown"}`,
+          details: { payment_method: "stripe", amount: total, currency, email, offer_token: offerToken },
+        })
+      } catch { /* non-blocking */ }
+
       // If pending_activation has a portal_invoice_id (created at signing), mark it Paid
       const { data: activationWithInvoice } = await getSupabase()
         .from("pending_activations")

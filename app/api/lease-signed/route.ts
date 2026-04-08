@@ -225,6 +225,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Log to action_log for CRM Recent Activity + realtime notifications
+    try {
+      await supabaseAdmin.from("action_log").insert({
+        actor: "system",
+        action_type: "lease_signed",
+        table_name: "lease_agreements",
+        record_id: lease.id,
+        account_id: lease.account_id || null,
+        contact_id: lease.contact_id || null,
+        summary: `Lease signed: ${lease.tenant_company} (Suite ${lease.suite_number})`,
+        details: { token, tenant_company: lease.tenant_company, suite_number: lease.suite_number },
+      })
+    } catch { /* non-blocking */ }
+
     return NextResponse.json({ ok: true, results })
   } catch (err) {
     console.error("[lease-signed]", err)

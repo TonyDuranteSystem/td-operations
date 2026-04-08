@@ -645,44 +645,67 @@ export async function copyUploadsToDrive(
   const copied: string[] = []
   const failed: string[] = []
 
+  const MAX_RETRIES = 3
+  const RETRY_DELAYS = [0, 1000, 3000] // immediate, 1s, 3s
+
   for (const path of uploadPaths) {
-    try {
-      const fileName = path.split("/").pop() || "document.pdf"
-      const { data: fileData, error: dlError } = await supabaseAdmin.storage
-        .from(bucket)
-        .download(path)
+    const fileName = path.split("/").pop() || "document.pdf"
+    let downloaded = false
 
-      if (dlError) {
-        console.error(`[copyUploadsToDrive] Storage download error for ${path}:`, dlError.message)
-        failed.push(`${fileName} (download error: ${dlError.message})`)
-        continue
-      }
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        if (RETRY_DELAYS[attempt] > 0) {
+          await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]))
+        }
 
-      if (!fileData || fileData.size === 0) {
-        console.error(`[copyUploadsToDrive] Empty file for ${path} (size: ${fileData?.size ?? 'null'})`)
-        failed.push(`${fileName} (empty download)`)
-        continue
-      }
+        const { data: fileData, error: dlError } = await supabaseAdmin.storage
+          .from(bucket)
+          .download(path)
 
-      const buf = Buffer.from(await fileData.arrayBuffer())
-      const mimeType = fileData.type || "application/octet-stream"
+        if (dlError) {
+          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} failed for ${bucket}/${path}: ${dlError.message}`)
+          if (attempt === MAX_RETRIES - 1) {
+            failed.push(`${fileName} (download error after ${MAX_RETRIES} attempts: ${dlError.message})`)
+          }
+          continue
+        }
 
-      // Determine target folder (default to targetFolderId)
-      let destFolder = targetFolderId
-      if (fileMapping) {
-        for (const [prefix, folderId] of Object.entries(fileMapping)) {
-          if (fileName.toLowerCase().startsWith(prefix.toLowerCase())) {
-            destFolder = folderId
-            break
+        if (!fileData || fileData.size === 0) {
+          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} empty for ${bucket}/${path} (size: ${fileData?.size ?? 'null'})`)
+          if (attempt === MAX_RETRIES - 1) {
+            failed.push(`${fileName} (empty after ${MAX_RETRIES} attempts)`)
+          }
+          continue
+        }
+
+        // Download succeeded — upload to Drive
+        const buf = Buffer.from(await fileData.arrayBuffer())
+        const mimeType = fileData.type || "application/octet-stream"
+
+        let destFolder = targetFolderId
+        if (fileMapping) {
+          for (const [prefix, folderId] of Object.entries(fileMapping)) {
+            if (fileName.toLowerCase().startsWith(prefix.toLowerCase())) {
+              destFolder = folderId
+              break
+            }
           }
         }
-      }
 
-      await uploadBinaryToDrive(fileName, buf, mimeType, destFolder)
-      copied.push(fileName)
-    } catch (e) {
-      const fileName = path.split("/").pop() || path
-      failed.push(`${fileName}: ${e instanceof Error ? e.message : String(e)}`)
+        await uploadBinaryToDrive(fileName, buf, mimeType, destFolder)
+        copied.push(fileName)
+        downloaded = true
+        break
+      } catch (e) {
+        console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} exception for ${path}: ${e instanceof Error ? e.message : String(e)}`)
+        if (attempt === MAX_RETRIES - 1) {
+          failed.push(`${fileName}: ${e instanceof Error ? e.message : String(e)} (after ${MAX_RETRIES} attempts)`)
+        }
+      }
+    }
+
+    if (!downloaded && !failed.some(f => f.startsWith(fileName))) {
+      failed.push(`${fileName} (failed after ${MAX_RETRIES} attempts)`)
     }
   }
 

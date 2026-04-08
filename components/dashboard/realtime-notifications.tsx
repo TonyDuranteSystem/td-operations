@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -174,9 +174,67 @@ export function RealtimeNotifications() {
       )
       .subscribe()
 
+    // ─── Listen for business events in action_log ─────────
+    // Server-side filter: only business events, not MCP tool CRUD (60-300/day)
+    const actionLogChannel = supabase
+      .channel('global-action-log')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'action_log',
+          filter: 'action_type=in.(payment_confirmed,ss4_signed,lease_signed,oa_signed,oa_partial_signed,form_submitted,form_completed)',
+        },
+        (payload) => {
+          const actionType = payload.new?.action_type as string
+          const summary = (payload.new?.summary as string)?.slice(0, 80) || actionType
+          const accountId = payload.new?.account_id as string | null
+          const contactId = payload.new?.contact_id as string | null
+
+          playSound()
+
+          // Determine toast style by event category
+          let title = 'Activity'
+          let icon = <FileText className="h-4 w-4 text-blue-500" />
+          let color = 'blue'
+          let linkPath = '/'
+
+          if (actionType === 'payment_confirmed') {
+            title = 'Payment Received'
+            icon = <CreditCard className="h-4 w-4 text-emerald-500" />
+            color = 'emerald'
+          } else if (['ss4_signed', 'lease_signed', 'oa_signed', 'oa_partial_signed'].includes(actionType)) {
+            title = 'Document Signed'
+            icon = <PenTool className="h-4 w-4 text-violet-500" />
+            color = 'violet'
+          } else {
+            title = 'Form Submitted'
+          }
+
+          if (accountId) linkPath = `/accounts/${accountId}`
+          else if (contactId) linkPath = `/contacts/${contactId}`
+
+          // Suppress color lint — used for future styling
+          void color
+
+          toast(title, {
+            description: summary,
+            icon,
+            duration: 8000,
+            action: {
+              label: 'View',
+              onClick: () => router.push(linkPath),
+            },
+          })
+        }
+      )
+      .subscribe()
+
     return () => {
       supabase.removeChannel(portalChannel)
       supabase.removeChannel(internalChannel)
+      supabase.removeChannel(actionLogChannel)
     }
   }, [playSound, router])
 

@@ -12,6 +12,7 @@ interface LogActionParams {
   table_name: string       // target table or service name (e.g. "accounts", "gmail", "drive")
   record_id?: string       // UUID of affected record
   account_id?: string      // linked CRM account (for cross-reference)
+  contact_id?: string      // linked CRM contact (for individual clients without account)
   summary: string          // human-readable one-liner
   details?: Record<string, unknown>  // structured data (fields changed, params, etc.)
 }
@@ -37,6 +38,7 @@ export function logAction(params: LogActionParams): void {
         table_name: params.table_name,
         record_id: params.record_id || null,
         account_id: params.account_id || null,
+        contact_id: params.contact_id || null,
         summary: params.summary,
         details: params.details || {},
       })

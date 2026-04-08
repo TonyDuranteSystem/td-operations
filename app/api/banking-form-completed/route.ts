@@ -210,6 +210,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Log to action_log for CRM Recent Activity + realtime notifications
+    try {
+      await supabaseAdmin.from("action_log").insert({
+        actor: "system",
+        action_type: "form_submitted",
+        table_name: "banking_submissions",
+        record_id: sub.id,
+        account_id: sub.account_id || null,
+        contact_id: sub.contact_id || null,
+        summary: `Banking form completed: ${companyName} — ${providerName}`,
+        details: { token, provider: sub.provider, company_name: companyName },
+      })
+    } catch { /* non-blocking */ }
+
     return NextResponse.json({ ok: true, results })
   } catch (err) {
     console.error("[banking-form-completed]", err)
