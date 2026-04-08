@@ -67,7 +67,7 @@ describe('syncAirwallexDeposits', () => {
     expect(mockFrom).toHaveBeenCalledWith('td_bank_feeds')
     expect(mockUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: 'airwallex',
+        source: 'airwallex_api',
         external_id: 'airwallex_dep_001',
         amount: 3000,
         currency: 'EUR',
