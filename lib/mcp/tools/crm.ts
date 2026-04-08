@@ -512,7 +512,7 @@ export function registerCrmTools(server: McpServer) {
           .from('service_deliveries')
           .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, account_id')
           .eq('account_id', id)
-          .neq('status', 'Cancelled')
+          .neq('status', 'cancelled')
           .order('updated_at', { ascending: false }),
         supabaseAdmin
           .from('payments')

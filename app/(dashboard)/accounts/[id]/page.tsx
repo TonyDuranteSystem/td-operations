@@ -59,7 +59,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .from('service_deliveries')
       .select('id, service_name, service_type, stage, status, start_date, end_date, notes, updated_at, account_id')
       .eq('account_id', params.id)
-      .neq('status', 'Cancelled')
+      .neq('status', 'cancelled')
       .order('updated_at', { ascending: false }),
     // Payments
     supabase

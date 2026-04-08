@@ -17,6 +17,11 @@ const STATUS_COLORS: Record<string, string> = {
   'Waiting Third Party': 'bg-orange-100 text-orange-700',
   'Completed': 'bg-emerald-100 text-emerald-700',
   'Cancelled': 'bg-zinc-100 text-zinc-500',
+  // SD lowercase values (normalized)
+  'active': 'bg-blue-100 text-blue-700',
+  'blocked': 'bg-red-100 text-red-700',
+  'completed': 'bg-emerald-100 text-emerald-700',
+  'cancelled': 'bg-zinc-100 text-zinc-500',
 }
 
 const STATUS_ICONS: Record<string, React.ElementType> = {
@@ -26,6 +31,11 @@ const STATUS_ICONS: Record<string, React.ElementType> = {
   'Waiting Third Party': AlertCircle,
   'Completed': CheckCircle2,
   'Cancelled': Clock,
+  // SD lowercase values (normalized)
+  'active': Activity,
+  'blocked': AlertCircle,
+  'completed': CheckCircle2,
+  'cancelled': Clock,
 }
 
 export default async function PortalServicesPage() {
@@ -45,8 +55,8 @@ export default async function PortalServicesPage() {
   const services = selectedAccountId
     ? await getPortalServices(selectedAccountId)
     : await getPortalServicesByContact(contactId)
-  const active = services.filter(s => s.status !== 'Completed')
-  const completed = services.filter(s => s.status === 'Completed')
+  const active = services.filter(s => s.status !== 'Completed' && s.status !== 'completed')
+  const completed = services.filter(s => s.status === 'Completed' || s.status === 'completed')
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">

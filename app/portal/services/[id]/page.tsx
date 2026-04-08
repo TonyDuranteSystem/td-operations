@@ -53,12 +53,16 @@ interface ServiceDetail {
   documents: ServiceDoc[]
 }
 
-const STATUS_CONFIG = {
+const STATUS_CONFIG: Record<string, { color: string; icon: React.ElementType }> = {
   'Not Started': { color: 'bg-zinc-100 text-zinc-600', icon: Clock },
   'In Progress': { color: 'bg-blue-100 text-blue-700', icon: Clock },
   'Blocked': { color: 'bg-red-100 text-red-700', icon: AlertCircle },
   'Completed': { color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
-} as const
+  'active': { color: 'bg-blue-100 text-blue-700', icon: Clock },
+  'blocked': { color: 'bg-red-100 text-red-700', icon: AlertCircle },
+  'completed': { color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
+  'cancelled': { color: 'bg-zinc-100 text-zinc-500', icon: Clock },
+}
 
 function fmtDate(d: string | null): string {
   if (!d) return ''

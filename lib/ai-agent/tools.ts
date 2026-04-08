@@ -497,7 +497,7 @@ async function getAccountDetail(p: any) {
   const [account, contacts, services, payments, deadlines, deals] = await Promise.all([
     supabaseAdmin.from('accounts').select('*').eq('id', id).single(),
     supabaseAdmin.from('account_contacts').select('role, contact:contacts(id, full_name, email, phone, language)').eq('account_id', id),
-    supabaseAdmin.from('service_deliveries').select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at').eq('account_id', id).neq('status', 'Cancelled').order('updated_at', { ascending: false }),
+    supabaseAdmin.from('service_deliveries').select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at').eq('account_id', id).neq('status', 'cancelled').order('updated_at', { ascending: false }),
     supabaseAdmin.from('payments').select('id, description, amount, amount_currency, status, due_date, paid_date, invoice_number, notes').eq('account_id', id).order('due_date', { ascending: false }).limit(20),
     supabaseAdmin.from('deadlines').select('id, deadline_type, due_date, status, notes').eq('account_id', id).order('due_date').limit(10),
     supabaseAdmin.from('deals').select('id, deal_name, stage, amount, deal_type, notes, created_at').eq('account_id', id).order('created_at', { ascending: false }).limit(10),
