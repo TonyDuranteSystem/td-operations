@@ -144,11 +144,21 @@ export async function POST(req: NextRequest) {
       if (offer.client_email) {
         const { data: existingContact } = await supabase
           .from("contacts")
-          .select("id")
+          .select("id, full_name")
           .ilike("email", offer.client_email)
           .limit(1)
           .maybeSingle()
-        contactId = existingContact?.id || null
+        if (existingContact) {
+          contactId = existingContact.id
+          // Backfill name from lead if contact has no name (e.g., created by autoCreatePortalUser with email only)
+          if (!existingContact.full_name && offer.client_name) {
+            await supabase
+              .from("contacts")
+              .update({ full_name: offer.client_name, updated_at: new Date().toISOString() })
+              .eq("id", contactId)
+            console.warn(`[offer-signed] Backfilled contact name: ${offer.client_name} on ${contactId}`)
+          }
+        }
       }
 
       // If no contact exists and we have a lead, create the contact from lead data
@@ -178,22 +188,24 @@ export async function POST(req: NextRequest) {
 
           if (newContact) {
             contactId = newContact.id
-
-            // Update lead: mark as converted
-            await supabase
-              .from("leads")
-              .update({
-                converted_to_contact_id: contactId,
-                status: "Converted",
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", offer.lead_id)
-
             console.warn(`[offer-signed] Contact created from lead: ${contactId} for ${lead.full_name}`)
           } else {
             console.error("[offer-signed] Failed to create contact from lead:", contactErr?.message)
           }
         }
+      }
+
+      // Mark lead as Converted (regardless of whether contact was found or created)
+      if (contactId && offer.lead_id) {
+        await supabase
+          .from("leads")
+          .update({
+            converted_to_contact_id: contactId,
+            status: "Converted",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", offer.lead_id)
+        console.warn(`[offer-signed] Lead ${offer.lead_id} marked Converted → contact ${contactId}`)
       }
     } catch (contactConvErr) {
       console.error("[offer-signed] Lead→Contact conversion failed:", contactConvErr instanceof Error ? contactConvErr.message : String(contactConvErr))
