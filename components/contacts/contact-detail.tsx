@@ -17,6 +17,7 @@ import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/co
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { EditableField } from '@/components/accounts/editable-field'
+import { FileManager } from '@/components/accounts/file-manager'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
@@ -228,6 +229,7 @@ interface ContactDetailProps {
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
   ss4Applications: SS4ApplicationRecord[]
+  driveFolderId?: string | null
 }
 
 // ─── Main Component ───
@@ -245,6 +247,7 @@ export function ContactDetail({
   pendingActivations = [],
   wizardProgress = [],
   ss4Applications = [],
+  driveFolderId,
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
@@ -380,7 +383,9 @@ export function ContactDetail({
       {activeTab === 'invoices' && (
         <InvoicesTab invoices={invoices} />
       )}
-      {activeTab === 'documents' && (
+      {activeTab === 'documents' && driveFolderId && accounts.length > 0 ? (
+        <FileManager accountId={accounts[0].id} driveFolderId={driveFolderId} isAdmin={true} />
+      ) : activeTab === 'documents' && (
         <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} />
       )}
       {activeTab === 'chat' && (
