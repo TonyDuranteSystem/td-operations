@@ -21,6 +21,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { INTERNAL_BASE_URL } from "@/lib/config"
 
 // ─── Types ───
 
@@ -976,7 +977,7 @@ export async function POST(req: NextRequest) {
 
       case "create_portal_user": {
         // Delegate to the existing portal creation endpoint
-        const resp = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || "https://td-operations.vercel.app"}/api/crm/admin-actions/contact-portal`, {
+        const resp = await fetch(`${INTERNAL_BASE_URL}/api/crm/admin-actions/contact-portal`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contact_id, action: "create_portal" }),
@@ -1002,7 +1003,7 @@ export async function POST(req: NextRequest) {
 
       case "run_activation": {
         const { pending_activation_id } = params as { pending_activation_id: string; contact_id: string }
-        const apiUrl = `${process.env.NEXT_PUBLIC_APP_URL || "https://td-operations.vercel.app"}/api/workflows/activate-service`
+        const apiUrl = `${INTERNAL_BASE_URL}/api/workflows/activate-service`
         const resp = await fetch(apiUrl, {
           method: "POST",
           headers: {
