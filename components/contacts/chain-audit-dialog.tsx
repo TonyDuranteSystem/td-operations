@@ -506,7 +506,9 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
                     {fixingId === check.id ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : null}
-                    Confirm: Create &quot;{accountForm.company_name}&quot;
+                    {FORM_ACTIONS.has(check.fix!.action)
+                      ? <>Confirm: Create &quot;{accountForm.company_name}&quot;</>
+                      : <>Confirm: {check.fix!.label}</>}
                   </button>
                   <button
                     onClick={(e) => {
