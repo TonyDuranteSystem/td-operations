@@ -93,7 +93,7 @@ const CATEGORY_ORDER = [
 ]
 
 const ACCOUNT_CATEGORY_ORDER = [
-  'Account', 'Services', 'EIN Pipeline', 'Portal', 'Agreements',
+  'Formation Pipeline', 'Account', 'Services', 'EIN Pipeline', 'Portal', 'Agreements',
 ]
 
 // ─── Component ───

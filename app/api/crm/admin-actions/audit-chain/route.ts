@@ -694,12 +694,43 @@ export async function GET(req: NextRequest) {
     for (const acct of linkedAccounts) {
       const acctChecks: ChainCheck[] = []
       const acctServices = services.filter(s => s.account_id === acct.id)
-      const _acctDocs = docs.filter(d => d.account_id === acct.id)
       const acctOA = oaAgreements.filter(o => o.account_id === acct.id)
       const acctLease = leaseAgreements.filter(l => l.account_id === acct.id)
       const acctSS4 = ss4Apps.filter(s => s.account_id === acct.id)
 
-      // Account type check
+      // ── Determine formation stage (if this is a formation account) ──
+      const formationSD = acctServices.find(s => s.service_type === "Company Formation" && s.status === "active")
+      const formationStageOrder = formationSD?.stage_order ?? 0
+      const formationStage = formationSD?.stage ?? null
+      const isFormationInProgress = !!formationSD && formationSD.status === "active"
+      const formationComplete = acctServices.some(s => s.service_type === "Company Formation" && s.status === "completed")
+      const hasEIN = !!acct.ein_number
+
+      // Stage thresholds for Company Formation pipeline:
+      // 1=Data Collection, 2=State Filing, 3=EIN Application, 4=EIN Submitted, 5=Post-Formation+Banking, 6=Closing
+      const STAGE_EIN_APPLICATION = 3
+      const STAGE_POST_FORMATION = 5
+
+      // ── Pipeline position indicator ──
+      if (formationSD) {
+        acctChecks.push({
+          id: `pipeline_${acct.id.slice(0, 8)}`,
+          category: "Formation Pipeline",
+          label: `Stage ${formationStageOrder} of 6 — ${formationStage}`,
+          status: "info",
+          detail: `Company Formation is in progress. Current stage determines which checks are relevant below.`,
+        })
+      } else if (formationComplete) {
+        acctChecks.push({
+          id: `pipeline_${acct.id.slice(0, 8)}`,
+          category: "Formation Pipeline",
+          label: "Formation complete",
+          status: "ok",
+          detail: "Company Formation pipeline is completed.",
+        })
+      }
+
+      // ── Account type check (always relevant) ──
       const hasActiveSDs = acctServices.filter(s => s.status === "active").length > 0
       if (acct.account_type === "One-Time" && hasActiveSDs) {
         acctChecks.push({
@@ -727,19 +758,30 @@ export async function GET(req: NextRequest) {
         })
       }
 
-      // EIN check
+      // ── EIN check — only relevant at stage 5+ (Post-Formation) or if formation is complete ──
       if (acct.entity_type?.includes("LLC") || acct.entity_type?.includes("Corp")) {
-        acctChecks.push({
-          id: `ein_${acct.id.slice(0, 8)}`,
-          category: "Account",
-          label: "EIN",
-          status: acct.ein_number ? "ok" : "warning",
-          detail: acct.ein_number ?? "Missing — needed for banking and tax filing",
-        })
+        if (hasEIN) {
+          acctChecks.push({
+            id: `ein_${acct.id.slice(0, 8)}`,
+            category: "Account",
+            label: "EIN",
+            status: "ok",
+            detail: acct.ein_number!,
+          })
+        } else if (!isFormationInProgress || formationStageOrder >= STAGE_POST_FORMATION || formationComplete) {
+          // Only warn about missing EIN if formation is at post-formation stage or later
+          acctChecks.push({
+            id: `ein_${acct.id.slice(0, 8)}`,
+            category: "Account",
+            label: "EIN",
+            status: "warning",
+            detail: "Missing — needed for banking and tax filing",
+          })
+        }
+        // If formation is in early stages, don't show EIN check at all — it's expected to be missing
       }
 
-      // Service deliveries for this account
-      // Find the offer that matches this account (by account_id or by checking bundled_pipelines)
+      // ── Service deliveries (always relevant) ──
       const acctOffer = offers.find(o => o.account_id === acct.id)
       const bundled = acctOffer?.bundled_pipelines ?? []
       const existingTypes = new Set(acctServices.map(s => s.service_type).filter(Boolean))
@@ -747,17 +789,16 @@ export async function GET(req: NextRequest) {
       if (bundled.length > 0) {
         const missing = bundled.filter(p => !existingTypes.has(p))
         if (missing.length > 0) {
-          // For formation: Company Formation SD is the primary one
-          const isFormation = acctOffer?.contract_type === "formation"
-          const hasFormation = existingTypes.has("Company Formation")
+          const isFormationOffer = acctOffer?.contract_type === "formation"
+          const hasFormationSD = existingTypes.has("Company Formation")
 
-          if (isFormation && hasFormation) {
+          if (isFormationOffer && hasFormationSD) {
             acctChecks.push({
               id: `sds_pending_${acct.id.slice(0, 8)}`,
               category: "Services",
               label: "Pending services",
               status: "info",
-              detail: `${missing.length} services pending after formation: ${missing.join(", ")}`,
+              detail: `${missing.length} services will be created automatically after formation: ${missing.join(", ")}`,
             })
           } else {
             acctChecks.push({
@@ -803,30 +844,68 @@ export async function GET(req: NextRequest) {
         })
       }
 
-      // Portal transition readiness (legacy client check)
+      // ── SS-4 / EIN pipeline — only relevant at stage 3+ (EIN Application) ──
+      if (acct.entity_type?.includes("LLC") || acct.entity_type?.includes("Corp")) {
+        if (acctSS4.length > 0) {
+          const ss4 = acctSS4[0]
+          acctChecks.push({
+            id: `ss4_${acct.id.slice(0, 8)}`,
+            category: "EIN Pipeline",
+            label: "SS-4 Application",
+            status: ss4.status === "done" ? "ok" : ss4.status === "submitted" ? "info" : "warning",
+            detail: `Status: ${ss4.status}${ss4.ein_number ? ` — EIN: ${ss4.ein_number}` : ""}`,
+          })
+        } else if (!hasEIN) {
+          // Only show SS-4 warning if formation is at EIN Application stage or later, or no formation SD
+          if (!isFormationInProgress || formationStageOrder >= STAGE_EIN_APPLICATION || formationComplete) {
+            acctChecks.push({
+              id: `ss4_missing_${acct.id.slice(0, 8)}`,
+              category: "EIN Pipeline",
+              label: "SS-4 Application",
+              status: "warning",
+              detail: "No SS-4 application and no EIN — SS-4 needs to be created",
+            })
+          }
+        }
+      }
+
+      // ── Portal transition — only for legacy clients OR post-formation (stage 5+) ──
+      // For formation in progress (stages 1-4): portal transition is premature
+      const isFormationEarlyStage = isFormationInProgress && formationStageOrder < STAGE_POST_FORMATION
       if (!acct.portal_account && acct.status === "Active" && acct.account_type === "Client") {
-        acctChecks.push({
-          id: `portal_transition_${acct.id.slice(0, 8)}`,
-          category: "Portal",
-          label: "Portal transition",
-          status: "warning",
-          detail: "Active Client account without portal — needs transition",
-          fix: {
-            action: "run_portal_transition",
-            label: "Run portal transition",
-            params: { account_id: acct.id },
-            description: "Runs full portal transition: Drive scan, document processing, auto-create OA/Lease/MSA, SDs, deadlines, auth user, portal flags.",
-            impact: [
-              "Drive files scanned and processed (OCR + classify)",
-              "OA, Lease, Renewal MSA auto-created if missing",
-              "Service deliveries created (Formation, EIN, ITIN, Renewal, CMRA)",
-              "Deadlines created (Annual Report, RA Renewal)",
-              "Portal flags set (portal_account=true, portal_tier=active)",
-              "Auth user created (does NOT send email — send separately)",
-            ],
-            risk: "high",
-          },
-        })
+        if (isFormationEarlyStage) {
+          // Don't show portal transition for formation clients in early stages
+          acctChecks.push({
+            id: `portal_transition_${acct.id.slice(0, 8)}`,
+            category: "Portal",
+            label: "Portal setup",
+            status: "info",
+            detail: `Portal will be set up after formation is complete (currently at: ${formationStage})`,
+          })
+        } else {
+          acctChecks.push({
+            id: `portal_transition_${acct.id.slice(0, 8)}`,
+            category: "Portal",
+            label: "Portal transition",
+            status: "warning",
+            detail: "Active Client account without portal — needs transition",
+            fix: {
+              action: "run_portal_transition",
+              label: "Run portal transition",
+              params: { account_id: acct.id },
+              description: "Runs full portal transition: Drive scan, document processing, auto-create OA/Lease/MSA, SDs, deadlines, auth user, portal flags.",
+              impact: [
+                "Drive files scanned and processed (OCR + classify)",
+                "OA, Lease, Renewal MSA auto-created if missing",
+                "Service deliveries created (Formation, EIN, ITIN, Renewal, CMRA)",
+                "Deadlines created (Annual Report, RA Renewal)",
+                "Portal flags set (portal_account=true, portal_tier=active)",
+                "Auth user created (does NOT send email — send separately)",
+              ],
+              risk: "high",
+            },
+          })
+        }
       } else if (acct.portal_account) {
         acctChecks.push({
           id: `portal_transition_${acct.id.slice(0, 8)}`,
@@ -837,8 +916,8 @@ export async function GET(req: NextRequest) {
         })
       }
 
-      // OA check
-      if (acct.account_type === "Client" && acct.status === "Active") {
+      // ── OA / Lease — only relevant at stage 5+ (Post-Formation) or for non-formation accounts ──
+      if (acct.account_type === "Client" && acct.status === "Active" && !isFormationEarlyStage) {
         const signedOA = acctOA.find(o => o.status === "signed")
         acctChecks.push({
           id: `oa_${acct.id.slice(0, 8)}`,
@@ -852,7 +931,6 @@ export async function GET(req: NextRequest) {
               : "No OA found",
         })
 
-        // Lease check
         const signedLease = acctLease.find(l => l.status === "signed")
         acctChecks.push({
           id: `lease_${acct.id.slice(0, 8)}`,
@@ -865,28 +943,6 @@ export async function GET(req: NextRequest) {
               ? `${acctLease.length} lease(s) — latest: ${acctLease[0].status}`
               : "No lease found",
         })
-      }
-
-      // SS-4 / EIN pipeline
-      if (acct.entity_type?.includes("LLC") || acct.entity_type?.includes("Corp")) {
-        if (acctSS4.length > 0) {
-          const ss4 = acctSS4[0]
-          acctChecks.push({
-            id: `ss4_${acct.id.slice(0, 8)}`,
-            category: "EIN Pipeline",
-            label: "SS-4 Application",
-            status: ss4.status === "done" ? "ok" : ss4.status === "submitted" ? "info" : "warning",
-            detail: `Status: ${ss4.status}${ss4.ein_number ? ` — EIN: ${ss4.ein_number}` : ""}`,
-          })
-        } else if (!acct.ein_number) {
-          acctChecks.push({
-            id: `ss4_missing_${acct.id.slice(0, 8)}`,
-            category: "EIN Pipeline",
-            label: "SS-4 Application",
-            status: "warning",
-            detail: "No SS-4 application and no EIN — SS-4 needs to be created",
-          })
-        }
       }
 
       accountAudits.push({
