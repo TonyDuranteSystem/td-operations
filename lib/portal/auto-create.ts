@@ -72,7 +72,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
         }
         // If no contact exists yet, we can still create a portal user from the lead email
         if (!targetContactId) {
-          return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en', autoCreated)
+          return await createFromEmail(lead.email, lead.full_name, accountId, tier, lead.language === 'Italian' ? 'it' : 'en', autoCreated, undefined)
         }
       }
     }
@@ -93,7 +93,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
     }
 
     const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
-    return await createFromEmail(contact.email, contact.full_name, accountId, tier, contactLang, autoCreated)
+    return await createFromEmail(contact.email, contact.full_name, accountId, tier, contactLang, autoCreated, targetContactId)
   } catch (err) {
     return {
       success: false,
@@ -110,19 +110,33 @@ async function createFromEmail(
   tier: PortalTier,
   language?: string,
   autoCreated = true,
+  /** Caller-resolved contact_id — used to backfill auth metadata if missing */
+  callerContactId?: string,
 ): Promise<AutoCreateResult> {
   // Check if user already exists
   const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
   const existingUser = (existingList?.users ?? []).find(u => u.email === email)
 
   if (existingUser) {
-    // User exists — update tier on both contact and account
-    const existingContactId = existingUser.app_metadata?.contact_id
-    if (existingContactId) {
+    // User exists — resolve contact_id (prefer auth metadata, backfill from caller or DB)
+    let resolvedContactId = existingUser.app_metadata?.contact_id || callerContactId
+    if (!resolvedContactId) {
+      // Last resort: look up contact by email
+      const { data: contactByEmail } = await supabaseAdmin
+        .from('contacts')
+        .select('id')
+        .eq('email', email)
+        .limit(1)
+        .maybeSingle()
+      resolvedContactId = contactByEmail?.id
+    }
+
+    // Update contact tier
+    if (resolvedContactId) {
       await supabaseAdmin
         .from('contacts')
         .update({ portal_tier: tier })
-        .eq('id', existingContactId)
+        .eq('id', resolvedContactId)
     }
     if (accountId) {
       await supabaseAdmin
@@ -130,9 +144,13 @@ async function createFromEmail(
         .update({ portal_tier: tier })
         .eq('id', accountId)
     }
-    // Sync portal_tier to auth metadata (dashboard reads this to gate UI)
+    // Sync portal_tier + backfill contact_id to auth metadata
     await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
-      app_metadata: { ...existingUser.app_metadata, portal_tier: tier },
+      app_metadata: {
+        ...existingUser.app_metadata,
+        portal_tier: tier,
+        ...(resolvedContactId ? { contact_id: resolvedContactId } : {}),
+      },
     })
     return { success: true, alreadyExists: true, email, userId: existingUser.id }
   }
