@@ -177,7 +177,7 @@ export function WizardClient({
     } finally {
       setIsSubmitting(false)
     }
-  }, [wizardType, entityType, formData, accountId, contactId, currentProgressId, validateStep, locale])
+  }, [wizardType, entityType, formData, accountId, contactId, currentProgressId, validateStep, locale, isResubmitMode])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -231,25 +231,49 @@ export function WizardClient({
 
   // Success screen (shown after successful submit or re-submit)
   if (isSubmitted) {
+    const isBanking = wizardType === 'banking_payset' || wizardType === 'banking_relay'
+    const bankLabel = wizardType === 'banking_relay' ? 'Relay (USD)' : 'Payset (EUR)'
+
     return (
       <div className="max-w-lg mx-auto text-center py-16">
         <div className="h-16 w-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
           <CheckCircle className="h-8 w-8 text-green-600" />
         </div>
         <h2 className="text-2xl font-bold mb-2">
-          {locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!'}
+          {isBanking
+            ? (locale === 'it' ? `${bankLabel} — Richiesta inviata!` : `${bankLabel} — Application submitted!`)
+            : (locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')}
         </h2>
         <p className="text-zinc-500 mb-6">
           {locale === 'it'
             ? 'Il nostro team esaminerà le informazioni e ti contatterà a breve.'
             : 'Our team will review your information and contact you shortly.'}
         </p>
-        <a
-          href="/portal"
-          className="inline-flex items-center px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
-        </a>
+        {isBanking ? (
+          <div className="space-y-3">
+            <a
+              href="/portal/wizard?type=banking"
+              className="inline-flex items-center px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+            >
+              {locale === 'it' ? 'Continua con le altre banche →' : 'Continue with other banks →'}
+            </a>
+            <div>
+              <a
+                href="/portal"
+                className="inline-flex items-center px-4 py-1.5 text-sm text-zinc-500 hover:text-zinc-700 transition-colors"
+              >
+                {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+              </a>
+            </div>
+          </div>
+        ) : (
+          <a
+            href="/portal"
+            className="inline-flex items-center px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            {locale === 'it' ? 'Torna alla Dashboard' : 'Back to Dashboard'}
+          </a>
+        )}
       </div>
     )
   }
