@@ -293,7 +293,7 @@ export default async function WizardPage({
       {(() => {
         const nonBankingWizards = wizardList.filter(w => w.type !== 'banking_payset' && w.type !== 'banking_relay')
         const hasBanking = wizardList.some(w => w.type === 'banking_payset' || w.type === 'banking_relay')
-        const showableTabs = hasBanking ? [...nonBankingWizards, { type: 'banking_payset' as const, label: locale === 'it' ? 'Banking' : 'Banking', serviceType: 'Banking Fintech', submitted: wizardList.filter(w => w.type === 'banking_payset' || w.type === 'banking_relay').every(w => w.submitted) }] : nonBankingWizards
+        const showableTabs = hasBanking ? [...nonBankingWizards, { type: 'banking_payset' as const, label: locale === 'it' ? 'Banking' : 'Banking', serviceType: 'Banking Fintech', submitted: wizardList.filter(w => w.type === 'banking_payset' || w.type === 'banking_relay').some(w => w.submitted) }] : nonBankingWizards
         return showableTabs.length > 1 && !forcedType ? (
         <div className="mb-6 border rounded-lg bg-white p-4">
           <p className="text-sm font-medium text-zinc-700 mb-3">
