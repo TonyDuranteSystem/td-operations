@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
         accounts!payments_account_id_fkey(company_name),
         contacts!payments_contact_id_fkey(full_name, email)
       `)
-      .eq("status", "overdue")
+      .eq("status", "Overdue")
       .order("due_date", { ascending: true })
 
     if (err) {
@@ -110,7 +110,7 @@ export async function GET(req: NextRequest) {
       total_amount: totalAmount,
     })
 
-    console.log(`[overdue-report] Report saved: ${overdue.length} overdue payments`)
+    console.warn(`[overdue-report] Report saved: ${overdue.length} overdue payments`)
 
     return NextResponse.json({
       message: "Report generated",

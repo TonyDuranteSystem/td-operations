@@ -388,7 +388,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         assigned_to: "Antonio",
         priority: "High",
         category: "Payment",
-        status: "todo",
+        status: "To Do",
         account_id: accountId,
       })
     }
@@ -400,7 +400,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
       assigned_to: "Antonio",
       priority: "High",
       category: "Payment",
-      status: "todo",
+      status: "To Do",
     })
   }
 
