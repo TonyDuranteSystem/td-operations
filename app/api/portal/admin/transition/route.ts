@@ -3,20 +3,38 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { logAction } from '@/lib/mcp/action-log'
+import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
+
+export const maxDuration = 60 // Vercel Pro: 60s
+
+// Document types visible to clients in the portal
+const PORTAL_VISIBLE_DOC_TYPES = [
+  'Form SS-4', 'Articles of Organization', 'Office Lease', 'Lease Agreement',
+  'Operating Agreement', 'EIN Letter (IRS)', 'Form 8832', 'ITIN Letter', 'Signed Contract',
+]
+const PORTAL_VISIBLE_CATEGORIES = [3, 5] // Tax, Correspondence
+
+const TD_ADDRESS_PATTERNS = ['ulmerton', 'gulf blvd', 'indian shores', 'park blvd']
+function isTDAddress(addr: string | null): boolean {
+  if (!addr) return false
+  const l = addr.toLowerCase()
+  return TD_ADDRESS_PATTERNS.some(p => l.includes(p))
+}
 
 /**
  * POST /api/portal/admin/transition
  *
- * Runs the portal transition for a legacy client. Pass any account_id —
+ * Full portal transition for a legacy client. Pass any account_id —
  * resolves the contact, finds ALL their active accounts, and for each:
- *   - Sets portal_visible on documents
- *   - Sets portal_account=true, portal_tier=active
- *   - Creates auth user with full metadata (once)
+ *   1. Scans Google Drive + processes new files (OCR + classify)
+ *   2. Sets portal_visible on documents
+ *   3. Auto-creates OA, Lease, Renewal MSA if missing (Client accounts)
+ *   4. Auto-creates service deliveries (Formation, EIN, ITIN, Annual Renewal, CMRA)
+ *   5. Auto-creates deadlines (Annual Report, RA Renewal)
+ *   6. Sets portal_account=true, portal_tier=active
+ *   7. Creates auth user with full metadata (once)
  *
- * Does NOT: scan Drive (too slow for HTTP), create OA/Lease/MSA (use MCP tool for full setup),
- * or send email. This is the "quick setup" version for the CRM button.
- *
- * Returns warnings if blockers are found (no email, no Drive folder, etc.)
+ * Does NOT send email — admin sends credentials separately.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -32,7 +50,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   }
 
-  // 1. Resolve contact from account
+  // ── 1. Resolve contact ──
   const { data: contactLinks } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id, contact:contacts(id, full_name, email, language, itin_number)')
@@ -47,10 +65,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (!contact?.email) {
-    return NextResponse.json({ error: `Contact ${contact?.full_name || 'unknown'} has no email. Cannot create portal account.` }, { status: 400 })
+    return NextResponse.json({ error: `Contact ${contact?.full_name || 'unknown'} has no email` }, { status: 400 })
   }
 
-  // 2. Find ALL active accounts for this contact
+  // ── 2. Find ALL active accounts ──
   const { data: allLinks } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
@@ -60,46 +78,81 @@ export async function POST(request: NextRequest) {
 
   const { data: allAccounts } = await supabaseAdmin
     .from('accounts')
-    .select('id, company_name, entity_type, status, physical_address, drive_folder_id, portal_account, portal_tier, account_type, notes')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes')
     .in('id', allAccountIds)
     .eq('status', 'Active')
 
   const activeAccounts = allAccounts ?? []
-
   if (activeAccounts.length === 0) {
     return NextResponse.json({ error: 'No active accounts found for this contact' }, { status: 400 })
   }
 
-  // 3. Pre-flight checks — collect warnings but don't block
+  const lang = contact.language?.toLowerCase()?.startsWith('it') || contact.language === 'Italian' ? 'it' : 'en'
   const warnings: string[] = []
   const reportLines: string[] = []
 
+  // ── 3. Process each account ──
   for (const acct of activeAccounts) {
+    const acctLines: string[] = [`── ${acct.company_name} ──`]
+    const isOneTime = acct.account_type === 'One-Time'
+
     if (acct.portal_account) {
-      reportLines.push(`${acct.company_name}: already transitioned (skipped)`)
+      acctLines.push('Already transitioned (skipped)')
+      reportLines.push(...acctLines, '')
       continue
     }
 
-    if (!acct.drive_folder_id) {
-      warnings.push(`${acct.company_name}: no Google Drive folder linked`)
+    // Pre-flight: TD address (Client accounts only)
+    if (!isOneTime && !isTDAddress(acct.physical_address)) {
+      warnings.push(`${acct.company_name}: Non-TD address (${acct.physical_address || 'NULL'})`)
     }
 
-    // Set portal_visible on existing documents
-    const { data: docs } = await supabaseAdmin
-      .from('documents')
-      .select('id, document_type_name, category')
-      .eq('account_id', acct.id)
+    // ── DRIVE SCAN ──
+    let driveProcessed = 0
+    let driveSkipped = 0
+    if (acct.drive_folder_id) {
+      try {
+        const allFiles = await collectFilesRecursive(acct.drive_folder_id, 3)
+        if (allFiles.length > 0) {
+          const fileIds = allFiles.map(f => f.id)
+          const existingIds = new Set<string>()
+          for (let i = 0; i < fileIds.length; i += 50) {
+            const chunk = fileIds.slice(i, i + 50)
+            const { data: existing } = await supabaseAdmin
+              .from('documents').select('drive_file_id').in('drive_file_id', chunk)
+            existing?.forEach(e => existingIds.add(e.drive_file_id))
+          }
+          const toProcess = allFiles.filter(f => !existingIds.has(f.id))
+          driveSkipped = allFiles.length - toProcess.length
+          // Process up to 10 files per account (limit for HTTP timeout)
+          for (const file of toProcess.slice(0, 10)) {
+            const r = await processFile(file.id, acct.id, acct.company_name)
+            if (r.success) driveProcessed++
+          }
+          if (toProcess.length > 10) {
+            warnings.push(`${acct.company_name}: ${toProcess.length - 10} Drive files remaining (limit 10 per request)`)
+          }
+        }
+      } catch (driveErr) {
+        warnings.push(`${acct.company_name}: Drive scan error: ${driveErr instanceof Error ? driveErr.message : 'unknown'}`)
+      }
+      acctLines.push(`Drive: ${driveProcessed} processed, ${driveSkipped} already in system`)
+    } else {
+      warnings.push(`${acct.company_name}: no Drive folder linked`)
+    }
 
-    const PORTAL_VISIBLE_DOC_TYPES = [
-      'Form SS-4', 'Articles of Organization', 'Office Lease', 'Lease Agreement',
-      'Operating Agreement', 'EIN Letter (IRS)', 'Form 8832', 'ITIN Letter', 'Signed Contract',
-    ]
-    const PORTAL_VISIBLE_CATEGORIES = [3, 5]
-    const seenTypes = new Set<string>()
+    // ── SET PORTAL_VISIBLE ──
+    const { data: docs } = await supabaseAdmin.from('documents')
+      .select('id, document_type_name, category, drive_link')
+      .eq('account_id', acct.id)
+      .order('processed_at', { ascending: false })
+
+    const allDocs = docs ?? []
     const allowedIds: string[] = []
     const hiddenIds: string[] = []
+    const seenTypes = new Set<string>()
 
-    for (const doc of docs ?? []) {
+    for (const doc of allDocs) {
       const typeName = doc.document_type_name ?? ''
       const cat = doc.category as number | null
       const visByType = PORTAL_VISIBLE_DOC_TYPES.includes(typeName) && !seenTypes.has(typeName)
@@ -111,11 +164,204 @@ export async function POST(request: NextRequest) {
         hiddenIds.push(doc.id)
       }
     }
-
     if (allowedIds.length > 0) await supabaseAdmin.from('documents').update({ portal_visible: true }).in('id', allowedIds)
     if (hiddenIds.length > 0) await supabaseAdmin.from('documents').update({ portal_visible: false }).in('id', hiddenIds)
+    acctLines.push(`Docs: ${allowedIds.length} visible, ${hiddenIds.length} hidden`)
 
-    // Set account flags
+    // ── AUTO-CREATE OA, LEASE, MSA (Client accounts only) ──
+    if (!isOneTime) {
+      // OA
+      const { data: existingOA } = await supabaseAdmin.from('oa_agreements')
+        .select('id, status').eq('account_id', acct.id).maybeSingle()
+      if (!existingOA) {
+        const entityType = acct.entity_type?.toLowerCase().includes('multi') ? 'MMLLC' : 'SMLLC'
+        const slug = acct.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: newOa } = await supabaseAdmin.from('oa_agreements').insert({
+          token: `${slug}-oa-${new Date().getFullYear()}`,
+          account_id: acct.id, contact_id: contact.id,
+          company_name: acct.company_name,
+          state_of_formation: acct.state_of_formation || 'Wyoming',
+          formation_date: acct.formation_date || today,
+          ein_number: acct.ein_number || null,
+          entity_type: entityType, manager_name: contact.full_name,
+          member_name: contact.full_name, member_email: contact.email,
+          effective_date: today,
+          business_purpose: 'any and all lawful business activities',
+          initial_contribution: '$0.00', fiscal_year_end: 'December 31',
+          accounting_method: 'Cash', duration: 'Perpetual',
+          principal_address: '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
+          language: 'en', status: 'draft',
+        }).select('id').single()
+        acctLines.push(newOa ? 'OA: auto-created (draft)' : 'OA: creation failed')
+      } else {
+        acctLines.push(`OA: exists (${existingOA.status})`)
+      }
+
+      // Lease
+      const { data: existingLease } = await supabaseAdmin.from('lease_agreements')
+        .select('id, status, suite_number').eq('account_id', acct.id).maybeSingle()
+      const hasLeaseDriveDoc = allDocs.find(d => d.document_type_name === 'Office Lease' && d.drive_link)
+      if (!existingLease && !hasLeaseDriveDoc) {
+        // Auto-assign suite
+        const { data: lastLeases } = await supabaseAdmin.from('lease_agreements')
+          .select('suite_number').order('suite_number', { ascending: false }).limit(1)
+        let suite = '3D-101'
+        if (lastLeases?.length) {
+          const lastNum = parseInt(lastLeases[0].suite_number.replace('3D-', ''), 10)
+          if (!isNaN(lastNum)) suite = `3D-${(lastNum + 1).toString().padStart(3, '0')}`
+        }
+        const year = new Date().getFullYear()
+        const slug = acct.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: newLease } = await supabaseAdmin.from('lease_agreements').insert({
+          token: `${slug}-${year}`, account_id: acct.id, contact_id: contact.id,
+          tenant_company: acct.company_name, tenant_contact_name: contact.full_name,
+          tenant_email: contact.email, suite_number: suite,
+          premises_address: '10225 Ulmerton Rd, Largo, FL 33771',
+          effective_date: today, term_start_date: today, term_end_date: `${year}-12-31`,
+          contract_year: year, term_months: 12, monthly_rent: 100, yearly_rent: 1200,
+          security_deposit: 150, square_feet: 120, status: 'draft', language: 'en',
+        }).select('id, suite_number').single()
+        acctLines.push(newLease ? `Lease: auto-created (draft, Suite ${newLease.suite_number})` : 'Lease: creation failed')
+      } else if (existingLease) {
+        acctLines.push(`Lease: exists (${existingLease.status}, Suite ${existingLease.suite_number})`)
+      } else {
+        acctLines.push('Lease: signed (detected from Drive)')
+      }
+
+      // Renewal MSA
+      const { data: existingMSA } = await supabaseAdmin.from('offers')
+        .select('id, token, status').eq('account_id', acct.id).eq('contract_type', 'renewal').maybeSingle()
+      if (!existingMSA && acct.installment_1_amount) {
+        const slug = acct.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        const year = new Date().getFullYear()
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: newMSA } = await supabaseAdmin.from('offers').insert({
+          token: `renewal-${slug}-${year}`, account_id: acct.id,
+          client_name: contact.full_name, client_email: contact.email,
+          language: lang, contract_type: 'renewal',
+          payment_type: 'bank_transfer', status: 'draft', offer_date: today,
+          effective_date: `${year}-01-01`,
+          bundled_pipelines: ['CMRA Mailing Address', 'State RA Renewal', 'State Annual Report', 'Tax Return'],
+          services: [{ name: 'Annual LLC Management', price: (acct.installment_1_amount || 0) + (acct.installment_2_amount || 0), description: 'Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal' }],
+          cost_summary: [
+            { label: 'First Installment (January)', items: [{ name: 'Annual Management', price: `$${acct.installment_1_amount?.toLocaleString() || '1,000'}` }], total: `$${acct.installment_1_amount?.toLocaleString() || '1,000'}` },
+            { label: 'Second Installment (June)', items: [{ name: 'Annual Management', price: `$${acct.installment_2_amount?.toLocaleString() || '1,000'}` }], total: `$${acct.installment_2_amount?.toLocaleString() || '1,000'}` },
+          ],
+        }).select('id, token').single()
+        acctLines.push(newMSA ? `MSA: auto-created (draft, ${newMSA.token})` : 'MSA: creation failed')
+      } else if (existingMSA) {
+        acctLines.push(`MSA: exists (${existingMSA.status})`)
+      } else if (!acct.installment_1_amount) {
+        warnings.push(`${acct.company_name}: no installment amounts — MSA skipped`)
+      }
+    } else {
+      acctLines.push('OA/Lease/MSA: skipped (One-Time)')
+    }
+
+    // ── SERVICE DELIVERIES ──
+    const { data: existingSDs } = await supabaseAdmin.from('service_deliveries')
+      .select('id, service_type').eq('account_id', acct.id)
+    const sdTypes = new Set((existingSDs ?? []).map(s => s.service_type))
+    const createdSDs: string[] = []
+
+    if (acct.formation_date && !sdTypes.has('Company Formation')) {
+      await supabaseAdmin.from('service_deliveries').insert({
+        account_id: acct.id, service_type: 'Company Formation', pipeline: 'Company Formation',
+        service_name: `Company Formation -- ${acct.company_name}`,
+        stage: 'Closing', stage_order: 6, status: 'completed',
+        start_date: acct.formation_date, assigned_to: 'Luca', notes: 'Legacy onboard',
+        stage_history: [{ to_stage: 'Closing', to_order: 6, notes: 'Legacy', advanced_at: new Date().toISOString() }],
+      })
+      createdSDs.push('Formation')
+    }
+    if (acct.ein_number && !sdTypes.has('EIN')) {
+      await supabaseAdmin.from('service_deliveries').insert({
+        account_id: acct.id, service_type: 'EIN', pipeline: 'EIN',
+        service_name: `EIN -- ${acct.company_name}`,
+        stage: 'EIN Received', stage_order: 4, status: 'completed',
+        start_date: acct.formation_date || new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
+        notes: `Legacy onboard - EIN ${acct.ein_number}`,
+        stage_history: [{ to_stage: 'EIN Received', to_order: 4, notes: 'Legacy', advanced_at: new Date().toISOString() }],
+      })
+      createdSDs.push('EIN')
+    }
+    if (contact.itin_number && !sdTypes.has('ITIN')) {
+      await supabaseAdmin.from('service_deliveries').insert({
+        account_id: acct.id, service_type: 'ITIN',
+        service_name: `ITIN -- ${acct.company_name}`,
+        status: 'completed', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
+        notes: `Legacy onboard - ITIN ${contact.itin_number}`,
+      })
+      createdSDs.push('ITIN')
+    }
+    if (!isOneTime && !sdTypes.has('Annual Renewal')) {
+      await supabaseAdmin.from('service_deliveries').insert({
+        account_id: acct.id, service_type: 'Annual Renewal',
+        service_name: `Annual Renewal -- ${acct.company_name}`,
+        status: 'active', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca', notes: 'Legacy onboard',
+      })
+      createdSDs.push('Annual Renewal')
+    }
+    if (!isOneTime && !sdTypes.has('CMRA Mailing Address') && isTDAddress(acct.physical_address)) {
+      await supabaseAdmin.from('service_deliveries').insert({
+        account_id: acct.id, service_type: 'CMRA Mailing Address',
+        service_name: `CMRA -- ${acct.company_name}`,
+        status: 'active', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
+        notes: `Legacy onboard - ${acct.physical_address}`,
+      })
+      createdSDs.push('CMRA')
+    }
+    if (createdSDs.length > 0) acctLines.push(`SDs: ${createdSDs.join(', ')}`)
+
+    // ── DEADLINES (Client only) ──
+    if (!isOneTime && acct.formation_date && acct.state_of_formation) {
+      const { data: existingDL } = await supabaseAdmin.from('deadlines')
+        .select('deadline_type').eq('account_id', acct.id)
+      const dlTypes = new Set((existingDL ?? []).map(d => d.deadline_type))
+      const formDate = new Date(acct.formation_date)
+      const formMonth = formDate.getMonth()
+      const formDay = formDate.getDate()
+      const nextYear = new Date().getFullYear() + 1
+      const state = acct.state_of_formation
+      const llcType = acct.entity_type?.toLowerCase().includes('multi') ? 'MMLLC' : 'SMLLC'
+      const createdDL: string[] = []
+
+      if (!dlTypes.has('Annual Report')) {
+        let arDue: string | null = null
+        if (state === 'Wyoming') arDue = `${nextYear}-${String(formMonth + 1).padStart(2, '0')}-01`
+        else if (state === 'Florida') arDue = `${nextYear}-05-01`
+        else if (state === 'Delaware') arDue = `${nextYear}-06-01`
+        if (arDue) {
+          await supabaseAdmin.from('deadlines').insert({
+            account_id: acct.id, deadline_type: 'Annual Report', due_date: arDue,
+            status: 'Pending', state, year: nextYear, llc_type: llcType, assigned_to: 'Luca',
+            deadline_record: `${acct.company_name} - Annual Report ${nextYear}`, notes: 'Legacy onboard',
+          })
+          createdDL.push(`Annual Report ${arDue}`)
+        }
+      }
+      if (!dlTypes.has('RA Renewal')) {
+        const raDue = `${nextYear}-${String(formMonth + 1).padStart(2, '0')}-${String(formDay).padStart(2, '0')}`
+        await supabaseAdmin.from('deadlines').insert({
+          account_id: acct.id, deadline_type: 'RA Renewal', due_date: raDue,
+          status: 'Pending', state, year: nextYear, llc_type: llcType, assigned_to: 'Luca',
+          deadline_record: `${acct.company_name} - RA Renewal ${nextYear}`, notes: 'Legacy onboard',
+        })
+        createdDL.push(`RA Renewal ${raDue}`)
+      }
+      if (createdDL.length > 0) acctLines.push(`Deadlines: ${createdDL.join(', ')}`)
+    }
+
+    // ── Tax return check ──
+    if (acct.formation_date && acct.formation_date < '2026-01-01') {
+      const { data: tr } = await supabaseAdmin.from('tax_returns')
+        .select('id').eq('company_name', acct.company_name).eq('tax_year', 2025).maybeSingle()
+      if (!tr) warnings.push(`${acct.company_name}: no 2025 tax return record`)
+    }
+
+    // ── SET ACCOUNT FLAGS ──
     await supabaseAdmin.from('accounts').update({
       portal_account: true,
       portal_tier: 'active',
@@ -123,19 +369,18 @@ export async function POST(request: NextRequest) {
       notes: (acct.notes || '') + `\n${new Date().toISOString().split('T')[0]}: Portal transition (CRM button). [PORTAL_TRANSITION]`,
     }).eq('id', acct.id)
 
-    reportLines.push(`${acct.company_name}: ${allowedIds.length} docs visible, portal_account=true`)
+    acctLines.push('portal_account = true')
+    reportLines.push(...acctLines, '')
 
     logAction({
       actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
-      action_type: 'update',
-      table_name: 'accounts',
-      record_id: acct.id,
-      account_id: acct.id,
-      summary: `Portal transition (CRM button): ${acct.company_name}`,
+      action_type: 'update', table_name: 'accounts',
+      record_id: acct.id, account_id: acct.id,
+      summary: `Portal transition (CRM): ${acct.company_name}`,
     })
   }
 
-  // 4. Create or repair auth user (once)
+  // ── 4. Create or repair auth user (once) ──
   const { data: authList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
   const existingAuth = (authList?.users ?? []).find(u => u.email === contact.email)
   const accountIds = activeAccounts.map(a => a.id)
@@ -143,19 +388,9 @@ export async function POST(request: NextRequest) {
   if (!existingAuth) {
     const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
     const { error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email: contact.email,
-      password: tempPassword,
-      email_confirm: true,
-      app_metadata: {
-        role: 'client',
-        contact_id: contact.id,
-        portal_tier: 'active',
-        account_ids: accountIds,
-      },
-      user_metadata: {
-        full_name: contact.full_name,
-        must_change_password: true,
-      },
+      email: contact.email, password: tempPassword, email_confirm: true,
+      app_metadata: { role: 'client', contact_id: contact.id, portal_tier: 'active', account_ids: accountIds },
+      user_metadata: { full_name: contact.full_name, must_change_password: true },
     })
     if (createError) {
       warnings.push(`Auth user creation failed: ${createError.message}`)
@@ -163,23 +398,14 @@ export async function POST(request: NextRequest) {
       reportLines.push(`Auth user: CREATED (${contact.email})`)
     }
   } else {
-    // Repair metadata
     await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
-      app_metadata: {
-        ...existingAuth.app_metadata,
-        role: 'client',
-        contact_id: contact.id,
-        portal_tier: 'active',
-        account_ids: accountIds,
-      },
+      app_metadata: { ...existingAuth.app_metadata, role: 'client', contact_id: contact.id, portal_tier: 'active', account_ids: accountIds },
     })
-    reportLines.push(`Auth user: already existed — metadata repaired (${contact.email})`)
+    reportLines.push(`Auth user: existed — metadata repaired (${contact.email})`)
   }
 
-  // 5. Update contact
-  await supabaseAdmin.from('contacts').update({
-    portal_tier: 'active',
-  }).eq('id', contact.id)
+  // ── 5. Update contact ──
+  await supabaseAdmin.from('contacts').update({ portal_tier: 'active' }).eq('id', contact.id)
 
   const processedCount = activeAccounts.filter(a => !a.portal_account).length
 
