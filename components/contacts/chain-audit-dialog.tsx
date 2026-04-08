@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   X, Loader2, CheckCircle2, AlertCircle, XCircle, Info,
   RefreshCw, Link2, ChevronDown, ChevronRight,
-  ShieldAlert, ShieldCheck, Shield, Building2, Unlink,
+  ShieldAlert, ShieldCheck, Shield, Building2, Unlink, Upload, FileText,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -116,6 +116,87 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
     state_of_formation: 'New Mexico',
     formation_date: '',
   })
+
+  // Upload state for Articles of Organization
+  const [uploading, setUploading] = useState(false)
+  const [uploadedFile, setUploadedFile] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  async function handleArticlesUpload(file: File) {
+    if (!file) return
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/tiff']
+    if (!allowed.includes(file.type)) {
+      toast.error('Unsupported file type. Use PDF, JPG, PNG, or TIFF.')
+      return
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error('File too large (max 15MB for OCR)')
+      return
+    }
+
+    setUploading(true)
+    try {
+      // Step 1: Get signed upload URL from Supabase Storage
+      const ext = file.name.split('.').pop() ?? 'pdf'
+      const storagePath = `articles/${contactId}/${Date.now()}.${ext}`
+
+      const urlRes = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bucket: 'onboarding-uploads', path: storagePath }),
+      })
+      const urlData = await urlRes.json()
+      if (!urlRes.ok) throw new Error(urlData.error || 'Failed to get upload URL')
+
+      // Step 2: Upload file directly to Supabase Storage
+      const uploadRes = await fetch(urlData.signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      })
+      if (!uploadRes.ok) throw new Error('Failed to upload file to storage')
+
+      // Step 3: Call OCR Articles endpoint
+      const ocrRes = await fetch('/api/crm/admin-actions/ocr-articles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type,
+        }),
+      })
+      const ocrData = await ocrRes.json()
+
+      if (!ocrRes.ok) {
+        throw new Error(ocrData.error || 'OCR failed')
+      }
+
+      // Step 4: Auto-fill form from parsed data
+      setAccountForm(prev => ({
+        company_name: ocrData.company_name || prev.company_name,
+        entity_type: ocrData.entity_type || prev.entity_type,
+        state_of_formation: ocrData.state_of_formation || prev.state_of_formation,
+        formation_date: ocrData.formation_date || prev.formation_date,
+      }))
+
+      setUploadedFile(file.name)
+
+      const filled = [
+        ocrData.company_name ? 'company name' : null,
+        ocrData.entity_type ? 'entity type' : null,
+        ocrData.state_of_formation ? 'state' : null,
+        ocrData.formation_date ? 'formation date' : null,
+        ocrData.filing_id ? `filing ID: ${ocrData.filing_id}` : null,
+      ].filter(Boolean)
+
+      toast.success(`OCR extracted: ${filled.join(', ')}. Review and edit if needed.`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   useEffect(() => {
     if (open) {
@@ -285,7 +366,45 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
               {/* Form for create_account_for_offer */}
               {FORM_ACTIONS.has(check.fix.action) && (
                 <div className="space-y-3 p-3 bg-white rounded-lg border border-zinc-200" onClick={e => e.stopPropagation()}>
-                  <p className="text-xs font-semibold text-zinc-500 uppercase">Enter company details from Articles of Organization</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase">Enter company details from Articles of Organization</p>
+                    <div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.webp,.tiff"
+                        className="hidden"
+                        onChange={e => {
+                          const file = e.target.files?.[0]
+                          if (file) handleArticlesUpload(file)
+                          e.target.value = ''
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className={cn(
+                          'inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg transition-colors',
+                          'bg-violet-100 text-violet-700 hover:bg-violet-200',
+                          uploading && 'opacity-50 cursor-not-allowed',
+                        )}
+                      >
+                        {uploading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="h-3.5 w-3.5" />
+                        )}
+                        {uploading ? 'OCR processing...' : 'Upload Articles PDF'}
+                      </button>
+                    </div>
+                  </div>
+                  {uploadedFile && (
+                    <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 px-2 py-1 rounded">
+                      <FileText className="h-3.5 w-3.5" />
+                      {uploadedFile} — fields auto-filled from OCR. Review below.
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="col-span-2">
                       <label className="block text-xs font-medium text-zinc-600 mb-1">Company Name *</label>
