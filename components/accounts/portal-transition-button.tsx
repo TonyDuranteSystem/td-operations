@@ -18,6 +18,7 @@ export function PortalTransitionButton({ accountId, portalAccount }: PortalTrans
     warnings: string[]
     accountsProcessed: number
     contactEmail: string
+    emailSent?: boolean
     error?: string
   } | null>(null)
   const router = useRouter()
@@ -25,7 +26,7 @@ export function PortalTransitionButton({ accountId, portalAccount }: PortalTrans
   if (portalAccount) return null // Already transitioned
 
   const handleRun = async () => {
-    if (!confirm('Run portal transition for this client?\n\nThis will:\n- Scan & process Drive documents\n- Create OA, Lease, Renewal MSA if missing\n- Create service deliveries & deadlines\n- Create portal auth user\n- Set portal_account=true\n\nEmail will NOT be sent automatically.')) return
+    if (!confirm('Run portal transition for this client?\n\nThis will:\n- Scan & process Drive documents\n- Create OA, Lease, Renewal MSA if missing\n- Create service deliveries & deadlines\n- Create portal auth user\n- Set portal_account=true\n- Send welcome email with login credentials')) return
 
     setLoading(true)
     try {
@@ -53,8 +54,9 @@ export function PortalTransitionButton({ accountId, portalAccount }: PortalTrans
           warnings: data.warnings || [],
           accountsProcessed: data.accounts_processed,
           contactEmail: data.contact_email,
+          emailSent: data.email_sent,
         })
-        toast.success(`Portal transition complete — ${data.accounts_processed} account(s) processed`)
+        toast.success(`Portal transition complete — ${data.accounts_processed} account(s) processed${data.email_sent ? ', welcome email sent' : ''}`)
         router.refresh()
       }
     } catch {
@@ -120,8 +122,10 @@ export function PortalTransitionButton({ accountId, portalAccount }: PortalTrans
                   <div className="rounded-lg bg-zinc-50 p-4">
                     <pre className="text-xs text-zinc-700 whitespace-pre-wrap font-mono">{result.report}</pre>
                   </div>
-                  <div className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700">
-                    Email has NOT been sent. Send credentials via the contact page &quot;Resend Welcome&quot; button, or use the MCP gmail_send tool.
+                  <div className={`rounded-lg p-3 text-xs ${result.emailSent ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                    {result.emailSent
+                      ? 'Welcome email with login credentials has been sent to the client.'
+                      : 'Welcome email was NOT sent. Use the contact page "Resend Welcome" button or MCP gmail_send tool.'}
                   </div>
                 </>
               )}

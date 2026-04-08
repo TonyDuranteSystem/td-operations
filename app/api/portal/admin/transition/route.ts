@@ -4,6 +4,7 @@ import { isAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { logAction } from '@/lib/mcp/action-log'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
+import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
 
 export const maxDuration = 60 // Vercel Pro: 60s
 
@@ -385,6 +386,7 @@ export async function POST(request: NextRequest) {
   const existingAuth = (authList?.users ?? []).find(u => u.email === contact.email)
   const accountIds = activeAccounts.map(a => a.id)
 
+  let emailSent = false
   if (!existingAuth) {
     const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
     const { error: createError } = await supabaseAdmin.auth.admin.createUser({
@@ -395,13 +397,39 @@ export async function POST(request: NextRequest) {
     if (createError) {
       warnings.push(`Auth user creation failed: ${createError.message}`)
     } else {
+      // Send welcome email with credentials
+      const emailResult = await sendPortalWelcomeEmail({
+        email: contact.email,
+        fullName: contact.full_name,
+        tempPassword,
+        language: lang === 'it' ? 'it' : 'en',
+      })
+      emailSent = emailResult.success
+      if (!emailResult.success) {
+        warnings.push(`Welcome email failed: ${emailResult.error || 'unknown'}`)
+      }
       reportLines.push(`Auth user: CREATED (${contact.email})`)
+      reportLines.push(emailSent ? 'Welcome email: SENT' : 'Welcome email: FAILED (send manually)')
     }
   } else {
+    // Existing user — reset password and send new credentials
+    const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
     await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
+      password: tempPassword,
       app_metadata: { ...existingAuth.app_metadata, role: 'client', contact_id: contact.id, portal_tier: 'active', account_ids: accountIds },
     })
-    reportLines.push(`Auth user: existed — metadata repaired (${contact.email})`)
+    const emailResult = await sendPortalWelcomeEmail({
+      email: contact.email,
+      fullName: contact.full_name,
+      tempPassword,
+      language: lang === 'it' ? 'it' : 'en',
+    })
+    emailSent = emailResult.success
+    if (!emailResult.success) {
+      warnings.push(`Welcome email failed: ${emailResult.error || 'unknown'}`)
+    }
+    reportLines.push(`Auth user: existed — password reset + metadata repaired (${contact.email})`)
+    reportLines.push(emailSent ? 'Welcome email: SENT' : 'Welcome email: FAILED (send manually)')
   }
 
   // ── 5. Update contact ──
@@ -416,6 +444,7 @@ export async function POST(request: NextRequest) {
     contact_name: contact.full_name,
     report: reportLines.join('\n'),
     warnings,
-    message: `Portal transition complete for ${contact.full_name}. ${processedCount} account(s) processed. Email NOT sent.`,
+    email_sent: emailSent,
+    message: `Portal transition complete for ${contact.full_name}. ${processedCount} account(s) processed.${emailSent ? ' Welcome email sent.' : ' Welcome email NOT sent — send manually.'}`,
   })
 }
