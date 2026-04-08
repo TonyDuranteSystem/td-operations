@@ -665,6 +665,7 @@ function QuickActionsBar({
   const [loading, setLoading] = useState<string | null>(null)
   const [advanceDialog, setAdvanceDialog] = useState<{ id: string; name: string; stage: string } | null>(null)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
+  const [showAdvanceDropdown, setShowAdvanceDropdown] = useState(false)
 
   const hasWizard = wizardProgress.length > 0
   const activeSds = serviceDeliveries.filter(sd => sd.status === 'active')
@@ -810,27 +811,36 @@ function QuickActionsBar({
         )}
 
         {showAdvanceStage && activeSds.length > 1 && (
-          <div className="relative group">
-            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
+          <div className="relative">
+            <button
+              onClick={() => setShowAdvanceDropdown(prev => !prev)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+            >
               <PlayCircle className="h-3.5 w-3.5" />
               Advance Stage ({activeSds.length})
+              <ChevronDownIcon className="h-3 w-3" />
             </button>
-            <div className="absolute left-0 top-full mt-1 z-20 hidden group-hover:block bg-white border rounded-lg shadow-lg py-1 min-w-[240px]">
-              {activeSds.map(sd => (
-                <button
-                  key={sd.id}
-                  onClick={() => setAdvanceDialog({
-                    id: sd.id,
-                    name: sd.service_name ?? sd.service_type ?? 'Service',
-                    stage: sd.stage ?? 'Unknown',
-                  })}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-50 transition-colors"
-                >
-                  <p className="font-medium truncate">{sd.service_name ?? sd.service_type ?? 'Service'}</p>
-                  <p className="text-xs text-muted-foreground">Current: {sd.stage ?? '—'}</p>
-                </button>
-              ))}
-            </div>
+            {showAdvanceDropdown && (
+              <div className="absolute left-0 top-full mt-1 z-20 bg-white border rounded-lg shadow-lg py-1 min-w-[280px]">
+                {activeSds.map(sd => (
+                  <button
+                    key={sd.id}
+                    onClick={() => {
+                      setShowAdvanceDropdown(false)
+                      setAdvanceDialog({
+                        id: sd.id,
+                        name: sd.service_name ?? sd.service_type ?? 'Service',
+                        stage: sd.stage ?? 'Unknown',
+                      })
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-50 transition-colors"
+                  >
+                    <p className="font-medium truncate">{sd.service_name ?? sd.service_type ?? 'Service'}</p>
+                    <p className="text-xs text-muted-foreground">Current: {sd.stage ?? '—'}</p>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {showConfirmPaymentBtn && (
