@@ -813,12 +813,41 @@ export async function GET(req: NextRequest) {
       }
 
       // ── Service deliveries (always relevant) ──
-      const acctOffer = offers.find(o => o.account_id === acct.id)
-      const bundled = acctOffer?.bundled_pipelines ?? []
+      // Only consider signed/completed offers — draft offers are not commitments
+      const acctOffer = offers.find(o => o.account_id === acct.id && ["signed", "completed"].includes(o.status))
+        ?? offers.find(o => o.account_id === acct.id) // fallback to any offer if none signed
+      const bundled = (acctOffer && ["signed", "completed"].includes(acctOffer.status))
+        ? (acctOffer.bundled_pipelines ?? [])
+        : [] // Don't compare against draft/sent offer pipelines
       const existingTypes = new Set(acctServices.map(s => s.service_type).filter(Boolean))
 
       if (bundled.length > 0) {
-        const missing = bundled.filter(p => !existingTypes.has(p))
+        // Filter out Tax Return if company was formed in the current year (not due yet)
+        const formationYear = acct.formation_date ? new Date(acct.formation_date).getFullYear() : null
+        const currentYear = new Date().getFullYear()
+        const isFirstYear = formationYear !== null && formationYear >= currentYear
+
+        let missing = bundled.filter(p => !existingTypes.has(p))
+        const deferredServices: string[] = []
+
+        if (isFirstYear) {
+          // Tax Return not due until next year for companies formed this year
+          if (missing.includes("Tax Return")) {
+            deferredServices.push("Tax Return (not due — company formed in current year)")
+            missing = missing.filter(p => p !== "Tax Return")
+          }
+        }
+
+        if (deferredServices.length > 0) {
+          acctChecks.push({
+            id: `sds_deferred_${acct.id.slice(0, 8)}`,
+            category: "Services",
+            label: "Deferred services",
+            status: "info",
+            detail: deferredServices.join("; "),
+          })
+        }
+
         if (missing.length > 0) {
           const isFormationOffer = acctOffer?.contract_type === "formation"
           const hasFormationSD = existingTypes.has("Company Formation")
