@@ -150,7 +150,6 @@ export async function POST(req: NextRequest) {
 
       const submissionRecord: Record<string, unknown> = {
         token: submissionToken,
-        lead_id: null,
         contact_id: contact_id || null,
         account_id: account_id || null,
         entity_type: entity_type || 'SMLLC',
@@ -160,6 +159,11 @@ export async function POST(req: NextRequest) {
         changed_fields: {},
         upload_paths: uploadPaths,
         status: 'completed',
+      }
+
+      // Only include lead_id for tables that have it (tax_return_submissions does not)
+      if (submissionTable !== 'tax_return_submissions') {
+        submissionRecord.lead_id = null
       }
 
       // Only include tax_year if we resolved it (avoids NOT NULL constraint violation)
