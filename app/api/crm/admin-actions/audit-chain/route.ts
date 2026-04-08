@@ -713,13 +713,30 @@ export async function GET(req: NextRequest) {
 
       // ── Pipeline position indicator ──
       if (formationSD) {
-        acctChecks.push({
-          id: `pipeline_${acct.id.slice(0, 8)}`,
-          category: "Formation Pipeline",
-          label: `Stage ${formationStageOrder} of 6 — ${formationStage}`,
-          status: "info",
-          detail: `Company Formation is in progress. Current stage determines which checks are relevant below.`,
-        })
+        // Check if the stage is BEHIND actual progress
+        const hasFormationDate = !!acct.formation_date
+        const stageBehind = hasFormationDate && formationStageOrder < STAGE_EIN_APPLICATION
+        const hasEINButEarly = hasEIN && formationStageOrder < STAGE_POST_FORMATION
+
+        if (stageBehind || hasEINButEarly) {
+          // Stage is behind — formation date exists but SD hasn't been advanced
+          const expectedStage = hasEIN ? "Post-Formation + Banking (Stage 5)" : "EIN Application (Stage 3)"
+          acctChecks.push({
+            id: `pipeline_${acct.id.slice(0, 8)}`,
+            category: "Formation Pipeline",
+            label: `Stage ${formationStageOrder} of 6 — ${formationStage} ⚠️ BEHIND`,
+            status: "error",
+            detail: `${hasFormationDate ? `Articles received (${acct.formation_date})` : ""}${hasEIN ? `, EIN: ${acct.ein_number}` : ""} — but SD is still at Stage ${formationStageOrder}. Should be at ${expectedStage}. Use "Advance Stage" on the contact page to catch up.`,
+          })
+        } else {
+          acctChecks.push({
+            id: `pipeline_${acct.id.slice(0, 8)}`,
+            category: "Formation Pipeline",
+            label: `Stage ${formationStageOrder} of 6 — ${formationStage}`,
+            status: "info",
+            detail: `Company Formation is in progress. Current stage determines which checks are relevant below.`,
+          })
+        }
       } else if (formationComplete) {
         acctChecks.push({
           id: `pipeline_${acct.id.slice(0, 8)}`,
