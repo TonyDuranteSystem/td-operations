@@ -51,56 +51,393 @@ const _REQUIRED_ACCOUNT_FIELDS = [
 ] as const
 
 export function registerPortalTools(server: McpServer) {
+  // ─── Helper: process a single account for portal transition ───
+  // Returns per-account report lines, flags, and pending docs
+  async function processAccountForTransition(
+    account: {
+      id: string; company_name: string; entity_type: string | null; state_of_formation: string | null
+      ein_number: string | null; formation_date: string | null; status: string; physical_address: string | null
+      drive_folder_id: string | null; portal_account: boolean | null; portal_tier: string | null
+      services_bundle: string[] | null; account_type: string | null
+      installment_1_amount: number | null; installment_2_amount: number | null; notes: string | null
+    },
+    contact: { id: string; full_name: string; email: string; phone: string; language: string | null; itin_number: string | null },
+    lang: "en" | "it",
+  ): Promise<{ lines: string[]; flags: string[]; pendingDocs: string[]; skipped: boolean }> {
+    const lines: string[] = [`── ${account.company_name} ──`]
+    const flags: string[] = []
+    const pendingDocs: string[] = []
+    const isOneTime = account.account_type === "One-Time"
+
+    // Pre-flight: TD address check (Client accounts only)
+    if (!isOneTime && !isTDAddress(account.physical_address)) {
+      flags.push(`FLAG: Non-TD address (${account.physical_address || "NULL"}) -- needs manual address verification`)
+      lines.push("SKIPPED: Non-TD address")
+      return { lines, flags, pendingDocs, skipped: true }
+    }
+
+    // Already done?
+    if (account.portal_account) {
+      lines.push("Already set up (portal_account=true). Skipping data setup.")
+      return { lines, flags, pendingDocs, skipped: true }
+    }
+
+    // ─── SCAN DRIVE ───
+    let driveProcessed = 0
+    let driveSkipped = 0
+    if (account.drive_folder_id) {
+      const allFiles = await collectFilesRecursive(account.drive_folder_id, 3)
+      if (allFiles.length > 0) {
+        const fileIds = allFiles.map(f => f.id)
+        const existingIds = new Set<string>()
+        for (let i = 0; i < fileIds.length; i += 50) {
+          const chunk = fileIds.slice(i, i + 50)
+          const { data: existing } = await supabaseAdmin
+            .from("documents")
+            .select("drive_file_id")
+            .in("drive_file_id", chunk)
+          existing?.forEach(e => existingIds.add(e.drive_file_id))
+        }
+        const toProcess = allFiles.filter(f => !existingIds.has(f.id))
+        driveSkipped = allFiles.length - toProcess.length
+        for (const file of toProcess.slice(0, 20)) {
+          const r = await processFile(file.id, account.id, account.company_name)
+          if (r.success) driveProcessed++
+        }
+      }
+      lines.push(`Drive: ${driveProcessed} new files processed, ${driveSkipped} already in system`)
+    } else {
+      lines.push("Drive: no drive_folder_id linked")
+      flags.push("FLAG: No Drive folder linked")
+    }
+
+    // ─── SET PORTAL_VISIBLE ON DOCUMENTS ───
+    const { data: docs } = await supabaseAdmin.from("documents")
+      .select("id, file_name, document_type_name, category, portal_visible, drive_link")
+      .eq("account_id", account.id)
+      .order("processed_at", { ascending: false })
+
+    const allDocs = docs ?? []
+    const allowedIds: string[] = []
+    const hiddenIds: string[] = []
+    const seenTypes = new Set<string>()
+
+    for (const doc of allDocs) {
+      const typeName = doc.document_type_name ?? ""
+      const docCategory = doc.category as number | null
+      const isVisibleByType = PORTAL_VISIBLE_DOC_TYPES.includes(typeName) && !seenTypes.has(typeName)
+      const isVisibleByCategory = docCategory != null && PORTAL_VISIBLE_CATEGORIES.includes(docCategory)
+      if (isVisibleByType || isVisibleByCategory) {
+        if (isVisibleByType) seenTypes.add(typeName)
+        allowedIds.push(doc.id)
+      } else {
+        hiddenIds.push(doc.id)
+      }
+    }
+
+    if (allowedIds.length > 0) await supabaseAdmin.from("documents").update({ portal_visible: true }).in("id", allowedIds)
+    if (hiddenIds.length > 0) await supabaseAdmin.from("documents").update({ portal_visible: false }).in("id", hiddenIds)
+
+    const visibleDocs = allDocs.filter(d => allowedIds.includes(d.id))
+    lines.push(`Documents: ${visibleDocs.length} visible, ${hiddenIds.length} hidden`)
+    for (const d of visibleDocs) lines.push(`  ${d.document_type_name}`)
+
+    // ─── AUTO-CREATE OA, LEASE, RENEWAL MSA (Client accounts only) ───
+    let oaStatus = "N/A"
+    let leaseStatus = "N/A"
+    let msaStatus = "N/A"
+
+    if (isOneTime) {
+      lines.push("OA: SKIPPED (One-Time account)")
+      lines.push("Lease: SKIPPED (One-Time account)")
+      lines.push("Renewal MSA: SKIPPED (One-Time account)")
+    }
+
+    if (!isOneTime) {
+      const { data: existingOA } = await supabaseAdmin.from("oa_agreements")
+        .select("id, status").eq("account_id", account.id).maybeSingle()
+
+      oaStatus = ""
+      if (existingOA) {
+        oaStatus = existingOA.status === "signed" ? "Signed" : `Exists (${existingOA.status})`
+        if (existingOA.status !== "signed") pendingDocs.push("Operating Agreement")
+      } else {
+        const entityType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+        const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+        const token = `${companySlug}-oa-${new Date().getFullYear()}`
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: newOa } = await supabaseAdmin.from("oa_agreements").insert({
+          token, account_id: account.id, contact_id: contact.id,
+          company_name: account.company_name,
+          state_of_formation: account.state_of_formation || "Wyoming",
+          formation_date: account.formation_date || today,
+          ein_number: account.ein_number || null,
+          entity_type: entityType, manager_name: contact.full_name,
+          member_name: contact.full_name, member_email: contact.email,
+          effective_date: today,
+          business_purpose: "any and all lawful business activities",
+          initial_contribution: "$0.00", fiscal_year_end: "December 31",
+          accounting_method: "Cash", duration: "Perpetual",
+          principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+          language: "en", status: "draft",
+        }).select("id").single()
+        if (newOa) {
+          oaStatus = "AUTO-CREATED (draft)"
+          pendingDocs.push("Operating Agreement")
+          logAction({ action_type: "create", table_name: "oa_agreements", record_id: newOa.id, account_id: account.id, summary: `Auto-created OA for ${account.company_name} (legacy onboard)` })
+        } else {
+          oaStatus = "FAILED to create"
+          flags.push("ERROR: OA creation failed")
+        }
+      }
+      lines.push(`OA: ${oaStatus}`)
+
+      // LEASE
+      const { data: existingLease } = await supabaseAdmin.from("lease_agreements")
+        .select("id, status, suite_number").eq("account_id", account.id).maybeSingle()
+      const hasLeaseDriveDoc = allDocs.find(d => d.document_type_name === "Office Lease" && d.drive_link)
+
+      leaseStatus = ""
+      if (existingLease) {
+        leaseStatus = existingLease.status === "signed" ? `Signed (Suite ${existingLease.suite_number})` : `Exists (${existingLease.status}, Suite ${existingLease.suite_number})`
+        if (existingLease.status !== "signed") pendingDocs.push("Lease Agreement")
+      } else if (hasLeaseDriveDoc) {
+        leaseStatus = "Signed (detected from Drive)"
+      } else {
+        const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
+          .select("suite_number").order("suite_number", { ascending: false }).limit(1)
+        let assignedSuite = "3D-101"
+        if (lastLeases?.length) {
+          const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
+          assignedSuite = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
+        }
+        const year = new Date().getFullYear()
+        const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: newLease } = await supabaseAdmin.from("lease_agreements").insert({
+          token: `${companySlug}-${year}`, account_id: account.id, contact_id: contact.id,
+          tenant_company: account.company_name, tenant_contact_name: contact.full_name,
+          tenant_email: contact.email, suite_number: assignedSuite,
+          premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
+          effective_date: today, term_start_date: today, term_end_date: `${year}-12-31`,
+          contract_year: year, term_months: 12, monthly_rent: 100, yearly_rent: 1200,
+          security_deposit: 150, square_feet: 120, status: "draft", language: "en",
+        }).select("id, suite_number").single()
+        if (newLease) {
+          leaseStatus = `AUTO-CREATED (draft, Suite ${newLease.suite_number})`
+          pendingDocs.push("Lease Agreement")
+          logAction({ action_type: "create", table_name: "lease_agreements", record_id: newLease.id, account_id: account.id, summary: `Auto-created lease for ${account.company_name} Suite ${newLease.suite_number} (legacy onboard)` })
+        } else {
+          leaseStatus = "FAILED to create"
+          flags.push("ERROR: Lease creation failed")
+        }
+      }
+      lines.push(`Lease: ${leaseStatus}`)
+
+      // RENEWAL MSA
+      const { data: existingMSA } = await supabaseAdmin.from("offers")
+        .select("id, token, status").eq("account_id", account.id).eq("contract_type", "renewal").maybeSingle()
+
+      msaStatus = ""
+      if (existingMSA) {
+        msaStatus = `Exists (${existingMSA.status}, token: ${existingMSA.token})`
+        if (existingMSA.status !== "signed" && existingMSA.status !== "completed") pendingDocs.push("Contratto Annuale")
+      } else if (account.installment_1_amount) {
+        const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+        const year = new Date().getFullYear()
+        const token = `renewal-${companySlug}-${year}`
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: newMSA, error: msaError } = await supabaseAdmin.from("offers").insert({
+          token, account_id: account.id, client_name: contact.full_name,
+          client_email: contact.email, language: lang, contract_type: "renewal",
+          payment_type: "bank_transfer", status: "draft", offer_date: today,
+          effective_date: `${year}-01-01`,
+          bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
+          services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
+          cost_summary: [
+            { label: "First Installment (January)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
+            { label: "Second Installment (June)", items: [{ name: "Annual Management", price: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` },
+          ],
+        }).select("id, token").single()
+        if (newMSA) {
+          msaStatus = `AUTO-CREATED (draft, token: ${newMSA.token})`
+          pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
+          logAction({ action_type: "create", table_name: "offers", record_id: newMSA.id, account_id: account.id, summary: `Auto-created renewal MSA for ${account.company_name} (legacy onboard)` })
+        } else {
+          msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
+          flags.push(`ERROR: Renewal MSA creation failed${msaError ? ` — ${msaError.message}` : ""}`)
+        }
+      } else {
+        msaStatus = "SKIPPED -- no installment amounts on account"
+        flags.push("FLAG: Missing installment amounts -- cannot create Renewal MSA. Set installment_1_amount and installment_2_amount on account first.")
+      }
+      lines.push(`Renewal MSA: ${msaStatus}`)
+    }
+
+    // ─── AUTO-CREATE SERVICE DELIVERIES ───
+    const { data: existingSDs } = await supabaseAdmin.from("service_deliveries")
+      .select("id, service_type, status").eq("account_id", account.id)
+    const existingSDTypes = new Set((existingSDs ?? []).map(s => s.service_type))
+    const createdSDs: string[] = []
+
+    if (account.formation_date && !existingSDTypes.has("Company Formation")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "Company Formation", pipeline: "Company Formation",
+        service_name: `Company Formation -- ${account.company_name}`,
+        stage: "Closing", stage_order: 6, status: "completed",
+        start_date: account.formation_date, assigned_to: "Luca",
+        notes: "Legacy onboard", stage_history: [{ to_stage: "Closing", to_order: 6, notes: "Legacy", advanced_at: new Date().toISOString() }],
+      })
+      createdSDs.push("Company Formation (completed)")
+    }
+
+    if (account.ein_number && !existingSDTypes.has("EIN")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "EIN", pipeline: "EIN",
+        service_name: `EIN -- ${account.company_name}`,
+        stage: "EIN Received", stage_order: 4, status: "completed",
+        start_date: account.formation_date || new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: `Legacy onboard - EIN ${account.ein_number}`, stage_history: [{ to_stage: "EIN Received", to_order: 4, notes: "Legacy", advanced_at: new Date().toISOString() }],
+      })
+      createdSDs.push("EIN (completed)")
+    }
+
+    if (!isOneTime && !existingSDTypes.has("Annual Renewal")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "Annual Renewal",
+        service_name: `Annual Renewal -- ${account.company_name}`,
+        status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: "Legacy onboard",
+      })
+      createdSDs.push("Annual Renewal (active)")
+    }
+
+    if (!isOneTime && !existingSDTypes.has("CMRA Mailing Address")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "CMRA Mailing Address",
+        service_name: `CMRA -- ${account.company_name}`,
+        status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: `Legacy onboard - address: ${account.physical_address}`,
+      })
+      createdSDs.push("CMRA (active)")
+    }
+
+    if (account.formation_date && account.formation_date < "2026-01-01") {
+      const { data: existingTR } = await supabaseAdmin.from("tax_returns")
+        .select("id").eq("company_name", account.company_name).eq("tax_year", 2025).maybeSingle()
+      if (!existingTR) {
+        flags.push("FLAG: No 2025 tax return record -- needs manual review with Antonio/Luca")
+      }
+    }
+
+    if (contact.itin_number && !existingSDTypes.has("ITIN")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "ITIN",
+        service_name: `ITIN -- ${account.company_name}`,
+        status: "completed", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: `Legacy onboard - ITIN ${contact.itin_number}`,
+      })
+      createdSDs.push("ITIN (completed)")
+    }
+
+    if (createdSDs.length > 0) lines.push(`SDs created: ${createdSDs.join(", ")}`)
+
+    // ─── AUTO-CREATE DEADLINES (Client accounts only) ───
+    const createdDeadlines: string[] = []
+    if (!isOneTime) {
+      const { data: existingDeadlines } = await supabaseAdmin.from("deadlines")
+        .select("deadline_type").eq("account_id", account.id)
+      const existingDLTypes = new Set((existingDeadlines ?? []).map(d => d.deadline_type))
+
+      if (account.formation_date && account.state_of_formation) {
+        const formDate = new Date(account.formation_date)
+        const formMonth = formDate.getMonth()
+        const formDay = formDate.getDate()
+        const nextYear = new Date().getFullYear() + 1
+        const state = account.state_of_formation
+        const llcType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+
+        if (!existingDLTypes.has("Annual Report")) {
+          let arDue: string | null = null
+          if (state === "Wyoming") arDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-01`
+          else if (state === "Florida") arDue = `${nextYear}-05-01`
+          else if (state === "Delaware") arDue = `${nextYear}-06-01`
+          if (arDue) {
+            await supabaseAdmin.from("deadlines").insert({
+              account_id: account.id, deadline_type: "Annual Report", due_date: arDue,
+              status: "Pending", state, year: nextYear, llc_type: llcType, assigned_to: "Luca",
+              deadline_record: `${account.company_name} - Annual Report ${nextYear}`, notes: "Legacy onboard",
+            })
+            createdDeadlines.push(`Annual Report ${arDue}`)
+          }
+        }
+
+        if (!existingDLTypes.has("RA Renewal")) {
+          const raDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-${String(formDay).padStart(2, "0")}`
+          await supabaseAdmin.from("deadlines").insert({
+            account_id: account.id, deadline_type: "RA Renewal", due_date: raDue,
+            status: "Pending", state, year: nextYear, llc_type: llcType, assigned_to: "Luca",
+            deadline_record: `${account.company_name} - RA Renewal ${nextYear}`, notes: "Legacy onboard",
+          })
+          createdDeadlines.push(`RA Renewal ${raDue}`)
+        }
+      }
+    }
+    if (createdDeadlines.length > 0) lines.push(`Deadlines created: ${createdDeadlines.join(", ")}`)
+
+    // OLD ADDRESS FLAG
+    if (isTDAddress(account.physical_address) && !isCurrentTDAddress(account.physical_address)) {
+      flags.push(`FLAG: Old TD address (${account.physical_address}) -- will need Form 8822-B to change to Ulmerton (do later)`)
+    }
+
+    // UPDATE ACCOUNT FLAGS
+    await supabaseAdmin.from("accounts").update({
+      portal_account: true,
+      portal_tier: "active",
+      portal_created_date: new Date().toISOString().split("T")[0],
+      notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed. [PORTAL_TRANSITION_SETUP]`,
+    }).eq("id", account.id)
+
+    logAction({
+      action_type: "update", table_name: "accounts", record_id: account.id, account_id: account.id,
+      summary: `Legacy portal onboard: ${account.company_name} -- ${visibleDocs.length} docs, ${createdSDs.length} SDs, OA: ${oaStatus}, Lease: ${leaseStatus}, MSA: ${msaStatus}`,
+    })
+
+    return { lines, flags, pendingDocs, skipped: false }
+  }
+
   server.tool(
     "portal_transition_setup",
-    `Prepare a legacy client for portal access. Fully automated end-to-end:
+    `Prepare a legacy client for portal access. Processes ALL active accounts for the contact in one shot.
 
-1. Scans Google Drive for unprocessed files and processes them (OCR + classify)
-2. Sets portal_visible on documents (allowed types visible, rest hidden)
-3. Auto-creates OA (English, draft) if missing
-4. Auto-creates Lease (auto-assign suite) if missing and client has TD address
-5. Auto-creates missing service deliveries (Formation, EIN, Annual Renewal, CMRA, Tax Return 2025)
-6. Auto-creates deadlines (Annual Report, RA Renewal by state rules)
-7. Creates portal account (auth user + contact/account flags)
-8. Generates the welcome email HTML for review -- DOES NOT SEND
+Per account:
+1. Scans Google Drive for unprocessed files (OCR + classify)
+2. Sets portal_visible on documents
+3. Auto-creates OA, Lease, Renewal MSA if missing (Client accounts only)
+4. Auto-creates service deliveries (Formation, EIN, Annual Renewal, CMRA, ITIN)
+5. Auto-creates deadlines (Annual Report, RA Renewal by state rules)
+6. Sets portal_account=true + portal_tier=active on the account
 
-Returns: full report + email HTML. Review the email, then call gmail_send to deliver it.
+Once (across all accounts):
+7. Creates auth user with full metadata (contact_id + account_ids)
+8. Sets portal_tier=active on the contact
+9. Generates welcome email HTML for review -- DOES NOT SEND
 
-For Client accounts with TD addresses (Ulmerton/Gulf/Park) only.
-One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual review.`,
+Pass any one account_id -- the tool finds the contact, then processes ALL their active accounts.
+Returns: full report + email HTML. Review the email, then call gmail_send to deliver it.`,
     {
-      account_id: z.string().uuid().describe("CRM account UUID"),
+      account_id: z.string().uuid().describe("Any CRM account UUID for this client — all active accounts for the same contact will be processed"),
     },
     async ({ account_id }) => {
       try {
-        // ─── 1. GET ACCOUNT ───
-        const { data: account } = await supabaseAdmin
-          .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
-          .eq("id", account_id)
-          .single()
-
-        if (!account) return { content: [{ type: "text" as const, text: "Account not found" }] }
-
-        // ─── 2. PRE-FLIGHT CHECKS ───
-        const flags: string[] = []
-
-        const isOneTime = account.account_type === "One-Time"
-
-        // Check TD address (Client accounts only — One-Time don't need TD address)
-        if (!isOneTime && !isTDAddress(account.physical_address)) {
-          flags.push(`FLAG: Non-TD address (${account.physical_address || "NULL"}) -- check annual report for real address`)
-          return { content: [{ type: "text" as const, text: `${account.company_name}\n\n${flags.join("\n")}\n\nOnly Client accounts with TD addresses (Ulmerton/Gulf/Park) can be auto-processed. This account needs manual address verification first.` }] }
-        }
-
-        // ─── 3. GET CONTACT (center of everything) ───
+        // ─── 1. RESOLVE CONTACT from the given account ───
         const { data: contactLinks } = await supabaseAdmin
           .from("account_contacts")
           .select("contact_id, role, ownership_pct, contact:contacts(id, full_name, email, phone, language, itin_number)")
           .eq("account_id", account_id)
 
         if (!contactLinks?.length) {
-          return { content: [{ type: "text" as const, text: `${account.company_name}\n\nBLOCKER: No contact linked to account. Cannot proceed.` }] }
+          return { content: [{ type: "text" as const, text: "BLOCKER: No contact linked to this account. Cannot proceed." }] }
         }
 
         const primaryLink = contactLinks[0]
@@ -110,433 +447,141 @@ One-Time accounts, non-TD addresses, and missing data are FLAGGED for manual rev
         }
 
         if (!contact?.email) {
-          return { content: [{ type: "text" as const, text: `${account.company_name}\n\nBLOCKER: Contact ${contact?.full_name || "unknown"} has no email. Cannot create portal account.` }] }
+          return { content: [{ type: "text" as const, text: `BLOCKER: Contact ${contact?.full_name || "unknown"} has no email. Cannot create portal account.` }] }
         }
 
-        // Determine language: default English, only use Italian if explicitly set
-        const allContacts = contactLinks.map(cl => cl.contact as unknown as { language: string | null })
-        const hasItalian = allContacts.some(c => c?.language?.toLowerCase().startsWith("it") || c?.language === "Italian")
+        // ─── 2. FIND ALL ACTIVE ACCOUNTS for this contact ───
+        const { data: allAccountLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id")
+          .eq("contact_id", contact.id)
+
+        const allAccountIds = (allAccountLinks ?? []).map(l => l.account_id)
+
+        const { data: allAccounts } = await supabaseAdmin
+          .from("accounts")
+          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+          .in("id", allAccountIds)
+          .eq("status", "Active")
+
+        const activeAccounts = allAccounts ?? []
+
+        if (activeAccounts.length === 0) {
+          return { content: [{ type: "text" as const, text: `No active accounts found for ${contact.full_name}. Nothing to process.` }] }
+        }
+
+        // Determine language
+        const hasItalian = contact.language?.toLowerCase().startsWith("it") || contact.language === "Italian"
         const lang: "en" | "it" = hasItalian ? "it" : "en"
 
-        // ─── 4. CHECK IF ALREADY DONE ───
-        if (account.portal_account) {
-          return { content: [{ type: "text" as const, text: `${account.company_name} -- portal already set up (portal_account=true). Skipping.` }] }
-        }
-
-        // Check if auth user already exists
+        // ─── 3. CHECK / CREATE AUTH USER (once) ───
         const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
         const existingAuth = (authUsers?.users ?? []).find(u => u.email === contact.email)
-        if (existingAuth) {
-          flags.push(`NOTE: Auth user already exists for ${contact.email} -- will skip portal_create_user`)
-        }
 
-        // ─── 5. SCAN DRIVE ───
-        const lines: string[] = [`== LEGACY PORTAL ONBOARD: ${account.company_name} ==`, ""]
-        let driveProcessed = 0
-        let driveSkipped = 0
-        if (account.drive_folder_id) {
-          const allFiles = await collectFilesRecursive(account.drive_folder_id, 3)
-          if (allFiles.length > 0) {
-            const fileIds = allFiles.map(f => f.id)
-            const existingIds = new Set<string>()
-            for (let i = 0; i < fileIds.length; i += 50) {
-              const chunk = fileIds.slice(i, i + 50)
-              const { data: existing } = await supabaseAdmin
-                .from("documents")
-                .select("drive_file_id")
-                .in("drive_file_id", chunk)
-              existing?.forEach(e => existingIds.add(e.drive_file_id))
-            }
-            const toProcess = allFiles.filter(f => !existingIds.has(f.id))
-            driveSkipped = allFiles.length - toProcess.length
-            for (const file of toProcess.slice(0, 20)) {
-              const r = await processFile(file.id, account.id, account.company_name)
-              if (r.success) driveProcessed++
-            }
-          }
-          lines.push(`Drive: ${driveProcessed} new files processed, ${driveSkipped} already in system`)
-        } else {
-          lines.push("Drive: no drive_folder_id linked")
-          flags.push("FLAG: No Drive folder linked")
-        }
-
-        // ─── 6. SET PORTAL_VISIBLE ON DOCUMENTS ───
-        const { data: docs } = await supabaseAdmin.from("documents")
-          .select("id, file_name, document_type_name, category, portal_visible, drive_link")
-          .eq("account_id", account_id)
-          .order("processed_at", { ascending: false })
-
-        const allDocs = docs ?? []
-        const allowedIds: string[] = []
-        const hiddenIds: string[] = []
-        const seenTypes = new Set<string>()
-
-        for (const doc of allDocs) {
-          const typeName = doc.document_type_name ?? ""
-          const docCategory = doc.category as number | null
-          const isVisibleByType = PORTAL_VISIBLE_DOC_TYPES.includes(typeName) && !seenTypes.has(typeName)
-          const isVisibleByCategory = docCategory != null && PORTAL_VISIBLE_CATEGORIES.includes(docCategory)
-          if (isVisibleByType || isVisibleByCategory) {
-            if (isVisibleByType) seenTypes.add(typeName)
-            allowedIds.push(doc.id)
-          } else {
-            hiddenIds.push(doc.id)
-          }
-        }
-
-        if (allowedIds.length > 0) await supabaseAdmin.from("documents").update({ portal_visible: true }).in("id", allowedIds)
-        if (hiddenIds.length > 0) await supabaseAdmin.from("documents").update({ portal_visible: false }).in("id", hiddenIds)
-
-        const visibleDocs = allDocs.filter(d => allowedIds.includes(d.id))
-        lines.push(`Documents: ${visibleDocs.length} visible, ${hiddenIds.length} hidden`)
-        for (const d of visibleDocs) lines.push(`  ${d.document_type_name}`)
-
-        // ─── 7-9. AUTO-CREATE OA, LEASE, RENEWAL MSA (Client accounts only) ───
-        const pendingDocs: string[] = []
-
-        let oaStatus = "N/A"
-        let leaseStatus = "N/A"
-        let msaStatus = "N/A"
-
-        if (isOneTime) {
-          lines.push("OA: SKIPPED (One-Time account)")
-          lines.push("Lease: SKIPPED (One-Time account)")
-          lines.push("Renewal MSA: SKIPPED (One-Time account)")
-        }
-
-        // --- BEGIN: Client-only document creation ---
-        if (!isOneTime) {
-
-        const { data: existingOA } = await supabaseAdmin.from("oa_agreements")
-          .select("id, status").eq("account_id", account_id).maybeSingle()
-
-        oaStatus = ""
-        if (existingOA) {
-          oaStatus = existingOA.status === "signed" ? "Signed" : `Exists (${existingOA.status})`
-          if (existingOA.status !== "signed") pendingDocs.push("Operating Agreement")
-        } else {
-          const entityType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
-          const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-          const token = `${companySlug}-oa-${new Date().getFullYear()}`
-          const today = new Date().toISOString().slice(0, 10)
-          const { data: newOa } = await supabaseAdmin.from("oa_agreements").insert({
-            token, account_id: account.id, contact_id: contact.id,
-            company_name: account.company_name,
-            state_of_formation: account.state_of_formation || "Wyoming",
-            formation_date: account.formation_date || today,
-            ein_number: account.ein_number || null,
-            entity_type: entityType, manager_name: contact.full_name,
-            member_name: contact.full_name, member_email: contact.email,
-            effective_date: today,
-            business_purpose: "any and all lawful business activities",
-            initial_contribution: "$0.00", fiscal_year_end: "December 31",
-            accounting_method: "Cash", duration: "Perpetual",
-            principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
-            language: "en", status: "draft",
-          }).select("id").single()
-          if (newOa) {
-            oaStatus = "AUTO-CREATED (draft)"
-            pendingDocs.push("Operating Agreement")
-            logAction({ action_type: "create", table_name: "oa_agreements", record_id: newOa.id, account_id: account.id, summary: `Auto-created OA for ${account.company_name} (legacy onboard)` })
-          } else {
-            oaStatus = "FAILED to create"
-            flags.push("ERROR: OA creation failed")
-          }
-        }
-        lines.push(`OA: ${oaStatus}`)
-
-        // ─── 8. AUTO-CREATE LEASE (only if TD address and no existing lease or Drive doc) ───
-        const { data: existingLease } = await supabaseAdmin.from("lease_agreements")
-          .select("id, status, suite_number").eq("account_id", account_id).maybeSingle()
-        const hasLeaseDriveDoc = allDocs.find(d => d.document_type_name === "Office Lease" && d.drive_link)
-
-        leaseStatus = ""
-        if (existingLease) {
-          leaseStatus = existingLease.status === "signed" ? `Signed (Suite ${existingLease.suite_number})` : `Exists (${existingLease.status}, Suite ${existingLease.suite_number})`
-          if (existingLease.status !== "signed") pendingDocs.push("Lease Agreement")
-        } else if (hasLeaseDriveDoc) {
-          leaseStatus = "Signed (detected from Drive)"
-        } else {
-          // Auto-assign next suite
-          const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
-            .select("suite_number").order("suite_number", { ascending: false }).limit(1)
-          let assignedSuite = "3D-101"
-          if (lastLeases?.length) {
-            const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
-            assignedSuite = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
-          }
-          const year = new Date().getFullYear()
-          const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-          const today = new Date().toISOString().slice(0, 10)
-          const { data: newLease } = await supabaseAdmin.from("lease_agreements").insert({
-            token: `${companySlug}-${year}`, account_id: account.id, contact_id: contact.id,
-            tenant_company: account.company_name, tenant_contact_name: contact.full_name,
-            tenant_email: contact.email, suite_number: assignedSuite,
-            premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-            effective_date: today, term_start_date: today, term_end_date: `${year}-12-31`,
-            contract_year: year, term_months: 12, monthly_rent: 100, yearly_rent: 1200,
-            security_deposit: 150, square_feet: 120, status: "draft", language: "en",
-          }).select("id, suite_number").single()
-          if (newLease) {
-            leaseStatus = `AUTO-CREATED (draft, Suite ${newLease.suite_number})`
-            pendingDocs.push("Lease Agreement")
-            logAction({ action_type: "create", table_name: "lease_agreements", record_id: newLease.id, account_id: account.id, summary: `Auto-created lease for ${account.company_name} Suite ${newLease.suite_number} (legacy onboard)` })
-          } else {
-            leaseStatus = "FAILED to create"
-            flags.push("ERROR: Lease creation failed")
-          }
-        }
-        lines.push(`Lease: ${leaseStatus}`)
-
-        // ─── 9. AUTO-CREATE RENEWAL MSA ───
-        const { data: existingMSA } = await supabaseAdmin.from("offers")
-          .select("id, token, status").eq("account_id", account_id).eq("contract_type", "renewal").maybeSingle()
-
-        msaStatus = ""
-        if (existingMSA) {
-          msaStatus = `Exists (${existingMSA.status}, token: ${existingMSA.token})`
-          if (existingMSA.status !== "signed" && existingMSA.status !== "completed") pendingDocs.push("Contratto Annuale")
-        } else if (account.installment_1_amount) {
-          // Create renewal MSA with installment amounts from account
-          const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-          const year = new Date().getFullYear()
-          const token = `renewal-${companySlug}-${year}`
-          const today = new Date().toISOString().slice(0, 10)
-          const { data: newMSA, error: msaError } = await supabaseAdmin.from("offers").insert({
-            token, account_id: account.id, client_name: contact.full_name,
-            client_email: contact.email, language: lang, contract_type: "renewal",
-            payment_type: "bank_transfer", status: "draft", offer_date: today,
-            effective_date: `${year}-01-01`,
-            bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
-            services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
-            cost_summary: [
-              { label: "First Installment (January)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
-              { label: "Second Installment (June)", items: [{ name: "Annual Management", price: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` },
-            ],
-          }).select("id, token").single()
-          if (newMSA) {
-            msaStatus = `AUTO-CREATED (draft, token: ${newMSA.token})`
-            pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
-            logAction({ action_type: "create", table_name: "offers", record_id: newMSA.id, account_id: account.id, summary: `Auto-created renewal MSA for ${account.company_name} (legacy onboard)` })
-          } else {
-            msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
-            flags.push(`ERROR: Renewal MSA creation failed${msaError ? ` — ${msaError.message}` : ""}`)
-          }
-        } else {
-          msaStatus = "SKIPPED -- no installment amounts on account"
-          flags.push("FLAG: Missing installment amounts -- cannot create Renewal MSA. Set installment_1_amount and installment_2_amount on account first.")
-        }
-        lines.push(`Renewal MSA: ${msaStatus}`)
-
-        } // --- END: Client-only document creation ---
-
-        // ─── 10. AUTO-CREATE SERVICE DELIVERIES ───
-        const { data: existingSDs } = await supabaseAdmin.from("service_deliveries")
-          .select("id, service_type, status").eq("account_id", account_id)
-        const existingSDTypes = new Set((existingSDs ?? []).map(s => s.service_type))
-        const createdSDs: string[] = []
-
-        // Company Formation (completed)
-        if (account.formation_date && !existingSDTypes.has("Company Formation")) {
-          await supabaseAdmin.from("service_deliveries").insert({
-            account_id: account.id, service_type: "Company Formation", pipeline: "Company Formation",
-            service_name: `Company Formation -- ${account.company_name}`,
-            stage: "Closing", stage_order: 6, status: "completed",
-            start_date: account.formation_date, assigned_to: "Luca",
-            notes: "Legacy onboard", stage_history: [{ to_stage: "Closing", to_order: 6, notes: "Legacy", advanced_at: new Date().toISOString() }],
-          })
-          createdSDs.push("Company Formation (completed)")
-        }
-
-        // EIN (completed)
-        if (account.ein_number && !existingSDTypes.has("EIN")) {
-          await supabaseAdmin.from("service_deliveries").insert({
-            account_id: account.id, service_type: "EIN", pipeline: "EIN",
-            service_name: `EIN -- ${account.company_name}`,
-            stage: "EIN Received", stage_order: 4, status: "completed",
-            start_date: account.formation_date || new Date().toISOString().slice(0, 10), assigned_to: "Luca",
-            notes: `Legacy onboard - EIN ${account.ein_number}`, stage_history: [{ to_stage: "EIN Received", to_order: 4, notes: "Legacy", advanced_at: new Date().toISOString() }],
-          })
-          createdSDs.push("EIN (completed)")
-        }
-
-        // Annual Renewal (active) — Client accounts only
-        if (!isOneTime && !existingSDTypes.has("Annual Renewal")) {
-          await supabaseAdmin.from("service_deliveries").insert({
-            account_id: account.id, service_type: "Annual Renewal",
-            service_name: `Annual Renewal -- ${account.company_name}`,
-            status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
-            notes: "Legacy onboard",
-          })
-          createdSDs.push("Annual Renewal (active)")
-        }
-
-        // CMRA (active) — Client accounts with TD address only
-        if (!isOneTime && !existingSDTypes.has("CMRA Mailing Address")) {
-          await supabaseAdmin.from("service_deliveries").insert({
-            account_id: account.id, service_type: "CMRA Mailing Address",
-            service_name: `CMRA -- ${account.company_name}`,
-            status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
-            notes: `Legacy onboard - address: ${account.physical_address}`,
-          })
-          createdSDs.push("CMRA (active)")
-        }
-
-        // Tax Return 2025 (active) - if formed before 2026
-        if (account.formation_date && account.formation_date < "2026-01-01") {
-          const { data: existingTR } = await supabaseAdmin.from("tax_returns")
-            .select("id").eq("company_name", account.company_name).eq("tax_year", 2025).maybeSingle()
-          if (!existingTR) {
-            flags.push("FLAG: No 2025 tax return record -- needs manual review with Antonio/Luca")
-          }
-        }
-
-        // ITIN (completed) if contact has itin_number
-        if (contact.itin_number && !existingSDTypes.has("ITIN")) {
-          await supabaseAdmin.from("service_deliveries").insert({
-            account_id: account.id, service_type: "ITIN",
-            service_name: `ITIN -- ${account.company_name}`,
-            status: "completed", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
-            notes: `Legacy onboard - ITIN ${contact.itin_number}`,
-          })
-          createdSDs.push("ITIN (completed)")
-        }
-
-        if (createdSDs.length > 0) lines.push(`SDs created: ${createdSDs.join(", ")}`)
-
-        // ─── 11. AUTO-CREATE DEADLINES (Client accounts only) ───
-        const createdDeadlines: string[] = []
-        if (!isOneTime) {
-        const { data: existingDeadlines } = await supabaseAdmin.from("deadlines")
-          .select("deadline_type").eq("account_id", account_id)
-        const existingDLTypes = new Set((existingDeadlines ?? []).map(d => d.deadline_type))
-
-        if (account.formation_date && account.state_of_formation) {
-          const formDate = new Date(account.formation_date)
-          const formMonth = formDate.getMonth()
-          const formDay = formDate.getDate()
-          const nextYear = new Date().getFullYear() + 1
-          const state = account.state_of_formation
-          const llcType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
-
-          // Annual Report
-          if (!existingDLTypes.has("Annual Report")) {
-            let arDue: string | null = null
-            if (state === "Wyoming") arDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-01`
-            else if (state === "Florida") arDue = `${nextYear}-05-01`
-            else if (state === "Delaware") arDue = `${nextYear}-06-01`
-            // NM has no annual report
-            if (arDue) {
-              await supabaseAdmin.from("deadlines").insert({
-                account_id: account.id, deadline_type: "Annual Report", due_date: arDue,
-                status: "Pending", state, year: nextYear, llc_type: llcType, assigned_to: "Luca",
-                deadline_record: `${account.company_name} - Annual Report ${nextYear}`, notes: "Legacy onboard",
-              })
-              createdDeadlines.push(`Annual Report ${arDue}`)
-            }
-          }
-
-          // RA Renewal
-          if (!existingDLTypes.has("RA Renewal")) {
-            const raDue = `${nextYear}-${String(formMonth + 1).padStart(2, "0")}-${String(formDay).padStart(2, "0")}`
-            await supabaseAdmin.from("deadlines").insert({
-              account_id: account.id, deadline_type: "RA Renewal", due_date: raDue,
-              status: "Pending", state, year: nextYear, llc_type: llcType, assigned_to: "Luca",
-              deadline_record: `${account.company_name} - RA Renewal ${nextYear}`, notes: "Legacy onboard",
-            })
-            createdDeadlines.push(`RA Renewal ${raDue}`)
-          }
-        }
-
-        } // end !isOneTime deadlines
-        if (createdDeadlines.length > 0) lines.push(`Deadlines created: ${createdDeadlines.join(", ")}`)
-
-        // ─── 12. OLD ADDRESS FLAG ───
-        if (isTDAddress(account.physical_address) && !isCurrentTDAddress(account.physical_address)) {
-          flags.push(`FLAG: Old TD address (${account.physical_address}) -- will need Form 8822-B to change to Ulmerton (do later)`)
-        }
-
-        // ─── 13. CREATE PORTAL ACCOUNT ───
         let tempPassword = ""
         let portalCreated = false
+        const globalFlags: string[] = []
+
         if (!existingAuth) {
           tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
           const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
             email: contact.email, password: tempPassword, email_confirm: true,
-            app_metadata: { role: "client", contact_id: contact.id },
+            app_metadata: {
+              role: "client",
+              contact_id: contact.id,
+              portal_tier: "active",
+              account_ids: activeAccounts.map(a => a.id),
+            },
             user_metadata: { full_name: contact.full_name, must_change_password: true },
           })
           if (createError || !newUser) {
-            flags.push(`ERROR: Portal account creation failed: ${createError?.message || "unknown"}`)
+            globalFlags.push(`ERROR: Portal account creation failed: ${createError?.message || "unknown"}`)
           } else {
             portalCreated = true
-            logAction({ action_type: "create", table_name: "auth.users", record_id: newUser.user.id, account_id: account.id, summary: `Portal user created: ${contact.full_name} (${contact.email})` })
+            logAction({ action_type: "create", table_name: "auth.users", record_id: newUser.user.id, account_id: account_id, summary: `Portal user created: ${contact.full_name} (${contact.email}) — ${activeAccounts.length} accounts` })
           }
         } else {
-          lines.push(`Portal account: already exists (${contact.email})`)
+          // Repair existing auth user metadata
+          await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
+            app_metadata: {
+              ...existingAuth.app_metadata,
+              role: "client",
+              contact_id: contact.id,
+              portal_tier: "active",
+              account_ids: activeAccounts.map(a => a.id),
+            },
+          })
+          globalFlags.push(`NOTE: Auth user already exists for ${contact.email} -- metadata repaired (account_ids synced)`)
         }
 
-        // ─── 14. UPDATE CRM FLAGS ───
-        // NOTE: portal_account stays FALSE until the email is actually sent.
-        // The session must call gmail_send, then update portal_account=true + portal_email_sent_at.
-        // This prevents the bug where accounts are marked as "done" but the client was never notified.
-        await supabaseAdmin.from("accounts").update({
-          portal_tier: "active",
-          portal_created_date: new Date().toISOString().split("T")[0],
-          notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed. Email NOT sent yet. [PORTAL_TRANSITION_SETUP]`,
-        }).eq("id", account.id)
-
+        // Update contact tier
         await supabaseAdmin.from("contacts").update({
           portal_tier: "active",
         }).eq("id", contact.id)
 
-        // ─── 15. GENERATE EMAIL (DO NOT SEND) ───
+        // ─── 4. PROCESS EACH ACCOUNT ───
+        const reportLines: string[] = [
+          `== LEGACY PORTAL ONBOARD: ${contact.full_name} ==`,
+          `Contact: ${contact.email}`,
+          `Active accounts: ${activeAccounts.length} (${activeAccounts.map(a => a.company_name).join(", ")})`,
+          "",
+        ]
+        const allPendingDocs: string[] = []
+
+        for (const acct of activeAccounts) {
+          const result = await processAccountForTransition(acct, contact, lang)
+          reportLines.push(...result.lines)
+          reportLines.push("")
+          globalFlags.push(...result.flags)
+          allPendingDocs.push(...result.pendingDocs)
+        }
+
+        // ─── 5. BUILD SUMMARY ───
+        reportLines.push("== SUMMARY ==")
+        if (portalCreated) {
+          reportLines.push(`Portal account: CREATED (${contact.email}, password: ${tempPassword})`)
+        } else {
+          reportLines.push(`Portal account: already existed (${contact.email}) -- metadata repaired`)
+        }
+        reportLines.push(`Portal tier: active`)
+        reportLines.push(`Language: ${lang}`)
+        reportLines.push(`Accounts processed: ${activeAccounts.length}`)
+        reportLines.push(`Pending docs to sign: ${allPendingDocs.length > 0 ? allPendingDocs.join(", ") : "none"}`)
+
+        if (globalFlags.length > 0) {
+          reportLines.push("")
+          reportLines.push("--- FLAGS ---")
+          for (const f of globalFlags) reportLines.push(`  ${f}`)
+        }
+
+        // ─── 6. GENERATE EMAIL (DO NOT SEND) ───
         const portalUrl = `${PORTAL_BASE_URL}/portal/login`
         const firstName = contact.full_name.split(" ")[0]
+        // Use first account name in email, but mention all companies
+        const primaryCompany = activeAccounts[0].company_name
         const emailHtml = buildTransitionWelcomeEmail(
           firstName, contact.email, tempPassword || "[existing password]",
-          portalUrl, account.company_name, lang, pendingDocs,
+          portalUrl, primaryCompany, lang, allPendingDocs,
         )
         const emailSubject = lang === "it"
           ? `Il Tuo Nuovo Portale Clienti -- Tony Durante LLC`
           : `Your New Client Portal -- Tony Durante LLC`
 
-        // ─── 16. BUILD REPORT ───
-        lines.push("")
-        if (portalCreated) {
-          lines.push(`Portal account: CREATED (${contact.email}, password: ${tempPassword})`)
-        }
-        lines.push(`Portal tier: active`)
-        lines.push(`Language: ${lang}`)
-        lines.push(`Pending docs to sign: ${pendingDocs.length > 0 ? pendingDocs.join(", ") : "none"}`)
-
-        if (flags.length > 0) {
-          lines.push("")
-          lines.push("--- FLAGS ---")
-          for (const f of flags) lines.push(`  ${f}`)
-        }
-
-        lines.push("")
-        lines.push("--- EMAIL READY FOR REVIEW ---")
-        lines.push(`To: ${contact.email}`)
-        lines.push(`Subject: ${emailSubject}`)
-        lines.push(`Language: ${lang}`)
-        lines.push("")
-        lines.push("Review the email, then send with:")
-        lines.push(`gmail_send(to: "${contact.email}", subject: "${emailSubject}", body_html: [the HTML below], account_id: "${account.id}", contact_id: "${contact.id}", tag: "portal-credentials")`)
-        lines.push("")
-        lines.push("AFTER sending, you MUST run these 2 updates:")
-        lines.push(`1. crm_update_record(accounts, "${account.id}", {portal_account: true})`)
-        lines.push(`2. crm_update_record(contacts, "${contact.id}", {portal_email_sent_at: "${new Date().toISOString().split("T")[0]}", portal_email_template: "${lang === "it" ? "it-branded-v2" : "en-branded-v2"}"})`)
-
-        logAction({
-          action_type: "update", table_name: "accounts", record_id: account.id, account_id: account.id,
-          summary: `Legacy portal onboard complete: ${account.company_name} -- ${visibleDocs.length} docs, ${createdSDs.length} SDs, OA: ${oaStatus}, Lease: ${leaseStatus}, MSA: ${msaStatus}`,
-        })
+        reportLines.push("")
+        reportLines.push("--- EMAIL READY FOR REVIEW ---")
+        reportLines.push(`To: ${contact.email}`)
+        reportLines.push(`Subject: ${emailSubject}`)
+        reportLines.push(`Language: ${lang}`)
+        reportLines.push("")
+        reportLines.push("Review the email, then send with:")
+        reportLines.push(`gmail_send(to: "${contact.email}", subject: "${emailSubject}", body_html: [the HTML below], account_id: "${activeAccounts[0].id}", contact_id: "${contact.id}", tag: "portal-credentials")`)
+        reportLines.push("")
+        reportLines.push("AFTER sending, update the contact:")
+        reportLines.push(`crm_update_record(contacts, "${contact.id}", {portal_email_sent_at: "${new Date().toISOString().split("T")[0]}", portal_email_template: "${lang === "it" ? "it-branded-v2" : "en-branded-v2"}"})`)
 
         return {
           content: [
-            { type: "text" as const, text: lines.join("\n") },
+            { type: "text" as const, text: reportLines.join("\n") },
             { type: "text" as const, text: "\n\n--- EMAIL HTML ---\n\n" + emailHtml },
           ],
         }
