@@ -156,6 +156,8 @@ export default function OfferPageWithCode() {
   const [emailError, setEmailError] = useState(false)
   const [lang, setLang] = useState<'en' | 'it'>('it')
   const [selectedOptional, setSelectedOptional] = useState<Set<string>>(new Set())
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [showBankDetails, setShowBankDetails] = useState(false)
 
   const L = LABELS[lang]
 
@@ -645,8 +647,106 @@ export default function OfferPageWithCode() {
 
             {isSigned && <p style={{ fontSize: 18, marginBottom: 16 }}>&#10004; {L.contractSigned}</p>}
 
-            {/* Payment Info — informational, dynamic based on selected services */}
-            {(dynamicTotal || o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
+            {/* SIGNED — Interactive payment buttons */}
+            {isSigned && (o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
+              <>
+                <p style={{ fontSize: 15, opacity: 0.9, marginBottom: 24 }}>
+                  {lang === 'it' ? L.proceedPayment : L.proceedPayment}
+                </p>
+                <div className="offer-payment-buttons">
+                  {/* Pay by Card button */}
+                  {(o.payment_type === 'checkout' || o.payment_links?.length) && (
+                    <button
+                      className="offer-payment-btn"
+                      disabled={checkoutLoading}
+                      onClick={async () => {
+                        setCheckoutLoading(true)
+                        try {
+                          const res = await fetch('/api/offers/create-checkout', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ token }),
+                          })
+                          if (res.ok) {
+                            const data = await res.json()
+                            if (data.checkoutUrl) {
+                              window.location.href = data.checkoutUrl
+                              return
+                            }
+                          }
+                          // Fallback: use existing payment_links
+                          if (o.payment_links?.[0]?.url) {
+                            window.location.href = o.payment_links[0].url
+                            return
+                          }
+                          alert(lang === 'it' ? 'Errore nella creazione del pagamento. Riprova.' : 'Error creating payment session. Please try again.')
+                        } catch {
+                          alert(lang === 'it' ? 'Errore di connessione. Riprova.' : 'Connection error. Please try again.')
+                        } finally {
+                          setCheckoutLoading(false)
+                        }
+                      }}
+                    >
+                      {checkoutLoading
+                        ? (lang === 'it' ? '⏳ Caricamento...' : '⏳ Loading...')
+                        : <>&#128179; {L.payByCard} — {dynamicTotal ? dynamicTotal.cardFormatted : (o.payment_links?.[0]?.amount ?? '')}</>
+                      }
+                      {!checkoutLoading && o.bank_details && <span className="offer-surcharge-tag">+5%</span>}
+                    </button>
+                  )}
+
+                  {/* Divider */}
+                  {(o.payment_type === 'checkout' || o.payment_links?.length) && o.bank_details && (
+                    <div className="offer-pay-info-or">{lang === 'it' ? 'oppure' : 'or'}</div>
+                  )}
+
+                  {/* Bank Transfer button */}
+                  {o.bank_details && (
+                    <button
+                      className="offer-payment-btn offer-payment-btn-bank"
+                      onClick={() => setShowBankDetails(!showBankDetails)}
+                    >
+                      &#127974; {L.payByTransfer} — {dynamicTotal ? dynamicTotal.formatted : dynamicPaymentAmount}
+                    </button>
+                  )}
+                </div>
+
+                {/* Bank details panel — shown when bank transfer is selected */}
+                {showBankDetails && o.bank_details && (
+                  <div className="offer-bank-box" style={{ marginTop: 24 }}>
+                    <div className="offer-bank-title">{L.bankDetails}</div>
+                    {o.bank_details.beneficiary && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.beneficiary}</span><span className="offer-bank-value">{o.bank_details.beneficiary}</span></div>
+                    )}
+                    {o.bank_details.account_number && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.accountNumber}</span><span className="offer-bank-value">{o.bank_details.account_number}</span></div>
+                    )}
+                    {o.bank_details.routing_number && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.routingNumber}</span><span className="offer-bank-value">{o.bank_details.routing_number}</span></div>
+                    )}
+                    {o.bank_details.iban && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.iban}</span><span className="offer-bank-value">{o.bank_details.iban}</span></div>
+                    )}
+                    {o.bank_details.bic && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.bic}</span><span className="offer-bank-value">{o.bank_details.bic}</span></div>
+                    )}
+                    {o.bank_details.bank_name && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.bank}</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>
+                    )}
+                    {(o.bank_details.bank_address || (o.bank_details as any).address) && (
+                      <div className="offer-bank-row"><span className="offer-bank-label">{L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address || (o.bank_details as any).address}</span></div>
+                    )}
+                    {o.bank_details.reference && (
+                      <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>
+                    )}
+                    <div className="offer-bank-amount">{dynamicTotal ? dynamicTotal.formatted : dynamicPaymentAmount}</div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* NOT SIGNED — Static payment info preview */}
+            {!isSigned && (dynamicTotal || o.payment_type === 'checkout' || o.payment_links?.length || o.bank_details) && (
               <div className="offer-pay-info">
                 {(o.payment_type === 'checkout' || o.payment_links?.length) && o.bank_details ? (
                   <>
@@ -845,6 +945,9 @@ function OfferStyles() {
       .offer-payment-buttons { display: flex; flex-direction: column; gap: 12px; align-items: center; }
       .offer-payment-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: #fff; padding: 16px 48px; border-radius: 10px; font-weight: 700; font-size: 17px; text-decoration: none; transition: transform .2s, box-shadow .2s; min-width: 320px; box-shadow: 0 4px 14px rgba(34,197,94,.3); }
       .offer-payment-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(34,197,94,.4); }
+      .offer-payment-btn:disabled { opacity: .7; cursor: wait; transform: none; }
+      .offer-payment-btn-bank { background: linear-gradient(135deg, #1e3a5f 0%, #162d4a 100%); box-shadow: 0 4px 14px rgba(30,58,95,.3); }
+      .offer-payment-btn-bank:hover { box-shadow: 0 8px 24px rgba(30,58,95,.4); }
       .offer-payment-note { font-size: 13px; opacity: .7; margin-top: 12px; }
       .offer-payment-secure { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; font-size: 12px; opacity: .5; }
 
