@@ -751,7 +751,7 @@ function QuickActionsBar({
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="relative z-10 flex flex-wrap items-center gap-2">
         <span title="Quick actions available for this client based on their current stage.">
           <Zap className="h-4 w-4 text-zinc-400" />
         </span>
@@ -821,7 +821,7 @@ function QuickActionsBar({
               <ChevronDownIcon className="h-3 w-3" />
             </button>
             {showAdvanceDropdown && (
-              <div className="absolute left-0 top-full mt-1 z-20 bg-white border rounded-lg shadow-lg py-1 min-w-[280px]">
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white border rounded-lg shadow-xl py-1 min-w-[280px]">
                 {activeSds.map(sd => (
                   <button
                     key={sd.id}
