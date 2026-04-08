@@ -33,6 +33,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Offer not found" }, { status: 404 })
     }
 
+    // Verify the offer was actually signed (has signature + signed status)
+    if (!offer.signed_at && offer.status !== "signed" && offer.status !== "completed") {
+      console.error("[offer-signed] Offer not signed:", offer_token, "status:", offer.status)
+      return NextResponse.json({ error: "Offer not signed" }, { status: 403 })
+    }
+
     // Check if pending_activation already exists
     const { data: existing } = await supabase
       .from("pending_activations")
