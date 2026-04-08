@@ -26,7 +26,8 @@ function extractUploadPaths(data: Record<string, unknown>): string[] {
     if (typeof val === 'string' && (
       val.includes('/passport_') || val.includes('/articles_') ||
       val.includes('/ein_') || val.includes('/ss4_') ||
-      val.includes('/bank_statement') || val.includes('/tax_return')
+      val.includes('/bank_statement') || val.includes('/tax_return') ||
+      val.includes('/proof_of_address') || val.includes('/business_bank_statement')
     )) {
       paths.push(val)
     }
@@ -258,6 +259,68 @@ export async function POST(req: NextRequest) {
         } catch (e) {
           console.error('[wizard-submit] Task creation error:', e)
         }
+      }
+
+      // Advance Banking Fintech service delivery: Data Collection → Application Submitted
+      if (account_id) {
+        try {
+          const { data: sd } = await supabaseAdmin
+            .from('service_deliveries')
+            .select('id, stage, stage_history')
+            .eq('account_id', account_id)
+            .eq('service_type', 'Banking Fintech')
+            .eq('status', 'active')
+            .limit(1)
+            .maybeSingle()
+
+          if (sd && sd.stage === 'Data Collection') {
+            const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
+            history.push({
+              event: 'banking_wizard_submitted',
+              at: new Date().toISOString(),
+              note: `${provider} banking form submitted via portal wizard`,
+            })
+            await supabaseAdmin
+              .from('service_deliveries')
+              .update({ stage: 'Application Submitted', stage_history: history, updated_at: new Date().toISOString() })
+              .eq('id', sd.id)
+          }
+        } catch (e) {
+          console.error('[wizard-submit] SD advance error:', e)
+        }
+      }
+
+      // Update banking_submissions record so MCP tools see current data
+      if (account_id) {
+        try {
+          const providerSlug = wizard_type === 'banking_relay' ? 'relay' : 'payset'
+          await supabaseAdmin
+            .from('banking_submissions')
+            .update({
+              submitted_data: data,
+              status: 'completed',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('account_id', account_id)
+            .eq('provider', providerSlug)
+        } catch (e) {
+          console.error('[wizard-submit] banking_submissions update error:', e)
+        }
+      }
+
+      // Log to action_log for CRM Recent Activity feed
+      try {
+        await supabaseAdmin.from('action_log').insert({
+          actor: 'portal_wizard',
+          action_type: 'form_submitted',
+          table_name: 'wizard_progress',
+          record_id: progress_id || null,
+          account_id: account_id || null,
+          summary: `Banking application submitted: ${provider} — ${compName}`,
+          details: { wizard_type, provider },
+        })
+      } catch (e) {
+        console.error('[wizard-submit] action_log error:', e)
       }
 
       return NextResponse.json({ success: true, provider: wizard_type })
