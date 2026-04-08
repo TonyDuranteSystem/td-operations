@@ -23,18 +23,12 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
     error?: string
   } | null>(null)
 
-  const [suiteNumber, setSuiteNumber] = useState('')
   const [monthlyRent, setMonthlyRent] = useState('100')
   const [securityDeposit, setSecurityDeposit] = useState('150')
 
   if (!open) return null
 
   const handleGenerate = () => {
-    if (!suiteNumber.trim()) {
-      toast.error('Suite number is required')
-      return
-    }
-
     startTransition(async () => {
       try {
         const res = await fetch('/api/crm/admin-actions/generate-document', {
@@ -43,7 +37,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
           body: JSON.stringify({
             action: 'generate_lease',
             account_id: accountId,
-            suite_number: suiteNumber.trim(),
+            // suite_number omitted — auto-assigned by backend
             monthly_rent: parseInt(monthlyRent) || 100,
             security_deposit: parseInt(securityDeposit) || 150,
           }),
@@ -63,7 +57,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
         }
 
         setResult({ success: true, token: data.token, admin_preview: data.admin_preview, suite_number: data.suite_number })
-        toast.success(`Lease created for ${companyName}`)
+        toast.success(`Lease created for ${companyName} — Suite ${data.suite_number}`)
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Error')
@@ -95,19 +89,8 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
               </div>
 
               <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Suite Number <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={suiteNumber}
-                    onChange={e => setSuiteNumber(e.target.value)}
-                    placeholder="e.g., 3D-107"
-                    className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    autoFocus
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">Format: 3D-XXX (each client gets a unique suite)</p>
+                <div className="text-xs text-muted-foreground bg-blue-50 rounded-lg p-3">
+                  Suite number will be auto-assigned (next available 3D-XXX)
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -172,7 +155,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName }: G
               </button>
               <button
                 onClick={handleGenerate}
-                disabled={isPending || !suiteNumber.trim()}
+                disabled={isPending}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Home className="h-4 w-4" />}

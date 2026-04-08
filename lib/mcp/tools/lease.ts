@@ -41,7 +41,7 @@ Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path
 Workflow: lease_create → lease_get (review with admin preview link) → lease_send → client views → signs → PDF saved.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
-      suite_number: z.string().describe("Suite number assigned to tenant (e.g. '3D-107'). REQUIRED."),
+      suite_number: z.string().optional().describe("Suite number assigned to tenant (e.g. '3D-107'). Auto-assigned if omitted."),
       effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
       term_start_date: z.string().optional().describe("Lease start date YYYY-MM-DD (default: today)"),
       term_end_date: z.string().optional().describe("Lease end date YYYY-MM-DD (default: December 31 of current year)"),
@@ -115,7 +115,19 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
         const monthlyRent = params.monthly_rent ?? 100
         const yearlyRent = params.yearly_rent ?? (monthlyRent * 12)
 
-        // ─── 6. INSERT ───
+        // ─── 6. AUTO-ASSIGN SUITE IF NOT PROVIDED ───
+        let suiteNumber = params.suite_number
+        if (!suiteNumber) {
+          const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
+            .select("suite_number").order("suite_number", { ascending: false }).limit(1)
+          suiteNumber = "3D-101"
+          if (lastLeases?.length) {
+            const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
+            if (!isNaN(lastNum)) suiteNumber = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
+          }
+        }
+
+        // ─── 7. INSERT ───
         const { data: lease, error: insertErr } = await supabaseAdmin
           .from("lease_agreements")
           .insert({
@@ -128,7 +140,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
             tenant_contact_name: contact.full_name,
             tenant_email: contact.email || null,
             premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-            suite_number: params.suite_number,
+            suite_number: suiteNumber,
             square_feet: params.square_feet ?? 120,
             effective_date: effectiveDate,
             term_start_date: termStartDate,
@@ -155,8 +167,8 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           table_name: "lease_agreements",
           record_id: lease.id,
           account_id: params.account_id,
-          summary: `Created lease agreement for ${account.company_name} (${year}), Suite ${params.suite_number}`,
-          details: { token: lease.token, suite_number: params.suite_number, year },
+          summary: `Created lease agreement for ${account.company_name} (${year}), Suite ${suiteNumber}`,
+          details: { token: lease.token, suite_number: suiteNumber, year },
         })
 
         const adminPreviewUrl = `${LEASE_BASE_URL}/${lease.token}?preview=td`
@@ -165,7 +177,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           `✅ Lease Agreement created for **${account.company_name}**`,
           ``,
           `Token: ${lease.token}`,
-          `Suite: ${params.suite_number}`,
+          `Suite: ${suiteNumber}`,
           `Term: ${fmtDate(termStartDate)} → ${fmtDate(termEndDate)}`,
           `Rent: $${monthlyRent}/month ($${yearlyRent}/year)`,
           `Deposit: $${params.security_deposit ?? 150}`,

@@ -191,9 +191,16 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
   if ("error" in result) return { error: result.error }
   const { account, contact } = result
 
-  const suiteNumber = params.suite_number as string
+  // Auto-assign suite number if not provided
+  let suiteNumber = params.suite_number as string | undefined
   if (!suiteNumber) {
-    return { error: "Suite number is required (e.g., '3D-107')" }
+    const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
+      .select("suite_number").order("suite_number", { ascending: false }).limit(1)
+    suiteNumber = "3D-101"
+    if (lastLeases?.length) {
+      const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
+      if (!isNaN(lastNum)) suiteNumber = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
+    }
   }
 
   const year = (params.contract_year as number) ?? new Date().getFullYear()
