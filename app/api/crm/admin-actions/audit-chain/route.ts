@@ -720,13 +720,27 @@ export async function GET(req: NextRequest) {
 
         if (stageBehind || hasEINButEarly) {
           // Stage is behind — formation date exists but SD hasn't been advanced
-          const expectedStage = hasEIN ? "Post-Formation + Banking (Stage 5)" : "EIN Application (Stage 3)"
+          const targetStage = hasEIN ? "Post-Formation + Banking" : "EIN Application"
+          const targetStageNum = hasEIN ? 5 : 3
+          const expectedLabel = `${targetStage} (Stage ${targetStageNum})`
           acctChecks.push({
             id: `pipeline_${acct.id.slice(0, 8)}`,
             category: "Formation Pipeline",
             label: `Stage ${formationStageOrder} of 6 — ${formationStage} ⚠️ BEHIND`,
             status: "error",
-            detail: `${hasFormationDate ? `Articles received (${acct.formation_date})` : ""}${hasEIN ? `, EIN: ${acct.ein_number}` : ""} — but SD is still at Stage ${formationStageOrder}. Should be at ${expectedStage}. Use "Advance Stage" on the contact page to catch up.`,
+            detail: `${hasFormationDate ? `Articles received (${acct.formation_date})` : ""}${hasEIN ? `, EIN: ${acct.ein_number}` : ""} — but SD is still at Stage ${formationStageOrder}. Should be at ${expectedLabel}.`,
+            fix: {
+              action: "advance_to_stage",
+              label: `Advance to ${targetStage}`,
+              params: { delivery_id: formationSD!.id, target_stage: targetStage, account_id: acct.id },
+              description: `Advances the Company Formation SD directly from "${formationStage}" to "${targetStage}" (skipping intermediate stages). This is safe because the earlier stages are already completed.`,
+              impact: [
+                `SD stage jumps from ${formationStageOrder} to ${targetStageNum}`,
+                "Stage history updated with all skipped stages",
+                "Auto-tasks created for the target stage",
+              ],
+              risk: "moderate",
+            },
           })
         } else {
           acctChecks.push({
@@ -1252,6 +1266,65 @@ export async function POST(req: NextRequest) {
             "REVIEW: Check company name and entity type (may need to be Multi Member LLC)",
           ].filter(Boolean),
           account_id: newAccount.id,
+        })
+      }
+
+      case "advance_to_stage": {
+        const { delivery_id, target_stage } = params as { delivery_id: string; target_stage: string; account_id: string }
+
+        // Get current delivery
+        const { data: delivery, error: dErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("*")
+          .eq("id", delivery_id)
+          .single()
+        if (dErr || !delivery) return NextResponse.json({ error: "Service delivery not found" }, { status: 404 })
+
+        // Get pipeline stages
+        const { data: pStages } = await supabaseAdmin
+          .from("pipeline_stages")
+          .select("*")
+          .eq("service_type", delivery.service_type)
+          .order("stage_order")
+        if (!pStages?.length) return NextResponse.json({ error: "No pipeline stages found" }, { status: 500 })
+
+        // Find target stage
+        const target = pStages.find((s: { stage_name: string }) => s.stage_name.toLowerCase() === target_stage.toLowerCase())
+        if (!target) return NextResponse.json({ error: `Stage "${target_stage}" not found in pipeline` }, { status: 400 })
+
+        // Build stage history with all skipped stages
+        const currentOrder = delivery.stage_order || 0
+        const history = [...(delivery.stage_history || [])]
+        // Add current stage to history
+        history.push({ stage: delivery.stage, stage_order: currentOrder, entered_at: delivery.stage_entered_at, exited_at: new Date().toISOString(), notes: "Skipped — caught up via chain audit" })
+        // Add intermediate skipped stages
+        for (const s of pStages) {
+          if (s.stage_order > currentOrder && s.stage_order < target.stage_order) {
+            history.push({ stage: s.stage_name, stage_order: s.stage_order, entered_at: new Date().toISOString(), exited_at: new Date().toISOString(), notes: "Skipped — already completed" })
+          }
+        }
+
+        // Update SD to target stage
+        const { error: updateErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .update({
+            stage: target.stage_name,
+            stage_order: target.stage_order,
+            stage_entered_at: new Date().toISOString(),
+            stage_history: history,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", delivery_id)
+        if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 })
+
+        return NextResponse.json({
+          success: true,
+          detail: `Advanced from "${delivery.stage}" to "${target.stage_name}" (Stage ${currentOrder} → ${target.stage_order})`,
+          side_effects: [
+            `SD stage: ${delivery.stage} → ${target.stage_name}`,
+            `Skipped ${target.stage_order - currentOrder - 1} intermediate stage(s)`,
+            "Stage history updated",
+          ],
         })
       }
 
