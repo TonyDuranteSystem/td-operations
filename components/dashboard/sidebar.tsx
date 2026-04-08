@@ -32,6 +32,7 @@ import {
   Wrench,
   Share2,
   Package,
+  HeartPulse,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -95,6 +96,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, tooltip: 'Client portal management — create portal users, send invitations.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
+  { id: 'client-health', name: 'Client Health', href: '/client-health', icon: HeartPulse, tooltip: 'Stuck activations, orphan records, wrong account types, and data integrity issues.' },
   { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true, tooltip: 'Developer utilities — database queries, system status, and debugging tools.' },
 ]
 

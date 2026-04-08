@@ -8,11 +8,12 @@ import {
   Calendar, Shield, FileText, Briefcase, Clock,
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
-  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
+  Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, Link2,
   ChevronDown as ChevronDownIcon, ExternalLink,
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
+import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
@@ -249,6 +250,7 @@ export function ContactDetail({
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
   const [showDiagnostic, setShowDiagnostic] = useState(false)
+  const [showChainAudit, setShowChainAudit] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
   const makeContactSaver = (field: string) => async (value: string) => {
@@ -289,14 +291,24 @@ export function ContactDetail({
             </div>
           </div>
         </div>
-        <button
-          onClick={() => setShowDiagnostic(true)}
-          className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
-          title="Run a health check on this contact — finds missing data, broken links, and suggests fixes."
-        >
-          <Stethoscope className="h-3.5 w-3.5" />
-          Diagnose
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowChainAudit(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
+            title="Audit the full client lifecycle chain — lead, offer, activation, account, services, portal."
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            Chain Audit
+          </button>
+          <button
+            onClick={() => setShowDiagnostic(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+            title="Run a health check on this contact — finds missing data, broken links, and suggests fixes."
+          >
+            <Stethoscope className="h-3.5 w-3.5" />
+            Diagnose
+          </button>
+        </div>
       </div>
 
       {/* Quick Actions */}
@@ -396,6 +408,13 @@ export function ContactDetail({
       <ContactDiagnosticDialog
         open={showDiagnostic}
         onClose={() => setShowDiagnostic(false)}
+        contactId={contact.id}
+        contactName={contact.full_name}
+      />
+
+      <ChainAuditDialog
+        open={showChainAudit}
+        onClose={() => setShowChainAudit(false)}
         contactId={contact.id}
         contactName={contact.full_name}
       />
