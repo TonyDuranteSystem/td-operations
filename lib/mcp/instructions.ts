@@ -422,18 +422,22 @@ Always check \`contacts.gender\` before composing any client email. The \`getGre
 
 ## Client Portal — Legacy Onboarding
 
-For clients onboarded BEFORE the portal existed, use portal_transition_setup(account_id) BEFORE creating a portal account. This tool:
+For clients onboarded BEFORE the portal existed, use portal_transition_setup(account_id). Pass ANY account_id for the client — the tool resolves the contact and processes ALL their active accounts in one shot. It:
 1. Scans Google Drive for unprocessed files and processes them (OCR + classify + store)
-2. Sets portal_visible=true on allowed document types (Form SS-4, Articles of Organization, Office Lease, Operating Agreement, EIN Letter (IRS), Form 8832, ITIN Letter)
-3. Sets portal_visible=false on everything else (passports, registered agent docs, receipts, etc.)
-4. Audits the full environment: account data, contacts, services, deadlines, tax returns, payments, Drive folder
-5. Reports a readiness score (X/8) with actionable next steps
+2. Sets portal_visible on documents (allowed types visible, everything else hidden)
+3. Auto-creates OA, Lease (auto-assigned suite 3D-XXX), Renewal MSA if missing (Client accounts only)
+4. Creates service deliveries (Formation, EIN, ITIN, Annual Renewal, CMRA) based on account data
+5. Creates deadlines (Annual Report, RA Renewal) based on state rules
+6. Creates or repairs auth user with full metadata (role, contact_id, portal_tier, account_ids)
+7. Sets portal_account=true and portal_tier=active on all active accounts + contact
+8. Does NOT send email — send credentials separately via gmail_send or CRM "Resend Welcome" button
+
+CRM UI alternative: The account detail page has a violet "Portal Transition" button (visible when portal_account=false) that does the same thing via /api/portal/admin/transition.
 
 Workflow for legacy clients:
-1. portal_transition_setup(account_id) -- prepare documents and get status report
-2. Review output -- verify correct docs are visible, sign documents detected
-3. portal_create_user(account_id) -- create the login account
-4. Send login invite via gmail_send
+1. portal_transition_setup(account_id) -- full setup in one call (all accounts, auth user, docs, SDs, deadlines)
+2. Review output -- check warnings, verify docs, fix any issues flagged
+3. Send login credentials via gmail_send or CRM contact page "Resend Welcome" button
 
 ## Error Handling
 
