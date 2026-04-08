@@ -47,7 +47,9 @@ export function CompanySwitcher({ accounts, selectedAccountId, userName }: Compa
   }
 
   const handleSelect = (accountId: string) => {
-    sessionStorage.setItem('portal_account_id', accountId)
+    // Set as a cookie so server components can read it (cookies() in layout.tsx)
+    // Path=/portal ensures it's scoped; max-age=1yr; SameSite=Lax for security
+    document.cookie = `portal_account_id=${accountId}; path=/portal; max-age=31536000; SameSite=Lax`
     setOpen(false)
     router.refresh()
   }
