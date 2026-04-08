@@ -19,16 +19,15 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 
-/** Extract file upload paths from wizard data */
+/** Extract file upload paths from wizard data.
+ * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{filename}
+ * stored in the "onboarding-uploads" bucket (see wizard-upload/route.ts:35).
+ * Instead of a brittle whitelist of field names, detect any value that looks like a storage path. */
 function extractUploadPaths(data: Record<string, unknown>): string[] {
+  const WIZARD_PREFIXES = ['formation/', 'onboarding/', 'tax/', 'tax_return/', 'banking/', 'banking_payset/', 'banking_relay/', 'itin/', 'closure/']
   const paths: string[] = []
   for (const val of Object.values(data)) {
-    if (typeof val === 'string' && (
-      val.includes('/passport_') || val.includes('/articles_') ||
-      val.includes('/ein_') || val.includes('/ss4_') ||
-      val.includes('/bank_statement') || val.includes('/tax_return') ||
-      val.includes('/proof_of_address') || val.includes('/business_bank_statement')
-    )) {
+    if (typeof val === 'string' && WIZARD_PREFIXES.some(p => val.startsWith(p))) {
       paths.push(val)
     }
   }
