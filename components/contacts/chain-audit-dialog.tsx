@@ -98,6 +98,9 @@ const ACCOUNT_CATEGORY_ORDER = [
 
 // ─── Component ───
 
+// Actions that require a form before executing
+const FORM_ACTIONS = new Set(['create_account_for_offer'])
+
 export function ChainAuditDialog({ open, onClose, contactId, contactName }: Props) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ChainAuditResult | null>(null)
@@ -105,6 +108,14 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmingFix, setConfirmingFix] = useState<string | null>(null)
+
+  // Form state for create_account_for_offer
+  const [accountForm, setAccountForm] = useState({
+    company_name: '',
+    entity_type: 'Single Member LLC',
+    state_of_formation: 'New Mexico',
+    formation_date: '',
+  })
 
   useEffect(() => {
     if (open) {
@@ -117,6 +128,30 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // Prefill account form when expanding a create_account_for_offer fix
+  useEffect(() => {
+    if (!expandedId || !result) return
+    const allChecks = [...result.global_checks, ...result.account_audits.flatMap(a => a.checks)]
+    const check = allChecks.find(c => c.id === expandedId)
+    if (check?.fix?.action === 'create_account_for_offer') {
+      const p = check.fix.params
+      // Derive company name from client_name (e.g., "Damy Mocellin - Oh My Creatives" → "Oh My Creatives")
+      let name = (p.client_name as string) || ''
+      if (name.includes(' - ')) {
+        name = name.split(' - ').slice(1).join(' - ').trim()
+      }
+      if (!name.toLowerCase().includes('llc') && !name.toLowerCase().includes('corp') && !name.toLowerCase().includes('inc')) {
+        name = name + ' LLC'
+      }
+      setAccountForm({
+        company_name: name,
+        entity_type: 'Single Member LLC',
+        state_of_formation: 'New Mexico',
+        formation_date: '',
+      })
+    }
+  }, [expandedId, result])
 
   async function runAudit() {
     setLoading(true)
@@ -136,17 +171,21 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
     }
   }
 
-  async function executeFix(check: ChainCheck) {
+  async function executeFix(check: ChainCheck, overrideParams?: Record<string, unknown>) {
     if (!check.fix) return
     setFixingId(check.id)
     try {
+      const params = overrideParams
+        ? { ...check.fix.params, ...overrideParams }
+        : check.fix.params
+
       const res = await fetch('/api/crm/admin-actions/audit-chain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contact_id: contactId,
           action: check.fix.action,
-          params: check.fix.params,
+          params,
         }),
       })
       const data = await res.json()
@@ -243,23 +282,96 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
                 </ul>
               </div>
 
+              {/* Form for create_account_for_offer */}
+              {FORM_ACTIONS.has(check.fix.action) && (
+                <div className="space-y-3 p-3 bg-white rounded-lg border border-zinc-200" onClick={e => e.stopPropagation()}>
+                  <p className="text-xs font-semibold text-zinc-500 uppercase">Enter company details from Articles of Organization</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-zinc-600 mb-1">Company Name *</label>
+                      <input
+                        type="text"
+                        value={accountForm.company_name}
+                        onChange={e => setAccountForm(prev => ({ ...prev, company_name: e.target.value }))}
+                        className="w-full px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        placeholder="e.g. Oh My Creatives LLC"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-zinc-600 mb-1">Entity Type *</label>
+                      <select
+                        value={accountForm.entity_type}
+                        onChange={e => setAccountForm(prev => ({ ...prev, entity_type: e.target.value }))}
+                        className="w-full px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      >
+                        <option value="Single Member LLC">Single Member LLC</option>
+                        <option value="Multi Member LLC">Multi Member LLC</option>
+                        <option value="C-Corp Elected">C-Corp Elected</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-zinc-600 mb-1">State of Formation *</label>
+                      <select
+                        value={accountForm.state_of_formation}
+                        onChange={e => setAccountForm(prev => ({ ...prev, state_of_formation: e.target.value }))}
+                        className="w-full px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      >
+                        <option value="New Mexico">New Mexico</option>
+                        <option value="Wyoming">Wyoming</option>
+                        <option value="Delaware">Delaware</option>
+                        <option value="Florida">Florida</option>
+                        <option value="Texas">Texas</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-zinc-600 mb-1">Formation Date</label>
+                      <input
+                        type="date"
+                        value={accountForm.formation_date}
+                        onChange={e => setAccountForm(prev => ({ ...prev, formation_date: e.target.value }))}
+                        className="w-full px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Confirm / Execute */}
               {!isConfirming ? (
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
+                    // For form actions, validate required fields
+                    if (FORM_ACTIONS.has(check.fix!.action)) {
+                      if (!accountForm.company_name.trim()) {
+                        toast.error('Company name is required')
+                        return
+                      }
+                    }
                     setConfirmingFix(check.id)
                   }}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-zinc-200 hover:bg-zinc-50 transition-colors"
                 >
-                  {check.fix.label}
+                  {FORM_ACTIONS.has(check.fix.action)
+                    ? `Create "${accountForm.company_name || '...'}" account`
+                    : check.fix.label}
                 </button>
               ) : (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      executeFix(check)
+                      // For form actions, pass form values as overrides
+                      if (FORM_ACTIONS.has(check.fix!.action)) {
+                        executeFix(check, {
+                          company_name: accountForm.company_name.trim(),
+                          entity_type: accountForm.entity_type,
+                          state_of_formation: accountForm.state_of_formation,
+                          formation_date: accountForm.formation_date || null,
+                        })
+                      } else {
+                        executeFix(check)
+                      }
                     }}
                     disabled={fixingId === check.id}
                     className={cn(
@@ -275,7 +387,7 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
                     {fixingId === check.id ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : null}
-                    Confirm: {check.fix.label}
+                    Confirm: Create &quot;{accountForm.company_name}&quot;
                   </button>
                   <button
                     onClick={(e) => {

@@ -1116,32 +1116,37 @@ export async function POST(req: NextRequest) {
       }
 
       case "create_account_for_offer": {
-        const { offer_token, client_name, contract_type, lead_id } = params as {
+        const { offer_token, lead_id } = params as {
           contact_id: string; offer_token: string; client_name: string
           contract_type: string | null; lead_id: string | null
         }
 
-        // Derive company name from client_name (strip " - " suffix pattern)
-        // e.g., "Damy Mocellin - Oh My Creatives" → "Oh My Creatives"
-        let companyName = client_name
-        if (client_name.includes(" - ")) {
-          companyName = client_name.split(" - ").slice(1).join(" - ").trim()
-        }
-        if (!companyName.toLowerCase().includes("llc")) {
-          companyName = companyName + " LLC"
+        // Use form-provided values (from UI) — these come from the Articles of Organization
+        const companyName = (params.company_name as string)?.trim()
+        const entityType = (params.entity_type as string) || "Single Member LLC"
+        const stateOfFormation = (params.state_of_formation as string) || null
+        const formationDate = (params.formation_date as string) || null
+
+        if (!companyName) {
+          return NextResponse.json({ error: "Company name is required" }, { status: 400 })
         }
 
-        const entityType = contract_type === "formation" ? "Single Member LLC" : "Single Member LLC"
+        // Determine status based on whether formation date is provided
+        // If we have a formation date → Articles received → Active
+        // If no formation date → still in formation → Pending Formation
+        const accountStatus = formationDate ? "Active" : "Pending Formation"
 
         const { data: newAccount, error: acctErr } = await supabaseAdmin
           .from("accounts")
           .insert({
             company_name: companyName,
             entity_type: entityType,
-            status: "Pending Formation",
+            state_of_formation: stateOfFormation,
+            formation_date: formationDate,
+            status: accountStatus,
             account_type: "Client",
             portal_account: false,
-            notes: `Auto-created from chain audit. Offer: ${offer_token}. Review company name and entity type.`,
+            notes: `Created from chain audit. Offer: ${offer_token}. Articles of Organization received.`,
           })
           .select("id, company_name")
           .single()
