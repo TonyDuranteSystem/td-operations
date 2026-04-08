@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createPortalNotification } from "@/lib/portal/notifications"
+import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 
 export async function POST(req: NextRequest) {
   try {
@@ -866,13 +867,16 @@ export async function POST(req: NextRequest) {
               const rawItin = itinMatch[1].replace(/[- ]/g, "")
               const itinFormatted = `${rawItin.slice(0, 3)}-${rawItin.slice(3, 5)}-${rawItin.slice(5)}`
 
+              // Extract issue date from CP565 OCR text (format: "Month DD, YYYY")
+              const issueDate = parseItinIssueDateFromOcr(ocrResult.fullText)
+
               await supabaseAdmin.from("contacts").update({
                 itin_number: itinFormatted,
-                itin_issue_date: new Date().toISOString().split("T")[0],
+                itin_issue_date: issueDate,
                 updated_at: new Date().toISOString(),
               }).eq("id", targetContactId)
 
-              ocrSideEffects.push(`ITIN extracted: ${itinFormatted}`)
+              ocrSideEffects.push(`ITIN extracted: ${itinFormatted}, issue date: ${issueDate}`)
             } else {
               ocrSideEffects.push("OCR ran but no ITIN number found (expected 9XX-XX-XXXX)")
             }
