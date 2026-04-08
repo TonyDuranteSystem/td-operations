@@ -484,6 +484,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         companyName={account.company_name}
         clientEmail={primaryContact?.email || ''}
         clientLanguage={primaryContact?.language}
+        contactId={primaryContact?.id}
         offer={offer}
         isAdmin={isAdmin}
       />

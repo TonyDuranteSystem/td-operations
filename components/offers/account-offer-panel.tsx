@@ -33,6 +33,7 @@ interface AccountOfferPanelProps {
   companyName: string
   clientEmail: string
   clientLanguage?: string | null
+  contactId?: string | null
   offer: OfferData | null
   isAdmin: boolean
 }
@@ -42,6 +43,7 @@ export function AccountOfferPanel({
   companyName,
   clientEmail,
   clientLanguage,
+  contactId,
   offer,
   isAdmin: _isAdmin,
 }: AccountOfferPanelProps) {
@@ -277,6 +279,7 @@ export function AccountOfferPanel({
         open={showCreateOffer}
         onClose={() => setShowCreateOffer(false)}
         accountId={accountId}
+        contactId={contactId}
         clientName={companyName}
         clientEmail={clientEmail}
         clientLanguage={clientLanguage}

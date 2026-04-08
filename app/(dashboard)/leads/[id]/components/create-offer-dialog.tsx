@@ -11,6 +11,7 @@ interface CreateOfferDialogProps {
   open: boolean
   onClose: () => void
   leadId: string
+  contactId?: string | null
   leadName: string
   leadEmail: string
   leadLanguage?: string | null
@@ -22,6 +23,7 @@ export function CreateOfferDialog({
   open,
   onClose,
   leadId,
+  contactId,
   leadName,
   leadEmail,
   leadLanguage,
@@ -33,6 +35,7 @@ export function CreateOfferDialog({
       open={open}
       onClose={onClose}
       leadId={leadId}
+      contactId={contactId}
       clientName={leadName}
       clientEmail={leadEmail}
       clientLanguage={leadLanguage}

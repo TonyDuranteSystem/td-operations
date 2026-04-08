@@ -39,6 +39,7 @@ interface LeadActionsProps {
   leadLanguage?: string | null
   leadReferrer?: string | null
   leadReferrerType?: string | null
+  contactId?: string | null
   offer: OfferData | null
   activation: ActivationData | null
   isAdmin?: boolean // kept for interface compat, no longer gates UI
@@ -53,6 +54,7 @@ export function LeadActions({
   leadLanguage,
   leadReferrer,
   leadReferrerType,
+  contactId,
   offer,
   activation,
   isAdmin: _isAdmin = false,
@@ -348,6 +350,7 @@ export function LeadActions({
         open={showCreateOffer}
         onClose={() => setShowCreateOffer(false)}
         leadId={leadId}
+        contactId={contactId}
         leadName={leadName}
         leadEmail={leadEmail || ''}
         leadLanguage={leadLanguage}

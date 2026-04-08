@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2 } from 'lucide-react'
+import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp } from 'lucide-react'
 import { toast } from 'sonner'
 
 // ── Service catalog: loaded from DB ──
@@ -75,12 +75,21 @@ interface PreconditionItem {
   customName?: string
 }
 
+interface NoteSource {
+  type: 'lead_notes' | 'contact_notes' | 'account_notes' | 'call_summary'
+  label: string
+  content: string
+  action_items?: string[]
+  id: string
+}
+
 interface CreateOfferDialogProps {
   open: boolean
   onClose: () => void
   // Either lead or account — one must be provided
   leadId?: string | null
   accountId?: string | null
+  contactId?: string | null
   clientName: string
   clientEmail: string
   clientLanguage?: string | null
@@ -93,6 +102,7 @@ export function CreateOfferDialog({
   onClose,
   leadId,
   accountId,
+  contactId,
   clientName,
   clientEmail,
   clientLanguage,
@@ -152,6 +162,60 @@ export function CreateOfferDialog({
 
   // Admin notes (internal only)
   const [adminNotes, setAdminNotes] = useState('')
+
+  // Notes context for offer creation
+  const [notesContext, setNotesContext] = useState<NoteSource[]>([])
+  const [notesLoading, setNotesLoading] = useState(false)
+  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set())
+  const [notesExpanded, setNotesExpanded] = useState(true)
+  const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set())
+
+  // Fetch notes context when dialog opens
+  useEffect(() => {
+    if (!open) return
+    if (!leadId && !contactId && !accountId) return
+
+    setNotesLoading(true)
+    const params = new URLSearchParams()
+    if (leadId) params.set('lead_id', leadId)
+    if (contactId) params.set('contact_id', contactId)
+    if (accountId) params.set('account_id', accountId)
+
+    fetch(`/api/crm/admin-actions/offer-notes-context?${params.toString()}`)
+      .then(r => r.json())
+      .then(d => {
+        const sources = (d.sources ?? []) as NoteSource[]
+        setNotesContext(sources)
+        // Select all by default
+        setSelectedNoteIds(new Set(sources.map(s => s.id)))
+      })
+      .catch(() => { /* silently fail — notes are optional */ })
+      .finally(() => setNotesLoading(false))
+  }, [open, leadId, contactId, accountId])
+
+  const toggleNoteSelection = (id: string) => {
+    setSelectedNoteIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  const toggleNoteExpanded = (id: string) => {
+    setExpandedNoteIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
 
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
 
@@ -315,6 +379,25 @@ export function CreateOfferDialog({
             })
           : null
 
+        // Build combined admin notes: selected note sources + user-typed notes
+        const noteParts: string[] = []
+        for (const source of notesContext) {
+          if (!selectedNoteIds.has(source.id)) continue
+          if (source.type === 'call_summary') {
+            let section = `=== ${source.label} ===\n${source.content}`
+            if (source.action_items && source.action_items.length > 0) {
+              section += '\nAction Items:\n' + source.action_items.map(item => `- ${item}`).join('\n')
+            }
+            noteParts.push(section)
+          } else {
+            noteParts.push(`=== ${source.label} ===\n${source.content}`)
+          }
+        }
+        if (adminNotes.trim()) {
+          noteParts.push(`=== Admin Notes ===\n${adminNotes.trim()}`)
+        }
+        const combinedNotes = noteParts.length > 0 ? noteParts.join('\n\n') : null
+
         const res = await fetch('/api/crm/admin-actions/create-offer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -336,7 +419,7 @@ export function CreateOfferDialog({
             referrer_type: referrerType || null,
             required_documents: requiredDocsJson,
             issues: issuesJson,
-            admin_notes: adminNotes.trim() || null,
+            admin_notes: combinedNotes,
           }),
         })
 
@@ -389,6 +472,104 @@ export function CreateOfferDialog({
               <p className="text-xs text-blue-600 mt-1">Referrer: {referrerName} ({referrerType || 'client'})</p>
             )}
           </div>
+
+          {/* Notes & Call Context */}
+          {(notesLoading || notesContext.length > 0) && (
+            <div className="border rounded-lg overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setNotesExpanded(prev => !prev)}
+                className="flex items-center justify-between w-full px-3 py-2.5 bg-violet-50 hover:bg-violet-100 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-violet-600" />
+                  <span className="text-sm font-semibold text-violet-900">Notes &amp; Call Context</span>
+                  {notesContext.length > 0 && (
+                    <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 text-xs font-medium rounded-full bg-violet-200 text-violet-800">
+                      {notesContext.length}
+                    </span>
+                  )}
+                </div>
+                {notesExpanded ? <ChevronUp className="h-4 w-4 text-violet-600" /> : <ChevronDown className="h-4 w-4 text-violet-600" />}
+              </button>
+
+              {notesExpanded && (
+                <div className="p-3 space-y-2">
+                  {notesLoading && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading notes...
+                    </div>
+                  )}
+
+                  {!notesLoading && notesContext.length === 0 && (
+                    <p className="text-xs text-muted-foreground py-1">No notes available</p>
+                  )}
+
+                  {notesContext.map(source => {
+                    const isChecked = selectedNoteIds.has(source.id)
+                    const isFullyExpanded = expandedNoteIds.has(source.id)
+                    const preview = source.content.length > 150 && !isFullyExpanded
+                      ? source.content.slice(0, 150) + '...'
+                      : source.content
+
+                    return (
+                      <div
+                        key={source.id}
+                        className={`rounded-lg border p-2.5 transition-colors ${
+                          isChecked
+                            ? 'bg-violet-50 border-violet-200'
+                            : 'bg-white border-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleNoteSelection(source.id)}
+                            className="h-4 w-4 mt-0.5 rounded border-zinc-300 text-violet-600 focus:ring-violet-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              {source.type === 'call_summary' ? (
+                                <Phone className="h-3.5 w-3.5 text-violet-500 flex-shrink-0" />
+                              ) : (
+                                <StickyNote className="h-3.5 w-3.5 text-violet-500 flex-shrink-0" />
+                              )}
+                              <span className="text-xs font-medium text-zinc-700 truncate">{source.label}</span>
+                            </div>
+                            <p className="text-xs text-zinc-500 mt-1 whitespace-pre-wrap break-words">{preview}</p>
+                            {source.content.length > 150 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleNoteExpanded(source.id)}
+                                className="text-xs text-violet-600 hover:text-violet-800 mt-0.5 font-medium"
+                              >
+                                {isFullyExpanded ? 'Show less' : 'Show full'}
+                              </button>
+                            )}
+                            {isFullyExpanded && source.action_items && source.action_items.length > 0 && (
+                              <div className="mt-1.5">
+                                <p className="text-xs font-medium text-zinc-600">Action Items:</p>
+                                <ul className="text-xs text-zinc-500 mt-0.5 space-y-0.5">
+                                  {source.action_items.map((item, i) => (
+                                    <li key={i} className="flex gap-1">
+                                      <span className="text-zinc-400">-</span>
+                                      <span>{item}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Services -- grouped by category */}
           <div>
