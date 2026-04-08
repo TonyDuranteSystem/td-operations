@@ -125,13 +125,17 @@ export async function POST(request: NextRequest) {
           }
           const toProcess = allFiles.filter(f => !existingIds.has(f.id))
           driveSkipped = allFiles.length - toProcess.length
-          // Process up to 10 files per account (limit for HTTP timeout)
-          for (const file of toProcess.slice(0, 10)) {
+          // Process all files (maxDuration=60s allows ~20 files with OCR)
+          const startTime = Date.now()
+          for (const file of toProcess) {
+            // Safety: stop 8s before Vercel timeout
+            if (Date.now() - startTime > 52_000) {
+              const remaining = toProcess.length - driveProcessed
+              warnings.push(`${acct.company_name}: ${remaining} Drive files remaining (timeout safety)`)
+              break
+            }
             const r = await processFile(file.id, acct.id, acct.company_name)
             if (r.success) driveProcessed++
-          }
-          if (toProcess.length > 10) {
-            warnings.push(`${acct.company_name}: ${toProcess.length - 10} Drive files remaining (limit 10 per request)`)
           }
         }
       } catch (driveErr) {
