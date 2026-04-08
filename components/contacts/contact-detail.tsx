@@ -9,7 +9,7 @@ import {
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
-  ChevronDown as ChevronDownIcon,
+  ChevronDown as ChevronDownIcon, ExternalLink,
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
@@ -381,7 +381,7 @@ export function ContactDetail({
         <InvoicesTab invoices={invoices} />
       )}
       {activeTab === 'documents' && (
-        <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} />
+        <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} />
       )}
       {activeTab === 'chat' && (
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
@@ -2099,10 +2099,12 @@ function ContactDocumentsTab({
   documents,
   accounts,
   contactId,
+  driveFolderUrl,
 }: {
   documents: ContactDocumentRecord[]
   accounts: LinkedAccount[]
   contactId: string
+  driveFolderUrl?: string | null
 }) {
   const [previewDoc, setPreviewDoc] = useState<ContactDocumentRecord | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -2293,7 +2295,20 @@ function ContactDocumentsTab({
   if (documents.length === 0) {
     return (
       <div className="space-y-4">
-        <div className="flex justify-end">{uploadButton}</div>
+        <div className="flex justify-end gap-2">
+          {driveFolderUrl && (
+            <a
+              href={driveFolderUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100 transition-colors"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in Drive
+            </a>
+          )}
+          {uploadButton}
+        </div>
         {uploadPanel}
         <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
           <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -2307,7 +2322,20 @@ function ContactDocumentsTab({
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{documents.length} documents</p>
-        {uploadButton}
+        <div className="flex items-center gap-2">
+          {driveFolderUrl && (
+            <a
+              href={driveFolderUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100 transition-colors"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in Drive
+            </a>
+          )}
+          {uploadButton}
+        </div>
       </div>
       {uploadPanel}
 
