@@ -5,6 +5,8 @@ import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
+import { gmailPost } from "@/lib/gmail"
+import { safeSend } from "@/lib/mcp/safe-send"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -322,11 +324,27 @@ export function registerPortalTools(server: McpServer) {
       createdSDs.push("CMRA (active)")
     }
 
-    if (account.formation_date && account.formation_date < "2026-01-01") {
+    // Tax Return SD (Client accounts only, formed before 2026)
+    if (!isOneTime && account.formation_date && account.formation_date < "2026-01-01" && !existingSDTypes.has("Tax Return")) {
       const { data: existingTR } = await supabaseAdmin.from("tax_returns")
-        .select("id").eq("company_name", account.company_name).eq("tax_year", 2025).maybeSingle()
-      if (!existingTR) {
-        flags.push("FLAG: No 2025 tax return record -- needs manual review with Antonio/Luca")
+        .select("id, data_received").eq("account_id", account.id).eq("tax_year", 2025).maybeSingle()
+
+      const hasTaxRecord = !!existingTR
+      const trStage = hasTaxRecord ? "Data Received" : "1st Installment Paid"
+
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "Tax Return", pipeline: "Tax Return",
+        service_name: `Tax Return -- ${account.company_name}`,
+        stage: trStage, status: "active",
+        start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: hasTaxRecord
+          ? `Legacy onboard - 2025 tax return record exists (${existingTR?.id})`
+          : "Legacy onboard - no 2025 tax return record yet; wizard needed",
+      })
+      createdSDs.push(`Tax Return (${trStage})`)
+
+      if (!hasTaxRecord) {
+        flags.push("FLAG: Tax wizard needed -- no 2025 tax_returns record. Run tax_form_create separately.")
       }
     }
 
@@ -338,6 +356,30 @@ export function registerPortalTools(server: McpServer) {
         notes: `Legacy onboard - ITIN ${contact.itin_number}`,
       })
       createdSDs.push("ITIN (completed)")
+    }
+
+    // State RA Renewal SD (Client accounts only)
+    if (!isOneTime && !existingSDTypes.has("State RA Renewal")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "State RA Renewal", pipeline: null,
+        service_name: `State RA Renewal -- ${account.company_name}`,
+        stage: "Upcoming", status: "active",
+        start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: "Legacy onboard",
+      })
+      createdSDs.push("State RA Renewal (Upcoming)")
+    }
+
+    // State Annual Report SD (Client accounts only)
+    if (!isOneTime && !existingSDTypes.has("State Annual Report")) {
+      await supabaseAdmin.from("service_deliveries").insert({
+        account_id: account.id, service_type: "State Annual Report", pipeline: null,
+        service_name: `State Annual Report -- ${account.company_name}`,
+        stage: "Upcoming", status: "active",
+        start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        notes: "Legacy onboard",
+      })
+      createdSDs.push("State Annual Report (Upcoming)")
     }
 
     if (createdSDs.length > 0) lines.push(`SDs created: ${createdSDs.join(", ")}`)
@@ -404,6 +446,128 @@ export function registerPortalTools(server: McpServer) {
     })
 
     return { lines, flags, pendingDocs, skipped: false }
+  }
+
+  // Send the transition welcome email to a contact using the safeSend pattern
+  // (CLAUDE.md: Send Operations — safeSend Pattern MANDATORY, line 119). Called
+  // ONCE per contact (even if they own multiple LLCs). Returns a status object
+  // instead of throwing, so batch callers can log-and-continue. Idempotency:
+  // skips the send if contacts.portal_email_sent_at is already set and
+  // forceResend is false.
+  async function sendTransitionWelcome(
+    contact: { id: string; full_name: string; email: string },
+    primaryAccount: { id: string; company_name: string },
+    tempPassword: string,
+    lang: "en" | "it",
+    pendingDocs: string[],
+    forceResend = false,
+  ): Promise<{ sent: boolean; subject: string; alreadySent?: boolean; error?: string; warnings?: string[] }> {
+    const portalUrl = `${PORTAL_BASE_URL}/portal/login`
+    const firstName = contact.full_name.split(" ")[0]
+    const emailHtml = buildTransitionWelcomeEmail(
+      firstName, contact.email, tempPassword || "[existing password]",
+      portalUrl, primaryAccount.company_name, lang, pendingDocs,
+    )
+    const subject = lang === "it"
+      ? `Il Tuo Nuovo Portale Clienti -- Tony Durante LLC`
+      : `Your New Client Portal -- Tony Durante LLC`
+
+    // RFC 2047 subject encoding (CLAUDE.md line 144: MANDATORY for raw MIME)
+    const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+    const encodedSubject = hasNonAscii
+      ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+      : subject
+
+    const fromEmail = "support@tonydurante.us"
+    const boundary = `boundary_${Date.now()}`
+    const plainText = lang === "it"
+      ? `Ciao ${firstName}, benvenuto nel tuo nuovo portale clienti Tony Durante LLC. Accedi: ${portalUrl} — Email: ${contact.email} — Password temporanea: ${tempPassword}`
+      : `Hi ${firstName}, welcome to your new Tony Durante LLC client portal. Log in: ${portalUrl} — Email: ${contact.email} — Temporary password: ${tempPassword}`
+
+    const mimeParts = [
+      [
+        `From: Tony Durante LLC <${fromEmail}>`,
+        `To: ${contact.email}`,
+        `Subject: ${encodedSubject}`,
+        "MIME-Version: 1.0",
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      ].join("\r\n"),
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      Buffer.from(plainText).toString("base64"),
+      "",
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      Buffer.from(emailHtml).toString("base64"),
+      "",
+      `--${boundary}--`,
+    ]
+    const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
+
+    try {
+      const result = await safeSend<{ id: string; threadId: string }>({
+        idempotencyCheck: async () => {
+          if (forceResend) return null
+          const { data: existingContact } = await supabaseAdmin
+            .from("contacts")
+            .select("portal_email_sent_at")
+            .eq("id", contact.id)
+            .single()
+          if (existingContact?.portal_email_sent_at) {
+            return {
+              alreadySent: true,
+              message: `Welcome email already sent to ${contact.email} on ${existingContact.portal_email_sent_at}`,
+            }
+          }
+          return null
+        },
+
+        sendFn: async () => {
+          return await gmailPost("/messages/send", { raw: encodedRaw }) as { id: string; threadId: string }
+        },
+
+        postSendSteps: [
+          {
+            name: "update_contact_email_tracking",
+            fn: async () => {
+              await supabaseAdmin.from("contacts").update({
+                portal_email_sent_at: new Date().toISOString().split("T")[0],
+                portal_email_template: lang === "it" ? "it-branded-v2" : "en-branded-v2",
+              }).eq("id", contact.id)
+            },
+          },
+          {
+            name: "log_action",
+            fn: async () => {
+              logAction({
+                action_type: "send", table_name: "contacts", record_id: contact.id,
+                account_id: primaryAccount.id,
+                summary: `Portal welcome email sent to ${contact.email} (${lang})`,
+              })
+            },
+          },
+        ],
+      })
+
+      if (result.alreadySent) {
+        return { sent: false, subject, alreadySent: true, error: result.idempotencyMessage }
+      }
+
+      const warnings = result.steps.filter(s => s.status === "error").map(s => `${s.step}: ${s.error}`)
+      return { sent: true, subject, warnings: warnings.length ? warnings : undefined }
+    } catch (err) {
+      // safeSend.sendFn threw — the actual gmail send failed
+      return {
+        sent: false,
+        subject,
+        error: err instanceof Error ? err.message : String(err),
+      }
+    }
   }
 
   server.tool(
@@ -554,39 +718,295 @@ Returns: full report + email HTML. Review the email, then call gmail_send to del
           for (const f of globalFlags) reportLines.push(`  ${f}`)
         }
 
-        // ─── 6. GENERATE EMAIL (DO NOT SEND) ───
-        const portalUrl = `${PORTAL_BASE_URL}/portal/login`
-        const firstName = contact.full_name.split(" ")[0]
-        // Use first account name in email, but mention all companies
-        const primaryCompany = activeAccounts[0].company_name
-        const emailHtml = buildTransitionWelcomeEmail(
-          firstName, contact.email, tempPassword || "[existing password]",
-          portalUrl, primaryCompany, lang, allPendingDocs,
+        // ─── 6. AUTO-SEND WELCOME EMAIL (log-and-continue on failure) ───
+        const emailResult = await sendTransitionWelcome(
+          contact, activeAccounts[0], tempPassword || "[existing password]",
+          lang, allPendingDocs,
         )
-        const emailSubject = lang === "it"
-          ? `Il Tuo Nuovo Portale Clienti -- Tony Durante LLC`
-          : `Your New Client Portal -- Tony Durante LLC`
 
         reportLines.push("")
-        reportLines.push("--- EMAIL READY FOR REVIEW ---")
-        reportLines.push(`To: ${contact.email}`)
-        reportLines.push(`Subject: ${emailSubject}`)
-        reportLines.push(`Language: ${lang}`)
-        reportLines.push("")
-        reportLines.push("Review the email, then send with:")
-        reportLines.push(`gmail_send(to: "${contact.email}", subject: "${emailSubject}", body_html: [the HTML below], account_id: "${activeAccounts[0].id}", contact_id: "${contact.id}", tag: "portal-credentials")`)
-        reportLines.push("")
-        reportLines.push("AFTER sending, update the contact:")
-        reportLines.push(`crm_update_record(contacts, "${contact.id}", {portal_email_sent_at: "${new Date().toISOString().split("T")[0]}", portal_email_template: "${lang === "it" ? "it-branded-v2" : "en-branded-v2"}"})`)
+        reportLines.push("--- WELCOME EMAIL ---")
+        if (emailResult.sent) {
+          reportLines.push(`✅ Sent to ${contact.email}`)
+          reportLines.push(`Subject: ${emailResult.subject}`)
+          reportLines.push(`Language: ${lang}`)
+          if (emailResult.warnings?.length) {
+            reportLines.push(`⚠️ Post-send warnings: ${emailResult.warnings.join("; ")}`)
+            globalFlags.push(...emailResult.warnings.map(w => `WARN: Welcome email post-send for ${contact.email}: ${w}`))
+          }
+        } else if (emailResult.alreadySent) {
+          reportLines.push(`⏭️  Skipped (already sent): ${contact.email}`)
+          reportLines.push(`${emailResult.error}`)
+        } else {
+          reportLines.push(`❌ NOT sent to ${contact.email}`)
+          reportLines.push(`Error: ${emailResult.error}`)
+          reportLines.push(`Retry manually with gmail_send — template: ${lang === "it" ? "it-branded-v2" : "en-branded-v2"}`)
+          globalFlags.push(`ERROR: Welcome email failed for ${contact.email}: ${emailResult.error}`)
+        }
 
         return {
           content: [
             { type: "text" as const, text: reportLines.join("\n") },
-            { type: "text" as const, text: "\n\n--- EMAIL HTML ---\n\n" + emailHtml },
           ],
         }
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    }
+  )
+
+  server.tool(
+    "portal_transition_batch",
+    `Batch version of portal_transition_setup. Runs the full legacy-onboard pipeline for many accounts at once — sequentially, one contact at a time.
+
+Input: array of account UUIDs. The tool groups accounts by their primary contact, so if two account IDs belong to the same person, that person gets ONE welcome email covering all their LLCs (matching portal_transition_setup semantics).
+
+Per contact:
+1. Resolves all active accounts linked to that contact (not just the input ones) — matches portal_transition_setup
+2. Creates/repairs auth user + sets portal_tier=active on contact
+3. For each active account: runs processAccountForTransition (Drive scan, doc visibility, OA/Lease/MSA creation, all service deliveries incl. Tax Return + State RA Renewal + State Annual Report, deadlines, account flags)
+4. Auto-sends welcome email (log-and-continue on failure — flags set, next contact still processed)
+
+Returns a per-contact status table. Does NOT abort on individual failures — one bad contact doesn't block the batch.
+
+Use this for the 2026 legacy portal transition (159 clients). Run portal_transition_setup for single-contact ad-hoc runs.`,
+    {
+      account_ids: z.array(z.string().uuid()).min(1).describe("Array of CRM account UUIDs. Contacts are deduplicated automatically."),
+    },
+    async ({ account_ids }) => {
+      const batchStart = Date.now()
+      const perAccountResults: Array<{
+        account_id: string
+        company_name?: string
+        contact_name?: string
+        contact_email?: string
+        status: "processed" | "skipped" | "blocked" | "error" | "grouped"
+        detail: string
+      }> = []
+
+      try {
+        // ─── 1. RESOLVE ALL INPUT ACCOUNTS → CONTACTS ───
+        // Dedupe accounts first
+        const uniqueAccountIds = Array.from(new Set(account_ids))
+
+        const { data: allContactLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("account_id, contact_id, contact:contacts(id, full_name, email, phone, language, itin_number)")
+          .in("account_id", uniqueAccountIds)
+
+        if (!allContactLinks?.length) {
+          return { content: [{ type: "text" as const, text: "BLOCKER: No contacts linked to any of the provided accounts." }] }
+        }
+
+        // Group by contact_id — pick first contact per account
+        const accountToContact = new Map<string, string>()
+        const contactsById = new Map<string, { id: string; full_name: string; email: string; phone: string; language: string | null; itin_number: string | null }>()
+        for (const link of allContactLinks) {
+          if (!accountToContact.has(link.account_id)) {
+            accountToContact.set(link.account_id, link.contact_id)
+          }
+          if (link.contact_id && !contactsById.has(link.contact_id)) {
+            contactsById.set(link.contact_id, link.contact as unknown as { id: string; full_name: string; email: string; phone: string; language: string | null; itin_number: string | null })
+          }
+        }
+
+        // Mark any input account with no contact as blocked
+        for (const acctId of uniqueAccountIds) {
+          if (!accountToContact.has(acctId)) {
+            perAccountResults.push({ account_id: acctId, status: "blocked", detail: "No contact linked to this account" })
+          }
+        }
+
+        // Build unique contact list from accounts that DID have a contact
+        const uniqueContactIds = Array.from(new Set(Array.from(accountToContact.values())))
+
+        // ─── 2. PROCESS EACH CONTACT SEQUENTIALLY ───
+        const contactLines: string[] = []
+        let contactsProcessed = 0
+        let contactsFailed = 0
+
+        for (const contactId of uniqueContactIds) {
+          const contact = contactsById.get(contactId)
+          if (!contact) {
+            perAccountResults.push({ account_id: "(unknown)", status: "error", detail: `Contact ${contactId} not found` })
+            contactsFailed++
+            continue
+          }
+
+          if (!contact.email) {
+            perAccountResults.push({
+              account_id: "(all)",
+              contact_name: contact.full_name,
+              status: "blocked",
+              detail: "Contact has no email — cannot create portal account",
+            })
+            contactsFailed++
+            continue
+          }
+
+          try {
+            // Find ALL active accounts for this contact (not just the input ones)
+            const { data: allContactAccountLinks } = await supabaseAdmin
+              .from("account_contacts")
+              .select("account_id")
+              .eq("contact_id", contact.id)
+            const allContactAccountIds = (allContactAccountLinks ?? []).map(l => l.account_id)
+
+            const { data: activeAccounts } = await supabaseAdmin
+              .from("accounts")
+              .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+              .in("id", allContactAccountIds)
+              .eq("status", "Active")
+
+            if (!activeAccounts?.length) {
+              perAccountResults.push({
+                account_id: "(all)",
+                contact_name: contact.full_name,
+                contact_email: contact.email,
+                status: "skipped",
+                detail: "No active accounts",
+              })
+              continue
+            }
+
+            const hasItalian = contact.language?.toLowerCase().startsWith("it") || contact.language === "Italian"
+            const lang: "en" | "it" = hasItalian ? "it" : "en"
+
+            // Auth user create/repair (same logic as portal_transition_setup)
+            const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+            const existingAuth = (authUsers?.users ?? []).find(u => u.email === contact.email)
+
+            let tempPassword = ""
+            if (!existingAuth) {
+              tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+              const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
+                email: contact.email, password: tempPassword, email_confirm: true,
+                app_metadata: {
+                  role: "client",
+                  contact_id: contact.id,
+                  portal_tier: "active",
+                  account_ids: activeAccounts.map(a => a.id),
+                },
+                user_metadata: { full_name: contact.full_name, must_change_password: true },
+              })
+              if (createError || !newUser) {
+                perAccountResults.push({
+                  account_id: "(all)",
+                  contact_name: contact.full_name,
+                  contact_email: contact.email,
+                  status: "error",
+                  detail: `Portal account creation failed: ${createError?.message || "unknown"}`,
+                })
+                contactsFailed++
+                continue
+              }
+              logAction({ action_type: "create", table_name: "auth.users", record_id: newUser.user.id, account_id: activeAccounts[0].id, summary: `Portal user created (batch): ${contact.full_name} (${contact.email}) — ${activeAccounts.length} accounts` })
+            } else {
+              await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
+                app_metadata: {
+                  ...existingAuth.app_metadata,
+                  role: "client",
+                  contact_id: contact.id,
+                  portal_tier: "active",
+                  account_ids: activeAccounts.map(a => a.id),
+                },
+              })
+            }
+
+            await supabaseAdmin.from("contacts").update({ portal_tier: "active" }).eq("id", contact.id)
+
+            // Process each active account
+            const allPendingDocs: string[] = []
+            const processedAccountIds: string[] = []
+
+            for (const acct of activeAccounts) {
+              try {
+                const result = await processAccountForTransition(acct, contact, lang)
+                allPendingDocs.push(...result.pendingDocs)
+                processedAccountIds.push(acct.id)
+
+                perAccountResults.push({
+                  account_id: acct.id,
+                  company_name: acct.company_name,
+                  contact_name: contact.full_name,
+                  contact_email: contact.email,
+                  status: result.skipped ? "skipped" : "processed",
+                  detail: result.skipped
+                    ? result.flags[0] || "skipped"
+                    : `${result.lines.length} ops; ${result.flags.length} flag(s)`,
+                })
+              } catch (acctErr) {
+                perAccountResults.push({
+                  account_id: acct.id,
+                  company_name: acct.company_name,
+                  contact_name: contact.full_name,
+                  contact_email: contact.email,
+                  status: "error",
+                  detail: acctErr instanceof Error ? acctErr.message : String(acctErr),
+                })
+              }
+            }
+
+            // Send welcome email ONCE per contact (log-and-continue)
+            const emailResult = await sendTransitionWelcome(
+              contact, activeAccounts[0], tempPassword || "[existing password]",
+              lang, allPendingDocs,
+            )
+
+            contactsProcessed++
+            let emailStatus: string
+            if (emailResult.sent) {
+              emailStatus = emailResult.warnings?.length ? `sent (warnings: ${emailResult.warnings.join("; ")})` : "sent"
+            } else if (emailResult.alreadySent) {
+              emailStatus = "skipped (already sent)"
+            } else {
+              emailStatus = `FAILED (${emailResult.error})`
+            }
+            contactLines.push(
+              `✓ ${contact.full_name} (${contact.email}) — ${processedAccountIds.length}/${activeAccounts.length} accounts, email: ${emailStatus}`
+            )
+          } catch (contactErr) {
+            contactsFailed++
+            perAccountResults.push({
+              account_id: "(all)",
+              contact_name: contact.full_name,
+              contact_email: contact.email,
+              status: "error",
+              detail: contactErr instanceof Error ? contactErr.message : String(contactErr),
+            })
+            contactLines.push(`✗ ${contact.full_name} (${contact.email}) — ERROR: ${contactErr instanceof Error ? contactErr.message : String(contactErr)}`)
+          }
+        }
+
+        // ─── 3. BUILD SUMMARY ───
+        const elapsed = ((Date.now() - batchStart) / 1000).toFixed(1)
+        const lines: string[] = [
+          `== BATCH PORTAL TRANSITION ==`,
+          `Input accounts: ${uniqueAccountIds.length}`,
+          `Unique contacts: ${uniqueContactIds.length}`,
+          `Contacts processed: ${contactsProcessed}`,
+          `Contacts failed: ${contactsFailed}`,
+          `Elapsed: ${elapsed}s`,
+          "",
+          "--- CONTACTS ---",
+          ...contactLines,
+          "",
+          "--- PER-ACCOUNT RESULTS ---",
+        ]
+        for (const r of perAccountResults) {
+          lines.push(
+            `[${r.status.toUpperCase()}] ${r.company_name || r.account_id} — ${r.contact_name || "?"} (${r.contact_email || "?"}) — ${r.detail}`
+          )
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+      } catch (err) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Batch error: ${err instanceof Error ? err.message : String(err)}\n\nPartial results:\n${perAccountResults.map(r => `[${r.status}] ${r.account_id} — ${r.detail}`).join("\n")}`,
+          }],
+        }
       }
     }
   )
