@@ -87,7 +87,7 @@ export async function markInvoicePaid(
     const today = new Date().toISOString().split('T')[0]
 
     // Update payment record
-    await supabaseAdmin.from('payments').update({
+    const { error: markPaidErr } = await supabaseAdmin.from('payments').update({
       status: 'Paid',
       invoice_status: 'Paid',
       amount_paid: payment.total,
@@ -96,6 +96,7 @@ export async function markInvoicePaid(
       payment_method: paymentMethod || null,
       updated_at: new Date().toISOString(),
     }).eq('id', paymentId)
+    if (markPaidErr) throw new Error(`Failed to mark payment as paid: ${markPaidErr.message}`)
 
     // Sync to client_expenses (portal mirror)
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
@@ -131,9 +132,10 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     if (!payment) throw new Error('Payment not found')
 
     // Update payment
-    await supabaseAdmin.from('payments').update({
+    const { error: voidErr } = await supabaseAdmin.from('payments').update({
       status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
     }).eq('id', paymentId)
+    if (voidErr) throw new Error(`Failed to void payment: ${voidErr.message}`)
 
     // Sync to client_expenses
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
@@ -148,10 +150,11 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     }
 
     // Unlink any matched bank feeds
-    await supabaseAdmin.from('td_bank_feeds').update({
+    const { error: bankFeedsErr } = await supabaseAdmin.from('td_bank_feeds').update({
       matched_payment_id: null, match_confidence: null,
       status: 'unmatched', updated_at: now,
     }).eq('matched_payment_id', paymentId)
+    if (bankFeedsErr) throw new Error(`Failed to unlink bank feeds: ${bankFeedsErr.message}`)
 
     revalidatePath('/finance')
     revalidatePath('/payments')
@@ -236,13 +239,14 @@ support@tonydurante.us`
     await gmailPost('/messages/send', { raw })
 
     // Mark as Sent
-    await supabaseAdmin.from('payments').update({
+    const { error: sendErr } = await supabaseAdmin.from('payments').update({
       invoice_status: 'Sent',
       status: 'Pending',
       sent_at: new Date().toISOString(),
       sent_to: clientEmail,
       updated_at: new Date().toISOString(),
     }).eq('id', paymentId)
+    if (sendErr) throw new Error(`Failed to mark invoice as sent: ${sendErr.message}`)
 
     // Sync to client_expenses
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
@@ -313,17 +317,19 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
     await gmailPost('/messages/send', { raw })
 
     // Update reminder count
-    await supabaseAdmin.from('payments').update({
+    const { error: reminderErr } = await supabaseAdmin.from('payments').update({
       reminder_count: (payment.reminder_count ?? 0) + 1,
       last_reminder_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', paymentId)
+    if (reminderErr) throw new Error(`Failed to update reminder count: ${reminderErr.message}`)
 
     // Mark as Sent if still Draft
     if (status === 'Draft') {
-      await supabaseAdmin.from('payments').update({
+      const { error: sentUpdateErr } = await supabaseAdmin.from('payments').update({
         invoice_status: 'Sent', status: 'Pending', updated_at: new Date().toISOString(),
       }).eq('id', paymentId)
+      if (sentUpdateErr) throw new Error(`Failed to mark invoice as sent: ${sentUpdateErr.message}`)
       // Sync to client_expenses
       const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
       await syncTDInvoiceStatus(paymentId, 'Sent')
@@ -359,7 +365,8 @@ export async function updateInvoice(
       payUpdates.amount_due = updates.total
     }
 
-    await supabaseAdmin.from('payments').update(payUpdates).eq('id', paymentId)
+    const { error: updatePayErr } = await supabaseAdmin.from('payments').update(payUpdates).eq('id', paymentId)
+    if (updatePayErr) throw new Error(`Failed to update invoice: ${updatePayErr.message}`)
 
     // Re-sync to QB if amount changed (non-blocking)
     if (updates.total !== undefined) {
@@ -378,7 +385,8 @@ export async function updateInvoice(
     if (updates.total !== undefined) { expUpdates.total = updates.total; expUpdates.subtotal = updates.total }
     if (updates.notes !== undefined) expUpdates.notes = updates.notes
     if (updates.description !== undefined) expUpdates.description = updates.description
-    await supabaseAdmin.from('client_expenses').update(expUpdates).eq('td_payment_id', paymentId)
+    const { error: updateExpErr } = await supabaseAdmin.from('client_expenses').update(expUpdates).eq('td_payment_id', paymentId)
+    if (updateExpErr) throw new Error(`Failed to sync to client_expenses mirror: ${updateExpErr.message}`)
 
     revalidatePath('/finance')
     revalidatePath('/payments')
@@ -413,10 +421,11 @@ export async function matchBankFeedToInvoice(
 export async function ignoreBankFeed(feedId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    await supabaseAdmin
+    const { error: ignoreErr } = await supabaseAdmin
       .from('td_bank_feeds')
       .update({ status: 'ignored', updated_at: new Date().toISOString() })
       .eq('id', feedId)
+    if (ignoreErr) throw new Error(`Failed to ignore bank feed: ${ignoreErr.message}`)
     revalidatePath('/finance')
     revalidatePath('/reconciliation')
   }, {
