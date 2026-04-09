@@ -9,10 +9,11 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
-import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncStripeCharges } from "@/lib/stripe-sync"
+import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     // Verify cron secret (Vercel sends this header)
     const authHeader = req.headers.get("authorization")
@@ -23,16 +24,12 @@ export async function GET(req: NextRequest) {
 
     const result = await syncStripeCharges({ daysBack: 90 })
 
-    await supabaseAdmin.from("cron_log").insert({
+    logCron({
       endpoint: "/api/cron/stripe-sync",
       status: result.ok ? "success" : "error",
-      details: {
-        synced: result.synced,
-        skipped: result.skipped,
-        total: result.total,
-      },
-      error_message: result.error || null,
-      executed_at: new Date().toISOString(),
+      duration_ms: Date.now() - startTime,
+      details: { synced: result.synced, skipped: result.skipped, total: result.total },
+      error_message: result.error || undefined,
     })
 
     return NextResponse.json(result)
@@ -40,15 +37,12 @@ export async function GET(req: NextRequest) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error("[stripe-sync] Cron error:", msg)
 
-    await supabaseAdmin
-      .from("cron_log")
-      .insert({
-        endpoint: "/api/cron/stripe-sync",
-        status: "error",
-        error_message: msg,
-        executed_at: new Date().toISOString(),
-      })
-      .then(() => null)
+    logCron({
+      endpoint: "/api/cron/stripe-sync",
+      status: "error",
+      duration_ms: Date.now() - startTime,
+      error_message: msg,
+    })
 
     return NextResponse.json({ error: msg }, { status: 500 })
   }

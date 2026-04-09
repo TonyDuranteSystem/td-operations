@@ -21,8 +21,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
+import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     // Verify cron secret (Vercel sends this header)
     const authHeader = req.headers.get("authorization")
@@ -46,7 +48,7 @@ export async function GET(req: NextRequest) {
 
     if (pErr) {
       console.error("[check-wire] Failed to query pending_activations:", pErr.message)
-      await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "error", error_message: pErr.message, executed_at: new Date().toISOString() })
+      logCron({ endpoint: "/api/cron/check-wire-payments", status: "error", duration_ms: Date.now() - startTime, error_message: pErr.message })
       return NextResponse.json({ error: pErr.message }, { status: 500 })
     }
 
@@ -228,9 +230,10 @@ export async function GET(req: NextRequest) {
 
     console.warn(`[check-wire] Done. Airwallex: ${airwallexFeedCount} new. Invoices matched: ${invoiceMatched}. Activations matched: ${activationMatched}.`)
 
-    await supabase.from("cron_log").insert({
+    logCron({
       endpoint: "/api/cron/check-wire-payments",
       status: "success",
+      duration_ms: Date.now() - startTime,
       details: {
         pending_activations: pendingList?.length ?? 0,
         open_invoices: openInvoices?.length ?? 0,
@@ -240,7 +243,6 @@ export async function GET(req: NextRequest) {
         activation_matched: activationMatched,
         match_details: matchResults.slice(0, 10),
       },
-      executed_at: new Date().toISOString(),
     })
 
     return NextResponse.json({
@@ -255,7 +257,7 @@ export async function GET(req: NextRequest) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[check-wire] Error:", msg)
-    await supabase.from("cron_log").insert({ endpoint: "/api/cron/check-wire-payments", status: "error", error_message: msg, executed_at: new Date().toISOString() }).then(() => {})
+    logCron({ endpoint: "/api/cron/check-wire-payments", status: "error", duration_ms: Date.now() - startTime, error_message: msg })
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

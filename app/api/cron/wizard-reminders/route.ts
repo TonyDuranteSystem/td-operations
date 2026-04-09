@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createPortalNotification } from "@/lib/portal/notifications"
+import { logCron } from "@/lib/cron-log"
 
 const REMINDER_3D_MS = 3 * 24 * 60 * 60 * 1000
 const REMINDER_7D_MS = 7 * 24 * 60 * 60 * 1000
@@ -28,6 +29,7 @@ const WIZARD_LABELS: Record<string, { en: string; it: string }> = {
 }
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   const authHeader = req.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -146,6 +148,13 @@ export async function GET(req: NextRequest) {
       results.skipped++
     }
   }
+
+  logCron({
+    endpoint: "/api/cron/wizard-reminders",
+    status: "success",
+    duration_ms: Date.now() - startTime,
+    details: results,
+  })
 
   return NextResponse.json({ ok: true, ...results })
 }

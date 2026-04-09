@@ -16,9 +16,9 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 import { claimNextJob, completeJob, failJob } from '@/lib/jobs/queue'
 import { getJobHandler } from '@/lib/jobs/registry'
+import { logCron } from '@/lib/cron-log'
 
 const MAX_JOBS_PER_RUN = 10
 
@@ -71,17 +71,12 @@ export async function GET(req: NextRequest) {
   const duration = Date.now() - startTime
   const processed = results.length
 
-  // Log to cron_log
-  try {
-    await supabaseAdmin.from('cron_log').insert({
-      endpoint: '/api/cron/process-jobs',
-      status: 'ok',
-      error_message: processed === 0 ? 'No pending jobs' : null,
-      executed_at: new Date().toISOString(),
-    })
-  } catch {
-    // Non-fatal
-  }
+  logCron({
+    endpoint: '/api/cron/process-jobs',
+    status: processed === 0 ? 'success' : results.some(r => r.status === 'failed') ? 'error' : 'success',
+    duration_ms: duration,
+    details: { processed, results },
+  })
 
   return NextResponse.json({
     processed,

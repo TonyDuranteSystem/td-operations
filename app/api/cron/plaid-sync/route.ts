@@ -11,8 +11,10 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { syncPlaidTransactions } from '@/lib/plaid-sync'
+import { logCron } from '@/lib/cron-log'
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     // Verify cron secret (Vercel sends this header)
     const authHeader = req.headers.get('authorization')
@@ -24,11 +26,11 @@ export async function GET(req: NextRequest) {
     // Check if Plaid is configured
     if (!process.env.PLAID_CLIENT_ID || !process.env.PLAID_SECRET) {
       console.warn('[plaid-sync] Plaid credentials not configured — skipping sync')
-      await supabaseAdmin.from('cron_log').insert({
+      logCron({
         endpoint: '/api/cron/plaid-sync',
-        status: 'skipped',
-        details: { reason: 'Plaid credentials not configured' },
-        executed_at: new Date().toISOString(),
+        status: 'success',
+        duration_ms: Date.now() - startTime,
+        details: { skipped: true, reason: 'Plaid credentials not configured' },
       })
       return NextResponse.json({ ok: true, skipped: true, reason: 'Plaid not configured' })
     }
@@ -41,21 +43,21 @@ export async function GET(req: NextRequest) {
 
     if (connErr) {
       console.error('[plaid-sync] Failed to query plaid_connections:', connErr.message)
-      await supabaseAdmin.from('cron_log').insert({
+      logCron({
         endpoint: '/api/cron/plaid-sync',
         status: 'error',
+        duration_ms: Date.now() - startTime,
         error_message: connErr.message,
-        executed_at: new Date().toISOString(),
       })
       return NextResponse.json({ error: connErr.message }, { status: 500 })
     }
 
     if (!connections || connections.length === 0) {
-      await supabaseAdmin.from('cron_log').insert({
+      logCron({
         endpoint: '/api/cron/plaid-sync',
         status: 'success',
+        duration_ms: Date.now() - startTime,
         details: { connections: 0, message: 'No active connections' },
-        executed_at: new Date().toISOString(),
       })
       return NextResponse.json({ ok: true, connections: 0, synced: 0 })
     }
@@ -80,11 +82,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Results logged via cron_log table below
-
-    await supabaseAdmin.from('cron_log').insert({
+    logCron({
       endpoint: '/api/cron/plaid-sync',
-      status: errorCount > 0 ? 'partial' : 'success',
+      status: errorCount > 0 ? 'error' : 'success',
+      duration_ms: Date.now() - startTime,
       details: {
         connections: connections.length,
         total_added: totalAdded,
@@ -92,7 +93,6 @@ export async function GET(req: NextRequest) {
         errors: errorCount,
         results,
       },
-      executed_at: new Date().toISOString(),
     })
 
     return NextResponse.json({
@@ -105,12 +105,12 @@ export async function GET(req: NextRequest) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[plaid-sync] Error:', msg)
-    await supabaseAdmin.from('cron_log').insert({
+    logCron({
       endpoint: '/api/cron/plaid-sync',
       status: 'error',
+      duration_ms: Date.now() - startTime,
       error_message: msg,
-      executed_at: new Date().toISOString(),
-    }).then(() => null)
+    })
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

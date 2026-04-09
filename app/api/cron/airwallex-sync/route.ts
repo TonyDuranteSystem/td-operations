@@ -8,8 +8,10 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
+import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   const authHeader = req.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
@@ -22,8 +24,21 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await syncAirwallexDeposits(from, to)
+    logCron({
+      endpoint: "/api/cron/airwallex-sync",
+      status: "success",
+      duration_ms: Date.now() - startTime,
+      details: { from, to, ...result },
+    })
     return NextResponse.json({ ok: true, from, to, ...result })
   } catch (err) {
-    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 })
+    const msg = (err as Error).message
+    logCron({
+      endpoint: "/api/cron/airwallex-sync",
+      status: "error",
+      duration_ms: Date.now() - startTime,
+      error_message: msg,
+    })
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 })
   }
 }

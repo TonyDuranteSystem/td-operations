@@ -16,6 +16,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { qbApiCall } from '@/lib/quickbooks'
+import { logCron } from '@/lib/cron-log'
 
 // QB invoice status → our status mapping
 function mapQBStatus(balance: number, total: number): { invoiceStatus: string; paymentStatus: string } {
@@ -156,6 +157,7 @@ async function matchCustomerToCRM(customerName: string): Promise<{
 }
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     // Auth check
     const authHeader = req.headers.get('authorization')
@@ -332,17 +334,23 @@ export async function GET(req: NextRequest) {
       errors: errors.slice(0, 20),
     }
 
-    await supabaseAdmin.from('cron_log').insert({
+    logCron({
       endpoint: '/api/cron/qb-invoice-sync',
-      status: errors.length > 0 ? 'partial' : 'success',
+      status: errors.length > 0 ? 'error' : 'success',
+      duration_ms: Date.now() - startTime,
       details: summary,
-      executed_at: new Date().toISOString(),
     })
 
     return NextResponse.json({ ok: true, ...summary })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[qb-invoice-sync] Error:', msg)
+    logCron({
+      endpoint: '/api/cron/qb-invoice-sync',
+      status: 'error',
+      duration_ms: Date.now() - startTime,
+      error_message: msg,
+    })
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

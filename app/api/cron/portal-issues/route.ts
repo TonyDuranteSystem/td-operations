@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailPost } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
+import { logCron } from '@/lib/cron-log'
 
 /**
  * GET /api/cron/portal-issues
@@ -8,12 +9,14 @@ import { NextRequest, NextResponse } from 'next/server'
  * Also auto-resolves issues older than 48h that are likely stale.
  */
 export async function GET(request: NextRequest) {
+  const startTime = Date.now()
   // Verify cron secret (Vercel sends this header)
   const authHeader = request.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  try {
   // Get open issues
   const { data: openIssues } = await supabaseAdmin
     .from('portal_issues')
@@ -92,10 +95,27 @@ export async function GET(request: NextRequest) {
     console.error('Failed to send portal issues digest:', err)
   }
 
+  logCron({
+    endpoint: '/api/cron/portal-issues',
+    status: 'success',
+    duration_ms: Date.now() - startTime,
+    details: { total_open: openIssues.length, urgent: urgentIssues.length },
+  })
+
   return NextResponse.json({
     message: 'Portal issues check complete',
     total_open: openIssues.length,
     urgent: urgentIssues.length,
     email_sent: true,
   })
+  } catch (err) {
+    console.error('[portal-issues] Error:', err)
+    logCron({
+      endpoint: '/api/cron/portal-issues',
+      status: 'error',
+      duration_ms: Date.now() - startTime,
+      error_message: err instanceof Error ? err.message : String(err),
+    })
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
+  }
 }

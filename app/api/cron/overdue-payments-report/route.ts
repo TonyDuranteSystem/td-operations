@@ -11,8 +11,10 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     // Verify cron secret
     const authHeader = req.headers.get("authorization")
@@ -112,6 +114,13 @@ export async function GET(req: NextRequest) {
 
     console.warn(`[overdue-report] Report saved: ${overdue.length} overdue payments`)
 
+    logCron({
+      endpoint: '/api/cron/overdue-payments-report',
+      status: 'success',
+      duration_ms: Date.now() - startTime,
+      details: { count: overdue.length, critical: buckets.critical.length, warning: buckets.warning.length, recent: buckets.recent.length },
+    })
+
     return NextResponse.json({
       message: "Report generated",
       count: overdue.length,
@@ -121,6 +130,12 @@ export async function GET(req: NextRequest) {
     })
   } catch (err) {
     console.error("[overdue-report] Error:", err)
+    logCron({
+      endpoint: '/api/cron/overdue-payments-report',
+      status: 'error',
+      duration_ms: Date.now() - startTime,
+      error_message: err instanceof Error ? err.message : String(err),
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },
       { status: 500 }

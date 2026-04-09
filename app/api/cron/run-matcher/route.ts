@@ -9,8 +9,10 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { logCron } from "@/lib/cron-log"
 
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   const authHeader = req.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
@@ -51,10 +53,10 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Log to cron_log
-  await supabaseAdmin.from("cron_log").insert({
-    job_name: "run-matcher",
+  logCron({
+    endpoint: "/api/cron/run-matcher",
     status: "success",
+    duration_ms: Date.now() - startTime,
     details: results,
   })
 

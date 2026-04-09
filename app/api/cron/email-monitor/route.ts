@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailGet, getHeader, GmailAPIMessage } from '@/lib/gmail'
 import { createDecision } from '@/lib/agent-decisions'
 import { NextRequest, NextResponse } from 'next/server'
+import { logCron } from '@/lib/cron-log'
 
 /**
  * GET /api/cron/email-monitor
@@ -21,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server'
 let lastRunAt = 0
 
 export async function GET(request: NextRequest) {
+  const startTime = Date.now()
   // Auth: accept CRON_SECRET or skip if env not set (dev mode)
   const authHeader = request.headers.get('authorization')
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -235,6 +237,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    logCron({
+      endpoint: '/api/cron/email-monitor',
+      status: 'success',
+      duration_ms: Date.now() - startTime,
+      details: { tasks_checked: tasks.length, unique_emails: emailTaskMap.size, proposals_created: proposalsCreated },
+    })
+
     return NextResponse.json({
       message: 'Email monitor completed',
       tasksChecked: tasks.length,
@@ -246,6 +255,12 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     console.error('Email monitor cron error:', message)
+    logCron({
+      endpoint: '/api/cron/email-monitor',
+      status: 'error',
+      duration_ms: Date.now() - startTime,
+      error_message: message,
+    })
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

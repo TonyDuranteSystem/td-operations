@@ -3,6 +3,7 @@ import { gmailPost } from '@/lib/gmail'
 import { getGreeting } from '@/lib/greeting'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
+import { logCron } from '@/lib/cron-log'
 
 /**
  * GET /api/cron/portal-digest
@@ -13,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
  * Only processes notifications older than 2 minutes (batching window).
  */
 export async function GET(request: NextRequest) {
+  const startTime = Date.now()
   const authHeader = request.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -254,6 +256,13 @@ export async function GET(request: NextRequest) {
       notificationsProcessed += notifIds.length
     }
 
+    logCron({
+      endpoint: '/api/cron/portal-digest',
+      status: 'success',
+      duration_ms: Date.now() - startTime,
+      details: { emails_sent: emailsSent, notifications_processed: notificationsProcessed },
+    })
+
     return NextResponse.json({
       message: `Digest sent`,
       emails_sent: emailsSent,
@@ -261,6 +270,12 @@ export async function GET(request: NextRequest) {
     })
   } catch (err) {
     console.error('[portal-digest] Error:', err)
+    logCron({
+      endpoint: '/api/cron/portal-digest',
+      status: 'error',
+      duration_ms: Date.now() - startTime,
+      error_message: err instanceof Error ? err.message : String(err),
+    })
     return NextResponse.json({ error: 'Digest failed' }, { status: 500 })
   }
 }

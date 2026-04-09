@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { logCron } from "@/lib/cron-log"
 
 /**
  * Cron: Annual Report Check
@@ -14,6 +15,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
  * SOP: State Annual Report v3.1
  */
 export async function GET(req: NextRequest) {
+  const startTime = Date.now()
   try {
     const authHeader = req.headers.get("authorization")
     const cronSecret = process.env.CRON_SECRET
@@ -187,15 +189,12 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Log to cron_log
-    await supabaseAdmin
-      .from("cron_log")
-      .insert({
-        endpoint: "/api/cron/annual-report-check",
-        status: "success",
-        details: { checked: accounts.length, created, skipped, blocked, results },
-        executed_at: new Date().toISOString(),
-      })
+    logCron({
+      endpoint: "/api/cron/annual-report-check",
+      status: "success",
+      duration_ms: Date.now() - startTime,
+      details: { checked: accounts.length, created, skipped, blocked, results },
+    })
 
     // Send email report if there are new filings or blocked accounts
     if (created > 0 || blocked > 0) {
@@ -252,10 +251,12 @@ export async function GET(req: NextRequest) {
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    await supabaseAdmin
-      .from("cron_log")
-      .insert({ endpoint: "/api/cron/annual-report-check", status: "error", error_message: msg, executed_at: new Date().toISOString() })
-      .then(() => {})
+    logCron({
+      endpoint: "/api/cron/annual-report-check",
+      status: "error",
+      duration_ms: Date.now() - startTime,
+      error_message: msg,
+    })
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

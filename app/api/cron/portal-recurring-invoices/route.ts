@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createUnifiedInvoice } from '@/lib/portal/unified-invoice'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { NextResponse } from 'next/server'
+import { logCron } from '@/lib/cron-log'
 
 /**
  * GET /api/cron/portal-recurring-invoices
@@ -11,6 +12,7 @@ import { NextResponse } from 'next/server'
  * creates a copy with new dates, advances recurring_next_date.
  */
 export async function GET() {
+  const startTime = Date.now()
   const today = new Date().toISOString().split('T')[0]
 
   // Find recurring invoices due for generation
@@ -81,6 +83,13 @@ export async function GET() {
       console.error(`Failed to generate recurring invoice for template ${template.id}:`, err)
     }
   }
+
+  logCron({
+    endpoint: '/api/cron/portal-recurring-invoices',
+    status: 'success',
+    duration_ms: Date.now() - startTime,
+    details: { generated, checked: recurring.length },
+  })
 
   return NextResponse.json({ generated, checked: recurring.length })
 }
