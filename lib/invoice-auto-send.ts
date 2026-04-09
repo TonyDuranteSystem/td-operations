@@ -1,16 +1,20 @@
 /**
- * Invoice Auto-Send — Server-side helper for automated invoice sending
+ * Invoice Auto-Send — Server-side helper for sending TD invoices with PDF.
  *
- * Used by cron jobs and other server-side processes that don't have
- * dashboard auth context. Sends invoice emails with PDF attachments.
+ * Used by:
+ *  - Cron jobs (annual-installments) via autoSendInvoices()
+ *  - Dashboard "Create & Send" via sendTDInvoice() called from finance/actions.ts
  *
- * For dashboard/UI sends, use the /api/invoices/[id]/send route instead.
+ * Produces: PDF attachment + HTML email + multipart/mixed MIME, with bank
+ * details resolved dynamically from payments.bank_preference (falls back to
+ * 'auto' when null, which picks Relay USD or Airwallex EUR by currency).
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { generateInvoicePdf, type InvoicePdfInput } from "@/lib/pdf/invoice-pdf"
 import { syncInvoiceToQB } from "@/lib/qb-sync"
+import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 
 // TD LLC company info
 const TD_COMPANY = {
@@ -20,21 +24,30 @@ const TD_COMPANY = {
   ein: "32-0754285",
 }
 
-const BANK_DETAILS: Record<string, InvoicePdfInput["bankDetails"]> = {
-  USD: {
-    label: "Relay — USD",
-    accountHolder: "Tony Durante LLC",
-    bankName: "Thread Bank",
-    accountNumber: "200000306770",
-    routingNumber: "064209588",
-  },
-  EUR: {
-    label: "Banking Circle — EUR",
-    bankName: "Banking Circle S.A.",
-    iban: "DK8989000023658198",
-    swiftBic: "SXPYDKKK",
-    accountHolder: "Tony Durante LLC",
-  },
+/**
+ * Resolve bank details for a payment row into the shape generateInvoicePdf +
+ * buildAutoSendEmail expect. Reads payments.bank_preference; if null, falls
+ * back to 'auto' which maps to Relay (USD) or Airwallex (EUR) via currency.
+ */
+function resolveBankDetails(
+  preference: string | null | undefined,
+  currency: "USD" | "EUR",
+): NonNullable<InvoicePdfInput["bankDetails"]> {
+  const pref = (preference ?? "auto") as BankPreference
+  const bd = getBankDetailsByPreference(pref, currency)
+  const effectivePref: BankPreference = pref === "auto"
+    ? (currency === "USD" ? "relay" : "airwallex")
+    : pref
+  const label = `${effectivePref.charAt(0).toUpperCase()}${effectivePref.slice(1)} — ${currency}`
+  return {
+    label,
+    accountHolder: bd.beneficiary ?? "Tony Durante LLC",
+    bankName: bd.bank_name ?? null,
+    iban: bd.iban ?? null,
+    swiftBic: bd.bic ?? null,
+    accountNumber: bd.account_number ?? null,
+    routingNumber: bd.routing_number ?? null,
+  }
 }
 
 interface AutoSendResult {
@@ -44,7 +57,7 @@ interface AutoSendResult {
 }
 
 /**
- * Auto-send multiple invoices. Used by cron jobs.
+ * Auto-send multiple invoices. Used by cron jobs (annual-installments).
  * For each payment ID: generates PDF, emails client, updates status, syncs to QB.
  */
 export async function autoSendInvoices(paymentIds: string[]): Promise<AutoSendResult[]> {
@@ -52,7 +65,7 @@ export async function autoSendInvoices(paymentIds: string[]): Promise<AutoSendRe
 
   for (const paymentId of paymentIds) {
     try {
-      await autoSendSingleInvoice(paymentId)
+      await sendTDInvoice(paymentId)
       results.push({ paymentId, success: true })
     } catch (err) {
       results.push({ paymentId, success: false, error: (err as Error).message })
@@ -62,7 +75,29 @@ export async function autoSendInvoices(paymentIds: string[]): Promise<AutoSendRe
   return results
 }
 
-async function autoSendSingleInvoice(paymentId: string): Promise<void> {
+/**
+ * Single source of truth for sending a TD invoice with PDF + HTML email.
+ *
+ * Called by:
+ *  - autoSendInvoices() (cron) — no opts, uses role='Owner' contact lookup
+ *  - sendNewInvoice() (dashboard wrapper) — passes recipientEmail + clientName
+ *    from its own flexible contact resolution (contact_id → first account_contacts)
+ *
+ * Steps:
+ *  1. Fetch payment (must be Draft)
+ *  2. Fetch payment_items + account
+ *  3. Resolve recipient (from opts OR account_contacts where role='Owner')
+ *  4. Resolve bank_details via payments.bank_preference → getBankDetailsByPreference
+ *  5. Generate PDF via generateInvoicePdf
+ *  6. Build HTML body via buildAutoSendEmail
+ *  7. Send via Gmail (multipart/mixed with PDF attachment)
+ *  8. Update payments row: invoice_status='Sent', sent_at, sent_to
+ *  9. Fire-and-forget QB sync
+ */
+export async function sendTDInvoice(
+  paymentId: string,
+  opts?: { recipientEmail?: string; clientName?: string },
+): Promise<void> {
   // Fetch payment + items + account + contact
   const { data: payment, error: pErr } = await supabaseAdmin
     .from("payments")
@@ -93,25 +128,34 @@ async function autoSendSingleInvoice(paymentId: string): Promise<void> {
     .eq("id", payment.account_id)
     .single()
 
-  // Get primary contact email
-  const { data: contactLink } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contacts(first_name, last_name, email)")
-    .eq("account_id", payment.account_id)
-    .eq("role", "Owner")
-    .limit(1)
-    .maybeSingle()
+  // Resolve recipient: prefer opts override (dashboard path with flexible
+  // contact resolution), fall back to cron-style role='Owner' lookup.
+  let recipientEmail = opts?.recipientEmail ?? ""
+  let recipientName = opts?.clientName ?? ""
 
-  const contact = (contactLink as unknown as { contacts: { first_name: string; last_name: string; email: string } })?.contacts
+  if (!recipientEmail) {
+    const { data: contactLink } = await supabaseAdmin
+      .from("account_contacts")
+      .select("contacts(first_name, last_name, email)")
+      .eq("account_id", payment.account_id)
+      .eq("role", "Owner")
+      .limit(1)
+      .maybeSingle()
 
-  if (!contact?.email) throw new Error("No contact email found for this account")
+    const contact = (contactLink as unknown as { contacts: { first_name: string; last_name: string; email: string } })?.contacts
+    if (!contact?.email) throw new Error("No contact email found for this account")
+    recipientEmail = contact.email
+    recipientName = contact.first_name
+      ? `${contact.first_name} ${contact.last_name ?? ""}`.trim()
+      : account?.company_name ?? "Client"
+  }
 
-  const currency = payment.amount_currency ?? "USD"
+  const currency: "USD" | "EUR" = (payment.amount_currency === "EUR" ? "EUR" : "USD")
   const csym = currency === "EUR" ? "€" : "$"
-  const bankDetails = BANK_DETAILS[currency] ?? BANK_DETAILS.USD
-  const clientName = contact.first_name
-    ? `${contact.first_name} ${contact.last_name ?? ""}`.trim()
-    : account?.company_name ?? "Client"
+  // Dynamic bank resolution via payments.bank_preference. Null => 'auto'
+  // => Relay USD or Airwallex EUR via getBankDetailsByPreference.
+  const bankDetails = resolveBankDetails(payment.bank_preference, currency)
+  const clientName = recipientName || account?.company_name || "Client"
   const invoiceNumber = payment.invoice_number ?? "DRAFT"
   const total = Number(payment.total ?? payment.amount ?? 0)
 
@@ -129,7 +173,7 @@ async function autoSendSingleInvoice(paymentId: string): Promise<void> {
     dueDate: payment.due_date,
     billTo: {
       name: account?.company_name ?? "Client",
-      email: contact.email,
+      email: recipientEmail,
       address: account?.physical_address ?? null,
     },
     items: items ?? [],
@@ -151,7 +195,7 @@ async function autoSendSingleInvoice(paymentId: string): Promise<void> {
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const parts = [
     "From: Tony Durante LLC <support@tonydurante.us>",
-    `To: ${contact.email}`,
+    `To: ${recipientEmail}`,
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -175,16 +219,18 @@ async function autoSendSingleInvoice(paymentId: string): Promise<void> {
   // Send email FIRST
   await gmailPost("/messages/send", { raw })
 
-  // Update status AFTER successful send
-  await supabaseAdmin
+  // Update status AFTER successful send. Destructure {error} per the
+  // silent-failure pattern fix from commit ebbb450.
+  const { error: updateErr } = await supabaseAdmin
     .from("payments")
     .update({
       invoice_status: "Sent",
       sent_at: new Date().toISOString(),
-      sent_to: contact.email,
+      sent_to: recipientEmail,
       updated_at: new Date().toISOString(),
     })
     .eq("id", paymentId)
+  if (updateErr) throw new Error(`Failed to mark payment as Sent: ${updateErr.message}`)
 
   // QB sync (non-blocking)
   syncInvoiceToQB(paymentId).catch(() => {})

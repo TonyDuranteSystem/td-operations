@@ -32,6 +32,9 @@ export interface TDInvoiceInput {
   paid_date?: string
   payment_method?: string
   whop_payment_id?: string
+  /** Bank account to use for this invoice. Honored by sendTDInvoice when rendering
+   *  PDF + email bank block. Null falls back to 'auto' (EUR→Airwallex, USD→Relay). */
+  bank_preference?: 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
 }
 
 export interface TDInvoiceResult {
@@ -57,6 +60,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     paid_date,
     payment_method,
     whop_payment_id,
+    bank_preference,
   } = input
 
   if (!account_id && !contact_id) {
@@ -118,6 +122,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       whop_payment_id: whop_payment_id || null,
       notes: notes || null,
       message: message || null,
+      bank_preference: bank_preference || null,
       qb_sync_status: 'pending',
     })
     .select('id')

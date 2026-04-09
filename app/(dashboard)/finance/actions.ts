@@ -55,6 +55,7 @@ export async function createUnifiedInvoiceDraft(input: {
       due_date: input.due_date || undefined,
       message: fullMessage.trim() || undefined,
       payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
+      bank_preference: bankPref,
     })
 
     revalidatePath('/finance')
@@ -168,7 +169,16 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
 
 /**
  * Send a newly created invoice to the client via email.
- * Sets status to Sent, includes bank details + payment instructions from the message field.
+ *
+ * Thin wrapper around sendTDInvoice() (lib/invoice-auto-send.ts) — the single
+ * source of truth for sending TD invoices with PDF + HTML. Owns the
+ * dashboard-specific contact resolution (flexible: contact_id first, then
+ * any account_contacts row — no role filter, unlike the cron path), plus the
+ * client_expenses mirror sync and the revalidatePath() calls.
+ *
+ * The actual PDF generation, HTML rendering, multipart/mixed MIME, bank
+ * details resolution (from payments.bank_preference), and payments row
+ * update all happen inside sendTDInvoice.
  */
 export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
   return safeAction(async () => {
@@ -176,12 +186,17 @@ export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
 
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, total, amount_due, amount_currency, invoice_status, due_date, account_id, contact_id, message, description')
+      .select('id, account_id, contact_id')
       .eq('id', paymentId)
       .single()
     if (!payment) throw new Error('Payment not found')
 
-    // Resolve client email
+    // Dashboard-specific flexible contact resolution:
+    //  1. Try payment.contact_id directly (if set)
+    //  2. Fall back to ANY account_contacts row (no role filter)
+    // This differs from sendTDInvoice's default lookup which uses role='Owner'.
+    // Dashboard sends often target a specific contact, so we pre-resolve and
+    // pass recipientEmail as an override.
     let clientEmail = ''
     let clientName = ''
     if (payment.contact_id) {
@@ -206,49 +221,14 @@ export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
     }
     if (!clientEmail) throw new Error('No client email found — check contact record')
 
-    const currency = payment.amount_currency ?? 'USD'
-    const csym = currency === 'EUR' ? '€' : '$'
-    const total = Number(payment.total ?? payment.amount_due)
-    const dueDateStr = payment.due_date ? `\nDue date: ${payment.due_date}` : ''
+    // Delegate to the shared helper. It generates the PDF, builds the HTML
+    // body, sends via Gmail with multipart/mixed, and updates payments.
+    const { sendTDInvoice } = await import('@/lib/invoice-auto-send')
+    await sendTDInvoice(paymentId, { recipientEmail: clientEmail, clientName })
 
-    // Build email body with payment instructions from the message field
-    const paymentInstructions = payment.message || ''
-    const subject = `Invoice ${payment.invoice_number} — ${csym}${total.toLocaleString(undefined, { minimumFractionDigits: 2 })} — ${payment.description || 'Tony Durante LLC'}`
-    const body = `Dear ${clientName},
-
-Please find below the details for invoice ${payment.invoice_number}.
-
-Service: ${payment.description || 'Professional Services'}
-Amount: ${csym}${total.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${currency}${dueDateStr}
-${paymentInstructions ? `\n${paymentInstructions}` : ''}
-
-Please include invoice number ${payment.invoice_number} in the payment reference.
-
-If you have any questions, please reply to this email.
-
-Best regards,
-Tony Durante LLC
-support@tonydurante.us`
-
-    const { gmailPost } = await import('@/lib/gmail')
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-    const raw = Buffer.from(
-      `To: ${clientEmail}\r\nFrom: support@tonydurante.us\r\nSubject: ${encodedSubject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
-    ).toString('base64url')
-
-    await gmailPost('/messages/send', { raw })
-
-    // Mark as Sent
-    const { error: sendErr } = await supabaseAdmin.from('payments').update({
-      invoice_status: 'Sent',
-      status: 'Pending',
-      sent_at: new Date().toISOString(),
-      sent_to: clientEmail,
-      updated_at: new Date().toISOString(),
-    }).eq('id', paymentId)
-    if (sendErr) throw new Error(`Failed to mark invoice as sent: ${sendErr.message}`)
-
-    // Sync to client_expenses
+    // Mirror the status change into client_expenses (dashboard-only concern;
+    // the cron path doesn't need this because the cron-created payments are
+    // already tracked in client_expenses via createTDInvoice).
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
     await syncTDInvoiceStatus(paymentId, 'Pending')
 
@@ -258,7 +238,7 @@ support@tonydurante.us`
     action_type: 'update',
     table_name: 'payments',
     record_id: paymentId,
-    summary: `Invoice sent to client via email`,
+    summary: `Invoice sent to client via email (PDF attached)`,
   })
 }
 
