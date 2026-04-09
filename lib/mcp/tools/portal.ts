@@ -588,12 +588,25 @@ Once (across all accounts):
 9. Generates welcome email HTML for review -- DOES NOT SEND
 
 Pass any one account_id -- the tool finds the contact, then processes ALL their active accounts.
-Returns: full report + email HTML. Review the email, then call gmail_send to deliver it.`,
+Returns: full report + email HTML. Review the email, then call gmail_send to deliver it.
+
+BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
     {
       account_id: z.string().uuid().describe("Any CRM account UUID for this client — all active accounts for the same contact will be processed"),
+      i_understand_this_is_bulk: z.boolean().describe("REQUIRED: explicit bulk-operation acknowledgment. Must be set to the literal boolean true. This tool processes ALL active accounts for the contact in one shot: Drive scan + document processing, OA + Lease + Renewal MSA creation, service deliveries, deadlines, auth user creation, portal_tier updates. The guard exists to prevent accidental multi-account cascade execution."),
     },
-    async ({ account_id }) => {
+    async ({ account_id, i_understand_this_is_bulk }) => {
       try {
+        // ─── BULK GUARD: Hard block unless caller explicitly acknowledges ───
+        if (i_understand_this_is_bulk !== true) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "🛑 BLOCKED: portal_transition_setup is a multi-account cascade operation (Drive processing + document creation + service deliveries + deadlines + auth user creation + portal_tier updates across ALL active accounts for the contact). You must pass i_understand_this_is_bulk=true explicitly to acknowledge this before the tool will run. No fallback, no default — the flag must be the boolean true.",
+            }],
+          }
+        }
+
         // ─── 1. RESOLVE CONTACT from the given account ───
         const { data: contactLinks } = await supabaseAdmin
           .from("account_contacts")

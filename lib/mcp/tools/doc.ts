@@ -789,7 +789,7 @@ export function registerDocTools(server: McpServer) {
     "doc_map_folders",
     "Link orphan documents (missing account_id) to CRM accounts by matching their Google Drive parent folder against accounts.drive_folder_id. Walks up to 3 levels of parent folders to find a match. Use dry_run=true first to preview which documents would be linked. Run this after doc_process_folder or doc_mass_process to clean up unlinked documents.",
     {
-      dry_run: z.boolean().optional().default(false).describe("If true, show matches without updating (default: false)"),
+      dry_run: z.boolean().optional().default(true).describe("If true, show matches without updating (default: true — must be explicitly set to false to perform writes)"),
     },
     async ({ dry_run }) => {
       try {
@@ -1065,14 +1065,25 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_bulk_process",
-    "Process all documents for a CRM client by account UUID — automatically resolves the client's Drive folder from accounts.drive_folder_id. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call. Use offset to resume from where a previous call left off. PREFERRED over doc_process_client when you have the account_id (no need to look up the folder ID manually).",
+    "Process all documents for a CRM client by account UUID — automatically resolves the client's Drive folder from accounts.drive_folder_id. Extracts text, classifies, and stores with automatic account linking. Max 20 files per call. Use offset to resume from where a previous call left off. PREFERRED over doc_process_client when you have the account_id (no need to look up the folder ID manually). BULK GUARD: requires i_understand_this_is_bulk=true on every call.",
     {
       account_id: z.string().uuid().describe("CRM account UUID — folder is auto-resolved from accounts.drive_folder_id"),
       skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default: true). Set false to re-classify with updated rules."),
       offset: z.number().optional().default(0).describe("Skip this many files before processing (use to resume after timeout). E.g. offset=11 skips the first 11 files."),
+      i_understand_this_is_bulk: z.boolean().describe("REQUIRED: explicit bulk-operation acknowledgment. Must be set to the literal boolean true. This tool processes up to BATCH_MAX_FILES files in one call with OCR + classification + DB writes to the documents table + action_log entries. The guard exists to prevent accidental invocation of a multi-file cascade."),
     },
-    async ({ account_id, skip_existing, offset }) => {
+    async ({ account_id, skip_existing, offset, i_understand_this_is_bulk }) => {
       try {
+        // ─── BULK GUARD: Hard block unless caller explicitly acknowledges ───
+        if (i_understand_this_is_bulk !== true) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "🛑 BLOCKED: doc_bulk_process is a bulk operation that processes many files in one call (OCR + classification + DB writes to the documents table). You must pass i_understand_this_is_bulk=true explicitly to acknowledge this before the tool will run. No fallback, no default — the flag must be the boolean true.",
+            }],
+          }
+        }
+
         const startTime = Date.now()
 
         // 1. Resolve account → drive_folder_id
@@ -1365,14 +1376,25 @@ export function registerDocTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "doc_mass_process",
-    "Mass-process documents across ALL active CRM accounts that have linked Drive folders (accounts.drive_folder_id). Processes accounts one by one in alphabetical order, extracting, classifying, and storing documents. Cursor-based: use after_account_id to resume from a previous run's next_cursor. Default: 5 accounts per call. Returns per-account results and next cursor for continuation.",
+    "Mass-process documents across ALL active CRM accounts that have linked Drive folders (accounts.drive_folder_id). Processes accounts one by one in alphabetical order, extracting, classifying, and storing documents. Cursor-based: use after_account_id to resume from a previous run's next_cursor. Default: 5 accounts per call. Returns per-account results and next cursor for continuation. BULK GUARD: requires i_understand_this_is_bulk=true on every call.",
     {
       after_account_id: z.string().uuid().optional().describe("Resume cursor — start after this account ID (from previous run's next_cursor)"),
       skip_existing: z.boolean().optional().default(true).describe("Skip already-processed files (default true)"),
       limit: z.number().optional().default(5).describe("Max accounts to attempt per call (default 5)"),
+      i_understand_this_is_bulk: z.boolean().describe("REQUIRED: explicit bulk-operation acknowledgment. Must be set to the literal boolean true. This tool iterates across multiple active CRM accounts per call, running OCR + classification + DB writes for each. The guard exists to prevent accidental cross-account cascade execution."),
     },
-    async ({ after_account_id, skip_existing, limit: maxAccounts }) => {
+    async ({ after_account_id, skip_existing, limit: maxAccounts, i_understand_this_is_bulk }) => {
       try {
+        // ─── BULK GUARD: Hard block unless caller explicitly acknowledges ───
+        if (i_understand_this_is_bulk !== true) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "🛑 BLOCKED: doc_mass_process is a cross-account bulk operation (OCR + classification + DB writes across multiple active accounts with Drive folders per call). You must pass i_understand_this_is_bulk=true explicitly to acknowledge this before the tool will run. No fallback, no default — the flag must be the boolean true.",
+            }],
+          }
+        }
+
         const startTime = Date.now()
 
         // 1. Get accounts to process

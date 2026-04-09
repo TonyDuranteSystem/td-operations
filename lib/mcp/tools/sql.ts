@@ -132,7 +132,7 @@ interface ValidationResult {
 }
 
 /** Check a single SQL statement (or CTE body) for dangerous operations */
-function validateStatement(stmt: string, isCtebody = false): ValidationResult {
+function validateStatement(stmt: string, _isCtebody = false): ValidationResult {
   const upper = stmt.replace(/\s+/g, " ").trim().toUpperCase()
 
   // 1. Block catastrophic DDL
@@ -298,11 +298,12 @@ export function registerSqlTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "execute_sql",
-    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic.",
+    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. Default mode is 'read' — rejects any mutation. Mutations (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies) REQUIRE mode='write' to be set explicitly. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic.",
     {
       query: z.string().describe("SQL query to execute. For SELECT: returns rows as JSON array. For mutations: wrap in a CTE that returns affected rows, e.g. WITH updated AS (UPDATE ... RETURNING *) SELECT * FROM updated"),
+      mode: z.enum(["read", "write"]).optional().default("read").describe("Execution mode. 'read' (default) rejects any mutation (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies). 'write' is required to perform any mutation. The model MUST set mode='write' explicitly to write — never implicitly. Pure SELECT queries run in any mode."),
     },
-    async ({ query: sqlQuery }) => {
+    async ({ query: sqlQuery, mode }) => {
       try {
         const startMs = Date.now()
         let dryRunInfo: string | undefined
@@ -315,6 +316,23 @@ export function registerSqlTools(server: McpServer) {
             content: [{
               type: "text" as const,
               text: `🛑 BLOCKED: ${validation.reason}\n\nThe query was NOT executed. This safety check prevents accidental data loss.`,
+            }],
+          }
+        }
+
+        // ─── MODE GUARD: Mutations require mode='write' explicitly ───
+        // Reuses validation.hasMutation from validateSQL(), which already inspects:
+        //   - comment-stripped, whitespace-normalized, case-insensitive SQL
+        //   - every statement in multi-statement queries
+        //   - CTE bodies (WITH x AS (DELETE FROM ...) → detected)
+        //   - CREATE/ALTER DDL (treated as mutation for mode-gating purposes)
+        if (validation.hasMutation && mode !== "write") {
+          const mutationLabel = validation.mutationType || "INSERT/UPDATE/DELETE/CREATE/ALTER"
+          const tableLabel = validation.dryRunTable ? ` on "${validation.dryRunTable}"` : ""
+          return {
+            content: [{
+              type: "text" as const,
+              text: `🛑 BLOCKED (mode='read'): This query contains a mutation (${mutationLabel})${tableLabel}. The default execute_sql mode is 'read' and rejects any mutation. To perform this write, re-invoke with mode='write' explicitly. CTE bodies are inspected — wrapping a mutation inside a SELECT does not bypass this check.\n\nThe query was NOT executed.`,
             }],
           }
         }

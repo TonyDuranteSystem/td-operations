@@ -13,6 +13,12 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 
+// Canonical Master Rules article — business rules source of truth.
+// Writes are frozen by default; require override_master_rules=true to modify.
+// UUID verified via SQL query on 2026-04-09 against knowledge_articles.
+// Title: "MASTER RULES — Fixed Business Rules Reference", category: "Business Rules".
+const MASTER_RULES_ARTICLE_ID = "370347b6-cfa7-486e-a757-e2acce70e15d"
+
 export function registerKnowledgeTools(server: McpServer) {
 
   // ═══════════════════════════════════════
@@ -185,14 +191,31 @@ export function registerKnowledgeTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "kb_update",
-    "Update an existing knowledge article or approved response by UUID. Only provided fields are changed. Use kb_search first to find the record ID.",
+    "Update an existing knowledge article or approved response by UUID. Only provided fields are changed. Use kb_search first to find the record ID. HARD FREEZE: the canonical Master Rules article (370347b6-cfa7-486e-a757-e2acce70e15d) is protected against writes — any attempt to update it is rejected unless override_master_rules=true is set explicitly. This prevents accidental corruption of the business rules source of truth.",
     {
       id: z.string().uuid().describe("Record UUID"),
       source: z.enum(["article", "response"]).describe("Table to update"),
       updates: z.record(z.string(), z.any()).describe("Fields to update (e.g. {content: 'new text', category: 'Banking'})"),
+      override_master_rules: z.boolean().optional().default(false).describe("Explicit opt-in to modify the canonical Master Rules article (370347b6-cfa7-486e-a757-e2acce70e15d). Must be literally true to unlock the write on that specific record. Has no effect on any other article or any response. Use ONLY with explicit user authorization naming the Master Rules article."),
     },
-    async ({ id, source, updates }) => {
+    async ({ id, source, updates, override_master_rules }) => {
       try {
+        // ─── HARD FREEZE: Master Rules article requires explicit override ───
+        // This check runs BEFORE the table resolution and BEFORE the DB call.
+        // No partial bypass: the flag must be literally `true` (not "true", not 1).
+        if (
+          source === "article" &&
+          id === MASTER_RULES_ARTICLE_ID &&
+          override_master_rules !== true
+        ) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `🛑 BLOCKED: Article ${MASTER_RULES_ARTICLE_ID} ("MASTER RULES — Fixed Business Rules Reference") is the canonical business rules source of truth and is frozen against writes. To modify this specific record, re-invoke kb_update with override_master_rules=true explicitly. This freeze has no partial bypass — the flag must be the boolean true, and only affects this single article ID.\n\nThe record was NOT updated.`,
+            }],
+          }
+        }
+
         const table = source === "article" ? "knowledge_articles" : "approved_responses"
 
         // Map 'content' to correct field name for responses

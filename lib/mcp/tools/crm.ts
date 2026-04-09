@@ -835,7 +835,7 @@ export function registerCrmTools(server: McpServer) {
     "crm_sync_hubspot",
     "Sync CRM data from Supabase to HubSpot (one-way push). Syncs Active accounts as Companies, their contacts as Contacts, and creates associations. Requires HUBSPOT_PAT env var. Use dry_run to preview. Supports syncing specific accounts by ID or all Active accounts.",
     {
-      dry_run: z.boolean().optional().default(false).describe("If true, preview what would sync without writing to HubSpot"),
+      dry_run: z.boolean().optional().default(true).describe("If true, preview what would sync without writing to HubSpot (default: true — must be explicitly set to false to perform writes)"),
       account_ids: z.array(z.string()).optional().describe("Specific account UUIDs to sync. If omitted, syncs all Active accounts."),
       limit: z.number().optional().default(0).describe("Max accounts to sync (0 = all)"),
     },
@@ -947,7 +947,7 @@ export function registerCrmTools(server: McpServer) {
     "crm_sync_airtable",
     "Sync CRM data from Supabase to Airtable (one-way push). Updates accounts that have an airtable_id link. Use this when Airtable needs to reflect latest CRM changes. Supports dry_run mode to preview without writing.",
     {
-      dry_run: z.boolean().optional().default(false).describe("If true, count records without actually updating Airtable"),
+      dry_run: z.boolean().optional().default(true).describe("If true, count records without actually updating Airtable (default: true — must be explicitly set to false to perform writes)"),
       limit: z.number().optional().default(0).describe("Max accounts to sync (0 = all)"),
     },
     async ({ dry_run, limit }) => {
