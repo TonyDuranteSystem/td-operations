@@ -114,6 +114,7 @@ export function CreateOfferDialog({
   const [catalog, setCatalog] = useState<CatalogService[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [createdOfferUrl, setCreatedOfferUrl] = useState<string | null>(null)
+  const [showConfirm, setShowConfirm] = useState(false)
 
   // Fetch service catalog from DB when dialog opens
   useEffect(() => {
@@ -240,6 +241,21 @@ export function CreateOfferDialog({
       return svc?.has_annual
     })
   }, [selected, catalog])
+
+  // Detect bank/currency incompatibility. Mercury/Relay/Revolut are USD-only;
+  // Airwallex is EUR-only. 'auto' is always compatible (picks the right one by currency).
+  const bankCurrencyMismatch = useMemo(() => {
+    const usdOnly = ['relay', 'mercury', 'revolut']
+    const eurOnly = ['airwallex']
+    const bankLabel = BANK_OPTIONS.find(b => b.value === bankPreference)?.label || bankPreference
+    if (usdOnly.includes(bankPreference) && currency !== 'USD') {
+      return { bankLabel, expected: 'USD' as const }
+    }
+    if (eurOnly.includes(bankPreference) && currency !== 'EUR') {
+      return { bankLabel, expected: 'EUR' as const }
+    }
+    return null
+  }, [bankPreference, currency])
 
   const servicesTotalAmount = selected.reduce((sum, s) => {
     const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
@@ -697,15 +713,26 @@ export function CreateOfferDialog({
               <select
                 value={bankPreference}
                 onChange={e => setBankPreference(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 ${
+                  bankCurrencyMismatch
+                    ? 'border-red-400 focus:ring-red-500 bg-red-50'
+                    : 'focus:ring-blue-500'
+                }`}
               >
                 {BANK_OPTIONS.map(b => (
                   <option key={b.value} value={b.value}>{b.label}</option>
                 ))}
               </select>
-              {bankPreference === 'auto' && (
+              {bankCurrencyMismatch ? (
+                <p className="text-xs text-red-600 mt-0.5 font-medium flex items-start gap-1">
+                  <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                  <span>
+                    {bankCurrencyMismatch.bankLabel} is {bankCurrencyMismatch.expected}-only — switch currency to {bankCurrencyMismatch.expected} or pick a different bank.
+                  </span>
+                </p>
+              ) : bankPreference === 'auto' ? (
                 <p className="text-xs text-zinc-400 mt-0.5">EUR-Airwallex, USD-Relay</p>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -924,7 +951,24 @@ export function CreateOfferDialog({
                 Cancel
               </button>
               <button
-                onClick={handleSubmit}
+                onClick={() => {
+                  // Pre-submit validation — mirrors checks inside handleSubmit so the
+                  // confirm modal never opens for invalid input.
+                  if (selected.length === 0) {
+                    toast.error('Select at least one service')
+                    return
+                  }
+                  const withPrices = selected.filter(s => s.price.trim())
+                  if (withPrices.length === 0) {
+                    toast.error('Enter a price for at least one service')
+                    return
+                  }
+                  if (bankCurrencyMismatch) {
+                    toast.error(`Bank/currency mismatch: ${bankCurrencyMismatch.bankLabel} is ${bankCurrencyMismatch.expected}-only`)
+                    return
+                  }
+                  setShowConfirm(true)
+                }}
                 disabled={isPending || selected.length === 0}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
@@ -935,6 +979,81 @@ export function CreateOfferDialog({
           )}
         </div>
       </div>
+
+      {/* Confirm-on-submit modal — final sanity check on currency/bank/amount
+          before the offer is created. Catches the class of mistakes like
+          "EUR services shipped with a Mercury USD bank block". */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center gap-2 px-5 py-4 border-b">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              <h3 className="text-base font-semibold">Confirm Offer Details</h3>
+            </div>
+            <div className="px-5 py-4 space-y-3 text-sm">
+              <p className="text-xs text-zinc-500">
+                Double-check the highlighted fields. These are the values the client will see.
+              </p>
+              <dl className="space-y-2">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-zinc-500">Client</dt>
+                  <dd className="font-medium text-right truncate">{clientName}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-zinc-500">Language</dt>
+                  <dd className="font-medium">{language === 'it' ? 'Italian' : 'English'}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-zinc-500">Contract</dt>
+                  <dd className="font-medium">{derivedContractType}</dd>
+                </div>
+                <div className="flex justify-between items-center gap-3 bg-blue-50 rounded px-2 py-1.5">
+                  <dt className="text-zinc-600 font-medium">Amount</dt>
+                  <dd className="text-lg font-bold text-blue-700">
+                    {currencySymbol}{totalAmount.toLocaleString('en-US')} {currency}
+                  </dd>
+                </div>
+                <div className="flex justify-between items-center gap-3 bg-blue-50 rounded px-2 py-1.5">
+                  <dt className="text-zinc-600 font-medium">Bank</dt>
+                  <dd className="font-bold text-blue-700">
+                    {BANK_OPTIONS.find(b => b.value === bankPreference)?.label}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-zinc-500">Payment</dt>
+                  <dd className="font-medium">{PAYMENT_TYPES.find(p => p.value === paymentType)?.label}</dd>
+                </div>
+                {(paymentType === 'checkout' || paymentType === 'both') && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-zinc-500">Gateway</dt>
+                    <dd className="font-medium capitalize">{paymentGateway}</dd>
+                  </div>
+                )}
+              </dl>
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-3">
+                ⚠ Once the client opens this offer, changing currency or bank means re-creating it. Make sure the amount currency and bank account match.
+              </p>
+            </div>
+            <div className="flex justify-end gap-3 px-5 py-4 border-t">
+              <button
+                onClick={() => setShowConfirm(false)}
+                disabled={isPending}
+                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Go Back
+              </button>
+              <button
+                onClick={() => { setShowConfirm(false); handleSubmit() }}
+                disabled={isPending}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Confirm &amp; Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
