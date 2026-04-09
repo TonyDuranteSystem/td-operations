@@ -18,9 +18,11 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
   const accountIds = links.map(l => l.account_id)
   const { data: accounts } = await supabaseAdmin
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, account_type')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, account_type, portal_tier')
     .in('id', accountIds)
-    .eq('status', 'Active')
+    // Include Active + Suspended (Suspended accounts show a banner + limited access).
+    // Cancelled/Closed/Delinquent/Pending Formation are hidden from the portal.
+    .in('status', ['Active', 'Suspended'])
     .order('company_name')
 
   return (accounts ?? []) as PortalAccount[]

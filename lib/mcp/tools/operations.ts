@@ -1398,10 +1398,16 @@ export function registerOperationsTools(server: McpServer) {
         if (account_id) {
           const { data: account } = await supabaseAdmin
             .from("accounts")
-            .select("company_name")
+            .select("company_name, status")
             .eq("id", account_id)
             .single()
           clientName = account?.company_name || "Unknown"
+          // Gate: block new deliveries on non-Active accounts.
+          // Cancelled/Closed/Suspended accounts should not accept new work.
+          const blockedStatuses = ["Suspended", "Cancelled", "Closed"]
+          if (account?.status && blockedStatuses.includes(account.status)) {
+            return { content: [{ type: "text" as const, text: `❌ Cannot create service delivery — account "${clientName}" is ${account.status}. Reactivate the account before starting new services.` }] }
+          }
         } else if (contact_id) {
           const { data: contact } = await supabaseAdmin
             .from("contacts")

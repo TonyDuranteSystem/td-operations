@@ -308,6 +308,7 @@ export interface PortalAccount {
   status: string
   physical_address: string | null
   account_type: string | null
+  portal_tier?: string | null
 }
 
 export interface PortalDocument {

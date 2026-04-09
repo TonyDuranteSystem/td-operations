@@ -14,6 +14,7 @@ import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PortalSwRegister } from '@/components/portal/portal-sw-register'
 import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
 import { PasswordGate } from '@/components/portal/password-gate'
+import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { cookies } from 'next/headers'
 import Script from 'next/script'
 
@@ -64,6 +65,8 @@ export default async function PortalLayout({
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id
     ?? accounts[0]?.id
     ?? ''
+  const selectedAccount = accounts.find(a => a.id === selectedAccountId)
+  const isSuspended = selectedAccount?.status === 'Suspended'
 
   // Show onboarding wizard on first login
   const mustChangePassword = !!user.user_metadata?.must_change_password
@@ -128,7 +131,13 @@ export default async function PortalLayout({
               <NotificationBell accountId={selectedAccountId || undefined} contactId={contactId} />
             </div>
           )}
-          {children}
+          {isSuspended && selectedAccount ? (
+            <SuspendedGuard companyName={selectedAccount.company_name}>
+              {children}
+            </SuspendedGuard>
+          ) : (
+            children
+          )}
         </main>
         <PwaInstallPrompt />
         </div>

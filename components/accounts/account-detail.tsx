@@ -7,7 +7,7 @@ import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Plus, Search, Loader2, Stethoscope, X,
+  Pencil, Plus, Search, Loader2, Stethoscope, X,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -26,6 +26,7 @@ import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
+import { StatusChangeDialog } from './status-change-dialog'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -394,6 +395,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
   const [showPlaceClient, setShowPlaceClient] = useState(false)
   const [showDiagnostic, setShowDiagnostic] = useState(false)
+  const [showStatusDialog, setShowStatusDialog] = useState(false)
 
   const primaryContact = contacts[0] || null
 
@@ -424,7 +426,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             <span className={cn(
               'text-xs font-medium px-2 py-0.5 rounded',
               account.status === 'Active' ? 'bg-emerald-100 text-emerald-700' :
-              account.status === 'Closed' ? 'bg-zinc-100 text-zinc-600' :
+              account.status === 'Pending Formation' ? 'bg-blue-100 text-blue-700' :
+              account.status === 'Closed' || account.status === 'Cancelled' ? 'bg-zinc-100 text-zinc-600' :
+              account.status === 'Suspended' ? 'bg-amber-100 text-amber-700' :
               'bg-red-100 text-red-700'
             )}>
               {account.status}
@@ -543,6 +547,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         accountId={account.id}
         companyName={account.company_name}
       />
+      <StatusChangeDialog
+        open={showStatusDialog}
+        onClose={() => setShowStatusDialog(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+        currentStatus={account.status ?? ''}
+        updatedAt={account.updated_at}
+      />
 
       {/* Tabs */}
       <div className="border-b">
@@ -579,7 +591,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'panoramica' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} />
       )}
       {activeTab === 'servizi' && (
         <ServiziTab services={services} today={today} accountId={account.id} />
@@ -666,7 +678,7 @@ function InstallmentBadge({ match }: { match: Payment | null }) {
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void }) {
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
 
@@ -710,13 +722,6 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
     { label: 'One-Time', value: 'One-Time' },
   ]
 
-  const _STATUS_OPTIONS = [
-    { label: 'Active', value: 'Active' },
-    { label: 'Inactive', value: 'Inactive' },
-    { label: 'Closed', value: 'Closed' },
-    { label: 'Suspended', value: 'Suspended' },
-  ]
-
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       {/* Company Info */}
@@ -724,6 +729,20 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
         <div className="grid gap-3 text-sm">
           <EditableField icon={Briefcase} label="Account Type" value={account.account_type ?? ''} type="select" options={ACCOUNT_TYPE_OPTIONS} onSave={makeAccountSaver('account_type')} />
+          <div className="flex items-center gap-2 group">
+            <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground min-w-[80px]">Status</span>
+            <span className="flex-1">{account.status}</span>
+            <button
+              type="button"
+              onClick={onOpenStatusDialog}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-zinc-100 rounded"
+              aria-label="Change Status"
+              title="Change Status"
+            >
+              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </div>
           <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} onSave={makeAccountSaver('entity_type')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
