@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { User } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
@@ -46,9 +47,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No offer found for this lead. Create an offer first.' }, { status: 400 })
     }
 
-    // Check if portal login already exists
-    const { data: existingAuth } = await supabaseAdmin.auth.admin.listUsers()
-    const existingUser = existingAuth?.users?.find(
+    // Check if portal login already exists.
+    // NOTE: listUsers() returns a discriminated union where the error branch has
+    // `users: []` (empty tuple). TypeScript cannot narrow this shape via a simple
+    // `if (error)` check because the property-based discriminant doesn't propagate
+    // to `data.users`. We handle the error branch defensively, then cast the users
+    // array to User[] — runtime behavior is unchanged.
+    const listUsersResult = await supabaseAdmin.auth.admin.listUsers()
+    if (listUsersResult.error) {
+      return NextResponse.json({ error: `Failed to check portal users: ${listUsersResult.error.message}` }, { status: 500 })
+    }
+    const allUsers = listUsersResult.data.users as User[]
+    const existingUser = allUsers.find(
       (u) => u.email?.toLowerCase() === lead.email!.toLowerCase()
     )
 

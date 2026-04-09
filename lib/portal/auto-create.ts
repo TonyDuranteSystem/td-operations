@@ -9,6 +9,7 @@
  * Idempotent: if user already exists, just updates the tier.
  */
 
+import type { User } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import type { PortalTier } from './tier-config'
@@ -606,7 +607,7 @@ export async function upgradePortalTier(
       .single()
     if (contactRow?.email) {
       const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-      const authUser = users.find(u => u.email === contactRow.email)
+      const authUser = (users as User[]).find(u => u.email === contactRow.email)
       if (authUser) {
         await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
           app_metadata: { ...authUser.app_metadata, portal_tier: newTier },
