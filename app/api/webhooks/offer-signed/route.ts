@@ -221,9 +221,9 @@ export async function POST(req: NextRequest) {
     // Invoice is for the PERSON (contact_id). Account doesn't exist yet.
     // When the account is created later (formation/onboarding wizard), account_id gets backfilled.
     let invoiceId: string | null = null
+    const contractType = offer.contract_type || "formation"
     try {
-      if (contactId && totalAmount > 0) {
-        const contractType = offer.contract_type || "formation"
+      if (contactId && totalAmount > 0 && contractType !== "renewal") {
         const serviceLabel = contractType === "formation" ? "LLC Formation"
           : contractType === "onboarding" ? "LLC Onboarding"
           : contractType === "tax_return" ? "Tax Return"
