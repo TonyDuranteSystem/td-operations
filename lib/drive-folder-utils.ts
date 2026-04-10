@@ -279,6 +279,7 @@ export async function ensureCompanyFolder(
 export async function migrateContactToCompany(
   contactFolderId: string,
   companyFolderId: string,
+  contactId?: string,
 ): Promise<{ moved: number; errors: string[] }> {
   const { listFiles, moveFile } = await getDriveHelpers()
   const result = { moved: 0, errors: [] as string[] }
@@ -314,6 +315,23 @@ export async function migrateContactToCompany(
       } catch (err) {
         result.errors.push(`Failed to move ${file.name}: ${err instanceof Error ? err.message : String(err)}`)
       }
+    }
+  }
+
+  // After migration, update contact's folder link to company's "2. Contacts" subfolder
+  if (contactId) {
+    const contactsSubfolderId = companySubMap['2. Contacts']
+    if (contactsSubfolderId) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({
+          drive_folder_id: contactsSubfolderId,
+          gdrive_folder_url: `https://drive.google.com/drive/folders/${contactsSubfolderId}`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', contactId)
+    } else {
+      console.warn(`[drive-folder-utils] migrateContactToCompany: No "2. Contacts" subfolder in company folder ${companyFolderId} — contact folder link not updated`)
     }
   }
 

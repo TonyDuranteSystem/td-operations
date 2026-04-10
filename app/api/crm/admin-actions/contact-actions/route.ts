@@ -432,7 +432,7 @@ export async function POST(req: NextRequest) {
               if (ownerContact?.gdrive_folder_url) {
                 const contactFolderMatch = (ownerContact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
                 if (contactFolderMatch) {
-                  const migrationResult = await migrateContactToCompany(contactFolderMatch[1], companyResult.folderId)
+                  const migrationResult = await migrateContactToCompany(contactFolderMatch[1], companyResult.folderId, contact_id)
                   if (migrationResult.moved > 0) {
                     sideEffects.push(`${migrationResult.moved} file(s) migrated from contact folder`)
                   }

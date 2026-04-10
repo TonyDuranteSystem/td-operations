@@ -201,3 +201,116 @@ export async function processContactFile(contactId: string, driveFileId: string,
     summary: `Processed Drive file ${fileName} for contact`,
   })
 }
+
+/**
+ * ONE-TIME REPAIR: Fix contacts whose drive_folder_id points to company root
+ * instead of the company's "2. Contacts" subfolder.
+ * Processes all affected contacts, resolves the correct subfolder via Drive API.
+ * Returns a report of updated, skipped, and errored contacts.
+ */
+export async function repairContactFolderLinks(): Promise<ActionResult<{
+  updated: number
+  skipped: Array<{ contactId: string; contactName: string; companyName: string; reason: string }>
+  errors: Array<{ contactId: string; contactName: string; error: string }>
+}>> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { listFolderAnyDrive } = await import('@/lib/google-drive')
+
+    // Find all contacts pointing to company root
+    const { data: rows } = await supabaseAdmin
+      .from('contacts')
+      .select(`
+        id, first_name, last_name, drive_folder_id,
+        account_contacts!inner(account_id, accounts!inner(id, company_name, drive_folder_id))
+      `)
+      .not('drive_folder_id', 'is', null)
+
+    if (!rows || rows.length === 0) return { updated: 0, skipped: [], errors: [] }
+
+    // Filter to contacts where drive_folder_id = company drive_folder_id
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const affected = rows.filter((r: any) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const links = r.account_contacts as any[]
+      return links?.some((l: { accounts: { drive_folder_id: string | null } }) =>
+        l.accounts?.drive_folder_id && l.accounts.drive_folder_id === r.drive_folder_id
+      )
+    })
+
+    // Cache: company_root_id -> "2. Contacts" subfolder ID (or null)
+    const subfolderCache = new Map<string, string | null>()
+
+    let updated = 0
+    const skipped: Array<{ contactId: string; contactName: string; companyName: string; reason: string }> = []
+    const errors: Array<{ contactId: string; contactName: string; error: string }> = []
+
+    for (const row of affected) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = row as any
+      const contactName = [r.first_name, r.last_name].filter(Boolean).join(' ') || 'Unknown'
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const link = (r.account_contacts as any[])?.[0]
+      const companyName = link?.accounts?.company_name || 'Unknown'
+      const companyRootId = link?.accounts?.drive_folder_id as string
+
+      if (!companyRootId) {
+        skipped.push({ contactId: r.id, contactName, companyName, reason: 'No company folder' })
+        continue
+      }
+
+      try {
+        // Resolve "2. Contacts" subfolder (cached per company)
+        if (!subfolderCache.has(companyRootId)) {
+          const result = await listFolderAnyDrive(companyRootId) as { files?: { id: string; name: string; mimeType: string }[] }
+          const items = result?.files || []
+          const contactsFolders = items.filter(
+            (f: { name: string; mimeType: string }) => f.name === '2. Contacts' && f.mimeType === 'application/vnd.google-apps.folder'
+          )
+
+          if (contactsFolders.length === 1) {
+            subfolderCache.set(companyRootId, contactsFolders[0].id)
+          } else if (contactsFolders.length === 0) {
+            subfolderCache.set(companyRootId, null)
+          } else {
+            // Multiple "2. Contacts" folders — ambiguous
+            subfolderCache.set(companyRootId, null)
+            skipped.push({ contactId: r.id, contactName, companyName, reason: `Multiple "2. Contacts" subfolders (${contactsFolders.length})` })
+            continue
+          }
+        }
+
+        const contactsSubfolderId = subfolderCache.get(companyRootId)
+        if (!contactsSubfolderId) {
+          skipped.push({ contactId: r.id, contactName, companyName, reason: 'No "2. Contacts" subfolder found' })
+          continue
+        }
+
+        // Update the contact
+        const { error: updateErr } = await supabaseAdmin
+          .from('contacts')
+          .update({
+            drive_folder_id: contactsSubfolderId,
+            gdrive_folder_url: `https://drive.google.com/drive/folders/${contactsSubfolderId}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', r.id)
+          .eq('drive_folder_id', companyRootId) // Safety: only if still pointing to company root
+
+        if (updateErr) {
+          errors.push({ contactId: r.id, contactName, error: updateErr.message })
+        } else {
+          updated++
+        }
+      } catch (err) {
+        errors.push({ contactId: r.id, contactName, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+
+    return { updated, skipped, errors }
+  }, {
+    action_type: 'update',
+    table_name: 'contacts',
+    summary: 'Batch repair: contact folder links (company root → 2. Contacts subfolder)',
+  })
+}
