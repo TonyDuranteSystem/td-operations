@@ -1,7 +1,7 @@
 // Enum values from CRM-Data-Schema.md — Section 2
 
 export const ACCOUNT_STATUS = [
-  'Active', 'Pending Formation', 'Delinquent', 'Suspended', 'Cancelled', 'Closed',
+  'Active', 'Pending Formation', 'Delinquent', 'Suspended', 'Offboarding', 'Cancelled', 'Closed',
 ] as const
 
 export const COMPANY_TYPE = [
@@ -172,6 +172,7 @@ export const STATUS_COLORS: Record<string, string> = {
   'Pending Formation': 'bg-amber-100 text-amber-800',
   'Delinquent': 'bg-red-100 text-red-800',
   'Suspended': 'bg-orange-100 text-orange-800',
+  'Offboarding': 'bg-amber-100 text-amber-800',
   'Cancelled': 'bg-zinc-100 text-zinc-800',
   'Closed': 'bg-zinc-100 text-zinc-800',
   // Task

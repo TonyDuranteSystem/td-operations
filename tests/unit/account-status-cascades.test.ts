@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   SUSPENDED_CASCADES,
   CANCELLED_CASCADES,
+  OFFBOARDING_CASCADES,
   CLOSED_CASCADES,
   getCascadesForStatus,
   getDefaultSelections,
@@ -10,12 +11,13 @@ import {
 import { ACCOUNT_STATUS } from '@/lib/constants'
 
 describe('ACCOUNT_STATUS enum (regression guard)', () => {
-  it('contains the 6 canonical values', () => {
+  it('contains the 7 canonical values', () => {
     expect(ACCOUNT_STATUS).toEqual([
       'Active',
       'Pending Formation',
       'Delinquent',
       'Suspended',
+      'Offboarding',
       'Cancelled',
       'Closed',
     ])
@@ -31,6 +33,10 @@ describe('getCascadesForStatus', () => {
 
   it('returns cancelled cascades for Cancelled', () => {
     expect(getCascadesForStatus('Cancelled')).toBe(CANCELLED_CASCADES)
+  })
+
+  it('returns offboarding cascades for Offboarding', () => {
+    expect(getCascadesForStatus('Offboarding')).toBe(OFFBOARDING_CASCADES)
   })
 
   it('returns closed cascades for Closed', () => {
@@ -124,11 +130,47 @@ describe('getDefaultSelections', () => {
       'revokePortalAccess',
       'runClosureDocs',
     ]
-    for (const status of ['Suspended', 'Cancelled', 'Closed']) {
+    for (const status of ['Suspended', 'Offboarding', 'Cancelled', 'Closed']) {
       const selections = getDefaultSelections(status)
       for (const key of Object.keys(selections)) {
         expect(validKeys).toContain(key as StatusCascadeKey)
       }
     }
+  })
+})
+
+describe('OFFBOARDING_CASCADES', () => {
+  it('has the same 3 cascade keys as CANCELLED_CASCADES (graceful-exit variant)', () => {
+    const cancelledKeys = CANCELLED_CASCADES.map((a) => a.key).sort()
+    const offboardingKeys = OFFBOARDING_CASCADES.map((a) => a.key).sort()
+    expect(offboardingKeys).toEqual(cancelledKeys)
+  })
+
+  it('includes cancelDeliveries, cancelDeadlines, createRACancelTask', () => {
+    const keys = OFFBOARDING_CASCADES.map((a) => a.key)
+    expect(keys).toContain('cancelDeliveries')
+    expect(keys).toContain('cancelDeadlines')
+    expect(keys).toContain('createRACancelTask')
+  })
+
+  it('does NOT include portal revocation or closure docs (Closed-only)', () => {
+    const keys = OFFBOARDING_CASCADES.map((a) => a.key)
+    expect(keys).not.toContain('revokePortalAccess')
+    expect(keys).not.toContain('runClosureDocs')
+    expect(keys).not.toContain('voidPendingPayments')
+    expect(keys).not.toContain('closeOpenTasks')
+  })
+
+  it('all cascades default to CHECKED', () => {
+    for (const a of OFFBOARDING_CASCADES) {
+      expect(a.defaultChecked).toBe(true)
+    }
+  })
+
+  it('getDefaultSelections returns all keys true for Offboarding', () => {
+    const selections = getDefaultSelections('Offboarding')
+    expect(selections.cancelDeliveries).toBe(true)
+    expect(selections.cancelDeadlines).toBe(true)
+    expect(selections.createRACancelTask).toBe(true)
   })
 })

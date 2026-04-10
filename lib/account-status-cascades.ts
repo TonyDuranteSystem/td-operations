@@ -64,6 +64,12 @@ export const CANCELLED_CASCADES: StatusCascadeAction[] = [
   },
 ]
 
+// Offboarding is a graceful-exit state. Behaviourally identical to Cancelled
+// today — same 3 side effects — but distinguished in the UI so staff can tell
+// a "client is leaving us on good terms" case apart from a "just cancelled"
+// one. The lists can diverge later if the workflows differ.
+export const OFFBOARDING_CASCADES: StatusCascadeAction[] = CANCELLED_CASCADES
+
 export const CLOSED_CASCADES: StatusCascadeAction[] = [
   ...CANCELLED_CASCADES,
   {
@@ -108,6 +114,8 @@ export function getCascadesForStatus(
   switch (newStatus) {
     case 'Suspended':
       return SUSPENDED_CASCADES
+    case 'Offboarding':
+      return OFFBOARDING_CASCADES
     case 'Cancelled':
       return CANCELLED_CASCADES
     case 'Closed':
