@@ -325,7 +325,7 @@ export async function ensureMinimalAccount(params: {
     .from('accounts')
     .insert({
       company_name: companyName,
-      status: 'Pending',
+      status: contractType === 'formation' ? 'Pending Formation' : 'Active',
       account_type: isStandaloneBusiness ? 'One-Time' : 'Client',
       entity_type: contractType === 'formation' ? 'Single Member LLC' : null,
       portal_account: true,

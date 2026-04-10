@@ -372,7 +372,7 @@ export async function POST(req: NextRequest) {
               service_name: `${pipeline} - ${activation.client_name}`,
               account_id: accountId,
               contact_id: contactId,
-              current_stage: stage,
+              stage: stage,
               status: "active",
               assigned_to: "Luca",
               notes: `Auto-created from offer ${activation.offer_token}`,
