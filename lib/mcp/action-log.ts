@@ -20,7 +20,7 @@ interface LogActionParams {
 /**
  * Log an action to the action_log table.
  * MUST be called after every successful write operation.
- * Non-blocking: errors are silently caught.
+ * Non-blocking: errors are logged to console but never thrown.
  */
 export function logAction(params: LogActionParams): void {
   // Fire and forget — don't await, don't throw
@@ -42,6 +42,12 @@ export function logAction(params: LogActionParams): void {
         summary: params.summary,
         details: params.details || {},
       })
-  ).catch(() => {})
-  // Truly fire-and-forget: no error propagation
+      .then(({ error }) => {
+        if (error) {
+          console.error(`[action-log] Insert failed for ${params.table_name}/${params.action_type}: ${error.message}`)
+        }
+      })
+  ).catch((err) => {
+    console.error(`[action-log] Unexpected error: ${err instanceof Error ? err.message : String(err)}`)
+  })
 }

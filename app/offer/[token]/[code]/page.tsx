@@ -152,7 +152,7 @@ export default function OfferPageWithCode() {
   const { token, code } = useParams<{ token: string; code: string }>()
   const searchParams = useSearchParams()
   const accessCode = code
-  const isPreview = searchParams.get('preview') === '1'
+  const isPreview = searchParams.get('preview') === 'td'
 
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -265,7 +265,8 @@ export default function OfferPageWithCode() {
       }
 
       // Track view (only once verified or no email gate needed)
-      if (hasVerifiedCookie(token) || !o.client_email || isPreview || hasValidCode) {
+      // NEVER track views in admin preview mode — prevents viewed_at pollution
+      if (!isPreview && (hasVerifiedCookie(token) || !o.client_email || hasValidCode)) {
         trackView(o)
       }
     } catch {

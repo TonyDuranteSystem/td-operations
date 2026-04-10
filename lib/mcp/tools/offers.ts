@@ -626,6 +626,30 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
           return { content: [{ type: "text" as const, text: `❌ Validation error: ${validationError}` }] }
         }
 
+        // ─── Duplicate-offer guard (mirrors CRM create-offer/route.ts:75-83) ───
+        if (params.lead_id) {
+          const { data: existingByLead } = await supabaseAdmin
+            .from("offers")
+            .select("token, status")
+            .eq("lead_id", params.lead_id)
+            .not("status", "in", '("expired","completed")')
+            .limit(1)
+          if (existingByLead?.length) {
+            return { content: [{ type: "text" as const, text: `❌ Active offer already exists for this lead: ${existingByLead[0].token} (status: ${existingByLead[0].status}). Use offer_update to modify it, or set its status to 'expired' first.` }] }
+          }
+        }
+        if (params.account_id) {
+          const { data: existingByAccount } = await supabaseAdmin
+            .from("offers")
+            .select("token, status")
+            .eq("account_id", params.account_id)
+            .not("status", "in", '("expired","completed")')
+            .limit(1)
+          if (existingByAccount?.length) {
+            return { content: [{ type: "text" as const, text: `❌ Active offer already exists for this account: ${existingByAccount[0].token} (status: ${existingByAccount[0].status}). Use offer_update to modify it, or set its status to 'expired' first.` }] }
+          }
+        }
+
         // Auto-lookup referrer from lead if lead_id provided and no referrer_name set
         let refName = params.referrer_name || null
         const refEmail = params.referrer_email || null

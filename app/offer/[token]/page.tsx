@@ -148,12 +148,12 @@ export default function OfferPage() {
   const router = useRouter()
   const token = params.token as string
   const accessCode = searchParams.get('c') || ''
-  const isPreview = searchParams.get('preview') === '1'
+  const isPreview = searchParams.get('preview') === 'td'
 
   // Redirect legacy ?c= URLs to the new /offer/{token}/{code} path
   useEffect(() => {
     if (accessCode) {
-      const preview = isPreview ? '?preview=1' : ''
+      const preview = isPreview ? '?preview=td' : ''
       router.replace(`/offer/${encodeURIComponent(token)}/${encodeURIComponent(accessCode)}${preview}`)
     }
   }, [accessCode, token, isPreview, router])
@@ -272,7 +272,8 @@ export default function OfferPage() {
       }
 
       // Track view (only once verified or no email gate needed)
-      if (hasVerifiedCookie(token) || !o.client_email || isPreview || hasValidCode) {
+      // NEVER track views in admin preview mode — prevents viewed_at pollution
+      if (!isPreview && (hasVerifiedCookie(token) || !o.client_email || hasValidCode)) {
         trackView(o)
       }
     } catch {
