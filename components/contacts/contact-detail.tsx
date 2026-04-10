@@ -111,6 +111,7 @@ interface ContactRecord {
   notes: string | null
   gdrive_folder_url: string | null
   drive_folder_id: string | null
+  primary_company_id: string | null
   created_at: string | null
   updated_at: string
 }
@@ -2117,6 +2118,10 @@ const CATEGORY_COLORS: Record<string, string> = {
   Tax: 'bg-amber-100 text-amber-700',
   Banking: 'bg-emerald-100 text-emerald-700',
   Correspondence: 'bg-zinc-100 text-zinc-600',
+  // Canonical contact-side sections
+  Identity: 'bg-purple-100 text-purple-700',
+  ITIN: 'bg-indigo-100 text-indigo-700',
+  Other: 'bg-zinc-100 text-zinc-600',
 }
 
 function formatFileSize(bytes: number): string {
@@ -2401,15 +2406,23 @@ function ContactDocumentsTab({
     }
   }
 
-  // Group by category
+  // Group by canonical contact-side sections
+  const getContactSection = (doc: ContactDocumentRecord): string => {
+    const t = (doc.document_type_name || '').toLowerCase()
+    if (/passport|id.doc|boi.report/i.test(t)) return 'Identity'
+    if (/w-7|itin/i.test(t)) return 'ITIN'
+    if (/1040|tax.return/i.test(t)) return 'Tax'
+    return 'Other'
+  }
+
   const grouped = documents.reduce<Record<string, ContactDocumentRecord[]>>((acc, doc) => {
-    const cat = doc.category_name || 'Uncategorized'
-    if (!acc[cat]) acc[cat] = []
-    acc[cat].push(doc)
+    const section = getContactSection(doc)
+    if (!acc[section]) acc[section] = []
+    acc[section].push(doc)
     return acc
   }, {})
 
-  const categoryOrder = ['Contacts', 'Company', 'Tax', 'Banking', 'Correspondence', 'Uncategorized']
+  const categoryOrder = ['Identity', 'ITIN', 'Tax', 'Other']
   const sortedCategories = categoryOrder.filter(c => grouped[c])
 
   const uploadButton = (
@@ -2686,12 +2699,12 @@ function ContactDocumentsTab({
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {doc.category_name && (
+                  {doc.document_type_name && (
                     <span className={cn(
                       'text-xs px-2 py-0.5 rounded-full font-medium',
-                      CATEGORY_COLORS[doc.category_name] || 'bg-zinc-100 text-zinc-600'
+                      CATEGORY_COLORS[getContactSection(doc)] || 'bg-zinc-100 text-zinc-600'
                     )}>
-                      {doc.category_name}
+                      {getContactSection(doc)}
                     </span>
                   )}
                   {doc.drive_file_id && (
