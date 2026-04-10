@@ -2131,6 +2131,25 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [processing, setProcessing] = useState<string | null>(null)
+
+  const handleProcess = async (driveFileId: string, fileName: string) => {
+    setProcessing(driveFileId)
+    try {
+      const { processContactFile } = await import('@/app/(dashboard)/contacts/folder-actions')
+      const result = await processContactFile(contactId, driveFileId, fileName)
+      if (result.success) {
+        toast.success(`Processed "${fileName}"${result.data?.documentId ? ' — OCR complete' : ''}`)
+        window.location.reload()
+      } else {
+        toast.error(result.error ?? 'Processing failed')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Processing failed')
+    } finally {
+      setProcessing(null)
+    }
+  }
 
   const fetchFiles = useCallback(async () => {
     setLoading(true)
@@ -2184,12 +2203,19 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
           {expanded[folder.id] && (
             <div className="border-l ml-5 pl-2">
               {folder.files.map(file => (
-                <a key={file.id} href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-zinc-50 text-zinc-600">
+                <div key={file.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-zinc-50 group">
                   <FileText className="h-3.5 w-3.5 text-zinc-400" />
-                  <span className="flex-1 truncate">{file.name}</span>
+                  <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
                   {file.size && <span className="text-xs text-zinc-400">{formatFileSize(Number(file.size))}</span>}
-                </a>
+                  <button
+                    onClick={() => handleProcess(file.id, file.name)}
+                    disabled={processing === file.id}
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
+                    title="Process & OCR"
+                  >
+                    {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
               ))}
               {folder.subfolders.map(sf => (
                 <div key={sf.id}>
@@ -2197,11 +2223,18 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
                     <Folder className="h-3 w-3 text-amber-400" /> {sf.name} ({sf.files.length})
                   </div>
                   {sf.files.map(file => (
-                    <a key={file.id} href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer"
-                      className="flex items-center gap-2 px-3 py-1.5 ml-4 text-sm hover:bg-zinc-50 text-zinc-600">
+                    <div key={file.id} className="flex items-center gap-2 px-3 py-1.5 ml-4 text-sm hover:bg-zinc-50 group">
                       <FileText className="h-3.5 w-3.5 text-zinc-400" />
-                      <span className="flex-1 truncate">{file.name}</span>
-                    </a>
+                      <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
+                      <button
+                        onClick={() => handleProcess(file.id, file.name)}
+                        disabled={processing === file.id}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
+                        title="Process & OCR"
+                      >
+                        {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
                   ))}
                 </div>
               ))}
@@ -2216,11 +2249,18 @@ function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { cont
         <div className="border-t px-3 py-2">
           <p className="text-xs text-zinc-400 mb-1">Root files</p>
           {data.rootFiles.map(file => (
-            <a key={file.id} href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 py-1 text-sm hover:text-blue-600 text-zinc-600">
+            <div key={file.id} className="flex items-center gap-2 py-1 text-sm group">
               <FileText className="h-3.5 w-3.5 text-zinc-400" />
-              <span className="truncate">{file.name}</span>
-            </a>
+              <a href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-zinc-600 hover:text-blue-600">{file.name}</a>
+              <button
+                onClick={() => handleProcess(file.id, file.name)}
+                disabled={processing === file.id}
+                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-blue-50 text-zinc-400 hover:text-blue-600 transition-all disabled:opacity-50"
+                title="Process & OCR"
+              >
+                {processing === file.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              </button>
+            </div>
           ))}
         </div>
       )}

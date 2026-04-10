@@ -115,3 +115,89 @@ export async function validateContactFolder(contactId: string): Promise<ActionRe
     summary: 'Validated contact Drive folder',
   })
 }
+
+/**
+ * Process a Drive file and create a document record for this contact.
+ * After processing, the file appears in the document list with OCR button.
+ * If the file is a passport/ITIN/EIN, also runs extraction OCR.
+ */
+export async function processContactFile(contactId: string, driveFileId: string, fileName: string): Promise<ActionResult<{ documentId?: string }>> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+
+    // Check if already processed
+    const { data: existing } = await supabaseAdmin
+      .from('documents')
+      .select('id')
+      .eq('drive_file_id', driveFileId)
+      .maybeSingle()
+
+    if (existing) {
+      return { documentId: existing.id }
+    }
+
+    // Get contact's linked account for account_id resolution
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id, accounts:account_id(company_name)')
+      .eq('contact_id', contactId)
+      .limit(1)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const link = links?.[0] as any
+    const accountId = link?.account_id || null
+    const accountName = link?.accounts?.company_name || null
+
+    // Process via the existing processFile function
+    const { processFile } = await import('@/lib/mcp/tools/doc')
+    const result = await processFile(driveFileId, accountId, accountName, contactId)
+
+    if (!result.success) {
+      throw new Error(`Processing failed: ${result.error || 'Unknown error'}`)
+    }
+
+    // Look up the created document record
+    const { data: createdDoc } = await supabaseAdmin
+      .from('documents')
+      .select('id, document_type_name')
+      .eq('drive_file_id', driveFileId)
+      .maybeSingle()
+
+    // If passport/ITIN/EIN — trigger OCR extraction
+    const docType = (createdDoc?.document_type_name || result.type || fileName || '').toLowerCase()
+    if (/passport|itin|ein/.test(docType) && createdDoc?.id) {
+      try {
+        const { ocrDriveFile } = await import('@/lib/docai')
+        const ocrResult = await ocrDriveFile(driveFileId)
+
+        if (ocrResult.fullText) {
+          if (docType.includes('passport')) {
+            const { parsePassportFromOcr } = await import('@/lib/passport-processing')
+            const parsed = parsePassportFromOcr(ocrResult.fullText)
+            const updates: Record<string, unknown> = { passport_on_file: true, updated_at: new Date().toISOString() }
+            if (parsed.passportNumber) updates.passport_number = parsed.passportNumber
+            if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
+            if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
+            await supabaseAdmin.from('contacts').update(updates).eq('id', contactId)
+          } else if (docType.includes('itin')) {
+            const itinMatch = ocrResult.fullText.match(/\b(9\d{2}[- ]?\d{2}[- ]?\d{4})\b/)
+            if (itinMatch) {
+              const formatted = itinMatch[1].replace(/[- ]/g, '').replace(/(\d{3})(\d{2})(\d{4})/, '$1-$2-$3')
+              await supabaseAdmin.from('contacts').update({ itin_number: formatted, updated_at: new Date().toISOString() }).eq('id', contactId)
+            }
+          }
+        }
+      } catch (ocrErr) {
+        console.warn('[processContactFile] OCR extraction failed (non-fatal):', ocrErr)
+      }
+    }
+
+    revalidatePath(`/contacts/${contactId}`)
+    return { documentId: createdDoc?.id }
+  }, {
+    action_type: 'create',
+    table_name: 'documents',
+    record_id: contactId,
+    summary: `Processed Drive file ${fileName} for contact`,
+  })
+}
