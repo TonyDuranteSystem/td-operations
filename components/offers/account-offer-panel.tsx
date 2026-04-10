@@ -62,7 +62,7 @@ export function AccountOfferPanel({
 
   const doSendOffer = async () => {
     if (!offer?.token) return
-    if (!confirm(`Send offer ${offer.token} to ${clientEmail}?\n\nThis will create a portal login and email the client their credentials.`)) return
+    if (!confirm(`Publish offer ${offer.token} to ${clientEmail}'s portal?\n\nThe client will be notified via email and must log into the portal to view the offer.`)) return
 
     setSendingOffer(true)
     try {
@@ -73,12 +73,12 @@ export function AccountOfferPanel({
       })
       const data = await res.json()
       if (!res.ok) {
-        toast.error(data.error || 'Failed to send offer')
+        toast.error(data.error || 'Failed to publish offer')
         return
       }
-      toast.success(data.message || 'Offer sent!')
+      toast.success(data.message || 'Offer published to portal')
       if (data.portal_created) {
-        toast.success('Portal user created -- client will receive login credentials')
+        toast.success('Portal access created — client will receive login credentials')
       }
       router.refresh()
     } catch (err) {
@@ -236,7 +236,7 @@ export function AccountOfferPanel({
                 View Offer
               </a>
 
-              {/* Send Offer (draft only) */}
+              {/* Publish Offer (draft only) */}
               {isOfferDraft && clientEmail && (
                 <button
                   onClick={doSendOffer}
@@ -244,7 +244,7 @@ export function AccountOfferPanel({
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
                 >
                   {sendingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                  Send Offer
+                  Publish Offer
                 </button>
               )}
 

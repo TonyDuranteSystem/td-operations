@@ -12,6 +12,7 @@ interface PortalOfferClientProps {
 const STATUS_INFO: Record<string, { en: string; it: string; icon: typeof FileText; color: string; bg: string }> = {
   draft: { en: 'Proposal Ready', it: 'Proposta Pronta', icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' },
   sent: { en: 'Proposal Ready', it: 'Proposta Pronta', icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' },
+  published: { en: 'Proposal Ready', it: 'Proposta Pronta', icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' },
   viewed: { en: 'Under Review', it: 'In Revisione', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
   signed: { en: 'Signed — Payment Pending', it: 'Firmato — In Attesa di Pagamento', icon: CreditCard, color: 'text-orange-600', bg: 'bg-orange-50' },
   completed: { en: 'Completed', it: 'Completato', icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },

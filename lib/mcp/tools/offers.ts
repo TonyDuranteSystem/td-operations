@@ -5,19 +5,17 @@
  * Live at: app.tonydurante.us/offer/{token}/{access_code}
  * Contract signing at: app.tonydurante.us/offer/{token}/contract
  *
- * Workflow: create (draft) → review → send (Gmail send) → client views → signs → pays
+ * Workflow: create (draft) → review → publish (portal-first) → client views → signs → pays
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
-import { safeSend } from "@/lib/mcp/safe-send"
-import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
-import { autoCreatePortalUser } from "@/lib/portal/auto-create"
+import { APP_BASE_URL } from "@/lib/config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
+import { publishOffer } from "@/lib/offers/publish"
 
 // ─── JSONB Validation Helpers ───────────────────────────────
 
@@ -179,106 +177,8 @@ function _buildOfferEmail(
   return { subject, htmlBody, plainText }
 }
 
-// ─── Portal Welcome Email (new client → portal credentials) ──
-
-function buildPortalWelcomeEmail(
-  firstName: string,
-  email: string,
-  tempPassword: string,
-  portalUrl: string,
-  lang: "en" | "it",
-  pixelUrl: string,
-): string {
-  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
-
-  if (lang === "it") {
-    return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">La tua proposta è pronta</h1>
-    <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
-  </div>
-  <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-    <p>Ciao ${firstName},</p>
-    <p>Grazie per la nostra consulenza. La tua proposta personalizzata è pronta per la revisione.</p>
-    <p>Accedi al tuo <strong>portale clienti</strong> per visualizzarla:</p>
-    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <table style="width: 100%; border-collapse: collapse;">
-        <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Portale</td><td style="padding: 4px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
-        <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Email</td><td style="padding: 4px 8px; font-weight: bold;">${email}</td></tr>
-        <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Password</td><td style="padding: 4px 8px; font-weight: bold; font-family: monospace; letter-spacing: 1px;">${tempPassword}</td></tr>
-      </table>
-    </div>
-    <p style="margin: 24px 0; text-align: center;">
-      <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Accedi al Portale
-      </a>
-    </p>
-    <p style="color: #6b7280; font-size: 13px;">Al primo accesso ti verrà chiesto di cambiare la password.</p>
-    <p style="color: #6b7280; font-size: 13px;">Per qualsiasi domanda, rispondi direttamente a questa email o usa la chat nel portale.</p>
-    <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
-    </div>
-  </div>
-</div>${pixel}`
-  }
-
-  return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">Your proposal is ready</h1>
-    <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
-  </div>
-  <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-    <p>Hi ${firstName},</p>
-    <p>Thank you for our consultation. Your personalized proposal is ready for review.</p>
-    <p>Log in to your <strong>client portal</strong> to view it:</p>
-    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
-      <table style="width: 100%; border-collapse: collapse;">
-        <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Portal</td><td style="padding: 4px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
-        <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Email</td><td style="padding: 4px 8px; font-weight: bold;">${email}</td></tr>
-        <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Password</td><td style="padding: 4px 8px; font-weight: bold; font-family: monospace; letter-spacing: 1px;">${tempPassword}</td></tr>
-      </table>
-    </div>
-    <p style="margin: 24px 0; text-align: center;">
-      <a href="${portalUrl}" style="display: inline-block; background: #1e3a5f; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">
-        Log in to Portal
-      </a>
-    </p>
-    <p style="color: #6b7280; font-size: 13px;">On your first login, you'll be asked to change your password.</p>
-    <p style="color: #6b7280; font-size: 13px;">For any questions, reply to this email or use the chat in your portal.</p>
-    <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af;">
-      Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
-    </div>
-  </div>
-</div>${pixel}`
-}
-
-// Fallback: direct offer link if portal creation fails
-function buildOfferLinkFallbackEmail(
-  firstName: string,
-  offerUrl: string,
-  lang: "en" | "it",
-  pixelUrl: string,
-): string {
-  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
-
-  if (lang === "it") {
-    return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <p>Ciao ${firstName},</p>
-  <p>La tua proposta personalizzata è pronta. Puoi consultarla al seguente link:</p>
-  <p style="margin: 24px 0;"><a href="${offerUrl}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Visualizza la Proposta</a></p>
-  <p>Per qualsiasi domanda, non esitare a contattarci.</p>
-  <p style="margin-top: 24px;">Cordiali saluti,<br/><strong>Tony Durante LLC</strong></p>
-</div>${pixel}`
-  }
-
-  return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-  <p>Hi ${firstName},</p>
-  <p>Your personalized proposal is ready. View it at the following link:</p>
-  <p style="margin: 24px 0;"><a href="${offerUrl}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">View Your Proposal</a></p>
-  <p>For any questions, don't hesitate to reach out.</p>
-  <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong></p>
-</div>${pixel}`
-}
+// Offer email templates (buildPortalWelcomeEmail, buildOfferLinkFallbackEmail)
+// moved to lib/offers/publish.ts as portal-first templates.
 
 /**
  * Portal Transition Welcome Email — for legacy clients getting portal access.
@@ -826,216 +726,49 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
   )
 
   // ═══════════════════════════════════════
-  // offer_send — Approve offer + send via Gmail (uses safeSend)
+  // offer_send — Publish offer to client portal (portal-first)
   // ═══════════════════════════════════════
   server.tool(
     "offer_send",
-    `Approve an offer and deliver it to the client via the portal. This is the final step that activates the client's portal onboarding experience.
+    `Publish an offer to the client portal. This is the final step that makes the offer visible in the client's portal and notifies them.
 
 What happens automatically:
-1. Creates portal access for the client (tier='lead') with login credentials
-2. Sends email with portal login URL and temporary password
-3. Sets offer status to 'sent' with open tracking
+1. Creates portal access for the client (tier='lead') if they don't have one
+2. Ensures contact linkage exists for the portal to function
+3. Sends a portal-access email (new user) or portal-notification email (existing user)
+4. Sets offer status to 'published'
 
-Once the client receives the email, they log into the portal where they can review the offer, sign the contract, and pay via Stripe Checkout — all in one flow.
+The email does NOT contain the offer itself — it only provides portal access. The client must log into the portal to view, sign, and pay.
 
-Requires client_email on the offer. Use offer_get to review content before calling this.`,
+Only works on 'draft' offers. Use offer_get to review content before calling this.`,
     {
-      token: z.string().describe("Offer token to send"),
+      token: z.string().describe("Offer token to publish"),
     },
     async ({ token }) => {
       try {
-        // Get offer details
-        const { data: offer, error: fetchError } = await supabaseAdmin
-          .from("offers")
-          .select("token, client_name, client_email, language, status, access_code, lead_id, account_id")
-          .eq("token", token)
-          .single()
+        const result = await publishOffer(token, "claude.ai")
 
-        if (fetchError) throw fetchError
-        if (!offer) return { content: [{ type: "text" as const, text: `❌ Offer not found: ${token}` }] }
-
-        if (!offer.client_email) {
-          return { content: [{ type: "text" as const, text: `❌ Cannot send: client_email is not set on this offer. Update it first with offer_update.` }] }
+        if (!result.success) {
+          return { content: [{ type: "text" as const, text: `❌ ${result.error}` }] }
         }
 
-        // ─── Step 1: Create portal user with 'lead' tier ───
-        const portalResult = await autoCreatePortalUser({
-          leadId: offer.lead_id || undefined,
-          accountId: offer.account_id || undefined,
-          tier: "lead",
-        })
-
-        const isNewUser = portalResult.success && !portalResult.alreadyExists
-        const tempPassword = portalResult.tempPassword
-        const portalLoginUrl = `${PORTAL_BASE_URL}/portal/login`
-
-        // ─── Step 2: Build email with portal credentials ───
-        const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
-        const lang = (offer.language || "en") as "en" | "it"
-        const firstName = offer.client_name.split(" ")[0]
-
-        // Fallback: if portal creation failed, send old-style offer link
-        const hasPortalCredentials = isNewUser && tempPassword
-        const offerDirectUrl = `${APP_BASE_URL}/offer/${token}/${offer.access_code || ""}`
-
-        const subject = lang === "it"
-          ? `La tua proposta è pronta — Tony Durante LLC`
-          : `Your proposal is ready — Tony Durante LLC`
-
-        const htmlBody = hasPortalCredentials
-          ? buildPortalWelcomeEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
-          : buildOfferLinkFallbackEmail(firstName, offerDirectUrl, lang, pixelUrl)
-
-        const plainText = hasPortalCredentials
-          ? lang === "it"
-            ? `Ciao ${firstName}, la tua proposta è pronta. Accedi al portale: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
-            : `Hi ${firstName}, your proposal is ready. Log in to your portal: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
-          : lang === "it"
-            ? `Ciao ${firstName}, la tua proposta è pronta: ${offerDirectUrl}`
-            : `Hi ${firstName}, your proposal is ready: ${offerDirectUrl}`
-
-        // Build MIME
-        const fromEmail = "support@tonydurante.us"
-        const boundary = `boundary_${Date.now()}`
-        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
-        const encodedSubject = hasNonAscii
-          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
-          : subject
-
-        const mimeParts = [
-          [
-            `From: Tony Durante LLC <${fromEmail}>`,
-            `To: ${offer.client_email}`,
-            `Subject: ${encodedSubject}`,
-            "MIME-Version: 1.0",
-            `Content-Type: multipart/alternative; boundary="${boundary}"`,
-          ].join("\r\n"),
-          "",
-          `--${boundary}`,
-          "Content-Type: text/plain; charset=utf-8",
-          "Content-Transfer-Encoding: base64",
-          "",
-          Buffer.from(plainText).toString("base64"),
-          "",
-          `--${boundary}`,
-          "Content-Type: text/html; charset=utf-8",
-          "Content-Transfer-Encoding: base64",
-          "",
-          Buffer.from(htmlBody).toString("base64"),
-          "",
-          `--${boundary}--`,
-        ]
-        const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
-
-        // ─── Step 3: safeSend — email FIRST, status updates AFTER ───
-        const result = await safeSend<{ id: string; threadId: string }>({
-          idempotencyCheck: async () => {
-            if (offer.status === "sent") {
-              const { data: existing } = await supabaseAdmin
-                .from("email_tracking")
-                .select("tracking_id, created_at")
-                .eq("recipient", offer.client_email!)
-                .ilike("subject", `%Tony Durante%`)
-                .limit(1)
-              if (existing?.length) {
-                return {
-                  alreadySent: true,
-                  message: [
-                    `⚠️ Offer already sent for "${token}"`,
-                    `Tracking: ${existing[0].tracking_id}`,
-                    `Sent at: ${existing[0].created_at}`,
-                    `To resend, first use offer_update to set status back to "draft".`,
-                  ].join("\n"),
-                }
-              }
-            }
-            return null
-          },
-
-          sendFn: async () => {
-            return await gmailPost("/messages/send", {
-              raw: encodedRaw,
-            }) as { id: string; threadId: string }
-          },
-
-          postSendSteps: [
-            {
-              name: "save_tracking",
-              fn: async () => {
-                await supabaseAdmin.from("email_tracking").insert({
-                  tracking_id: trackingId,
-                  recipient: offer.client_email,
-                  subject,
-                  from_email: fromEmail,
-                })
-              },
-            },
-            {
-              name: "update_offer_status",
-              fn: async () => {
-                await supabaseAdmin
-                  .from("offers")
-                  .update({ status: "sent" })
-                  .eq("token", token)
-              },
-            },
-            {
-              name: "update_lead_status",
-              fn: async () => {
-                if (offer.lead_id) {
-                  await supabaseAdmin
-                    .from("leads")
-                    .update({ offer_status: "Sent" })
-                    .eq("id", offer.lead_id)
-                }
-              },
-            },
-          ],
-        })
-
-        if (result.alreadySent) {
-          return { content: [{ type: "text" as const, text: result.idempotencyMessage! }] }
-        }
-
-        logAction({
-          action_type: "send",
-          table_name: "offers",
-          record_id: token,
-          summary: `Sent offer: ${offer.client_name} (${token}) to ${offer.client_email}${hasPortalCredentials ? " [portal created]" : ""}`,
-          details: {
-            lead_id: offer.lead_id,
-            language: offer.language,
-            gmail_message_id: result.sendResult?.id,
-            tracking_id: trackingId,
-            portal_created: isNewUser,
-          },
-        })
-
-        const statusLine = result.hasWarnings
-          ? `⚠️ Email sent but some follow-up steps had issues`
-          : `✅ Offer sent via Gmail`
+        const portalLine = result.portalCreated
+          ? `🔑 Portal access created — credentials sent`
+          : `👤 Portal user already exists — notification sent`
 
         return {
           content: [{
             type: "text" as const,
             text: [
-              statusLine,
+              `✅ Offer published to portal`,
               ``,
-              `📧 To: ${offer.client_email}`,
-              `📋 Subject: ${subject}`,
-              `🆔 Message ID: ${result.sendResult?.id}`,
-              `👁️ Open tracking: ${trackingId}`,
+              `📧 Email type: ${result.emailType}`,
+              `🆔 Message ID: ${result.gmailMessageId}`,
+              `👁️ Open tracking: ${result.trackingId}`,
               ``,
-              hasPortalCredentials
-                ? `🔑 Portal credentials sent to ${offer.client_email} (check email for password)`
-                : portalResult.alreadyExists
-                  ? `👤 Portal user already exists — sent direct offer link`
-                  : `⚠️ Portal creation failed: ${portalResult.error} — sent direct offer link`,
-              `🔗 Portal: ${portalLoginUrl}`,
+              portalLine,
               ``,
-              result.hasWarnings ? `⚠️ Steps: ${result.steps.map(s => `${s.step}=${s.status}`).join(", ")}` : "",
+              result.warnings.length ? `⚠️ Warnings: ${result.warnings.join(", ")}` : "",
             ].filter(Boolean).join("\n"),
           }],
         }

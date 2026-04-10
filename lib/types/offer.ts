@@ -100,7 +100,7 @@ export interface Offer {
   recurring_costs?: RecurringCost[]
   future_developments?: FutureDevelopment[]
   next_steps?: NextStep[]
-  status: 'draft' | 'sent' | 'viewed' | 'signed' | 'completed' | 'expired'
+  status: 'draft' | 'sent' | 'published' | 'viewed' | 'signed' | 'completed' | 'expired'
   expires_at?: string
   viewed_at?: string
   view_count: number

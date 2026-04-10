@@ -281,7 +281,7 @@ export default function OfferPageWithCode() {
       .update({
         view_count: (o.view_count || 0) + 1,
         viewed_at: new Date().toISOString(),
-        status: o.status === 'draft' || o.status === 'sent' ? 'viewed' : o.status,
+        status: o.status === 'draft' || o.status === 'sent' || o.status === 'published' ? 'viewed' : o.status,
       })
       .eq('id', o.id)
       .then(() => {})

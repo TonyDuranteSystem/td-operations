@@ -32,12 +32,21 @@ interface AutoCreateParams {
   skipIfExists?: boolean
   /** If true (default), marks account as auto-created. Set false for manual CRM actions. */
   autoCreated?: boolean
+  /** Override email — use this instead of resolving from lead/account/contact. Used by offer publish to ensure portal user matches offer.client_email exactly. */
+  emailOverride?: string
+  /** Override full name — paired with emailOverride. */
+  nameOverride?: string
 }
 
 export async function autoCreatePortalUser(params: AutoCreateParams): Promise<AutoCreateResult> {
-  const { accountId, contactId, leadId, tier, skipIfExists: _skipIfExists = true, autoCreated = true } = params
+  const { accountId, contactId, leadId, tier, skipIfExists: _skipIfExists = true, autoCreated = true, emailOverride, nameOverride } = params
 
   try {
+    // 0. If emailOverride provided, skip all resolution and use it directly
+    if (emailOverride) {
+      return await createFromEmail(emailOverride, nameOverride || emailOverride.split('@')[0], accountId, tier, undefined, autoCreated, undefined)
+    }
+
     // 1. Resolve contact
     let targetContactId = contactId
 
