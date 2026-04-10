@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send } from 'lucide-react'
+import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { ServiceTypeSelect } from '@/components/shared/service-type-select'
@@ -40,6 +40,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'card' | 'both'>('both')
   const [bankPreference, setBankPreference] = useState<'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'>('auto')
   const [items, setItems] = useState<InvoiceItem[]>([emptyItem()])
+  const [markAsPaid, setMarkAsPaid] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   if (!open) return null
@@ -91,6 +92,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
     setPaymentMethod('both')
     setBankPreference('auto')
     setItems([emptyItem()])
+    setMarkAsPaid(false)
     setErrors({})
   }
 
@@ -138,13 +140,16 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
           payment_method: paymentMethod,
           bank_preference: bankPreference,
           items: items.map((item, i) => ({ ...item, sort_order: i })),
+          mark_as_paid: markAsPaid || undefined,
         }
         const result = onCreateInvoice
           ? await onCreateInvoice(input)
           : await createInvoice(input)
         if (result.success) {
-          // If "Create & Send" was clicked, send immediately
-          if (sendMode && onSendInvoice && result.data?.id) {
+          if (markAsPaid) {
+            toast.success(`Invoice ${result.data?.invoice_number} created as Paid`)
+          } else if (sendMode && onSendInvoice && result.data?.id) {
+            // If "Create & Send" was clicked, send immediately
             const sendResult = await onSendInvoice(result.data.id)
             if (sendResult.success) {
               toast.success(`Invoice ${result.data.invoice_number} created and sent`)
@@ -442,6 +447,21 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
               </div>
             )}
 
+            {/* Already Paid toggle (invoice only) */}
+            {!isCredit && (
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={markAsPaid}
+                  onChange={e => setMarkAsPaid(e.target.checked)}
+                  className="rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                <CheckCircle2 className={`h-4 w-4 ${markAsPaid ? 'text-green-600' : 'text-zinc-300'}`} />
+                <span className="text-sm text-zinc-700">Already paid</span>
+                {markAsPaid && <span className="text-xs text-zinc-400">(creates as Paid receipt)</span>}
+              </label>
+            )}
+
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2">
               <button
@@ -451,7 +471,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
               >
                 Cancel
               </button>
-              {!isCredit && (
+              {!isCredit && !markAsPaid && (
                 <button
                   type="submit"
                   disabled={isPending}
@@ -462,19 +482,31 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
                   Save as Draft
                 </button>
               )}
-              <button
-                type="submit"
-                disabled={isPending}
-                onClick={() => setSendMode(!isCredit)}
-                className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 ${
-                  isCredit
-                    ? 'bg-purple-600 hover:bg-purple-700'
-                    : 'bg-blue-600 hover:bg-blue-700'
-                }`}
-              >
-                {isPending && (sendMode || isCredit) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {isCredit ? 'Create Credit Note' : 'Create & Send'}
-              </button>
+              {markAsPaid ? (
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  onClick={() => setSendMode(false)}
+                  className="px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 bg-green-600 hover:bg-green-700"
+                >
+                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Create Paid Invoice
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  onClick={() => setSendMode(!isCredit)}
+                  className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-50 flex items-center gap-2 ${
+                    isCredit
+                      ? 'bg-purple-600 hover:bg-purple-700'
+                      : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
+                >
+                  {isPending && (sendMode || isCredit) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {isCredit ? 'Create Credit Note' : 'Create & Send'}
+                </button>
+              )}
             </div>
           </form>
         </div>

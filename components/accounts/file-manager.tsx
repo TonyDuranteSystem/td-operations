@@ -6,6 +6,7 @@ import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
   MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2, Search,
   RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet, Globe,
+  FolderPlus, Link2, ShieldCheck,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { cn } from '@/lib/utils'
@@ -550,6 +551,9 @@ function FolderSection({
 export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
+  const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
+  const [linkFolderId, setLinkFolderId] = useState('')
+  const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
 
   const { data, isLoading, error } = useQuery<FilesResponse>({
     queryKey: ['account-files', accountId],
@@ -596,10 +600,77 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
   }, [data, accountId, handleRefresh])
 
   if (!driveFolderId) {
+    const handleCreate = async () => {
+      setFolderAction('creating')
+      try {
+        const { createCompanyFolder } = await import('@/app/(dashboard)/accounts/folder-actions')
+        const result = await createCompanyFolder(accountId)
+        if (result.success) {
+          toast.success('Company folder created')
+          window.location.reload()
+        } else {
+          toast.error(result.error ?? 'Failed to create folder')
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to create folder')
+      } finally {
+        setFolderAction('idle')
+      }
+    }
+
+    const handleLink = async () => {
+      if (!linkFolderId.trim()) return
+      setFolderAction('linking')
+      try {
+        const { linkDriveFolder } = await import('@/app/(dashboard)/accounts/folder-actions')
+        const result = await linkDriveFolder(accountId, linkFolderId.trim())
+        if (result.success) {
+          toast.success('Drive folder linked')
+          window.location.reload()
+        } else {
+          toast.error(result.error ?? 'Failed to link folder')
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to link folder')
+      } finally {
+        setFolderAction('idle')
+      }
+    }
+
     return (
-      <div className="text-center py-12 text-zinc-400">
-        <Folder className="h-8 w-8 mx-auto mb-2 opacity-50" />
-        <p>No Google Drive folder linked to this account</p>
+      <div className="text-center py-12 space-y-4">
+        <Folder className="h-8 w-8 mx-auto text-zinc-300" />
+        <p className="text-sm text-zinc-400">No Google Drive folder linked to this account</p>
+        <div className="flex justify-center gap-3">
+          <button
+            onClick={handleCreate}
+            disabled={folderAction !== 'idle'}
+            className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+          >
+            {folderAction === 'creating' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
+            Create Company Folder
+          </button>
+        </div>
+        <div className="max-w-sm mx-auto">
+          <p className="text-xs text-zinc-400 mb-2">Or link an existing Drive folder by ID:</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={linkFolderId}
+              onChange={e => setLinkFolderId(e.target.value)}
+              placeholder="Drive folder ID"
+              className="flex-1 px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleLink}
+              disabled={folderAction !== 'idle' || !linkFolderId.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50"
+            >
+              {folderAction === 'linking' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+              Link
+            </button>
+          </div>
+        </div>
       </div>
     )
   }
@@ -631,15 +702,57 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
 
   return (
     <div className="space-y-2">
+      {/* Validation result banner */}
+      {validationResult && (
+        <div className={cn(
+          'flex items-center gap-2 px-3 py-2 rounded-md text-sm',
+          validationResult.valid ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+        )}>
+          <ShieldCheck className="h-4 w-4 shrink-0" />
+          {validationResult.valid
+            ? `Folder valid — ${validationResult.fileCount} files`
+            : `Missing subfolders: ${validationResult.missingSubfolders.join(', ')}`}
+          <button onClick={() => setValidationResult(null)} className="ml-auto p-0.5 rounded hover:bg-white/50">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-zinc-500">{totalFiles} files</p>
-        <button
-          onClick={handleRefresh}
-          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100 transition-colors"
-        >
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={async () => {
+              setFolderAction('validating')
+              try {
+                const { validateFolder: validateFn } = await import('@/app/(dashboard)/accounts/folder-actions')
+                const result = await validateFn(accountId)
+                if (result.success && result.data) {
+                  setValidationResult(result.data)
+                } else {
+                  toast.error(result.error ?? 'Validation failed')
+                }
+              } catch {
+                toast.error('Validation failed')
+              } finally {
+                setFolderAction('idle')
+              }
+            }}
+            disabled={folderAction === 'validating'}
+            className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100 transition-colors"
+            title="Validate folder structure"
+          >
+            {folderAction === 'validating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+            Validate
+          </button>
+          <button
+            onClick={handleRefresh}
+            className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100 transition-colors"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Folder tree with drag-drop */}

@@ -21,7 +21,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { createFolder, uploadBinaryToDrive } from "@/lib/google-drive"
+import { uploadBinaryToDrive } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateOnboardingData } from "../validation"
@@ -292,72 +292,25 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   let driveFolderId: string | null = null
   if (company_name && state_of_formation) {
     try {
-      // Check if account already has a drive folder
-      const { data: acct } = await supabaseAdmin
-        .from("accounts")
-        .select("drive_folder_id")
-        .eq("id", account_id)
-        .single()
-
-      if (acct?.drive_folder_id) {
-        driveFolderId = acct.drive_folder_id
-        result.steps.push(step("drive_folder", "skipped", `Already exists: ${driveFolderId}`))
-      } else {
-        const stateFolderMap: Record<string, string> = {
-          "New Mexico": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
-          "NM": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
-          "Wyoming": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
-          "WY": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
-          "Delaware": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
-          "DE": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
-          "Florida": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
-          "FL": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
+      // Resolve owner name for folder naming
+      let ownerName = ""
+      if (contact_id) {
+        const { data: ownerContact } = await supabaseAdmin
+          .from("contacts")
+          .select("first_name, last_name")
+          .eq("id", contact_id)
+          .single()
+        if (ownerContact) {
+          ownerName = [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ")
         }
-        const companiesRootId = "1Z32I4pDzX4enwqJQzolbFw7fK94ISuCb"
-        let parentFolderId = stateFolderMap[state_of_formation] || null
-
-        if (!parentFolderId) {
-          const newStateFolder = await createFolder(companiesRootId, state_of_formation) as { id: string }
-          parentFolderId = newStateFolder.id
-        }
-
-        // Folder naming: "{Company Name} - {Owner Name}" per Drive convention
-        let folderName = company_name
-        if (contact_id) {
-          const { data: ownerContact } = await supabaseAdmin
-            .from("contacts")
-            .select("first_name, last_name")
-            .eq("id", contact_id)
-            .single()
-          if (ownerContact) {
-            const ownerName = [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ")
-            if (ownerName) folderName = `${company_name} - ${ownerName}`
-          }
-        }
-
-        const companyFolder = await createFolder(parentFolderId, folderName) as { id: string }
-        driveFolderId = companyFolder.id
-
-        // Create 5 subfolders from _TEMPLATE structure
-        const templateSubfolders = [
-          "1. Company", "2. Contacts", "3. Tax", "4. Banking", "5. Correspondence"
-        ]
-        for (const subName of templateSubfolders) {
-          try {
-            await createFolder(driveFolderId, subName)
-          } catch (subErr) {
-            console.warn(`[onboarding-setup] Failed to create subfolder ${subName}:`, subErr)
-          }
-        }
-
-        // Set drive_folder_id on account
-        await supabaseAdmin
-          .from("accounts")
-          .update({ drive_folder_id: driveFolderId })
-          .eq("id", account_id)
-
-        result.steps.push(step("drive_folder", "ok", `Created: ${driveFolderId}`))
       }
+
+      const { ensureCompanyFolder } = await import("@/lib/drive-folder-utils")
+      const folderResult = await ensureCompanyFolder(account_id, company_name, state_of_formation, ownerName || undefined)
+      driveFolderId = folderResult.folderId
+      result.steps.push(step("drive_folder", folderResult.created ? "ok" : "skipped",
+        folderResult.created ? `Created: ${driveFolderId}` : `Already exists: ${driveFolderId}`
+      ))
 
       await updateJobProgress(job.id, result)
 

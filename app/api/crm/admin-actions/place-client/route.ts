@@ -18,7 +18,7 @@
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-import { createFolder } from "@/lib/google-drive"
+// createFolder removed — now uses ensureCompanyFolder from drive-folder-utils
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 
@@ -103,17 +103,7 @@ const STAGE_PRESETS: Record<string, { service_type: string; stage_name: string; 
 
 // ─── State folder map for Google Drive ───
 
-const STATE_FOLDER_MAP: Record<string, string> = {
-  "New Mexico": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
-  "NM": "1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4",
-  "Wyoming": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
-  "WY": "110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x",
-  "Delaware": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
-  "DE": "1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-",
-  "Florida": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
-  "FL": "1XToxqPl-t6z10raeal_frSpvBBBRY8nG",
-}
-const COMPANIES_ROOT_ID = "1Z32I4pDzX4enwqJQzolbFw7fK94ISuCb"
+// STATE_FOLDER_MAP and COMPANIES_ROOT_ID removed — now centralized in drive-folder-utils.ts
 
 // ─── Helpers ───
 
@@ -142,46 +132,14 @@ async function createDriveFolder(
   state: string,
   contactName: string | null,
 ): Promise<StepResult> {
-  // Check if already exists
-  const { data: acct } = await supabaseAdmin
-    .from("accounts")
-    .select("drive_folder_id")
-    .eq("id", accountId)
-    .single()
-
-  if (acct?.drive_folder_id) {
-    return { name: "drive_folder", status: "skipped", detail: `Already exists: ${acct.drive_folder_id}` }
-  }
-
   try {
-    let parentFolderId = STATE_FOLDER_MAP[state] || null
-    if (!parentFolderId) {
-      // Create state folder under Companies root
-      const newStateFolder = await createFolder(COMPANIES_ROOT_ID, state) as { id: string }
-      parentFolderId = newStateFolder.id
+    const { ensureCompanyFolder } = await import("@/lib/drive-folder-utils")
+    const result = await ensureCompanyFolder(accountId, companyName, state, contactName || undefined)
+
+    if (result.created) {
+      return { name: "drive_folder", status: "ok", detail: `Created folder with subfolders (${result.folderId})` }
     }
-
-    const folderName = contactName ? `${companyName} - ${contactName}` : companyName
-    const companyFolder = await createFolder(parentFolderId, folderName) as { id: string }
-    const driveFolderId = companyFolder.id
-
-    // Create 5 subfolders
-    const subfolders = ["1. Company", "2. Contacts", "3. Tax", "4. Banking", "5. Correspondence"]
-    for (const subName of subfolders) {
-      try {
-        await createFolder(driveFolderId, subName)
-      } catch {
-        // Non-fatal — continue
-      }
-    }
-
-    // Update account
-    await supabaseAdmin
-      .from("accounts")
-      .update({ drive_folder_id: driveFolderId })
-      .eq("id", accountId)
-
-    return { name: "drive_folder", status: "ok", detail: `Created folder with 5 subfolders (${driveFolderId})` }
+    return { name: "drive_folder", status: "skipped", detail: `Already exists: ${result.folderId}` }
   } catch (err) {
     return { name: "drive_folder", status: "error", detail: err instanceof Error ? err.message : "Unknown error" }
   }

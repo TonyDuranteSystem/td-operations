@@ -16,6 +16,7 @@ export async function createUnifiedInvoiceDraft(input: {
   payment_method?: 'bank_transfer' | 'card' | 'both'
   bank_preference?: 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
   items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order: number }>
+  mark_as_paid?: boolean
 }): Promise<ActionResult<{ id: string; invoice_number: string }>> {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
@@ -56,6 +57,7 @@ export async function createUnifiedInvoiceDraft(input: {
       message: fullMessage.trim() || undefined,
       payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
       bank_preference: bankPref,
+      mark_as_paid: input.mark_as_paid || false,
     })
 
     revalidatePath('/finance')
@@ -65,7 +67,7 @@ export async function createUnifiedInvoiceDraft(input: {
     action_type: 'create',
     table_name: 'payments',
     account_id: input.account_id,
-    summary: `TD invoice created (Draft) via CRM dashboard`,
+    summary: `TD invoice created (${input.mark_as_paid ? 'Paid' : 'Draft'}) via CRM dashboard`,
   })
 }
 

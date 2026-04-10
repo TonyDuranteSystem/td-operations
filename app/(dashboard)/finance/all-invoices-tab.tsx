@@ -329,6 +329,7 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
             payment_method: input.payment_method,
             bank_preference: input.bank_preference,
             items: input.items,
+            mark_as_paid: input.mark_as_paid,
           })
           return result
         }}

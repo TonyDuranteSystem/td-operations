@@ -164,7 +164,7 @@ export async function ensureCompanyFolder(
   }
 
   // Determine parent folder by state
-  const { createFolder } = await getDriveHelpers()
+  const { createFolder, listFiles } = await getDriveHelpers()
   let parentId = STATE_FOLDER_MAP[stateOfFormation] || null
 
   if (!parentId) {
@@ -175,11 +175,41 @@ export async function ensureCompanyFolder(
 
   // Folder name: "{CompanyName} - {OwnerName}" or just "{CompanyName}"
   const folderName = ownerName ? `${companyName} - ${ownerName}` : companyName
-  const companyFolder = await createFolder(parentId, folderName) as { id: string }
 
-  // Create standard subfolders
-  const subfolders: Record<string, string> = {}
+  // Check Drive for existing folder with the same name (dedup)
+  const existingItems = await listFiles(parentId)
+  const matches = existingItems.filter(
+    f => f.name === folderName && f.mimeType === 'application/vnd.google-apps.folder',
+  )
+
+  let companyFolder: { id: string }
+  if (matches.length === 1) {
+    // Exact match — link to existing folder instead of creating duplicate
+    companyFolder = { id: matches[0].id }
+    console.warn(`[drive-folder-utils] Found existing folder "${folderName}" (${matches[0].id}) — linking instead of creating`)
+  } else if (matches.length > 1) {
+    // Multiple matches — cannot auto-link, require manual selection
+    const ids = matches.map(m => m.id).join(', ')
+    throw new Error(
+      `Multiple Drive folders named "${folderName}" found (${ids}). ` +
+      `Manual admin selection required — use "Link Existing Drive Folder" in the CRM.`
+    )
+  } else {
+    // No match — create new folder
+    companyFolder = await createFolder(parentId, folderName) as { id: string }
+  }
+
+  // Ensure standard subfolders exist (safe for both new and linked folders)
+  const existingSubs = await listFiles(companyFolder.id)
+  const existingSubMap: Record<string, string> = {}
+  for (const f of existingSubs) {
+    if (f.mimeType === 'application/vnd.google-apps.folder') {
+      existingSubMap[f.name] = f.id
+    }
+  }
+  const subfolders: Record<string, string> = { ...existingSubMap }
   for (const subName of STANDARD_SUBFOLDERS) {
+    if (existingSubMap[subName]) continue // already exists
     try {
       const sub = await createFolder(companyFolder.id, subName) as { id: string }
       subfolders[subName] = sub.id

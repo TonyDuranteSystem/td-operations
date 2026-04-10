@@ -26,6 +26,7 @@ export const createInvoiceSchema = z.object({
   payment_method: z.enum(['bank_transfer', 'card', 'both']).optional(),
   bank_preference: z.enum(['auto', 'relay', 'mercury', 'revolut', 'airwallex']).optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item required'),
+  mark_as_paid: z.boolean().optional(),
 })
 
 export const createCreditNoteSchema = z.object({
