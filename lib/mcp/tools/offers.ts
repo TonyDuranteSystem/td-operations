@@ -668,7 +668,6 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
             offer_date: params.offer_date || new Date().toISOString().split("T")[0],
             status: "draft",
             payment_type: params.payment_type,
-            payment_gateway: params.payment_gateway || "stripe",
             services: params.services,
             cost_summary: params.cost_summary,
             recurring_costs: params.recurring_costs,
@@ -752,7 +751,9 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
           }],
         }
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err)
+        const msg = err instanceof Error
+          ? err.message
+          : (typeof err === "object" && err !== null ? JSON.stringify(err) : String(err))
         return { content: [{ type: "text" as const, text: `❌ offer_create error: ${msg}` }] }
       }
     }
