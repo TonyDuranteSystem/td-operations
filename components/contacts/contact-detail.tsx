@@ -9,7 +9,7 @@ import {
   Building2, MessageSquare, KeyRound, CheckCircle2,
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, Link2,
-  ChevronDown as ChevronDownIcon, ExternalLink,
+  ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ContactDiagnosticDialog } from '@/components/contacts/contact-diagnostic-dialog'
@@ -110,6 +110,7 @@ interface ContactRecord {
   status: string | null
   notes: string | null
   gdrive_folder_url: string | null
+  drive_folder_id: string | null
   created_at: string | null
   updated_at: string
 }
@@ -393,7 +394,7 @@ export function ContactDetail({
         <InvoicesTab invoices={invoices} />
       )}
       {activeTab === 'documents' && (
-        <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} />
+        <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} driveFolderId={contact.drive_folder_id} />
       )}
       {activeTab === 'chat' && (
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
@@ -2124,16 +2125,121 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// ─── Contact File Browser (reads Drive folder tree via API) ──────────────
+function ContactFileBrowser({ contactId, driveFolderId: _driveFolderId }: { contactId: string; driveFolderId: string }) {
+  const [data, setData] = useState<{ folders: { id: string; name: string; files: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }[]; subfolders: { id: string; name: string; files: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }[] }[] }[]; rootFiles: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }[] } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+
+  const fetchFiles = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/files`)
+      const json = await res.json()
+      if (json.error && !json.folders) {
+        setError(json.error)
+      } else {
+        setData(json)
+        // Auto-expand all folders
+        const exp: Record<string, boolean> = {}
+        for (const f of json.folders || []) exp[f.id] = true
+        setExpanded(exp)
+      }
+    } catch {
+      setError('Failed to load files')
+    } finally {
+      setLoading(false)
+    }
+  }, [contactId])
+
+  useEffect(() => { fetchFiles() }, [fetchFiles])
+
+  if (loading) return <div className="flex items-center gap-2 py-4 justify-center text-sm text-zinc-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading files...</div>
+  if (error) return <div className="text-center py-4 text-sm text-zinc-400">{error} <button onClick={fetchFiles} className="text-blue-600 hover:underline ml-1">Retry</button></div>
+  if (!data) return null
+
+  const totalFiles = (data.folders || []).reduce((sum, f) => sum + f.files.length + f.subfolders.reduce((s, sf) => s + sf.files.length, 0), 0) + (data.rootFiles || []).length
+
+  return (
+    <div className="border rounded-lg bg-white">
+      <div className="flex items-center justify-between px-3 py-2 border-b bg-zinc-50">
+        <span className="text-xs text-zinc-500">{totalFiles} files in Drive</span>
+        <button onClick={fetchFiles} className="text-xs text-zinc-400 hover:text-zinc-600 flex items-center gap-1">
+          <RefreshCw className="h-3 w-3" /> Refresh
+        </button>
+      </div>
+      {(data.folders || []).map(folder => (
+        <div key={folder.id}>
+          <button
+            onClick={() => setExpanded(prev => ({ ...prev, [folder.id]: !prev[folder.id] }))}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            {expanded[folder.id] ? <ChevronDownIcon className="h-3.5 w-3.5 text-zinc-400" /> : <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />}
+            <FolderOpen className="h-3.5 w-3.5 text-amber-500" />
+            <span className="flex-1 text-left">{folder.name}</span>
+            <span className="text-xs text-zinc-400">{folder.files.length + folder.subfolders.reduce((s, sf) => s + sf.files.length, 0)}</span>
+          </button>
+          {expanded[folder.id] && (
+            <div className="border-l ml-5 pl-2">
+              {folder.files.map(file => (
+                <a key={file.id} href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-zinc-50 text-zinc-600">
+                  <FileText className="h-3.5 w-3.5 text-zinc-400" />
+                  <span className="flex-1 truncate">{file.name}</span>
+                  {file.size && <span className="text-xs text-zinc-400">{formatFileSize(Number(file.size))}</span>}
+                </a>
+              ))}
+              {folder.subfolders.map(sf => (
+                <div key={sf.id}>
+                  <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-zinc-500">
+                    <Folder className="h-3 w-3 text-amber-400" /> {sf.name} ({sf.files.length})
+                  </div>
+                  {sf.files.map(file => (
+                    <a key={file.id} href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3 py-1.5 ml-4 text-sm hover:bg-zinc-50 text-zinc-600">
+                      <FileText className="h-3.5 w-3.5 text-zinc-400" />
+                      <span className="flex-1 truncate">{file.name}</span>
+                    </a>
+                  ))}
+                </div>
+              ))}
+              {folder.files.length === 0 && folder.subfolders.length === 0 && (
+                <p className="px-3 py-1.5 text-xs text-zinc-400 italic">Empty</p>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+      {(data.rootFiles || []).length > 0 && (
+        <div className="border-t px-3 py-2">
+          <p className="text-xs text-zinc-400 mb-1">Root files</p>
+          {data.rootFiles.map(file => (
+            <a key={file.id} href={`/api/drive-preview/${file.id}`} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 py-1 text-sm hover:text-blue-600 text-zinc-600">
+              <FileText className="h-3.5 w-3.5 text-zinc-400" />
+              <span className="truncate">{file.name}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ContactDocumentsTab({
   documents,
   accounts,
   contactId,
   driveFolderUrl,
+  driveFolderId,
 }: {
   documents: ContactDocumentRecord[]
   accounts: LinkedAccount[]
   contactId: string
   driveFolderUrl?: string | null
+  driveFolderId?: string | null
 }) {
   const [previewDoc, setPreviewDoc] = useState<ContactDocumentRecord | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -2142,6 +2248,10 @@ function ContactDocumentsTab({
   const [uploadCategory, setUploadCategory] = useState('Contacts')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [ocrRunning, setOcrRunning] = useState<string | null>(null)
+  const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
+  const [linkFolderId, setLinkFolderId] = useState('')
+  const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
+  const [showFileBrowser, setShowFileBrowser] = useState(false)
 
   const handleRunOcr = async (docId: string) => {
     setOcrRunning(docId)
@@ -2321,6 +2431,139 @@ function ContactDocumentsTab({
     </div>
   )
 
+  const handleCreateFolder = async () => {
+    setFolderAction('creating')
+    try {
+      const { createContactFolder } = await import('@/app/(dashboard)/contacts/folder-actions')
+      const result = await createContactFolder(contactId)
+      if (result.success) {
+        toast.success('Contact folder created')
+        window.location.reload()
+      } else {
+        toast.error(result.error ?? 'Failed to create folder')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create folder')
+    } finally {
+      setFolderAction('idle')
+    }
+  }
+
+  const handleLinkFolder = async () => {
+    if (!linkFolderId.trim()) return
+    setFolderAction('linking')
+    try {
+      const { linkContactFolder } = await import('@/app/(dashboard)/contacts/folder-actions')
+      const result = await linkContactFolder(contactId, linkFolderId.trim())
+      if (result.success) {
+        toast.success('Drive folder linked')
+        window.location.reload()
+      } else {
+        toast.error(result.error ?? 'Failed to link folder')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to link folder')
+    } finally {
+      setFolderAction('idle')
+    }
+  }
+
+  const handleValidateFolder = async () => {
+    setFolderAction('validating')
+    try {
+      const { validateContactFolder } = await import('@/app/(dashboard)/contacts/folder-actions')
+      const result = await validateContactFolder(contactId)
+      if (result.success && result.data) {
+        setValidationResult(result.data)
+      } else {
+        toast.error(result.error ?? 'Validation failed')
+      }
+    } catch {
+      toast.error('Validation failed')
+    } finally {
+      setFolderAction('idle')
+    }
+  }
+
+  // Folder management section — shown when no folder is linked
+  const folderCreateSection = !driveFolderId && (
+    <div className="bg-white rounded-lg border p-6 text-center space-y-3">
+      <FolderOpen className="h-7 w-7 mx-auto text-zinc-300" />
+      <p className="text-sm text-zinc-400">No Drive folder linked to this contact</p>
+      <div className="flex justify-center gap-2">
+        <button
+          onClick={handleCreateFolder}
+          disabled={folderAction !== 'idle'}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {folderAction === 'creating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+          Create Contact Folder
+        </button>
+      </div>
+      <div className="max-w-xs mx-auto">
+        <p className="text-xs text-zinc-400 mb-1.5">Or link an existing folder by ID:</p>
+        <div className="flex gap-1.5">
+          <input
+            type="text"
+            value={linkFolderId}
+            onChange={e => setLinkFolderId(e.target.value)}
+            placeholder="Drive folder ID"
+            className="flex-1 px-2 py-1 text-xs border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={handleLinkFolder}
+            disabled={folderAction !== 'idle' || !linkFolderId.trim()}
+            className="px-2 py-1 text-xs border rounded hover:bg-zinc-50 disabled:opacity-50"
+          >
+            Link
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+
+  // File browser toggle — shown when folder IS linked
+  const fileBrowserSection = driveFolderId && (
+    <div className="space-y-2">
+      {validationResult && (
+        <div className={cn(
+          'flex items-center gap-2 px-3 py-2 rounded-md text-sm',
+          validationResult.valid ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+        )}>
+          <ShieldCheck className="h-4 w-4 shrink-0" />
+          {validationResult.valid
+            ? `Folder valid — ${validationResult.fileCount} files`
+            : `Missing subfolders: ${validationResult.missingSubfolders.join(', ')}`}
+          <button onClick={() => setValidationResult(null)} className="ml-auto p-0.5 rounded hover:bg-white/50">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setShowFileBrowser(!showFileBrowser)}
+          className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100"
+        >
+          <Folder className="h-3.5 w-3.5" />
+          {showFileBrowser ? 'Hide' : 'Browse'} Drive Folder
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleValidateFolder}
+            disabled={folderAction === 'validating'}
+            className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100"
+          >
+            {folderAction === 'validating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+            Validate
+          </button>
+        </div>
+      </div>
+      {showFileBrowser && (
+        <ContactFileBrowser contactId={contactId} driveFolderId={driveFolderId} />
+      )}
+    </div>
+  )
+
   if (documents.length === 0) {
     return (
       <div className="space-y-4">
@@ -2339,10 +2582,14 @@ function ContactDocumentsTab({
           {uploadButton}
         </div>
         {uploadPanel}
-        <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
-          <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
-          <p>No documents linked to this contact</p>
-        </div>
+        {folderCreateSection}
+        {fileBrowserSection}
+        {!driveFolderId && (
+          <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
+            <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p>No documents linked to this contact</p>
+          </div>
+        )}
       </div>
     )
   }
@@ -2366,6 +2613,7 @@ function ContactDocumentsTab({
           {uploadButton}
         </div>
       </div>
+      {fileBrowserSection}
       {uploadPanel}
 
       {sortedCategories.map(category => (

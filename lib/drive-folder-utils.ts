@@ -83,18 +83,36 @@ export async function ensureContactFolder(
   contactId: string,
   contactName: string,
 ): Promise<{ folderId: string; created: boolean; subfolders: Record<string, string> }> {
-  // Check if contact already has a Drive folder
+  // Check if contact already has drive_folder_id or gdrive_folder_url
   const { data: contact } = await supabaseAdmin
     .from('contacts')
-    .select('gdrive_folder_url')
+    .select('drive_folder_id, gdrive_folder_url')
     .eq('id', contactId)
     .single()
 
-  // If contact has a Drive folder URL, extract the folder ID
+  // If contact already has a Drive folder ID, return it
+  if (contact?.drive_folder_id) {
+    const { listFiles } = await getDriveHelpers()
+    const subs = await listFiles(contact.drive_folder_id)
+    const subfolders: Record<string, string> = {}
+    for (const f of subs) {
+      if (f.mimeType === 'application/vnd.google-apps.folder') {
+        subfolders[f.name] = f.id
+      }
+    }
+    return { folderId: contact.drive_folder_id, created: false, subfolders }
+  }
+
+  // Legacy fallback: extract from gdrive_folder_url if drive_folder_id not set
   if (contact?.gdrive_folder_url) {
     const idMatch = (contact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
     if (idMatch) {
       const existingId = idMatch[1]
+      // Backfill drive_folder_id
+      await supabaseAdmin
+        .from('contacts')
+        .update({ drive_folder_id: existingId, updated_at: new Date().toISOString() })
+        .eq('id', contactId)
       const { listFiles } = await getDriveHelpers()
       const subs = await listFiles(existingId)
       const subfolders: Record<string, string> = {}
@@ -107,33 +125,59 @@ export async function ensureContactFolder(
     }
   }
 
-  // Create folder: Contacts/{ContactName}/
+  // No folder linked — check Drive for existing folder with same name (dedup)
   const rootId = await ensureContactsRoot()
-  const { createFolder } = await getDriveHelpers()
+  const { createFolder, listFiles } = await getDriveHelpers()
 
-  const folder = await createFolder(rootId, contactName) as { id: string }
+  const existingItems = await listFiles(rootId)
+  const matches = existingItems.filter(
+    f => f.name === contactName && f.mimeType === 'application/vnd.google-apps.folder',
+  )
 
-  // Create standard subfolders
-  const subfolders: Record<string, string> = {}
+  let contactFolder: { id: string }
+  if (matches.length === 1) {
+    contactFolder = { id: matches[0].id }
+    console.warn(`[drive-folder-utils] Found existing contact folder "${contactName}" (${matches[0].id}) — linking instead of creating`)
+  } else if (matches.length > 1) {
+    const ids = matches.map(m => m.id).join(', ')
+    throw new Error(
+      `Multiple Drive folders named "${contactName}" found (${ids}). ` +
+      `Manual admin selection required — use "Link Existing Contact Folder" in the CRM.`
+    )
+  } else {
+    contactFolder = await createFolder(rootId, contactName) as { id: string }
+  }
+
+  // Ensure standard subfolders exist
+  const existingSubs = await listFiles(contactFolder.id)
+  const existingSubMap: Record<string, string> = {}
+  for (const f of existingSubs) {
+    if (f.mimeType === 'application/vnd.google-apps.folder') {
+      existingSubMap[f.name] = f.id
+    }
+  }
+  const subfolders: Record<string, string> = { ...existingSubMap }
   for (const subName of STANDARD_SUBFOLDERS) {
+    if (existingSubMap[subName]) continue
     try {
-      const sub = await createFolder(folder.id, subName) as { id: string }
+      const sub = await createFolder(contactFolder.id, subName) as { id: string }
       subfolders[subName] = sub.id
     } catch (err) {
       console.warn(`[drive-folder-utils] Failed to create subfolder ${subName}:`, err)
     }
   }
 
-  // Save to contact record
+  // Save both drive_folder_id and gdrive_folder_url to contact record
   await supabaseAdmin
     .from('contacts')
     .update({
-      gdrive_folder_url: `https://drive.google.com/drive/folders/${folder.id}`,
+      drive_folder_id: contactFolder.id,
+      gdrive_folder_url: `https://drive.google.com/drive/folders/${contactFolder.id}`,
       updated_at: new Date().toISOString(),
     })
     .eq('id', contactId)
 
-  return { folderId: folder.id, created: true, subfolders }
+  return { folderId: contactFolder.id, created: matches.length === 0, subfolders }
 }
 
 // ─── Phase 2: Company folder (post-company) ────────────────────────────────
