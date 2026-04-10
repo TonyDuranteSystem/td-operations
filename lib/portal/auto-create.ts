@@ -248,13 +248,18 @@ interface EnsureAccountResult {
 }
 
 /**
- * Ensure a minimal CRM account exists for formation/onboarding clients.
+ * Ensure a minimal CRM account exists for formation/onboarding clients,
+ * or for standalone business-context services (tax return, EIN, banking, closure, etc.).
  *
  * Formation clients don't have an account until their form is reviewed.
- * This creates a "Pending Formation - {name}" placeholder so that:
+ * This creates a placeholder so that:
  * - Service deliveries can be linked to an account
  * - Portal sidebar shows correctly
  * - Portal tier can be set on the account
+ *
+ * When isStandaloneBusiness=true (non-formation, non-onboarding business service):
+ * - account_type is set to 'One-Time' instead of 'Client'
+ * - placeholder name is "Pending Company — {name}" instead of "Pending Formation/Onboarding"
  *
  * Idempotent: if the contact is already linked to an account, returns that.
  */
@@ -264,8 +269,9 @@ export async function ensureMinimalAccount(params: {
   contractType: string
   offerToken?: string
   leadId?: string
+  isStandaloneBusiness?: boolean
 }): Promise<EnsureAccountResult> {
-  const { contactId, clientName, contractType, offerToken, leadId } = params
+  const { contactId, clientName, contractType, offerToken, leadId, isStandaloneBusiness } = params
 
   // Check if contact is already linked to an account
   const { data: existingLink } = await supabaseAdmin
@@ -309,15 +315,18 @@ export async function ensureMinimalAccount(params: {
   }
 
   // Create minimal account
-  const statusLabel = contractType === 'formation' ? 'Pending Formation' : 'Pending Onboarding'
-  const companyName = `${statusLabel} - ${clientName}`
+  const statusLabel = isStandaloneBusiness
+    ? 'Pending Company'
+    : contractType === 'formation' ? 'Pending Formation' : 'Pending Onboarding'
+  const separator = isStandaloneBusiness ? ' — ' : ' - '
+  const companyName = `${statusLabel}${separator}${clientName}`
 
   const { data: account, error: accErr } = await supabaseAdmin
     .from('accounts')
     .insert({
       company_name: companyName,
       status: 'Pending',
-      account_type: 'Client',
+      account_type: isStandaloneBusiness ? 'One-Time' : 'Client',
       entity_type: contractType === 'formation' ? 'Single Member LLC' : null,
       portal_account: true,
       portal_auto_created: true,

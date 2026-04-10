@@ -100,6 +100,17 @@ export default async function PortalLayout({
       .in('service_type', WIZARD_SERVICE_TYPES)
       .limit(1)
     hasWizardPending = (wizardSds?.length ?? 0) > 0
+  } else if (contactId) {
+    // Contact-only fallback: check SDs by contact_id for individual-context services
+    const { data: wizardSds } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('service_type')
+      .eq('contact_id', contactId)
+      .is('account_id', null)
+      .in('status', ['active'])
+      .in('service_type', WIZARD_SERVICE_TYPES)
+      .limit(1)
+    hasWizardPending = (wizardSds?.length ?? 0) > 0
   }
 
   return (

@@ -40,6 +40,50 @@ interface PreparedStep {
   status: "pending" | "confirmed" | "executed" | "skipped"
 }
 
+// ─── Service Context Resolution ────────────────────────────
+// Static map: service_type → context. Tax Return is ambiguous — requires explicit service_context on offer.
+const BUSINESS_SERVICE_TYPES = new Set([
+  'Company Formation', 'EIN', 'Banking Fintech', 'Company Closure',
+  'CMRA Mailing Address', 'Annual Renewal', 'DBA',
+])
+const INDIVIDUAL_SERVICE_TYPES = new Set([
+  'ITIN', 'ITIN Renewal',
+])
+
+/**
+ * Resolve service_context for each pipeline in the offer.
+ * Returns true if ANY pipeline is business-context.
+ * Tax Return: reads service_context from offer.services[] JSONB. Defaults to 'business' with warning for legacy offers.
+ */
+function hasBusinessContextPipeline(
+  pipelines: string[],
+  offerServices: Array<{ pipeline_type?: string; service_context?: string }> | null,
+  offerToken: string,
+): boolean {
+  for (const pipeline of pipelines) {
+    if (BUSINESS_SERVICE_TYPES.has(pipeline)) return true
+    if (INDIVIDUAL_SERVICE_TYPES.has(pipeline)) continue
+
+    // Ambiguous type (Tax Return) — check offer.services[] for explicit service_context
+    if (pipeline === 'Tax Return') {
+      const svc = (offerServices || []).find(
+        s => s.pipeline_type === 'Tax Return' || s.pipeline_type === pipeline
+      )
+      const ctx = svc?.service_context
+      if (ctx === 'individual') continue
+      if (ctx === 'business') return true
+      // Legacy fallback: no service_context set — default to business + log warning
+      console.warn(`[activate-service] Tax Return missing service_context on offer ${offerToken}, defaulting to business`)
+      return true
+    }
+
+    // Unknown service type — treat as business (safer: creates account)
+    console.warn(`[activate-service] Unknown service_type "${pipeline}" — defaulting to business context`)
+    return true
+  }
+  return false
+}
+
 // Map contract_type → form table + form action
 const FORM_CONFIG: Record<string, {
   table: string
@@ -220,10 +264,38 @@ export async function POST(req: NextRequest) {
       } else {
         steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
       }
-    } else if (!autoAccountId && leadId) {
-      // For other contract types, try to resolve from lead
-      const { data: lead } = await supabase.from("leads").select("account_id").eq("id", leadId).maybeSingle()
-      autoAccountId = lead?.account_id || null
+    } else if (!autoAccountId && contactId) {
+      // For other contract types: check if any pipeline is business-context
+      const offerPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
+      const offerServices = Array.isArray(offer?.services) ? offer.services : null
+      const needsBusinessAccount = hasBusinessContextPipeline(offerPipelines, offerServices, activation.offer_token)
+
+      if (needsBusinessAccount) {
+        // Standalone business service (tax return, EIN, banking, closure, etc.)
+        // The LLC exists in the real world but not in our system — create a One-Time account
+        const accountResult = await ensureMinimalAccount({
+          contactId,
+          clientName: activation.client_name,
+          contractType,
+          offerToken: activation.offer_token,
+          leadId: leadId || undefined,
+          isStandaloneBusiness: true,
+        })
+        if (accountResult.accountId) {
+          autoAccountId = accountResult.accountId
+          steps.push({
+            step: "ensure_account",
+            status: accountResult.created ? "created" : "existing",
+            detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created One-Time" : "already linked"})`,
+          })
+        } else {
+          steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
+        }
+      } else if (leadId) {
+        // Individual-context service — try to resolve from lead (legacy fallback)
+        const { data: lead } = await supabase.from("leads").select("account_id").eq("id", leadId).maybeSingle()
+        autoAccountId = lead?.account_id || null
+      }
     }
 
     // ─── STEP 1.6: Auto-upgrade account_type if offer has annual services ──
@@ -385,11 +457,52 @@ export async function POST(req: NextRequest) {
     // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
     // Upgrade portal tier from lead → onboarding after payment (syncs account + contacts)
     if (autoAccountId) {
+      // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
       const { upgradePortalTier } = await import("@/lib/portal/auto-create")
       const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
-      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? `${tierResult.previousTier || "lead"} → onboarding` : (tierResult.error || "Unknown error") })
+      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? `${tierResult.previousTier || "lead"} → onboarding (via account)` : (tierResult.error || "Unknown error") })
+    } else if (contactId) {
+      // Contact-only (individual service): upgrade contacts.portal_tier + auth metadata directly
+      // Must keep all tier sources in sync: contacts table + auth.users.app_metadata
+      try {
+        const { data: currentContact } = await supabase
+          .from("contacts")
+          .select("portal_tier, email")
+          .eq("id", contactId)
+          .single()
+
+        const currentTier = currentContact?.portal_tier || "lead"
+        const tierOrder = ["lead", "onboarding", "active", "full"]
+        const currentIdx = tierOrder.indexOf(currentTier)
+        const newIdx = tierOrder.indexOf("onboarding")
+
+        if (newIdx > currentIdx) {
+          // 1. Update contacts.portal_tier
+          await supabase
+            .from("contacts")
+            .update({ portal_tier: "onboarding" })
+            .eq("id", contactId)
+
+          // 2. Update auth.users.app_metadata.portal_tier (same pattern as upgradePortalTier)
+          if (currentContact?.email) {
+            const { data: { users } } = await supabase.auth.admin.listUsers({ perPage: 1000 })
+            const authUser = users.find((u: { email?: string }) => u.email === currentContact.email)
+            if (authUser) {
+              await supabase.auth.admin.updateUserById(authUser.id, {
+                app_metadata: { ...authUser.app_metadata, portal_tier: "onboarding" },
+              })
+            }
+          }
+
+          steps.push({ step: "portal_tier_upgrade", status: "done", detail: `${currentTier} → onboarding (contact-only, no account)` })
+        } else {
+          steps.push({ step: "portal_tier_upgrade", status: "done", detail: `Already at ${currentTier} (no downgrade)` })
+        }
+      } catch (e) {
+        steps.push({ step: "portal_tier_upgrade", status: "error", detail: `Contact-only upgrade failed: ${e instanceof Error ? e.message : String(e)}` })
+      }
     } else {
-      steps.push({ step: "portal_tier_upgrade", status: "skipped", detail: "No account linked" })
+      steps.push({ step: "portal_tier_upgrade", status: "skipped", detail: "No account or contact available" })
     }
 
     // ─── STEP 2c: Auto-create portal user + welcome email (AUTO) ──────
@@ -741,6 +854,24 @@ export async function POST(req: NextRequest) {
         updated_at: new Date().toISOString(),
       })
       .eq("id", pending_activation_id)
+
+    // ─── STEP 4b: Mark offer as completed (AUTO) ──────────
+    // Stripe webhook already does this (stripe/route.ts:328-334), but wire-paid
+    // and admin-confirmed cases skip the Stripe webhook, so we handle it here
+    // to ensure offer completion for ALL payment paths.
+    if (activation.offer_token) {
+      const { error: offerUpdErr } = await supabase
+        .from("offers")
+        .update({ status: "completed", updated_at: new Date().toISOString() })
+        .eq("token", activation.offer_token)
+        .eq("status", "signed") // Only update signed → completed, not other statuses
+      if (!offerUpdErr) {
+        steps.push({ step: "offer_completion", status: "done", detail: `Offer ${activation.offer_token} → completed` })
+      } else {
+        // May fail if already completed (e.g., Stripe webhook ran first) — that's fine
+        steps.push({ step: "offer_completion", status: "skipped", detail: "Offer not in 'signed' status (may already be completed)" })
+      }
+    }
 
     // ─── STEP 5: Notify Luca + Antonio via email ──────────
     try {
