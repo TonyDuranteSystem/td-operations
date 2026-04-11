@@ -106,11 +106,19 @@ export async function GET(req: NextRequest) {
     if (leadIds.size > 0) {
       const { data: leads } = await supabaseAdmin
         .from('leads')
-        .select('id, full_name, notes')
+        .select('id, full_name, notes, call_notes')
         .in('id', Array.from(leadIds))
 
       if (leads) {
         for (const lead of leads) {
+          if (lead.call_notes?.trim()) {
+            sources.push({
+              type: 'lead_notes',
+              label: `Staff Call Notes${lead.full_name ? ` (${lead.full_name})` : ''}`,
+              content: lead.call_notes,
+              id: lead.id,
+            })
+          }
           if (lead.notes?.trim()) {
             sources.push({
               type: 'lead_notes',
