@@ -4,10 +4,12 @@ import { useState } from 'react'
 import Link from 'next/link'
 import {
   AlertTriangle, Unlink, Building2, User, ExternalLink,
-  Loader2, Link2, CheckCircle2,
+  Loader2, Link2, CheckCircle2, RotateCcw, Wrench,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { retryActivation, repairSdContactId } from '@/app/(dashboard)/client-health/actions'
+import { useRouter } from 'next/navigation'
 
 // ─── Types ───
 
@@ -55,12 +57,19 @@ interface OrphanContact {
   has_offers: boolean
 }
 
+interface SdMissingContact {
+  account_id: string
+  company_name: string
+  missing_count: number
+}
+
 interface Stats {
   stuck_activations: number
   orphan_accounts: number
   wrong_type: number
   orphan_contacts: number
   orphan_contacts_with_offers: number
+  sd_missing_contact: number
 }
 
 interface Props {
@@ -68,6 +77,7 @@ interface Props {
   orphanAccounts: OrphanAccount[]
   wrongTypeAccounts: WrongTypeAccount[]
   orphanContacts: OrphanContact[]
+  sdMissingContact: SdMissingContact[]
   stats: Stats
 }
 
@@ -77,15 +87,18 @@ export function ClientHealthDashboard({
   stuckActivations,
   orphanAccounts,
   wrongTypeAccounts,
+  sdMissingContact,
   orphanContacts,
   stats,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<'stuck' | 'orphan_accounts' | 'wrong_type' | 'orphan_contacts'>('stuck')
+  const router = useRouter()
+  const [activeTab, setActiveTab] = useState<'stuck' | 'orphan_accounts' | 'wrong_type' | 'orphan_contacts' | 'sd_contact'>('stuck')
   const [fixingId, setFixingId] = useState<string | null>(null)
 
   const tabs = [
     { key: 'stuck' as const, label: 'Stuck Activations', count: stats.stuck_activations, color: 'text-red-600' },
     { key: 'wrong_type' as const, label: 'Wrong Account Type', count: stats.wrong_type, color: 'text-amber-600' },
+    { key: 'sd_contact' as const, label: 'SD Missing Contact', count: stats.sd_missing_contact, color: 'text-purple-600' },
     { key: 'orphan_accounts' as const, label: 'Orphan Accounts', count: stats.orphan_accounts, color: 'text-orange-600' },
     { key: 'orphan_contacts' as const, label: 'Orphan Contacts', count: stats.orphan_contacts, color: 'text-blue-600' },
   ]
@@ -170,16 +183,34 @@ export function ClientHealthDashboard({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={async () => {
+                        setFixingId(item.id)
+                        const result = await retryActivation(item.offer_token)
+                        if (result.success) {
+                          toast.success(`Activation retried for ${item.client_name}`)
+                          router.refresh()
+                        } else {
+                          toast.error(result.error || 'Retry failed')
+                        }
+                        setFixingId(null)
+                      }}
+                      disabled={fixingId === item.id}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 disabled:opacity-50 transition-colors"
+                    >
+                      {fixingId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                      Retry
+                    </button>
                     {item.contact ? (
                       <Link
                         href={`/contacts/${item.contact.id}`}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"
                       >
                         <Link2 className="h-3.5 w-3.5" />
-                        Audit {item.contact.full_name}
+                        Audit
                       </Link>
                     ) : (
-                      <span className="text-xs text-zinc-400">No contact linked</span>
+                      <span className="text-xs text-zinc-400">No contact</span>
                     )}
                   </div>
                 </div>
@@ -266,6 +297,55 @@ export function ClientHealthDashboard({
                       View
                     </Link>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── SD Missing Contact ─── */}
+      {activeTab === 'sd_contact' && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-700 flex items-center gap-2">
+            <Wrench className="h-4 w-4 text-purple-500" />
+            Active SDs with missing contact_id — need repair
+          </h2>
+          {sdMissingContact.length === 0 ? (
+            <div className="p-8 text-center text-sm text-zinc-400 bg-zinc-50 rounded-lg">
+              <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-400" />
+              All active SDs have contact_id set
+            </div>
+          ) : (
+            <div className="border rounded-lg divide-y">
+              {sdMissingContact.map(item => (
+                <div key={item.account_id} className="p-4 flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <Link href={`/accounts/${item.account_id}`} className="font-medium text-sm hover:underline">
+                      {item.company_name}
+                    </Link>
+                    <div className="text-xs text-zinc-500 mt-1">
+                      {item.missing_count} active SD{item.missing_count > 1 ? 's' : ''} missing contact_id
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setFixingId(item.account_id)
+                      const result = await repairSdContactId(item.account_id)
+                      if (result.success) {
+                        toast.success(`Fixed ${result.fixed} SD${result.fixed !== 1 ? 's' : ''} for ${item.company_name}`)
+                        router.refresh()
+                      } else {
+                        toast.error(result.error || 'Repair failed')
+                      }
+                      setFixingId(null)
+                    }}
+                    disabled={fixingId === item.account_id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 disabled:opacity-50 transition-colors shrink-0"
+                  >
+                    {fixingId === item.account_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
+                    Repair
+                  </button>
                 </div>
               ))}
             </div>

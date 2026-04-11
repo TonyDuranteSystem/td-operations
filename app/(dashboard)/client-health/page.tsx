@@ -112,6 +112,37 @@ export default async function ClientHealthPage() {
     has_offers: contactsWithOffers.has(c.email?.toLowerCase() ?? ''),
   }))
 
+  // ── 5. SDs with missing contact_id ──
+  const { data: sdsMissingContact } = await supabase
+    .from('service_deliveries')
+    .select('account_id')
+    .is('contact_id', null)
+    .not('account_id', 'is', null)
+    .eq('status', 'active')
+
+  // Group by account
+  const sdMissingMap: Record<string, number> = {}
+  for (const sd of sdsMissingContact ?? []) {
+    if (sd.account_id) {
+      sdMissingMap[sd.account_id] = (sdMissingMap[sd.account_id] || 0) + 1
+    }
+  }
+  const sdMissingAccountIds = Object.keys(sdMissingMap)
+
+  let sdMissingItems: Array<{ account_id: string; company_name: string; missing_count: number }> = []
+  if (sdMissingAccountIds.length > 0) {
+    const { data: accounts } = await supabase
+      .from('accounts')
+      .select('id, company_name')
+      .in('id', sdMissingAccountIds.slice(0, 100))
+
+    sdMissingItems = (accounts ?? []).map(a => ({
+      account_id: a.id,
+      company_name: a.company_name,
+      missing_count: sdMissingMap[a.id] || 0,
+    })).sort((a, b) => b.missing_count - a.missing_count)
+  }
+
   // ── Stats ──
   const stats = {
     stuck_activations: stuckItems.length,
@@ -119,6 +150,7 @@ export default async function ClientHealthPage() {
     wrong_type: wrongTypeItems.length,
     orphan_contacts: orphanContacts.length,
     orphan_contacts_with_offers: orphanContactItems.filter(c => c.has_offers).length,
+    sd_missing_contact: sdsMissingContact?.length ?? 0,
   }
 
   return (
@@ -134,6 +166,7 @@ export default async function ClientHealthPage() {
         orphanAccounts={orphanAccounts}
         wrongTypeAccounts={wrongTypeItems}
         orphanContacts={orphanContactItems}
+        sdMissingContact={sdMissingItems}
         stats={stats}
       />
     </div>
