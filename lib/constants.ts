@@ -27,6 +27,7 @@ export const SD_STATUS = [
 
 export const OFFER_STATUS = [
   'draft', 'sent', 'viewed', 'signed', 'completed', 'expired',
+  'under_discussion', 'superseded',
 ] as const
 
 export const LEASE_STATUS = [

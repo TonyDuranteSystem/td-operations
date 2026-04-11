@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
   Loader2, FileText, Rocket, Trash2, RotateCcw, UserX, Send,
+  MessageCircle, GitBranch,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
@@ -75,9 +77,11 @@ export function LeadActions({
   const [showResetOffer, setShowResetOffer] = useState(false)
   const [showDeletePortalUser, setShowDeletePortalUser] = useState(false)
 
-  // Send/resend offer state
+  // Send/resend/revise offer state
   const [sendingOffer, setSendingOffer] = useState(false)
   const [resendingOffer, setResendingOffer] = useState(false)
+  const [revisingOffer, setRevisingOffer] = useState(false)
+  const [settingDiscussion, setSettingDiscussion] = useState(false)
 
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
@@ -183,6 +187,55 @@ export function LeadActions({
     }
   }
 
+  const doReviseOffer = async () => {
+    if (!offer?.token) return
+    if (!confirm(`Create a revised version of this offer?\n\nThe current offer will be marked "superseded" and a new draft (v2) will be created with the same content.\n\nThe original offer is preserved — not deleted.`)) return
+
+    setRevisingOffer(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/revise-offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offer.token }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to revise offer')
+        return
+      }
+      toast.success(`Revised → v${data.version} draft created`)
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'An error occurred')
+    } finally {
+      setRevisingOffer(false)
+    }
+  }
+
+  const doSetUnderDiscussion = async () => {
+    if (!offer?.token) return
+    const isAlreadyDiscussion = offer.status === 'under_discussion'
+    const label = isAlreadyDiscussion ? 'Move back to Published' : 'Mark as Under Discussion'
+
+    if (!confirm(`${label}?\n\nThis changes the offer status only — no email sent, no content changed.`)) return
+
+    setSettingDiscussion(true)
+    try {
+      const { toggleOfferDiscussion } = await import('../actions')
+      const result = await toggleOfferDiscussion(offer.token, leadId)
+      if (result.success) {
+        toast.success(result.newStatus === 'under_discussion' ? 'Marked as Under Discussion' : 'Moved back to Published')
+        router.refresh()
+      } else {
+        toast.error(result.error || 'Failed to update status')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'An error occurred')
+    } finally {
+      setSettingDiscussion(false)
+    }
+  }
+
   if (isConverted && isActivated) {
     return (
       <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
@@ -225,6 +278,35 @@ export function LeadActions({
             >
               {sendingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Send Offer
+            </button>
+          )}
+
+          {/* Revise Offer (creates new version, supersedes current) */}
+          {isOfferPublished && offer?.status !== 'signed' && offer?.status !== 'completed' && offer?.status !== 'superseded' && (
+            <button
+              onClick={doReviseOffer}
+              disabled={revisingOffer}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-blue-300 text-blue-700 hover:bg-blue-50 disabled:opacity-50 transition-colors"
+            >
+              {revisingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+              Revise Offer
+            </button>
+          )}
+
+          {/* Under Discussion toggle */}
+          {isOfferPublished && offer?.status !== 'signed' && offer?.status !== 'completed' && offer?.status !== 'superseded' && (
+            <button
+              onClick={doSetUnderDiscussion}
+              disabled={settingDiscussion}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border disabled:opacity-50 transition-colors',
+                offer?.status === 'under_discussion'
+                  ? 'border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100'
+                  : 'border-zinc-300 text-zinc-600 hover:bg-zinc-50'
+              )}
+            >
+              {settingDiscussion ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+              {offer?.status === 'under_discussion' ? 'End Discussion' : 'Under Discussion'}
             </button>
           )}
 

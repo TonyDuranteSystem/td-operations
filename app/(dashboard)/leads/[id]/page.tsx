@@ -30,10 +30,13 @@ const STATUS_COLORS: Record<string, string> = {
 const OFFER_STATUS_COLORS: Record<string, string> = {
   'draft': 'bg-zinc-100 text-zinc-600',
   'sent': 'bg-blue-100 text-blue-700',
+  'published': 'bg-blue-100 text-blue-700',
   'viewed': 'bg-amber-100 text-amber-700',
   'signed': 'bg-indigo-100 text-indigo-700',
   'completed': 'bg-emerald-100 text-emerald-700',
   'expired': 'bg-red-100 text-red-600',
+  'under_discussion': 'bg-amber-100 text-amber-800',
+  'superseded': 'bg-zinc-100 text-zinc-500',
 }
 
 const ACTIVATION_STATUS_COLORS: Record<string, string> = {
@@ -71,14 +74,16 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
 
   if (!lead) notFound()
 
-  // Source of truth: offers table
-  const { data: offer } = await supabase
+  // Source of truth: offers table — fetch ALL versions for this lead
+  const { data: allOffers } = await supabase
     .from('offers')
-    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at, admin_notes')
+    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at, admin_notes, version, superseded_by')
     .eq('lead_id', params.id)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+    .order('version', { ascending: false })
+
+  // Current offer = highest version that is NOT superseded (or fallback to highest version)
+  const offer = allOffers?.find(o => o.status !== 'superseded') ?? allOffers?.[0] ?? null
+  const previousOffers = (allOffers ?? []).filter(o => o.token !== offer?.token)
 
   // Source of truth: pending_activations table
   const { data: activation } = await supabase
@@ -279,6 +284,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             <h2 className="text-sm font-semibold text-zinc-900 mb-4 flex items-center gap-2">
               <FileText className="h-4 w-4" />
               Offer
+              {(offer.version ?? 1) > 1 && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                  v{offer.version}
+                </span>
+              )}
             </h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div>
@@ -378,6 +388,47 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-sans leading-relaxed max-h-48 overflow-y-auto">
               {offer.admin_notes}
             </pre>
+          </div>
+        )}
+
+        {/* Offer Version History */}
+        {previousOffers.length > 0 && (
+          <div className="bg-white rounded-lg border p-5 md:col-span-2">
+            <h2 className="text-sm font-semibold text-zinc-700 mb-3">
+              Previous Versions ({previousOffers.length})
+            </h2>
+            <div className="space-y-2">
+              {previousOffers.map(prev => {
+                const statusColor: Record<string, string> = {
+                  superseded: 'bg-zinc-100 text-zinc-500',
+                  published: 'bg-blue-100 text-blue-700',
+                  viewed: 'bg-amber-100 text-amber-700',
+                  signed: 'bg-indigo-100 text-indigo-700',
+                  completed: 'bg-emerald-100 text-emerald-700',
+                }
+                return (
+                  <div key={prev.token} className="flex items-center justify-between p-3 rounded-lg bg-zinc-50">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">v{prev.version ?? 1}</span>
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${statusColor[prev.status] ?? 'bg-zinc-100'}`}>
+                          {prev.status}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{formatDate(prev.offer_date ?? prev.created_at)}</span>
+                      </div>
+                    </div>
+                    <a
+                      href={`${APP_BASE_URL}/offer/${prev.token}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                    >
+                      View <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 

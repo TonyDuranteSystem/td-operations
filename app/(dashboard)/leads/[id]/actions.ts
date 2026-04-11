@@ -167,3 +167,49 @@ export async function searchCallsByName(
     return { calls: [] }
   }
 }
+
+// ─── Toggle offer under_discussion status ───────────────────
+
+export async function toggleOfferDiscussion(
+  offerToken: string,
+  leadId: string
+): Promise<{ success: boolean; newStatus?: string; error?: string }> {
+  try {
+    const { data: offer } = await supabaseAdmin
+      .from('offers')
+      .select('status')
+      .eq('token', offerToken)
+      .single()
+
+    if (!offer) return { success: false, error: 'Offer not found' }
+
+    // Toggle: under_discussion ↔ published
+    const allowed = ['published', 'viewed', 'under_discussion']
+    if (!allowed.includes(offer.status)) {
+      return { success: false, error: `Cannot change status from "${offer.status}"` }
+    }
+
+    const newStatus = offer.status === 'under_discussion' ? 'published' : 'under_discussion'
+
+    const { error } = await supabaseAdmin
+      .from('offers')
+      .update({ status: newStatus })
+      .eq('token', offerToken)
+
+    if (error) return { success: false, error: error.message }
+
+    // Sync lead offer_status
+    await supabaseAdmin
+      .from('leads')
+      .update({
+        offer_status: newStatus === 'under_discussion' ? 'Under Discussion' : 'Published',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', leadId)
+
+    revalidatePath(`/leads/${leadId}`)
+    return { success: true, newStatus }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+}
