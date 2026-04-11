@@ -80,6 +80,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at, admin_notes, version, superseded_by')
     .eq('lead_id', params.id)
     .order('version', { ascending: false })
+    .order('created_at', { ascending: false })
 
   // Current offer = highest version that is NOT superseded (or fallback to highest version)
   const offer = allOffers?.find(o => o.status !== 'superseded') ?? allOffers?.[0] ?? null
