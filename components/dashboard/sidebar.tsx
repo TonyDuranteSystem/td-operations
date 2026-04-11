@@ -33,6 +33,7 @@ import {
   Share2,
   Package,
   HeartPulse,
+  PhoneIncoming,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -82,6 +83,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
+  { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },

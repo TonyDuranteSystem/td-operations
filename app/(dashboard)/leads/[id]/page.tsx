@@ -11,6 +11,7 @@ import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
 import { LeadNotesEditor } from './components/lead-notes-editor'
+import { CallSummaryCard } from './components/call-summary-card'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -86,6 +87,17 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+
+  // Fetch linked Circleback call summary
+  let callSummary = null
+  if (lead.circleback_call_id) {
+    const { data } = await supabaseAdmin
+      .from('call_summaries')
+      .select('id, meeting_name, duration_seconds, attendees, notes, action_items, recording_url, created_at')
+      .eq('id', lead.circleback_call_id)
+      .single()
+    callSummary = data
+  }
 
   // Check for portal user (admin-only, for delete button visibility)
   let hasPortalUser = false
@@ -374,6 +386,13 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             )}
           </div>
         )}
+
+        {/* Call Summary (Circleback bridge) */}
+        <CallSummaryCard
+          leadId={lead.id}
+          leadEmail={lead.email}
+          initialCall={callSummary}
+        />
 
         {/* Notes (editable) */}
         <LeadNotesEditor leadId={lead.id} notes={lead.notes ?? ''} />
