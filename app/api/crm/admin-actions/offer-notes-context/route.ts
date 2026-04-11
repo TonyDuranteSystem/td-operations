@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
               type: 'lead_notes',
               label: `Staff Call Notes${lead.full_name ? ` (${lead.full_name})` : ''}`,
               content: lead.call_notes,
-              id: lead.id,
+              id: `${lead.id}-call-notes`,
             })
           }
           if (lead.notes?.trim()) {
