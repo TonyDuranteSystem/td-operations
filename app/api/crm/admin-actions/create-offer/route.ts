@@ -98,12 +98,15 @@ export async function POST(req: NextRequest) {
       token = token + '-' + Date.now().toString(36).slice(-4)
     }
 
-    // Detect currency from cost_summary for bank details
+    // Use explicit currency if provided, fall back to symbol detection for legacy
+    const explicitCurrency = (body.currency as string)?.toUpperCase()
     const costArr = Array.isArray(cost_summary) ? cost_summary : []
     const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ''
     const servicesStr = JSON.stringify(services || [])
-    const isEUR = firstTotal.includes('€') || firstTotal.toUpperCase().includes('EUR')
-      || servicesStr.includes('€') || servicesStr.toUpperCase().includes('EUR')
+    const isEUR = explicitCurrency === 'EUR' ? true
+      : explicitCurrency === 'USD' ? false
+      : (firstTotal.includes('€') || firstTotal.toUpperCase().includes('EUR')
+        || servicesStr.includes('€') || servicesStr.toUpperCase().includes('EUR'))
 
     // Use bank_preference if specified, otherwise auto-detect by currency
     const bank_details = getBankDetailsByPreference(
@@ -133,6 +136,7 @@ export async function POST(req: NextRequest) {
         required_documents: required_documents || null,
         issues: issues || null,
         admin_notes: admin_notes || null,
+        currency: isEUR ? 'EUR' : 'USD',
         referrer_name: referrer_name || null,
         referrer_type: referrer_type || null,
         view_count: 0,

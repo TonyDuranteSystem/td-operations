@@ -75,8 +75,9 @@ export function LeadActions({
   const [showResetOffer, setShowResetOffer] = useState(false)
   const [showDeletePortalUser, setShowDeletePortalUser] = useState(false)
 
-  // Send offer state
+  // Send/resend offer state
   const [sendingOffer, setSendingOffer] = useState(false)
+  const [resendingOffer, setResendingOffer] = useState(false)
 
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
@@ -85,6 +86,7 @@ export function LeadActions({
   const hasEmail = !!leadEmail
   const isOfferSentOrBeyond = ['Offer Sent', 'Negotiating', 'Converted'].includes(leadStatus)
   const isOfferDraft = hasOffer && offer.status === 'draft'
+  const isOfferPublished = hasOffer && offer.status !== 'draft'
 
   // Sequential unlock logic
   const canCreateOffer = !hasOffer && !isConverted && !isLost
@@ -157,6 +159,30 @@ export function LeadActions({
     }
   }
 
+  const doResendOffer = async () => {
+    if (!offer?.token) return
+    if (!confirm(`Re-send portal reminder email to ${leadEmail}?\n\nThis is email-only — no status change, no republish, no new version.`)) return
+
+    setResendingOffer(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/resend-offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offer.token }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to resend')
+        return
+      }
+      toast.success(data.message || 'Reminder email sent')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'An error occurred')
+    } finally {
+      setResendingOffer(false)
+    }
+  }
+
   if (isConverted && isActivated) {
     return (
       <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
@@ -199,6 +225,18 @@ export function LeadActions({
             >
               {sendingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Send Offer
+            </button>
+          )}
+
+          {/* Resend Email (when offer already published) */}
+          {isOfferPublished && hasEmail && (
+            <button
+              onClick={doResendOffer}
+              disabled={resendingOffer}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+            >
+              {resendingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Resend Email
             </button>
           )}
 

@@ -74,7 +74,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // Source of truth: offers table
   const { data: offer } = await supabase
     .from('offers')
-    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at')
+    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at, admin_notes')
     .eq('lead_id', params.id)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -364,6 +364,20 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                 </a>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Offer Context (internal) */}
+        {offer?.admin_notes && (
+          <div className="bg-amber-50/50 rounded-lg border border-amber-200/50 p-5 md:col-span-2">
+            <h2 className="text-sm font-semibold text-zinc-700 mb-2 flex items-center gap-2">
+              <FileText className="h-4 w-4 text-amber-600" />
+              Offer Context
+              <span className="text-[10px] font-normal text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">internal — not visible to client</span>
+            </h2>
+            <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-sans leading-relaxed max-h-48 overflow-y-auto">
+              {offer.admin_notes}
+            </pre>
           </div>
         )}
 

@@ -445,6 +445,7 @@ export function CreateOfferDialog({
             payment_type: paymentType === 'both' ? 'checkout' : paymentType,
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,
+            currency,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -792,6 +793,9 @@ export function CreateOfferDialog({
                   </div>
                 </div>
               </div>
+              <p className="text-[10px] text-zinc-400 mt-1">
+                Installments use the same currency as setup fee ({currency})
+              </p>
             </div>
           )}
 
