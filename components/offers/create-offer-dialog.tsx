@@ -148,6 +148,7 @@ export function CreateOfferDialog({
   const [paymentGateway, setPaymentGateway] = useState('stripe')
   const [bankPreference, setBankPreference] = useState('auto')
   const [currency, setCurrency] = useState('EUR')
+  const [installmentCurrency, setInstallmentCurrency] = useState('USD')
 
   // Selected services with prices
   const [selected, setSelected] = useState<SelectedService[]>([])
@@ -220,6 +221,7 @@ export function CreateOfferDialog({
   }
 
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
+  const installmentCurrencySymbol = installmentCurrency === 'EUR' ? '\u20AC' : '$'
 
   // ── Derived values ──
   const derivedContractType = useMemo(() => {
@@ -394,14 +396,14 @@ export function CreateOfferDialog({
         if (showAnnual && (installment1 || installment2)) {
           recurringCosts = []
           if (installment1) {
-            recurringCosts.push({ label: '1st Installment (January)', price: `${currencySymbol}${installment1}` })
+            recurringCosts.push({ label: '1st Installment (January)', price: `${installmentCurrencySymbol}${installment1}`, currency: installmentCurrency })
           }
           if (installment2) {
-            recurringCosts.push({ label: '2nd Installment (June)', price: `${currencySymbol}${installment2}` })
+            recurringCosts.push({ label: '2nd Installment (June)', price: `${installmentCurrencySymbol}${installment2}`, currency: installmentCurrency })
           }
           const annualTotal = (parseFloat(installment1 || '0') + parseFloat(installment2 || '0'))
           if (annualTotal > 0) {
-            recurringCosts.push({ label: 'Annual Total', price: `${currencySymbol}${annualTotal.toLocaleString('en-US')}` })
+            recurringCosts.push({ label: 'Annual Total', price: `${installmentCurrencySymbol}${annualTotal.toLocaleString('en-US')}`, currency: installmentCurrency })
           }
         }
 
@@ -446,6 +448,7 @@ export function CreateOfferDialog({
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,
             currency,
+            installment_currency: showAnnual ? installmentCurrency : null,
             services: servicesJson,
             cost_summary: costSummary,
             recurring_costs: recurringCosts,
@@ -764,12 +767,22 @@ export function CreateOfferDialog({
           {/* Annual Rates */}
           {showAnnual && (
             <div>
-              <label className="block text-sm font-medium mb-2">Annual Rates (Year 2+)</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium">Annual Rates (Year 2+)</label>
+                <select
+                  value={installmentCurrency}
+                  onChange={e => setInstallmentCurrency(e.target.value)}
+                  className="px-2 py-1 text-xs border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                </select>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-muted-foreground">1st Installment (Jan)</label>
                   <div className="relative">
-                    <span className="absolute left-3 top-2 text-sm text-zinc-400">{currencySymbol}</span>
+                    <span className="absolute left-3 top-2 text-sm text-zinc-400">{installmentCurrencySymbol}</span>
                     <input
                       type="text"
                       value={installment1}
@@ -782,7 +795,7 @@ export function CreateOfferDialog({
                 <div>
                   <label className="text-xs text-muted-foreground">2nd Installment (Jun)</label>
                   <div className="relative">
-                    <span className="absolute left-3 top-2 text-sm text-zinc-400">{currencySymbol}</span>
+                    <span className="absolute left-3 top-2 text-sm text-zinc-400">{installmentCurrencySymbol}</span>
                     <input
                       type="text"
                       value={installment2}
@@ -793,9 +806,6 @@ export function CreateOfferDialog({
                   </div>
                 </div>
               </div>
-              <p className="text-[10px] text-zinc-400 mt-1">
-                Installments use the same currency as setup fee ({currency})
-              </p>
             </div>
           )}
 

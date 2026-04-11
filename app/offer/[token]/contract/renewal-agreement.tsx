@@ -40,12 +40,18 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
   const bodyRef = useRef<HTMLDivElement>(null)
 
   // Extract installment data from cost_summary
+  // Use installment_currency to format amounts correctly (fallback to raw strings for pre-fix offers)
+  const instCurrency = offer.installment_currency || offer.currency
+  const instSymbol = instCurrency === 'USD' ? '$' : instCurrency === 'EUR' ? '€' : null
+  const formatAmt = (raw: string) => instSymbol ? `${instSymbol}${raw.replace(/[^0-9.,]/g, '')}` : raw
+
   const costSummary = (offer.cost_summary || []) as Array<{ label?: string; total?: string; total_label?: string; items?: Array<{ name: string; price: string }> }>
   const firstSection = costSummary[0]
   const items = firstSection?.items || []
-  const inst1 = items[0]
-  const inst2 = items[1]
-  const totalLabel = firstSection?.total || firstSection?.total_label || ''
+  const inst1 = items[0] ? { name: items[0].name, price: formatAmt(items[0].price) } : null
+  const inst2 = items[1] ? { name: items[1].name, price: formatAmt(items[1].price) } : null
+  const rawTotal = firstSection?.total || firstSection?.total_label || ''
+  const totalLabel = rawTotal ? formatAmt(rawTotal) : ''
 
   // Extract company name from services or offer
   const companyName = (offer.services as Array<{ name?: string }> | undefined)?.[0]?.name || offer.client_name || '[Company Name]'

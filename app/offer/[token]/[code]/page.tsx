@@ -613,9 +613,13 @@ export default function OfferPageWithCode() {
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
-                    {o.recurring_costs.map((c, i) => (
-                      <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{c.price}</span></div>
-                    ))}
+                    {o.recurring_costs.map((c: { label: string; price: string; currency?: string }, i: number) => {
+                      const sym = c.currency === 'EUR' ? '€' : c.currency === 'USD' ? '$' : null
+                      const displayPrice = sym ? `${sym}${c.price.replace(/[^0-9.,]/g, '')}` : c.price
+                      return (
+                        <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{displayPrice}</span></div>
+                      )
+                    })}
                   </div>
                 )}
               </div>

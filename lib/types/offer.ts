@@ -50,6 +50,7 @@ export interface CostSummary {
 export interface RecurringCost {
   label: string
   price: string
+  currency?: string
 }
 
 export interface FutureDevelopment {
@@ -124,6 +125,9 @@ export interface Offer {
   referrer_notes?: string
   // Link protection
   access_code?: string
+  // Currency
+  currency?: string
+  installment_currency?: string
   // Contract type
   contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | 'renewal'
   // Pipelines to create when client pays (automation)

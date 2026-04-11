@@ -330,7 +330,9 @@ export default function ContractPage() {
     const selectedSet = new Set(Array.isArray((o as any).selected_services) ? (o as any).selected_services : [])
     const mainContractType = (o as any).contract_type || 'formation'
     let totalSetup = 0
-    let currency = 'EUR'
+    // Use explicit currency fields — fall back to symbol-sniffing only for pre-fix offers
+    const setupCurrency = (o as any).currency || 'EUR'
+    const setupSymbol = setupCurrency === 'USD' ? '$' : '€'
     for (const svc of services) {
       const isOpt = !!(svc as any).optional
       // If selected_services exists, use it; otherwise include all non-optional
@@ -348,22 +350,27 @@ export default function ContractPage() {
       const priceNum = parseFloat(priceStr.replace(/[^0-9.]/g, ''))
       if (!isNaN(priceNum) && priceNum > 0) {
         totalSetup += priceNum
-        if (/\$|usd/i.test(priceStr)) currency = '$'
-        else if (/EUR/i.test(priceStr)) currency = 'EUR'
       }
     }
 
-    const symbol = currency === '$' ? '$' : 'EUR'
     const fee = totalSetup > 0
-      ? `${symbol}${totalSetup.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
+      ? `${setupSymbol}${totalSetup.toLocaleString('en-US', { minimumFractionDigits: 0 })}`
       : 'As specified in the offer'
 
     // Derive annual maintenance from recurring_costs
+    // Use installment_currency if set, otherwise fall back to setup currency
+    const instCurrency = (o as any).installment_currency || setupCurrency
+    const instSymbol = instCurrency === 'USD' ? '$' : '€'
     if (o.recurring_costs && Array.isArray(o.recurring_costs) && o.recurring_costs.length > 0) {
       const parts: string[] = []
       for (let idx = 0; idx < o.recurring_costs.length; idx++) {
         const item = o.recurring_costs[idx]
-        const amt = (item as any).amount || (item as any).price || ''
+        const rawAmt = (item as any).amount || (item as any).price || ''
+        // Use per-entry currency, then offer.installment_currency, then raw string
+        const entryCurrency = (item as any).currency
+        const amt = entryCurrency || (o as any).installment_currency
+          ? `${(entryCurrency === 'EUR' || (!entryCurrency && instCurrency === 'EUR')) ? '€' : '$'}${rawAmt.replace(/[^0-9.,]/g, '')}`
+          : rawAmt
         const rawLabel = (item.label || '').toLowerCase()
         let engLabel: string
         if (rawLabel.includes('jan') || rawLabel.includes('genn')) engLabel = 'First Installment (January)'
@@ -373,9 +380,12 @@ export default function ContractPage() {
         parts.push(`${engLabel}: ${amt}`)
       }
       installments = parts.join(' -- ')
-      // Extract total annual fee from first recurring cost
+      // Extract total annual fee — reformat with correct installment currency
       const firstRc = o.recurring_costs[0]
-      annualFee = (firstRc as any).price || ''
+      const rawFee = (firstRc as any).price || ''
+      annualFee = (firstRc as any).currency || (o as any).installment_currency
+        ? `${instSymbol}${rawFee.replace(/[^0-9.,]/g, '')}`
+        : rawFee
     }
     if (!installments) installments = 'As specified in the offer'
 

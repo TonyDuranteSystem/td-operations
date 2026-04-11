@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       required_documents,
       issues,
       admin_notes,
+      installment_currency,
     } = body
 
     if (!client_name || !client_email) {
@@ -137,6 +138,7 @@ export async function POST(req: NextRequest) {
         issues: issues || null,
         admin_notes: admin_notes || null,
         currency: isEUR ? 'EUR' : 'USD',
+        installment_currency: installment_currency || null,
         referrer_name: referrer_name || null,
         referrer_type: referrer_type || null,
         view_count: 0,
