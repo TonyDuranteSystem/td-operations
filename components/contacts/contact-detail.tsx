@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -17,6 +17,8 @@ import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
+import { LifecycleTimeline } from '@/components/lifecycle/timeline'
+import { assembleTimeline } from '@/lib/lifecycle-timeline'
 import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -264,6 +266,31 @@ export function ContactDetail({
 
   const activeSds = serviceDeliveries.filter(sd => sd.status === 'active')
 
+  // Assemble lifecycle timeline from existing props
+  const timelineEvents = useMemo(() => assembleTimeline({
+    lead: lead ? { created_at: lead.created_at, status: lead.status ?? undefined, call_date: lead.call_date } : undefined,
+    offers: offers.map(o => {
+      const r = o as unknown as Record<string, unknown>
+      return { token: (r.token as string) || o.id, status: (r.status as string) || '', created_at: o.created_at, viewed_at: r.viewed_at as string | null, version: r.version as number | null, superseded_by: r.superseded_by as string | null }
+    }),
+    activations: pendingActivations.map(a => {
+      const r = a as unknown as Record<string, unknown>
+      return { id: a.id, status: a.status, created_at: (r.created_at as string) || new Date().toISOString(), payment_confirmed_at: a.payment_confirmed_at, amount: a.amount, currency: a.currency }
+    }),
+    wizardProgress: wizardProgress.map(w => {
+      const r = w as unknown as Record<string, unknown>
+      return { id: w.id, current_step: w.current_step, status: w.status, created_at: w.created_at, updated_at: w.updated_at, completed_at: r.completed_at as string | null }
+    }),
+    serviceDeliveries: serviceDeliveries.map(sd => {
+      const r = sd as unknown as Record<string, unknown>
+      return { id: sd.id, service_type: sd.service_type, service_name: sd.service_name, status: sd.status, created_at: (r.created_at as string) || sd.updated_at }
+    }),
+    payments: invoices.filter(inv => inv.status === 'Paid' || inv.status === 'paid').map(inv => {
+      const r = inv as unknown as Record<string, unknown>
+      return { id: inv.id, description: inv.description, amount: inv.amount, status: inv.status, created_at: (r.created_at as string) || new Date().toISOString() }
+    }),
+  }), [lead, offers, pendingActivations, wizardProgress, serviceDeliveries, invoices])
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -333,6 +360,9 @@ export function ContactDetail({
         serviceDeliveries={serviceDeliveries}
         contact={contact}
       />
+
+      {/* Lifecycle Timeline */}
+      <LifecycleTimeline events={timelineEvents} defaultOpen={false} />
 
       {/* Tabs */}
       <div className="border-b">

@@ -13,6 +13,8 @@ import { LeadActions } from './components/lead-actions'
 import { LeadNotesEditor } from './components/lead-notes-editor'
 import { CallSummaryCard } from './components/call-summary-card'
 import { EditableField } from './components/editable-field'
+import { LifecycleTimeline } from '@/components/lifecycle/timeline'
+import { assembleTimeline } from '@/lib/lifecycle-timeline'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -105,6 +107,31 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       .single()
     callSummary = data
   }
+
+  // Fetch timeline data: email tracking + contracts (for signed_at)
+  const offerTokens = (allOffers ?? []).map(o => o.token)
+  const [emailTrackingResult, contractsResult] = await Promise.all([
+    supabase
+      .from('email_tracking')
+      .select('id, subject, created_at, first_opened_at')
+      .eq('lead_id', params.id)
+      .order('created_at', { ascending: true }),
+    offerTokens.length > 0
+      ? supabase
+          .from('contracts')
+          .select('offer_token, signed_at')
+          .in('offer_token', offerTokens)
+      : Promise.resolve({ data: [] }),
+  ])
+
+  const timelineEvents = assembleTimeline({
+    lead: { created_at: lead.created_at, status: lead.status, call_date: lead.call_date, converted_to_contact_id: lead.converted_to_contact_id, updated_at: lead.updated_at },
+    offers: (allOffers ?? []).map(o => ({ token: o.token, status: o.status, created_at: o.created_at, viewed_at: o.viewed_at, version: o.version, superseded_by: o.superseded_by })),
+    callSummary: callSummary ? { created_at: callSummary.created_at, meeting_name: callSummary.meeting_name, duration_seconds: callSummary.duration_seconds } : null,
+    emailTracking: emailTrackingResult.data ?? [],
+    contracts: contractsResult.data ?? [],
+    activations: activation ? [{ id: activation.id, status: activation.status, created_at: activation.created_at, payment_confirmed_at: activation.payment_confirmed_at, amount: activation.amount, currency: activation.currency }] : [],
+  })
 
   // Check for portal user (admin-only, for delete button visibility)
   let hasPortalUser = false
@@ -492,6 +519,9 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             )}
           </div>
         )}
+
+        {/* Lifecycle Timeline */}
+        <LifecycleTimeline events={timelineEvents} />
 
         {/* Call Summary (Circleback bridge) + Staff Call Notes */}
         <CallSummaryCard
