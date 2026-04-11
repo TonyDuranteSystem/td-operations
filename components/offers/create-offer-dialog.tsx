@@ -21,6 +21,7 @@ interface CatalogService {
 interface SelectedService {
   id: string
   price: string
+  service_context: 'individual' | 'business' | 'ask'
 }
 
 const PAYMENT_TYPES = [
@@ -269,20 +270,36 @@ export function CreateOfferDialog({
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
+  // Default service_context based on service pipeline/name
+  const getDefaultContext = (svc: CatalogService | undefined): 'individual' | 'business' | 'ask' => {
+    if (!svc) return 'ask'
+    const p = svc.pipeline?.toLowerCase() || svc.name.toLowerCase()
+    if (['itin', 'itin renewal'].some(t => p.includes(t.toLowerCase()))) return 'individual'
+    if (['company formation', 'ein', 'banking fintech', 'company closure', 'cmra', 'annual renewal', 'dba', 'client onboarding', 'state ra renewal', 'state annual report'].some(t => p.includes(t.toLowerCase()))) return 'business'
+    if (p.includes('tax return')) return 'ask'
+    return 'ask'
+  }
+
   const toggleService = (id: string) => {
     setSelected(prev => {
       const exists = prev.find(s => s.id === id)
       if (exists) return prev.filter(s => s.id !== id)
-      // Pre-fill price from catalog default if available
+      // Pre-fill price and context from catalog
       const svc = catalog.find(c => c.id === id)
       const defaultPrice = svc?.default_price != null ? String(svc.default_price) : ''
-      return [...prev, { id, price: defaultPrice }]
+      return [...prev, { id, price: defaultPrice, service_context: getDefaultContext(svc) }]
     })
   }
 
   const updatePrice = (id: string, price: string) => {
     setSelected(prev =>
       prev.map(s => s.id === id ? { ...s, price } : s)
+    )
+  }
+
+  const updateServiceContext = (id: string, ctx: 'individual' | 'business' | 'ask') => {
+    setSelected(prev =>
+      prev.map(s => s.id === id ? { ...s, service_context: ctx } : s)
     )
   }
 
@@ -333,6 +350,7 @@ export function CreateOfferDialog({
             const svc: Record<string, unknown> = {
               name: svc_cat?.name || s.id,
               price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
+              service_context: s.service_context,
             }
             if (svc_cat?.contract_type) svc.contract_type = svc_cat.contract_type
             if (svc_cat?.pipeline) svc.pipeline_type = svc_cat.pipeline
@@ -606,9 +624,11 @@ export function CreateOfferDialog({
                   service={svc}
                   isSelected={isSelected(svc.id)}
                   price={selected.find(s => s.id === svc.id)?.price || ''}
+                  serviceContext={selected.find(s => s.id === svc.id)?.service_context || 'ask'}
                   currencySymbol={currencySymbol}
                   onToggle={() => toggleService(svc.id)}
                   onPriceChange={(p) => updatePrice(svc.id, p)}
+                  onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
                 />
               ))}
             </div>
@@ -621,9 +641,11 @@ export function CreateOfferDialog({
                   service={svc}
                   isSelected={isSelected(svc.id)}
                   price={selected.find(s => s.id === svc.id)?.price || ''}
+                  serviceContext={selected.find(s => s.id === svc.id)?.service_context || 'ask'}
                   currencySymbol={currencySymbol}
                   onToggle={() => toggleService(svc.id)}
                   onPriceChange={(p) => updatePrice(svc.id, p)}
+                  onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
                 />
               ))}
             </div>
@@ -636,9 +658,11 @@ export function CreateOfferDialog({
                   service={svc}
                   isSelected={isSelected(svc.id)}
                   price={selected.find(s => s.id === svc.id)?.price || ''}
+                  serviceContext={selected.find(s => s.id === svc.id)?.service_context || 'ask'}
                   currencySymbol={currencySymbol}
                   onToggle={() => toggleService(svc.id)}
                   onPriceChange={(p) => updatePrice(svc.id, p)}
+                  onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
                 />
               ))}
             </div>
@@ -1059,20 +1083,30 @@ export function CreateOfferDialog({
 }
 
 // ── Service row component ──
+const SERVICE_CONTEXT_OPTIONS = [
+  { value: 'business', label: 'Business', color: 'text-blue-700 bg-blue-50' },
+  { value: 'individual', label: 'Individual', color: 'text-emerald-700 bg-emerald-50' },
+  { value: 'ask', label: 'Ask client', color: 'text-amber-700 bg-amber-50' },
+] as const
+
 function ServiceRow({
   service,
   isSelected,
   price,
+  serviceContext,
   currencySymbol,
   onToggle,
   onPriceChange,
+  onContextChange,
 }: {
   service: { id: string; name: string }
   isSelected: boolean
   price: string
+  serviceContext: 'individual' | 'business' | 'ask'
   currencySymbol: string
   onToggle: () => void
   onPriceChange: (price: string) => void
+  onContextChange: (ctx: 'individual' | 'business' | 'ask') => void
 }) {
   return (
     <div
@@ -1094,16 +1128,29 @@ function ServiceRow({
         {service.name}
       </span>
       {isSelected && (
-        <div className="relative" onClick={e => e.stopPropagation()}>
-          <span className="absolute left-2.5 top-1.5 text-sm text-zinc-400">{currencySymbol}</span>
-          <input
-            type="text"
-            value={price}
-            onChange={e => onPriceChange(e.target.value)}
-            placeholder="0"
-            autoFocus
-            className="w-28 pl-6 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+          <select
+            value={serviceContext}
+            onChange={e => onContextChange(e.target.value as 'individual' | 'business' | 'ask')}
+            className={`text-xs font-medium px-2 py-1 rounded-md border-0 cursor-pointer focus:ring-2 focus:ring-blue-500 ${
+              SERVICE_CONTEXT_OPTIONS.find(o => o.value === serviceContext)?.color || ''
+            }`}
+          >
+            {SERVICE_CONTEXT_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <div className="relative">
+            <span className="absolute left-2.5 top-1.5 text-sm text-zinc-400">{currencySymbol}</span>
+            <input
+              type="text"
+              value={price}
+              onChange={e => onPriceChange(e.target.value)}
+              placeholder="0"
+              autoFocus
+              className="w-28 pl-6 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
         </div>
       )}
     </div>
