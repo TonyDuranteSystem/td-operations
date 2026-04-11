@@ -175,33 +175,49 @@ export async function POST(req: NextRequest) {
         .single()
 
       if (lead) {
-        const { data: existingContact } = await supabase
-          .from("contacts")
-          .select("id")
-          .ilike("email", lead.email || "")
-          .limit(1)
-
-        if (existingContact && existingContact.length > 0) {
-          contactId = existingContact[0].id
-          steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact exists: ${contactId}` })
-        } else {
-          const { data: newContact, error: cErr } = await supabase
+        // Priority 1: Use converted_to_contact_id if set (handles multi-email clients)
+        if (lead.converted_to_contact_id) {
+          const { data: linkedContact } = await supabase
             .from("contacts")
-            .insert({
-              full_name: lead.full_name,
-              email: lead.email,
-              phone: lead.phone,
-              language: lead.language === "Italian" ? "it" : "en",
-              role: "Owner",
-            })
-            .select()
+            .select("id")
+            .eq("id", lead.converted_to_contact_id)
             .single()
+          if (linkedContact) {
+            contactId = linkedContact.id
+            steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact from lead linkage: ${contactId}` })
+          }
+        }
 
-          if (newContact) {
-            contactId = newContact.id
-            steps.push({ step: "lead_to_contact", status: "created", detail: `Contact created: ${contactId}` })
+        // Priority 2: Fall through to email search only if not yet resolved
+        if (!contactId) {
+          const { data: existingContact } = await supabase
+            .from("contacts")
+            .select("id")
+            .ilike("email", lead.email || "")
+            .limit(1)
+
+          if (existingContact && existingContact.length > 0) {
+            contactId = existingContact[0].id
+            steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact exists: ${contactId}` })
           } else {
-            steps.push({ step: "lead_to_contact", status: "error", detail: cErr?.message })
+            const { data: newContact, error: cErr } = await supabase
+              .from("contacts")
+              .insert({
+                full_name: lead.full_name,
+                email: lead.email,
+                phone: lead.phone,
+                language: lead.language === "Italian" ? "it" : "en",
+                role: "Owner",
+              })
+              .select()
+              .single()
+
+            if (newContact) {
+              contactId = newContact.id
+              steps.push({ step: "lead_to_contact", status: "created", detail: `Contact created: ${contactId}` })
+            } else {
+              steps.push({ step: "lead_to_contact", status: "error", detail: cErr?.message })
+            }
           }
         }
       }
@@ -215,31 +231,58 @@ export async function POST(req: NextRequest) {
 
       if (leads && leads.length > 0) {
         leadId = leads[0].id
-        const { data: existingContact } = await supabase
-          .from("contacts")
-          .select("id")
-          .ilike("email", leads[0].email || "")
-          .limit(1)
 
-        if (existingContact && existingContact.length > 0) {
-          contactId = existingContact[0].id
-        } else {
-          const { data: newContact } = await supabase
+        // Priority 1: Use converted_to_contact_id if set
+        if (leads[0].converted_to_contact_id) {
+          const { data: linkedContact } = await supabase
             .from("contacts")
-            .insert({
-              full_name: leads[0].full_name,
-              email: leads[0].email,
-              phone: leads[0].phone,
-              language: leads[0].language === "Italian" ? "it" : "en",
-              role: "Owner",
-            })
-            .select()
+            .select("id")
+            .eq("id", leads[0].converted_to_contact_id)
             .single()
-          if (newContact) contactId = newContact.id
+          if (linkedContact) {
+            contactId = linkedContact.id
+          }
+        }
+
+        // Priority 2: Email search only if not yet resolved
+        if (!contactId) {
+          const { data: existingContact } = await supabase
+            .from("contacts")
+            .select("id")
+            .ilike("email", leads[0].email || "")
+            .limit(1)
+
+          if (existingContact && existingContact.length > 0) {
+            contactId = existingContact[0].id
+          } else {
+            const { data: newContact } = await supabase
+              .from("contacts")
+              .insert({
+                full_name: leads[0].full_name,
+                email: leads[0].email,
+                phone: leads[0].phone,
+                language: leads[0].language === "Italian" ? "it" : "en",
+                role: "Owner",
+              })
+              .select()
+              .single()
+            if (newContact) contactId = newContact.id
+          }
         }
         steps.push({ step: "lead_to_contact", status: "ok", detail: `Lead found by email, contact: ${contactId}` })
       } else {
-        steps.push({ step: "lead_to_contact", status: "skipped", detail: "No lead found" })
+        // No lead found — try contacts directly by email (existing clients on renewals)
+        const { data: directContact } = await supabase
+          .from("contacts")
+          .select("id")
+          .ilike("email", activation.client_email)
+          .limit(1)
+        if (directContact && directContact.length > 0) {
+          contactId = directContact[0].id
+          steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact found by email (no lead): ${contactId}` })
+        } else {
+          steps.push({ step: "lead_to_contact", status: "skipped", detail: "No lead or contact found" })
+        }
       }
     }
 
@@ -364,6 +407,22 @@ export async function POST(req: NextRequest) {
             continue
           }
 
+          // Secondary guard: same service_type already active on this account
+          // (catches SDs created by other paths without offer token in notes)
+          if (accountId) {
+            const { data: activeSd } = await supabase
+              .from("service_deliveries")
+              .select("id")
+              .eq("service_type", pipeline)
+              .eq("account_id", accountId)
+              .eq("status", "active")
+              .limit(1)
+            if (activeSd && activeSd.length > 0) {
+              sdResults.push({ pipeline, status: "existing", id: activeSd[0].id })
+              continue
+            }
+          }
+
           const stage = firstStage.get(pipeline) || "Pending"
           const { data: sd, error: sdErr } = await supabase
             .from("service_deliveries")
@@ -460,7 +519,8 @@ export async function POST(req: NextRequest) {
       // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
       const { upgradePortalTier } = await import("@/lib/portal/auto-create")
       const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
-      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? `${tierResult.previousTier || "lead"} → onboarding (via account)` : (tierResult.error || "Unknown error") })
+      const tierAlreadyAtOrAbove = ['onboarding', 'active', 'full'].includes(tierResult.previousTier || '')
+      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → onboarding (via account)`) : (tierResult.error || "Unknown error") })
     } else if (contactId) {
       // Contact-only (individual service): upgrade contacts.portal_tier + auth metadata directly
       // Must keep all tier sources in sync: contacts table + auth.users.app_metadata
