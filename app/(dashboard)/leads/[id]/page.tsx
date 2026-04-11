@@ -12,6 +12,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
 import { LeadNotesEditor } from './components/lead-notes-editor'
 import { CallSummaryCard } from './components/call-summary-card'
+import { EditableField } from './components/editable-field'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -166,29 +167,48 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             Contact Information
           </h2>
           <dl className="space-y-3 text-sm">
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
+              <dt className="text-muted-foreground flex items-center gap-1.5">
+                <User className="h-3.5 w-3.5" /> Name
+              </dt>
+              <dd>
+                <EditableField leadId={lead.id} field="full_name" value={lead.full_name} />
+              </dd>
+            </div>
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground flex items-center gap-1.5">
                 <Mail className="h-3.5 w-3.5" /> Email
               </dt>
-              <dd className="font-medium">
-                {lead.email ? (
-                  <a href={`mailto:${lead.email}`} className="text-blue-600 hover:underline">{lead.email}</a>
-                ) : '\u2014'}
+              <dd>
+                <EditableField leadId={lead.id} field="email" value={lead.email} warning="Affects matching" />
               </dd>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground flex items-center gap-1.5">
                 <Phone className="h-3.5 w-3.5" /> Phone
               </dt>
-              <dd className="font-medium">{lead.phone ?? '\u2014'}</dd>
+              <dd>
+                <EditableField leadId={lead.id} field="phone" value={lead.phone} placeholder="+1..." />
+              </dd>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground flex items-center gap-1.5">
                 <Globe className="h-3.5 w-3.5" /> Language
               </dt>
-              <dd className="font-medium">{lead.language ?? '\u2014'}</dd>
+              <dd>
+                <EditableField
+                  leadId={lead.id}
+                  field="language"
+                  value={lead.language}
+                  type="select"
+                  options={[
+                    { value: 'Italian', label: 'Italian' },
+                    { value: 'English', label: 'English' },
+                  ]}
+                />
+              </dd>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground flex items-center gap-1.5">
                 <MessageSquare className="h-3.5 w-3.5" /> Channel
               </dt>
@@ -204,25 +224,45 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             Source & Status
           </h2>
           <dl className="space-y-3 text-sm">
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground">Source</dt>
-              <dd className="font-medium">{lead.source ?? '\u2014'}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Referrer</dt>
-              <dd className="font-medium">
-                {offer?.referrer_name
-                  ? `${offer.referrer_name}${offer.referrer_type ? ` (${offer.referrer_type})` : ''}`
-                  : lead.referrer_name ?? '\u2014'}
+              <dd>
+                <EditableField
+                  leadId={lead.id}
+                  field="source"
+                  value={lead.source}
+                  type="select"
+                  options={[
+                    { value: 'Calendly', label: 'Calendly' },
+                    { value: 'Referral', label: 'Referral' },
+                    { value: 'Website', label: 'Website' },
+                    { value: 'Social', label: 'Social' },
+                    { value: 'Email', label: 'Email' },
+                    { value: 'Other', label: 'Other' },
+                  ]}
+                />
               </dd>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
+              <dt className="text-muted-foreground">Referrer</dt>
+              <dd>
+                <EditableField leadId={lead.id} field="referrer_name" value={lead.referrer_name} clearable placeholder="Name" />
+                {offer?.referrer_name && offer.referrer_name !== lead.referrer_name && (
+                  <span className="text-[10px] text-zinc-400 block mt-0.5">
+                    Offer: {offer.referrer_name}{offer.referrer_type ? ` (${offer.referrer_type})` : ''}
+                  </span>
+                )}
+              </dd>
+            </div>
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5" /> Call Date
               </dt>
-              <dd className="font-medium">{formatDate(lead.call_date)}</dd>
+              <dd>
+                <EditableField leadId={lead.id} field="call_date" value={lead.call_date} type="date" />
+              </dd>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <dt className="text-muted-foreground">Status</dt>
               <dd>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
@@ -387,11 +427,12 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </div>
         )}
 
-        {/* Call Summary (Circleback bridge) */}
+        {/* Call Summary (Circleback bridge) + Staff Call Notes */}
         <CallSummaryCard
           leadId={lead.id}
           leadEmail={lead.email}
           initialCall={callSummary}
+          callNotes={lead.call_notes ?? null}
         />
 
         {/* Notes (editable) */}

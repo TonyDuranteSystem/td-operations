@@ -997,7 +997,7 @@ export function CreateOfferDialog({
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                Create &amp; Preview
+                Review &amp; Confirm
               </button>
             </>
           )}
@@ -1012,11 +1012,11 @@ export function CreateOfferDialog({
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
             <div className="flex items-center gap-2 px-5 py-4 border-b">
               <AlertTriangle className="h-5 w-5 text-amber-500" />
-              <h3 className="text-base font-semibold">Confirm Offer Details</h3>
+              <h3 className="text-base font-semibold">Review Draft Details</h3>
             </div>
             <div className="px-5 py-4 space-y-3 text-sm">
               <p className="text-xs text-zinc-500">
-                Double-check the highlighted fields. These are the values the client will see.
+                Review before creating the draft. The client will <strong>NOT</strong> see this until you send it.
               </p>
               <dl className="space-y-2">
                 <div className="flex justify-between gap-3">
@@ -1072,7 +1072,7 @@ export function CreateOfferDialog({
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Confirm &amp; Create
+                Create Draft
               </button>
             </div>
           </div>

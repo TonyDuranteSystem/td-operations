@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { Phone, Clock, Users, FileText, ListChecks, Search, Link2, Unlink, Loader2, ExternalLink } from 'lucide-react'
 import { findAndLinkCall, linkCallToLead, unlinkCallFromLead, searchCallsByName } from '../actions'
 import { toast } from 'sonner'
+import { CallNotesEditor } from './call-notes-editor'
 
 interface CallData {
   id: string
@@ -20,9 +21,10 @@ interface CallSummaryCardProps {
   leadId: string
   leadEmail: string | null
   initialCall: CallData | null
+  callNotes: string | null
 }
 
-export function CallSummaryCard({ leadId, leadEmail, initialCall }: CallSummaryCardProps) {
+export function CallSummaryCard({ leadId, leadEmail, initialCall, callNotes }: CallSummaryCardProps) {
   const [call, setCall] = useState<CallData | null>(initialCall)
   const [searching, setSearching] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -203,6 +205,11 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall }: CallSummaryC
             View recording <ExternalLink className="h-3 w-3" />
           </a>
         )}
+
+        <p className="text-[10px] text-zinc-400 mt-3">Source: Circleback (read-only)</p>
+
+        {/* Staff Call Notes — editable CRM interpretation */}
+        <CallNotesEditor leadId={leadId} callNotes={callNotes} />
       </div>
     )
   }
@@ -290,6 +297,9 @@ export function CallSummaryCard({ leadId, leadEmail, initialCall }: CallSummaryC
           )}
         </div>
       )}
+
+      {/* Staff Call Notes — available even without a linked call */}
+      <CallNotesEditor leadId={leadId} callNotes={callNotes} />
     </div>
   )
 }
