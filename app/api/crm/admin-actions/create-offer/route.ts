@@ -34,6 +34,13 @@ export async function POST(req: NextRequest) {
       issues,
       admin_notes,
       installment_currency,
+      // Narrative content (client-facing sections)
+      intro_en,
+      intro_it,
+      strategy,
+      next_steps,
+      future_developments,
+      immediate_actions,
     } = body
 
     if (!client_name || !client_email) {
@@ -137,6 +144,13 @@ export async function POST(req: NextRequest) {
         required_documents: required_documents || null,
         issues: issues || null,
         admin_notes: admin_notes || null,
+        // Narrative content (client-facing)
+        intro_en: intro_en || null,
+        intro_it: intro_it || null,
+        strategy: strategy || null,
+        next_steps: next_steps || null,
+        future_developments: future_developments || null,
+        immediate_actions: immediate_actions || null,
         currency: isEUR ? 'EUR' : 'USD',
         installment_currency: installment_currency || null,
         referrer_name: referrer_name || null,

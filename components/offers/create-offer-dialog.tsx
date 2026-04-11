@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useTransition, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp } from 'lucide-react'
+import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 
 // ── Service catalog: loaded from DB ──
@@ -166,6 +166,16 @@ export function CreateOfferDialog({
   // Admin notes (internal only)
   const [adminNotes, setAdminNotes] = useState('')
 
+  // Narrative content (client-facing, AI-generated or manual)
+  const [narrativeOpen, setNarrativeOpen] = useState(false)
+  const [narrativeLoading, setNarrativeLoading] = useState(false)
+  const [introEn, setIntroEn] = useState('')
+  const [introIt, setIntroIt] = useState('')
+  const [strategyJson, setStrategyJson] = useState('')
+  const [nextStepsJson, setNextStepsJson] = useState('')
+  const [futureDevJson, setFutureDevJson] = useState('')
+  const [immediateActionsJson, setImmediateActionsJson] = useState('')
+
   // Notes context for offer creation
   const [notesContext, setNotesContext] = useState<NoteSource[]>([])
   const [notesLoading, setNotesLoading] = useState(false)
@@ -222,6 +232,80 @@ export function CreateOfferDialog({
 
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
   const installmentCurrencySymbol = installmentCurrency === 'EUR' ? '\u20AC' : '$'
+
+  // AI narrative generation handler
+  async function generateNarrative() {
+    if (narrativeLoading) return
+    if (selected.length === 0) {
+      toast.error('Select at least one service before generating')
+      return
+    }
+    setNarrativeLoading(true)
+    try {
+      // Build notes context for AI (same as what goes into admin_notes)
+      const noteParts: string[] = []
+      for (const source of notesContext) {
+        if (!selectedNoteIds.has(source.id)) continue
+        if (source.type === 'call_summary') {
+          let section = `${source.label}: ${source.content}`
+          if (source.action_items && source.action_items.length > 0) {
+            section += '\nAction Items: ' + source.action_items.join('; ')
+          }
+          noteParts.push(section)
+        } else {
+          noteParts.push(`${source.label}: ${source.content}`)
+        }
+      }
+      if (adminNotes.trim()) noteParts.push(`Admin Notes: ${adminNotes.trim()}`)
+
+      const serviceNames = selected.map(s => {
+        const cat = catalog.find(c => c.id === s.id)
+        return cat?.name || s.id
+      })
+
+      const res = await fetch('/api/crm/admin-actions/generate-offer-narrative', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_name: clientName,
+          language,
+          services: serviceNames,
+          notes_context: noteParts.join('\n\n'),
+          contract_type: catalog.find(c => selected.some(s => s.id === c.id))?.contract_type || 'formation',
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(err.error || `Generation failed (${res.status})`)
+      }
+
+      const data = await res.json()
+      const n = data.narrative
+
+      // Populate editable fields
+      setIntroEn(n.intro_en || '')
+      setIntroIt(n.intro_it || '')
+      setStrategyJson(JSON.stringify(n.strategy, null, 2))
+      setNextStepsJson(JSON.stringify(n.next_steps, null, 2))
+      setFutureDevJson(JSON.stringify(n.future_developments, null, 2))
+      setImmediateActionsJson(JSON.stringify(n.immediate_actions, null, 2))
+      setNarrativeOpen(true)
+      toast.success('Narrative generated — review and edit before creating draft')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Generation failed'
+      toast.error(msg)
+    } finally {
+      setNarrativeLoading(false)
+    }
+  }
+
+  // Parse narrative JSON fields safely (returns null if empty/invalid)
+  function parseJsonField(str: string): unknown | null {
+    const trimmed = str.trim()
+    if (!trimmed) return null
+    try { return JSON.parse(trimmed) } catch { return null }
+  }
 
   // ── Derived values ──
   const derivedContractType = useMemo(() => {
@@ -458,6 +542,13 @@ export function CreateOfferDialog({
             required_documents: requiredDocsJson,
             issues: issuesJson,
             admin_notes: combinedNotes,
+            // Narrative content (client-facing)
+            intro_en: introEn.trim() || null,
+            intro_it: introIt.trim() || null,
+            strategy: parseJsonField(strategyJson),
+            next_steps: parseJsonField(nextStepsJson),
+            future_developments: parseJsonField(futureDevJson),
+            immediate_actions: parseJsonField(immediateActionsJson),
           }),
         })
 
@@ -915,6 +1006,65 @@ export function CreateOfferDialog({
               placeholder="Internal notes about this offer, pricing decisions, call context..."
               className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
             />
+          </div>
+
+          {/* Narrative Content (client-facing, AI-assisted) */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-violet-50 to-blue-50 border-b">
+              <button
+                type="button"
+                onClick={() => setNarrativeOpen(!narrativeOpen)}
+                className="flex items-center gap-2 text-sm font-semibold text-violet-900"
+              >
+                <Sparkles className="h-4 w-4 text-violet-500" />
+                Client-Facing Narrative
+                {(introEn || introIt) && <span className="text-xs font-normal text-violet-600 bg-violet-100 px-1.5 py-0.5 rounded">has content</span>}
+                {narrativeOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              </button>
+              <button
+                type="button"
+                onClick={generateNarrative}
+                disabled={narrativeLoading || selected.length === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-colors"
+              >
+                {narrativeLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                {narrativeLoading ? 'Generating...' : 'Generate with AI'}
+              </button>
+            </div>
+            {narrativeOpen && (
+              <div className="p-4 space-y-3 bg-white">
+                <p className="text-[10px] text-zinc-400">These sections appear on the client-facing offer page. Edit freely — AI-generated content is a starting point.</p>
+                <div>
+                  <label className="text-xs font-medium text-zinc-700">Introduction (English)</label>
+                  <textarea value={introEn} onChange={e => setIntroEn(e.target.value)} rows={3} placeholder="Personalized introduction for the client..." className="w-full mt-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-700">Introduction (Italian)</label>
+                  <textarea value={introIt} onChange={e => setIntroIt(e.target.value)} rows={3} placeholder="Introduzione personalizzata per il cliente..." className="w-full mt-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-700">Immediate Actions <span className="font-normal text-zinc-400">(JSON array)</span></label>
+                  <textarea value={immediateActionsJson} onChange={e => setImmediateActionsJson(e.target.value)} rows={3} placeholder='[{"title": "...", "description": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-700">Strategy <span className="font-normal text-zinc-400">(JSON array)</span></label>
+                  <textarea value={strategyJson} onChange={e => setStrategyJson(e.target.value)} rows={3} placeholder='[{"step_number": 1, "title": "...", "description": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-700">Next Steps <span className="font-normal text-zinc-400">(JSON array)</span></label>
+                  <textarea value={nextStepsJson} onChange={e => setNextStepsJson(e.target.value)} rows={3} placeholder='[{"step_number": 1, "title": "...", "description": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-700">Future Developments <span className="font-normal text-zinc-400">(JSON array)</span></label>
+                  <textarea value={futureDevJson} onChange={e => setFutureDevJson(e.target.value)} rows={2} placeholder='[{"text": "..."}]' className="w-full mt-1 px-3 py-2 text-xs font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+                </div>
+                {(introEn || strategyJson) && (
+                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson('') }} className="text-xs text-red-500 hover:text-red-700">
+                    Clear all narrative content
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Auto-derived summary */}
