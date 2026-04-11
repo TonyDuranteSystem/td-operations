@@ -1336,6 +1336,7 @@ function WizardProgressCard({
             <span className="text-xs text-muted-foreground">
               {daysSincePaid}d since payment
             </span>
+            <WizardReminderButton contactId={contactId} />
           </div>
         </div>
       )
@@ -1343,7 +1344,10 @@ function WizardProgressCard({
     return (
       <div className="bg-white rounded-lg border p-5 space-y-2">
         <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Wizard</h3>
-        <p className="text-sm text-muted-foreground">No wizard data</p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-muted-foreground">No wizard data</p>
+          <WizardReminderButton contactId={contactId} />
+        </div>
       </div>
     )
   }
@@ -1433,6 +1437,45 @@ function WizardProgressCard({
         )}
       </div>
     </div>
+  )
+}
+
+// ─── Wizard Reminder Button (inline) ───
+
+function WizardReminderButton({ contactId }: { contactId: string }) {
+  const [sending, setSending] = useState(false)
+
+  const handleSend = async () => {
+    setSending(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/contact-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId, action: 'send_wizard_reminder' }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(data.detail || 'Wizard reminder sent')
+      } else {
+        toast.error(data.error || 'Failed to send reminder')
+      }
+    } catch {
+      toast.error('Failed to send reminder')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <button
+      onClick={handleSend}
+      disabled={sending}
+      className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 disabled:opacity-50 transition-colors"
+      title="Send wizard reminder email to client"
+    >
+      {sending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Bell className="h-2.5 w-2.5" />}
+      Remind
+    </button>
   )
 }
 

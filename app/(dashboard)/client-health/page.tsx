@@ -107,9 +107,33 @@ export default async function ClientHealthPage() {
     }
   }
 
+  // Check wizard status for orphan contacts with offers
+  const orphanIdsWithOffers = orphanContacts
+    .filter(c => contactsWithOffers.has(c.email?.toLowerCase() ?? ''))
+    .map(c => c.id)
+
+  const wizardStatusMap: Record<string, string> = {}
+  if (orphanIdsWithOffers.length > 0) {
+    const { data: wizards } = await supabase
+      .from('wizard_progress')
+      .select('contact_id, status, current_step')
+      .in('contact_id', orphanIdsWithOffers.slice(0, 100))
+      .order('updated_at', { ascending: false })
+
+    for (const w of wizards ?? []) {
+      // Keep the most recent status per contact
+      if (!wizardStatusMap[w.contact_id]) {
+        wizardStatusMap[w.contact_id] = w.status === 'submitted'
+          ? 'completed'
+          : `step_${w.current_step}`
+      }
+    }
+  }
+
   const orphanContactItems = orphanContacts.map(c => ({
     ...c,
     has_offers: contactsWithOffers.has(c.email?.toLowerCase() ?? ''),
+    wizard_status: wizardStatusMap[c.id] ?? null,
   }))
 
   // ── 5. SDs with missing contact_id ──

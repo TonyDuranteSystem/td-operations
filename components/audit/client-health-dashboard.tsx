@@ -55,6 +55,7 @@ interface OrphanContact {
   status: string | null
   created_at: string
   has_offers: boolean
+  wizard_status: string | null
 }
 
 interface SdMissingContact {
@@ -383,6 +384,21 @@ export function ClientHealthDashboard({
                         {item.has_offers && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
                             HAS OFFERS
+                          </span>
+                        )}
+                        {item.wizard_status === 'completed' && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 inline-flex items-center gap-0.5">
+                            <CheckCircle2 className="h-2.5 w-2.5" /> Wizard Done
+                          </span>
+                        )}
+                        {item.wizard_status && item.wizard_status.startsWith('step_') && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                            Wizard {item.wizard_status.replace('step_', 'Step ')}
+                          </span>
+                        )}
+                        {item.has_offers && !item.wizard_status && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500">
+                            No Wizard
                           </span>
                         )}
                         {item.portal_tier && (
