@@ -522,7 +522,8 @@ export default function ContractPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const selSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services as string[] : [])
       let correctTotal = 0
-      let correctCurrency = 'EUR'
+      // Use explicit currency field — no symbol-sniffing
+      const correctCurrency = (offer as any).currency === 'USD' ? '$' : '€'
       for (const svc of svcList) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const isOpt = !!(svc as any).optional
@@ -533,8 +534,6 @@ export default function ContractPage() {
         const pn = parseFloat(ps.replace(/[^0-9.]/g, ''))
         if (!isNaN(pn) && pn > 0) {
           correctTotal += pn
-          if (/\$|usd/i.test(ps)) correctCurrency = '$'
-          else if (/EUR/i.test(ps)) correctCurrency = 'EUR'
         }
       }
 
