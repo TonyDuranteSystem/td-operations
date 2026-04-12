@@ -69,6 +69,8 @@ function hasBusinessContextPipeline(
     if (pipeline === 'Tax Return') {
       const svc = (offerServices || []).find(
         s => s.pipeline_type === 'Tax Return' || s.pipeline_type === pipeline
+          || (s as Record<string, unknown>).contract_type === 'tax_return'
+          || (s as Record<string, unknown>).name?.toString().toLowerCase().includes('tax return')
       )
       const ctx = svc?.service_context
       if (ctx === 'individual') continue
