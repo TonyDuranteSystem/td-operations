@@ -3,63 +3,35 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
+import { advanceServiceDelivery } from '@/lib/service-delivery'
 
 export async function advanceDeliveryStage(
   deliveryId: string,
   targetStage: string,
-  stageOrder: number,
+  _stageOrder: number,
   notes?: string,
 ) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Unauthorized' }
 
-  // Update the delivery
-  const { error } = await supabaseAdmin
-    .from('service_deliveries')
-    .update({
-      stage: targetStage,
-      stage_order: stageOrder,
-      stage_entered_at: new Date().toISOString(),
-      notes: notes || undefined,
-      updated_at: new Date().toISOString(),
+  try {
+    const result = await advanceServiceDelivery({
+      delivery_id: deliveryId,
+      target_stage: targetStage,
+      notes,
+      actor: 'crm-tracker',
     })
-    .eq('id', deliveryId)
 
-  if (error) return { success: false, error: error.message }
-
-  // Create auto-tasks for the new stage
-  const { data: stageData } = await supabaseAdmin
-    .from('pipeline_stages')
-    .select('auto_tasks')
-    .eq('stage_name', targetStage)
-    .limit(1)
-    .maybeSingle()
-
-  if (stageData?.auto_tasks && Array.isArray(stageData.auto_tasks)) {
-    // Get account_id from delivery
-    const { data: delivery } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('account_id')
-      .eq('id', deliveryId)
-      .single()
-
-    for (const task of stageData.auto_tasks) {
-      await supabaseAdmin.from('tasks').insert({
-        task_title: task.title,
-        assigned_to: task.assigned_to || 'Luca',
-        category: task.category || 'Internal',
-        priority: task.priority || 'Normal',
-        status: 'To Do',
-        account_id: delivery?.account_id,
-        delivery_id: deliveryId,
-        stage_order: stageOrder,
-      })
+    revalidatePath('/trackers')
+    return {
+      success: result.success,
+      error: result.error,
+      auto_triggers: result.auto_triggers,
     }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
   }
-
-  revalidatePath('/trackers')
-  return { success: true }
 }
 
 export async function updateDeliveryNotes(
@@ -109,17 +81,32 @@ export async function completeDelivery(deliveryId: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Unauthorized' }
 
-  const { error } = await supabaseAdmin
-    .from('service_deliveries')
-    .update({
-      status: 'completed',
-      end_date: new Date().toISOString().split('T')[0],
-      updated_at: new Date().toISOString(),
+  try {
+    const result = await advanceServiceDelivery({
+      delivery_id: deliveryId,
+      target_stage: 'Completed',
+      actor: 'crm-tracker',
     })
-    .eq('id', deliveryId)
 
-  if (error) return { success: false, error: error.message }
+    revalidatePath('/trackers')
+    return {
+      success: result.success,
+      error: result.error,
+      auto_triggers: result.auto_triggers,
+    }
+  } catch (err) {
+    // Fallback: if "Completed" stage doesn't exist in pipeline_stages, just mark complete directly
+    const { error } = await supabaseAdmin
+      .from('service_deliveries')
+      .update({
+        status: 'completed',
+        end_date: new Date().toISOString().split('T')[0],
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', deliveryId)
 
-  revalidatePath('/trackers')
-  return { success: true }
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/trackers')
+    return { success: true }
+  }
 }

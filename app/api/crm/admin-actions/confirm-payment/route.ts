@@ -23,9 +23,10 @@ import { logAction } from "@/lib/mcp/action-log"
 interface ConfirmPaymentBody {
   lead_id: string
   // Payment info
-  payment_method: string // "wire" | "card" | "other"
+  payment_method: string // "wire" | "card" | "crypto" | "cash" | "whop" | "other"
   payment_date: string   // YYYY-MM-DD
   payment_reference?: string
+  paid_by_name?: string  // Third-party payer name (if different from lead)
   // Offer-derived (Mode 1) or manual (Mode 2)
   amount: number
   currency: "USD" | "EUR"
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
       payment_method,
       payment_date,
       payment_reference,
+      paid_by_name,
       amount,
       currency,
       contract_type,
@@ -120,9 +122,11 @@ export async function POST(request: Request) {
           currency,
           payment_method: payment_method || "wire",
           payment_confirmed_at: new Date().toISOString(),
-          notes: reason
-            ? `Admin confirmed. Method: ${payment_method}. Ref: ${payment_reference || "N/A"}. Reason: ${reason}`
-            : `Admin confirmed. Method: ${payment_method}. Ref: ${payment_reference || "N/A"}`,
+          notes: [
+            `Admin confirmed. Method: ${payment_method}. Ref: ${payment_reference || "N/A"}.`,
+            paid_by_name ? `Paid by: ${paid_by_name}.` : null,
+            reason ? `Reason: ${reason}` : null,
+          ].filter(Boolean).join(" "),
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingActivation.id)
@@ -152,9 +156,11 @@ export async function POST(request: Request) {
           payment_method: payment_method || "wire",
           status: "payment_confirmed",
           payment_confirmed_at: new Date().toISOString(),
-          notes: reason
-            ? `Admin created + confirmed. Method: ${payment_method}. Ref: ${payment_reference || "N/A"}. Reason: ${reason}`
-            : `Admin created + confirmed. Method: ${payment_method}. Ref: ${payment_reference || "N/A"}`,
+          notes: [
+            `Admin created + confirmed. Method: ${payment_method}. Ref: ${payment_reference || "N/A"}.`,
+            paid_by_name ? `Paid by: ${paid_by_name}.` : null,
+            reason ? `Reason: ${reason}` : null,
+          ].filter(Boolean).join(" "),
         })
         .select("id")
         .single()
@@ -238,7 +244,11 @@ export async function POST(request: Request) {
         payment_method: payment_method || "wire",
         paid_date: payment_date || new Date().toISOString().split("T")[0],
         status: "paid",
-        notes: payment_reference ? `Ref: ${payment_reference}` : undefined,
+        notes: [
+          payment_reference ? `Ref: ${payment_reference}` : null,
+          paid_by_name ? `Paid by: ${paid_by_name}` : null,
+        ].filter(Boolean).join(". ") || undefined,
+        paid_by_name: paid_by_name || null,
         is_test: lead.is_test || false,
       })
 
@@ -293,13 +303,14 @@ export async function POST(request: Request) {
       table_name: "pending_activations",
       record_id: activationId || undefined,
       account_id: accountId || undefined,
-      summary: `Payment confirmed by admin for ${lead.full_name}. ${currency} ${amount} via ${payment_method}. Ref: ${payment_reference || "N/A"}`,
+      summary: `Payment confirmed by admin for ${lead.full_name}. ${currency} ${amount} via ${payment_method}. Ref: ${payment_reference || "N/A"}${paid_by_name ? `. Paid by: ${paid_by_name}` : ""}`,
       details: {
         lead_id,
         offer_token: offer?.token,
         activation_id: activationId,
         payment_method,
         payment_reference,
+        paid_by_name: paid_by_name || null,
         amount,
         currency,
         contract_type,

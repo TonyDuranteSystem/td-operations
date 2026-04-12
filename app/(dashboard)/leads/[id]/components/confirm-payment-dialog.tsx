@@ -46,6 +46,7 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
   const [method, setMethod] = useState('wire')
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0])
   const [reference, setReference] = useState('')
+  const [paidByName, setPaidByName] = useState('')
   const [reason, setReason] = useState('')
 
   // Mode 2 fields (no offer)
@@ -116,6 +117,7 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
             payment_method: method,
             payment_date: paymentDate,
             payment_reference: reference || undefined,
+            paid_by_name: paidByName || undefined,
             amount: finalAmount,
             currency: finalCurrency,
             contract_type: finalContractType,
@@ -216,6 +218,8 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
                 >
                   <option value="wire">Wire Transfer</option>
                   <option value="card">Card</option>
+                  <option value="crypto">Crypto</option>
+                  <option value="cash">Cash</option>
                   <option value="whop">Whop</option>
                   <option value="other">Other</option>
                 </select>
@@ -239,6 +243,20 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
                 value={reference}
                 onChange={e => setReference(e.target.value)}
                 placeholder="Wire transfer ID, Whop order ID..."
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Paid By (third-party payer) */}
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Paid By <span className="text-zinc-400 font-normal">(if different from lead)</span>
+              </label>
+              <input
+                type="text"
+                value={paidByName}
+                onChange={e => setPaidByName(e.target.value)}
+                placeholder="Leave empty if the lead paid directly"
                 className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
