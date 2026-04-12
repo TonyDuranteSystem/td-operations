@@ -26,6 +26,7 @@ import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
+import { findTaxReturnService } from "@/lib/tax-return-context"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -58,24 +59,27 @@ const INDIVIDUAL_SERVICE_TYPES = new Set([
  */
 function hasBusinessContextPipeline(
   pipelines: string[],
-  offerServices: Array<{ pipeline_type?: string; service_context?: string }> | null,
+  offerServices: Array<Record<string, unknown>> | null,
   offerToken: string,
-): boolean | 'ambiguous' {
+): boolean | 'ambiguous' | 'multiple_matches' {
   for (const pipeline of pipelines) {
     if (BUSINESS_SERVICE_TYPES.has(pipeline)) return true
     if (INDIVIDUAL_SERVICE_TYPES.has(pipeline)) continue
 
-    // Ambiguous type (Tax Return) — check offer.services[] for explicit service_context
+    // Ambiguous type (Tax Return) — use shared helper to find service entry
     if (pipeline === 'Tax Return') {
-      const svc = (offerServices || []).find(
-        s => s.pipeline_type === 'Tax Return' || s.pipeline_type === pipeline
-          || (s as Record<string, unknown>).contract_type === 'tax_return'
-          || (s as Record<string, unknown>).name?.toString().toLowerCase().includes('tax return')
-      )
-      const ctx = svc?.service_context
+      const trResult = findTaxReturnService(offerServices)
+      if (trResult.status === 'multiple_matches') {
+        console.warn(`[activate-service] Tax Return has ${trResult.count} matching entries on offer ${offerToken} — blocking activation`)
+        return 'multiple_matches'
+      }
+      if (trResult.status === 'not_found') {
+        console.warn(`[activate-service] No Tax Return service entry found on offer ${offerToken} — blocking activation`)
+        return 'ambiguous'
+      }
+      const ctx = trResult.service_context
       if (ctx === 'individual') continue
       if (ctx === 'business') return true
-      // No explicit context — refuse to guess, return ambiguous for caller to handle
       console.warn(`[activate-service] Tax Return missing service_context on offer ${offerToken} — blocking activation`)
       return 'ambiguous'
     }
@@ -317,10 +321,17 @@ export async function POST(req: NextRequest) {
       const businessContextResult = hasBusinessContextPipeline(offerPipelines, offerServices, activation.offer_token)
 
       if (businessContextResult === 'ambiguous') {
-        // Tax Return with no explicit service_context — refuse to proceed
         return NextResponse.json({
           ok: false,
           error: "Tax Return activation requires explicit service_context (business or individual) on the offer. Update the offer's services[] before retrying activation.",
+          steps,
+        }, { status: 400 })
+      }
+
+      if (businessContextResult === 'multiple_matches') {
+        return NextResponse.json({
+          ok: false,
+          error: "Tax Return activation blocked — offer has multiple Tax Return service entries. Update the offer to have exactly one.",
           steps,
         }, { status: 400 })
       }

@@ -19,6 +19,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { findTaxReturnService } from "@/lib/tax-return-context"
 
 interface ConfirmPaymentBody {
   lead_id: string
@@ -96,17 +97,27 @@ export async function POST(request: Request) {
     // 2b. Preflight: Tax Return requires explicit service_context
     if (contract_type === "tax_return") {
       if (!offer) {
-        // Mode 2 (no offer) — block tax_return until an offer with explicit context exists
         return NextResponse.json(
           { error: "Tax Return payment requires an offer with explicit Business or Individual classification. Create an offer first, then confirm payment." },
           { status: 400 },
         )
       }
-      const offerServices = Array.isArray(offer.services) ? offer.services as Array<{ service_context?: string }> : []
-      const hasExplicitContext = offerServices.some(
-        s => s.service_context === "business" || s.service_context === "individual"
+      const trResult = findTaxReturnService(
+        Array.isArray(offer.services) ? offer.services as Array<Record<string, unknown>> : null
       )
-      if (!hasExplicitContext) {
+      if (trResult.status === "not_found") {
+        return NextResponse.json(
+          { error: "This Tax Return offer has no Tax Return service entry. Update the offer before confirming payment." },
+          { status: 400 },
+        )
+      }
+      if (trResult.status === "multiple_matches") {
+        return NextResponse.json(
+          { error: `This offer has ${trResult.count} Tax Return service entries. Update the offer to have exactly one Tax Return service before confirming payment.` },
+          { status: 400 },
+        )
+      }
+      if (trResult.service_context !== "business" && trResult.service_context !== "individual") {
         return NextResponse.json(
           { error: "This Tax Return offer requires an explicit Business or Individual classification before payment can be confirmed. Update the offer's service context first." },
           { status: 400 },
