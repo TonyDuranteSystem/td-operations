@@ -624,7 +624,7 @@ export async function GET(req: NextRequest) {
           })
         } else {
           globalChecks.push({
-            id: "form_formation_missing",
+            id: `form_formation_missing_${offer.token.slice(0, 8)}`,
             category: "Data Forms",
             label: "Formation wizard",
             status: "warning",
@@ -662,7 +662,7 @@ export async function GET(req: NextRequest) {
           })
         } else {
           globalChecks.push({
-            id: "form_onboarding_missing",
+            id: `form_onboarding_missing_${offer.token.slice(0, 8)}`,
             category: "Data Forms",
             label: "Onboarding wizard",
             status: "warning",
