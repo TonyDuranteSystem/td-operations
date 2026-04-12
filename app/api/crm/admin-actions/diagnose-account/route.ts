@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { classifyAccount } from "@/lib/account-classification"
 
 // ─── Types ───
 
@@ -143,7 +144,7 @@ export async function GET(req: NextRequest) {
         }
       }),
       // Tax return record
-      supabaseAdmin.from("tax_returns").select("id, tax_year, status")
+      supabaseAdmin.from("tax_returns").select("id, tax_year, status, extension_filed, first_year_skip")
         .eq("account_id", accountId).order("tax_year", { ascending: false }).limit(1),
       // Deadlines
       supabaseAdmin.from("deadlines").select("id, deadline_type, due_date, status")
@@ -173,8 +174,38 @@ export async function GET(req: NextRequest) {
     const ss4 = (ss4Result.data as unknown[])?.[0] as { id: string; token: string; status: string } | undefined
     const bankingForms = (bankingResult.data || []) as { id: string; token: string; status: string; provider: string; submitted_data: Record<string, unknown> }[]
     const authUsers = (authUsersResult.data || []) as { id: string; email: string }[]
-    const taxReturn = (taxReturnResult.data as unknown[])?.[0] as { id: string; tax_year: number; status: string } | undefined
+    const taxReturn = (taxReturnResult.data as unknown[])?.[0] as { id: string; tax_year: number; status: string; extension_filed: boolean; first_year_skip: boolean } | undefined
     const deadlines = (deadlinesResult.data || []) as { id: string; deadline_type: string; due_date: string; status: string }[]
+
+    // ── Shared classification ──
+    const formationSD = services.find(s => s.service_type === "Company Formation" && s.status === "active")
+      ?? services.find(s => s.service_type === "Company Formation" && (s.status === "completed" || s.status === "Completed"))
+    const classification = classifyAccount({
+      accountId,
+      accountType: account.account_type,
+      accountStatus: account.status,
+      einNumber: account.ein_number,
+      formationDate: account.formation_date,
+      entityType: account.entity_type,
+      activeServiceTypes: services.filter(s => s.status === "active").map(s => s.service_type).filter(Boolean),
+      formationSD: formationSD ? { stage: formationSD.stage, stageOrder: formationSD.stage_order, status: formationSD.status } : null,
+      taxReturn: taxReturn ? { taxYear: taxReturn.tax_year, extensionFiled: taxReturn.extension_filed, status: taxReturn.status, firstYearSkip: taxReturn.first_year_skip } : null,
+      ss4: ss4 ? { status: ss4.status } : null,
+    })
+
+    // Classification summary (first check in output)
+    checks.push({
+      id: "classification",
+      category: "Classification",
+      label: `Category: ${classification.category}`,
+      status: classification.category === "incomplete" ? "warning" : "ok",
+      detail: [
+        classification.formationComplete ? "Formation: complete" : classification.formationInProgress ? "Formation: in progress" : "Formation: not started",
+        classification.isWaitingForEIN ? "EIN: pending" : account.ein_number ? `EIN: ${account.ein_number}` : "EIN: none",
+        classification.taxReturnExpected ? `Tax: expected (${classification.taxReturnReason})` : `Tax: ${classification.taxReturnReason}`,
+        ...classification.pendingReasons.map(p => `⏳ ${p.reason}`),
+      ].join(" · "),
+    })
 
     // ═══════════════════════════════
     // CATEGORY: Contact
@@ -422,11 +453,10 @@ export async function GET(req: NextRequest) {
     }
 
     // ═══════════════════════════════
-    // CATEGORY: Service Delivery
+    // CATEGORY: Service Delivery (classification-driven)
     // ═══════════════════════════════
-    const bundledPipelines = offer?.bundled_pipelines || []
 
-    // Show ALL service deliveries with their real status
+    // Show ALL existing service deliveries with their real status
     if (services.length > 0) {
       for (const sd of services) {
         const sdStatus = sd.status === "active" ? "ok"
@@ -441,25 +471,36 @@ export async function GET(req: NextRequest) {
           detail: `Status: ${sd.status}${sd.stage ? ` — Stage: ${sd.stage}` : ""}${sd.assigned_to ? ` — ${sd.assigned_to}` : ""}`,
         })
       }
-    } else if (bundledPipelines.length > 0) {
+    }
+
+    // Check for missing SDs using classification
+    if (classification.category === "new_formation") {
+      checks.push({
+        id: "sd_formation_pending",
+        category: "Services",
+        label: "Standard services",
+        status: "info",
+        detail: "Formation in progress — standard SDs will be created after formation completes",
+      })
+    } else if (classification.missingSDs.length > 0) {
       checks.push({
         id: "sd_missing",
         category: "Services",
-        label: "Service deliveries",
+        label: `Missing: ${classification.missingSDs.join(", ")}`,
         status: "error",
-        detail: `No services found. Expected from offer: ${bundledPipelines.join(", ")}`,
+        detail: `Expected [${classification.expectedSDs.join(", ")}] but missing: ${classification.missingSDs.join(", ")}`,
         fix: {
           action: "create_service_deliveries",
-          label: "Create all missing services",
-          params: { pipelines: bundledPipelines, account_id: accountId, contact_id: contactId },
-          description: "Creates service delivery records for all pipelines defined in the offer (e.g. Company Formation, ITIN, EIN). Each is initialized at stage 1 (Data Collection) and assigned to Luca.",
-          impact: ["New service delivery rows appear in the pipeline dashboard", "Tasks may be auto-created for stage 1 if pipeline_stages are configured", "Assigned team member will see new work items"],
+          label: `Create ${classification.missingSDs.length} missing service(s)`,
+          params: { pipelines: classification.missingSDs, account_id: accountId, contact_id: contactId },
+          description: `Creates service deliveries for: ${classification.missingSDs.join(", ")}. Each starts at Stage 1.`,
+          impact: classification.missingSDs.map(m => `${m} SD created at first stage`),
           risk: "safe" as const,
         },
       })
-    } else {
+    } else if (services.length === 0 && classification.category !== "one_time") {
       checks.push({
-        id: "sd_missing",
+        id: "sd_none",
         category: "Services",
         label: "Service deliveries",
         status: "warning",
@@ -467,39 +508,28 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    // Check for missing bundled pipelines
-    const currentYear = new Date().getFullYear()
-    const formationYear = account.formation_date ? new Date(account.formation_date).getFullYear() : null
-
-    for (const pipeline of bundledPipelines) {
-      // Skip Tax Return check if company was formed in the current year or later
-      // (they don't need a return for a year they didn't exist)
-      if (pipeline === "Tax Return" && formationYear && formationYear >= currentYear) {
-        continue
-      }
-
-      const exists = services.some(s => s.service_type === pipeline)
-      if (!exists) {
-        checks.push({
-          id: `sd_missing_${pipeline.toLowerCase().replace(/\s+/g, "_")}`,
-          category: "Services",
-          label: `Missing: ${pipeline}`,
-          status: "error",
-          detail: `Expected from offer but not created`,
-          fix: {
-            action: "create_service_delivery",
-            label: `Create ${pipeline}`,
-            params: { service_type: pipeline, account_id: accountId, contact_id: contactId },
-            description: `Creates a single '${pipeline}' service delivery record, initialized at stage 1 (Data Collection) and assigned to Luca.`,
-            impact: ["New service delivery row appears in the pipeline dashboard", "Assigned team member will see the new work item"],
-            risk: "safe" as const,
-          },
-        })
-      }
+    // Tax Return expectation
+    if (classification.taxReturnExpected && !classification.actualSDs.includes("Tax Return")) {
+      checks.push({
+        id: "tax_expected",
+        category: "Services",
+        label: "Tax Return expected",
+        status: "warning",
+        detail: classification.taxReturnReason,
+      })
+    } else if (!classification.taxReturnExpected && classification.taxReturnReason && classification.category !== "new_formation") {
+      checks.push({
+        id: "tax_info",
+        category: "Services",
+        label: "Tax Return",
+        status: "info",
+        detail: classification.taxReturnReason,
+      })
     }
 
     // ═══════════════════════════════
     // CATEGORY: Forms
+    const bundledPipelines = offer?.bundled_pipelines || []
     // ═══════════════════════════════
     const contractType = offer?.contract_type || null
 
@@ -614,13 +644,40 @@ export async function GET(req: NextRequest) {
       } : undefined,
     })
 
-    if (account.ein_number || ss4) {
+    // EIN / SS-4 — uses classification to distinguish pending vs missing
+    if (account.ein_number) {
+      checks.push({
+        id: "ss4_status",
+        category: "Documents",
+        label: "EIN / SS-4",
+        status: "ok",
+        detail: `EIN: ${account.ein_number}${ss4 ? ` — SS-4: ${ss4.status}` : ""}`,
+      })
+    } else if (classification.isWaitingForEIN) {
+      const einReason = classification.pendingReasons.find(p => p.field === "ein_number")
+      checks.push({
+        id: "ss4_status",
+        category: "Documents",
+        label: "EIN pending",
+        status: "info",
+        detail: einReason?.reason ?? "EIN not yet received",
+      })
+    } else if (ss4) {
       checks.push({
         id: "ss4_status",
         category: "Documents",
         label: "SS-4 Application",
-        status: ss4 ? "ok" : account.ein_number ? "ok" : "info",
-        detail: ss4 ? `Status: ${ss4.status}` : account.ein_number ? `EIN: ${account.ein_number}` : "Not created",
+        status: ss4.status === "done" ? "ok" : "info",
+        detail: `Status: ${ss4.status}`,
+      })
+    } else if (classification.formationComplete) {
+      const einReason = classification.pendingReasons.find(p => p.field === "ein_number")
+      checks.push({
+        id: "ss4_status",
+        category: "Documents",
+        label: "EIN",
+        status: einReason ? "warning" : "error",
+        detail: einReason?.reason ?? "Missing — formation complete but EIN not recorded",
       })
     }
 
