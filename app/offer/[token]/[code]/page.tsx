@@ -455,13 +455,19 @@ export default function OfferPageWithCode() {
         </div>
 
         <div className="offer-content">
-          {/* Intro */}
-          {(o.intro_en || o.intro_it) && (
-            <div className="offer-intro-block">
-              {o.intro_en && <><div className="offer-lang-badge offer-lang-en">EN</div><div className="offer-intro-text">{o.intro_en}</div></>}
-              {o.intro_it && <><div className="offer-lang-badge offer-lang-it">IT</div><div className="offer-intro-text">{o.intro_it}</div></>}
-            </div>
-          )}
+          {/* Intro — show client language first, secondary language smaller */}
+          {(o.intro_en || o.intro_it) && (() => {
+            const primaryIntro = lang === 'it' ? o.intro_it : o.intro_en
+            const secondaryIntro = lang === 'it' ? o.intro_en : o.intro_it
+            const primaryLang = lang === 'it' ? 'IT' : 'EN'
+            const secondaryLang = lang === 'it' ? 'EN' : 'IT'
+            return (
+              <div className="offer-intro-block">
+                {primaryIntro && <><div className={`offer-lang-badge offer-lang-${primaryLang.toLowerCase()}`}>{primaryLang}</div><div className="offer-intro-text">{primaryIntro}</div></>}
+                {secondaryIntro && <><div className={`offer-lang-badge offer-lang-${secondaryLang.toLowerCase()}`} style={{ marginTop: 16, opacity: 0.7 }}>{secondaryLang}</div><div className="offer-intro-text" style={{ fontSize: 14, opacity: 0.8 }}>{secondaryIntro}</div></>}
+              </div>
+            )
+          })()}
 
           {/* Issues */}
           {o.issues && o.issues.length > 0 && (

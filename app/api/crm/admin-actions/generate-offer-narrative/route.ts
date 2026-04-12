@@ -22,7 +22,12 @@ You must produce ALL output as a single JSON object with exactly these keys:
 - "future_developments": An array of 2-4 items. Each: { "text": "Description of a future opportunity" }. These are optional services or growth opportunities for later.
 - "immediate_actions": An array of 2-4 items. Each: { "title": "Action Name", "description": "What needs to happen and why" }. These are things to address right away.
 
-Rules:
+LANGUAGE RULES (CRITICAL):
+- "intro_en" is ALWAYS in English. "intro_it" is ALWAYS in Italian.
+- "strategy", "next_steps", "future_developments", and "immediate_actions" MUST be written in the client's PREFERRED LANGUAGE (specified in the user prompt). If the preferred language is Italian, write these 4 sections in Italian. If English, write them in English.
+- This is important because the client sees these sections on their offer page in their language.
+
+Other rules:
 - Output ONLY the JSON object. No markdown, no code fences, no explanation.
 - All content must be relevant to the specific client and services selected.
 - The intro must reference the client's actual situation, not be generic.
