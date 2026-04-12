@@ -165,18 +165,17 @@ export async function publishOffer(
       if (offer.status !== "draft") {
         return { alreadySent: true, message: `Offer already published (status: ${offer.status}).` }
       }
-      // Also check email_tracking for this recipient + recent time
+      // Also check email_tracking for THIS specific offer token + recent time
       const { data: existing } = await supabaseAdmin
         .from("email_tracking")
         .select("tracking_id, created_at")
-        .eq("recipient", offer.client_email!)
-        .ilike("subject", "%Tony Durante%")
+        .eq("offer_token", token)
         .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
         .limit(1)
       if (existing?.length) {
         return {
           alreadySent: true,
-          message: `Recent email already sent to ${offer.client_email} (tracked: ${existing[0].tracking_id} at ${existing[0].created_at}). Set status back to 'draft' to resend.`,
+          message: `This offer was already sent (tracked: ${existing[0].tracking_id} at ${existing[0].created_at}). Set status back to 'draft' to resend.`,
         }
       }
       return null
@@ -194,6 +193,7 @@ export async function publishOffer(
         fn: async () => {
           await supabaseAdmin.from("email_tracking").insert({
             tracking_id: trackingId,
+            offer_token: token,
             recipient: offer.client_email,
             subject,
             from_email: fromEmail,
