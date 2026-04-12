@@ -10,6 +10,7 @@ import { format, parseISO } from 'date-fns'
 import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
+import { LeadLifecycleBar } from './components/lead-lifecycle-bar'
 import { LeadNotesEditor } from './components/lead-notes-editor'
 import { CallSummaryCard } from './components/call-summary-card'
 import { EditableField } from './components/editable-field'
@@ -164,6 +165,24 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </p>
         </div>
       </div>
+
+      {/* Lifecycle Bar */}
+      <LeadLifecycleBar
+        leadStatus={lead.status}
+        callDate={lead.call_date}
+        offerStatus={offer?.status ?? null}
+        offerViewedAt={offer?.viewed_at ?? null}
+        signedAt={
+          (contractsResult.data ?? []).find(
+            (c: { offer_token: string; signed_at: string | null }) => c.offer_token === offer?.token
+          )?.signed_at
+          ?? activation?.signed_at
+          ?? null
+        }
+        activationStatus={activation?.status ?? null}
+        paymentConfirmedAt={activation?.payment_confirmed_at ?? null}
+        convertedToContactId={lead.converted_to_contact_id}
+      />
 
       {/* Admin Actions */}
       <div className="mb-6">
