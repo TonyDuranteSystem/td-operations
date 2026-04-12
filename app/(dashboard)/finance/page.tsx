@@ -27,38 +27,32 @@ export default async function FinancePage({
     .not('invoice_status', 'is', null)
     .not('invoice_status', 'in', '("Cancelled","Split")')
 
-  // Aggregate per account
-  const clientMap: Record<string, {
-    total_invoiced: number
-    total_paid: number
-    outstanding: number
-    overdue: number
-    invoice_count: number
-    overdue_count: number
-    has_partial: boolean
-  }> = {}
+  // Aggregate per account + track contact-only (unlinked) payments separately
+  const emptyBucket = () => ({
+    total_invoiced: 0, total_paid: 0, outstanding: 0, overdue: 0,
+    invoice_count: 0, overdue_count: 0, has_partial: false,
+  })
+
+  const clientMap: Record<string, ReturnType<typeof emptyBucket>> = {}
+  const unlinkedBucket = emptyBucket()
 
   for (const inv of (invoiceSummary ?? [])) {
-    if (!inv.account_id) continue
-    if (!clientMap[inv.account_id]) {
-      clientMap[inv.account_id] = {
-        total_invoiced: 0, total_paid: 0, outstanding: 0, overdue: 0,
-        invoice_count: 0, overdue_count: 0, has_partial: false,
-      }
-    }
-    const c = clientMap[inv.account_id]
+    const bucket = inv.account_id
+      ? (clientMap[inv.account_id] ??= emptyBucket())
+      : unlinkedBucket
+
     const status = inv.invoice_status ?? ''
-    c.invoice_count++
-    c.total_invoiced += Number(inv.total ?? 0)
-    c.total_paid += Number(inv.amount_paid ?? 0)
+    bucket.invoice_count++
+    bucket.total_invoiced += Number(inv.total ?? 0)
+    bucket.total_paid += Number(inv.amount_paid ?? 0)
     if (['Sent', 'Overdue', 'Partial'].includes(status)) {
-      c.outstanding += Number(inv.amount_due ?? inv.total ?? 0)
+      bucket.outstanding += Number(inv.amount_due ?? inv.total ?? 0)
     }
     if (status === 'Overdue') {
-      c.overdue += Number(inv.amount_due ?? inv.total ?? 0)
-      c.overdue_count++
+      bucket.overdue += Number(inv.amount_due ?? inv.total ?? 0)
+      bucket.overdue_count++
     }
-    if (status === 'Partial') c.has_partial = true
+    if (status === 'Partial') bucket.has_partial = true
   }
 
   // Get all accounts
@@ -70,11 +64,17 @@ export default async function FinancePage({
   const clientList = (allAccounts ?? []).map(a => ({
     id: a.id,
     company_name: a.company_name,
-    ...(clientMap[a.id] ?? {
-      total_invoiced: 0, total_paid: 0, outstanding: 0, overdue: 0,
-      invoice_count: 0, overdue_count: 0, has_partial: false,
-    }),
+    ...(clientMap[a.id] ?? emptyBucket()),
   }))
+
+  // Add "Individual / Unlinked" bucket if any contact-only payments exist
+  if (unlinkedBucket.invoice_count > 0) {
+    clientList.unshift({
+      id: '__unlinked__',
+      company_name: 'Individual / Unlinked',
+      ...unlinkedBucket,
+    })
+  }
 
   // ── Fetch ALL invoices for flat list view (from payments) ──
   const { data: allPaymentsFlat } = await supabaseAdmin
@@ -111,30 +111,43 @@ export default async function FinancePage({
   let clientPaymentHistory: Array<Record<string, unknown>> = []
 
   if (selectedClientId) {
+    const isUnlinked = selectedClientId === '__unlinked__'
+
+    // Build queries: for unlinked, filter by account_id IS NULL + contact_id IS NOT NULL
+    const invoiceQuery = supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, description, payment_items(*), contacts:contact_id(full_name)')
+      .not('invoice_status', 'is', null)
+      .order('issue_date', { ascending: false })
+    const payHistQuery = supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, amount, amount_paid, paid_date, payment_method, status, invoice_status, portal_invoice_id, contact_id, contacts:contact_id(full_name)')
+      .not('invoice_status', 'is', null)
+      .order('paid_date', { ascending: false, nullsFirst: false })
+
+    if (isUnlinked) {
+      invoiceQuery.is('account_id', null).not('contact_id', 'is', null)
+      payHistQuery.is('account_id', null).not('contact_id', 'is', null)
+    } else {
+      invoiceQuery.eq('account_id', selectedClientId)
+      payHistQuery.eq('account_id', selectedClientId)
+    }
+
     const [invRes, cnRes, auditRes, payRes] = await Promise.all([
-      // Client invoices = payments with invoice_status + payment_items
-      supabaseAdmin
-        .from('payments')
-        .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, notes, message, account_id, contact_id, description, payment_items(*)')
-        .eq('account_id', selectedClientId)
-        .not('invoice_status', 'is', null)
-        .order('issue_date', { ascending: false }),
-      supabaseAdmin
-        .from('client_credit_notes')
-        .select('*')
-        .eq('account_id', selectedClientId)
-        .order('created_at', { ascending: false }),
+      invoiceQuery,
+      isUnlinked
+        ? Promise.resolve({ data: [] })
+        : supabaseAdmin
+            .from('client_credit_notes')
+            .select('*')
+            .eq('account_id', selectedClientId)
+            .order('created_at', { ascending: false }),
       supabaseAdmin
         .from('invoice_audit_log')
         .select('*')
         .order('performed_at', { ascending: false })
         .limit(50),
-      supabaseAdmin
-        .from('payments')
-        .select('id, invoice_number, amount, amount_paid, paid_date, payment_method, status, invoice_status, portal_invoice_id')
-        .eq('account_id', selectedClientId)
-        .not('invoice_status', 'is', null)
-        .order('paid_date', { ascending: false, nullsFirst: false }),
+      payHistQuery,
     ])
 
     // Map payment records to the shape the UI expects (rename fields)
