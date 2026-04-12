@@ -22,6 +22,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { INTERNAL_BASE_URL } from "@/lib/config"
+import { classifyAccount } from "@/lib/account-classification"
 
 // ─── Types ───
 
@@ -126,6 +127,7 @@ export async function GET(req: NextRequest) {
       oaResult,
       leaseResult,
       ss4Result,
+      taxReturnsResult,
     ] = await Promise.all([
       // Leads linked by converted_to_contact_id
       supabaseAdmin.from("leads")
@@ -187,6 +189,10 @@ export async function GET(req: NextRequest) {
       // SS-4 applications
       accountIds.length > 0
         ? supabaseAdmin.from("ss4_applications").select("id, status, account_id, ein_number").in("account_id", accountIds)
+        : { data: [] },
+      // Tax returns (for classification signal)
+      accountIds.length > 0
+        ? supabaseAdmin.from("tax_returns").select("id, account_id, tax_year, extension_filed, status, first_year_skip").in("account_id", accountIds).order("tax_year", { ascending: false })
         : { data: [] },
     ])
 
@@ -297,6 +303,7 @@ export async function GET(req: NextRequest) {
     const oaAgreements = (oaResult.data ?? []) as Array<{ id: string; status: string; signed_at: string | null; account_id: string }>
     const leaseAgreements = (leaseResult.data ?? []) as Array<{ id: string; status: string; signed_at: string | null; account_id: string }>
     const ss4Apps = (ss4Result.data ?? []) as Array<{ id: string; status: string; account_id: string; ein_number: string | null }>
+    const taxReturns = (taxReturnsResult.data ?? []) as Array<{ id: string; account_id: string; tax_year: number; extension_filed: boolean; status: string; first_year_skip: boolean }>
 
     // ═══════════════════════════════════════
     // GLOBAL CHECKS (contact-level)
@@ -753,18 +760,45 @@ export async function GET(req: NextRequest) {
       const acctServices = services.filter(s => s.account_id === acct.id)
       const acctOA = oaAgreements.filter(o => o.account_id === acct.id)
       const acctLease = leaseAgreements.filter(l => l.account_id === acct.id)
-      const acctSS4 = ss4Apps.filter(s => s.account_id === acct.id)
 
-      // ── Determine formation stage (if this is a formation account) ──
+      // ── Shared classification ──
       const formationSD = acctServices.find(s => s.service_type === "Company Formation" && s.status === "active")
+        ?? acctServices.find(s => s.service_type === "Company Formation" && s.status === "completed")
       const formationStageOrder = formationSD?.stage_order ?? 0
       const formationStage = formationSD?.stage ?? null
-      const isFormationInProgress = !!formationSD && formationSD.status === "active"
-      const formationComplete = acctServices.some(s => s.service_type === "Company Formation" && s.status === "completed")
+      const acctSS4 = ss4Apps.filter(s => s.account_id === acct.id)
+      const acctTR = taxReturns.find(t => t.account_id === acct.id)
+
+      const classification = classifyAccount({
+        accountId: acct.id,
+        accountType: acct.account_type,
+        accountStatus: acct.status,
+        einNumber: acct.ein_number,
+        formationDate: acct.formation_date,
+        entityType: acct.entity_type,
+        activeServiceTypes: acctServices.filter(s => s.status === "active").map(s => s.service_type).filter(Boolean),
+        formationSD: formationSD ? { stage: formationSD.stage, stageOrder: formationSD.stage_order, status: formationSD.status } : null,
+        taxReturn: acctTR ? { taxYear: acctTR.tax_year, extensionFiled: acctTR.extension_filed, status: acctTR.status, firstYearSkip: acctTR.first_year_skip } : null,
+        ss4: acctSS4.length > 0 ? { status: acctSS4[0].status } : null,
+      })
+
+      // ── Classification summary (visible in audit results) ──
+      acctChecks.push({
+        id: `classification_${acct.id.slice(0, 8)}`,
+        category: "Classification",
+        label: `Category: ${classification.category}`,
+        status: classification.category === "incomplete" ? "warning" : "ok",
+        detail: [
+          classification.formationComplete ? "Formation: complete" : classification.formationInProgress ? "Formation: in progress" : "Formation: not started",
+          classification.isWaitingForEIN ? "EIN: pending" : acct.ein_number ? `EIN: ${acct.ein_number}` : "EIN: none",
+          classification.taxReturnExpected ? `Tax: expected (${classification.taxReturnReason})` : `Tax: ${classification.taxReturnReason}`,
+          ...classification.pendingReasons.map(p => `⏳ ${p.reason}`),
+        ].join(" · "),
+      })
+
       const hasEIN = !!acct.ein_number
 
       // Stage thresholds for Company Formation pipeline:
-      // 1=Data Collection, 2=State Filing, 3=EIN Application, 4=EIN Submitted, 5=Post-Formation+Banking, 6=Closing
       const STAGE_EIN_APPLICATION = 3
       const STAGE_POST_FORMATION = 5
 
@@ -808,7 +842,7 @@ export async function GET(req: NextRequest) {
             detail: `Company Formation is in progress. Current stage determines which checks are relevant below.`,
           })
         }
-      } else if (formationComplete) {
+      } else if (classification.formationComplete) {
         acctChecks.push({
           id: `pipeline_${acct.id.slice(0, 8)}`,
           category: "Formation Pipeline",
@@ -846,7 +880,7 @@ export async function GET(req: NextRequest) {
         })
       }
 
-      // ── EIN check — only relevant at stage 5+ (Post-Formation) or if formation is complete ──
+      // ── EIN check — uses classification to distinguish pending vs missing ──
       if (acct.entity_type?.includes("LLC") || acct.entity_type?.includes("Corp")) {
         if (hasEIN) {
           acctChecks.push({
@@ -856,8 +890,29 @@ export async function GET(req: NextRequest) {
             status: "ok",
             detail: acct.ein_number!,
           })
-        } else if (!isFormationInProgress || formationStageOrder >= STAGE_POST_FORMATION || formationComplete) {
-          // Only warn about missing EIN if formation is at post-formation stage or later
+        } else if (classification.isWaitingForEIN) {
+          // Classification says EIN is pending — show as info, not warning
+          const einReason = classification.pendingReasons.find(p => p.field === "ein_number")
+          acctChecks.push({
+            id: `ein_${acct.id.slice(0, 8)}`,
+            category: "Account",
+            label: "EIN pending",
+            status: "info",
+            detail: einReason?.reason ?? "EIN not yet received — formation in progress",
+          })
+        } else if (classification.formationComplete) {
+          // Formation is done but no EIN — this is a real problem
+          const einReason = classification.pendingReasons.find(p => p.field === "ein_number")
+          acctChecks.push({
+            id: `ein_${acct.id.slice(0, 8)}`,
+            category: "Account",
+            label: "EIN",
+            status: einReason ? "warning" : "error",
+            detail: einReason?.reason ?? "Missing — formation complete but EIN not recorded",
+          })
+        } else if (classification.category === "new_formation") {
+          // Early formation — EIN not expected yet, don't show check
+        } else {
           acctChecks.push({
             id: `ein_${acct.id.slice(0, 8)}`,
             category: "Account",
@@ -866,98 +921,78 @@ export async function GET(req: NextRequest) {
             detail: "Missing — needed for banking and tax filing",
           })
         }
-        // If formation is in early stages, don't show EIN check at all — it's expected to be missing
       }
 
-      // ── Service deliveries (always relevant) ──
-      // Only consider signed/completed offers — draft offers are not commitments
-      const acctOffer = offers.find(o => o.account_id === acct.id && ["signed", "completed"].includes(o.status))
-        ?? offers.find(o => o.account_id === acct.id) // fallback to any offer if none signed
-      const bundled = (acctOffer && ["signed", "completed"].includes(acctOffer.status))
-        ? (acctOffer.bundled_pipelines ?? [])
-        : [] // Don't compare against draft/sent offer pipelines
-      const existingTypes = new Set(acctServices.map(s => s.service_type).filter(Boolean))
-
-      if (bundled.length > 0) {
-        // Filter out Tax Return if company was formed in the current year (not due yet)
-        const formationYear = acct.formation_date ? new Date(acct.formation_date).getFullYear() : null
-        const currentYear = new Date().getFullYear()
-        const isFirstYear = formationYear !== null && formationYear >= currentYear
-
-        let missing = bundled.filter(p => !existingTypes.has(p))
-        const deferredServices: string[] = []
-
-        if (isFirstYear) {
-          // Tax Return not due until next year for companies formed this year
-          if (missing.includes("Tax Return")) {
-            deferredServices.push("Tax Return (not due — company formed in current year)")
-            missing = missing.filter(p => p !== "Tax Return")
-          }
-        }
-
-        if (deferredServices.length > 0) {
-          acctChecks.push({
-            id: `sds_deferred_${acct.id.slice(0, 8)}`,
-            category: "Services",
-            label: "Deferred services",
-            status: "info",
-            detail: deferredServices.join("; "),
-          })
-        }
-
-        if (missing.length > 0) {
-          const isFormationOffer = acctOffer?.contract_type === "formation"
-          const hasFormationSD = existingTypes.has("Company Formation")
-
-          if (isFormationOffer && hasFormationSD) {
-            acctChecks.push({
-              id: `sds_pending_${acct.id.slice(0, 8)}`,
-              category: "Services",
-              label: "Pending services",
-              status: "info",
-              detail: `${missing.length} services will be created automatically after formation: ${missing.join(", ")}`,
-            })
-          } else {
-            acctChecks.push({
-              id: `sds_missing_${acct.id.slice(0, 8)}`,
-              category: "Services",
-              label: "Missing services",
-              status: "error",
-              detail: `Offer bundles [${bundled.join(", ")}] but missing: ${missing.join(", ")}`,
-              fix: {
-                action: "create_missing_sds",
-                label: `Create ${missing.length} missing SD(s)`,
-                params: { account_id: acct.id, contact_id: contactId, pipelines: missing },
-                description: `Creates service deliveries for: ${missing.join(", ")}. Each starts at Stage 1 with auto-tasks.`,
-                impact: missing.map(m => `${m} SD created at first stage`),
-                risk: "moderate",
-              },
-            })
-          }
-        } else {
-          acctChecks.push({
-            id: `sds_ok_${acct.id.slice(0, 8)}`,
-            category: "Services",
-            label: "Service deliveries",
-            status: "ok",
-            detail: `${acctServices.length} SDs — all bundled pipelines present`,
-          })
-        }
-      } else if (acctServices.length > 0) {
+      // ── Service deliveries — uses classification for expected vs actual ──
+      if (classification.category === "one_time") {
+        // One-Time: no standard bundle expected
         acctChecks.push({
-          id: `sds_exists_${acct.id.slice(0, 8)}`,
+          id: `sds_onetime_${acct.id.slice(0, 8)}`,
           category: "Services",
           label: "Service deliveries",
           status: "ok",
-          detail: `${acctServices.length} SDs${acctServices.filter(s => s.status === "active").length > 0 ? ` (${acctServices.filter(s => s.status === "active").length} active)` : ""}`,
+          detail: `One-Time account — ${acctServices.filter(s => s.status === "active").length} active SD(s)`,
+        })
+      } else if (classification.category === "new_formation") {
+        // Formation in progress — other SDs deferred
+        acctChecks.push({
+          id: `sds_formation_${acct.id.slice(0, 8)}`,
+          category: "Services",
+          label: "Service deliveries",
+          status: "info",
+          detail: `Formation in progress — standard SDs will be created after formation completes`,
+        })
+      } else if (classification.missingSDs.length > 0) {
+        // Missing SDs — offer fix
+        acctChecks.push({
+          id: `sds_missing_${acct.id.slice(0, 8)}`,
+          category: "Services",
+          label: "Missing services",
+          status: "error",
+          detail: `Expected [${classification.expectedSDs.join(", ")}] but missing: ${classification.missingSDs.join(", ")}`,
+          fix: {
+            action: "create_missing_sds",
+            label: `Create ${classification.missingSDs.length} missing SD(s)`,
+            params: { account_id: acct.id, contact_id: contactId, pipelines: classification.missingSDs },
+            description: `Creates service deliveries for: ${classification.missingSDs.join(", ")}. Each starts at Stage 1 with auto-tasks.`,
+            impact: classification.missingSDs.map(m => `${m} SD created at first stage`),
+            risk: "moderate",
+          },
+        })
+      } else if (acctServices.length > 0) {
+        acctChecks.push({
+          id: `sds_ok_${acct.id.slice(0, 8)}`,
+          category: "Services",
+          label: "Service deliveries",
+          status: "ok",
+          detail: `${acctServices.filter(s => s.status === "active").length} active SD(s) — all expected services present`,
         })
       } else {
         acctChecks.push({
           id: `sds_none_${acct.id.slice(0, 8)}`,
           category: "Services",
           label: "Service deliveries",
-          status: acct.status === "Active" ? "warning" : "info",
+          status: classification.category === "incomplete" ? "warning" : "info",
           detail: "No service deliveries for this account",
+        })
+      }
+
+      // Tax return expectation (from classification)
+      if (classification.taxReturnExpected && !classification.actualSDs.includes("Tax Return")) {
+        acctChecks.push({
+          id: `tax_expected_${acct.id.slice(0, 8)}`,
+          category: "Services",
+          label: "Tax Return expected",
+          status: "warning",
+          detail: classification.taxReturnReason,
+        })
+      } else if (!classification.taxReturnExpected && classification.taxReturnReason) {
+        acctChecks.push({
+          id: `tax_info_${acct.id.slice(0, 8)}`,
+          category: "Services",
+          label: "Tax Return",
+          status: "info",
+          detail: classification.taxReturnReason,
         })
       }
 
@@ -974,7 +1009,7 @@ export async function GET(req: NextRequest) {
           })
         } else if (!hasEIN) {
           // Only show SS-4 warning if formation is at EIN Application stage or later, or no formation SD
-          if (!isFormationInProgress || formationStageOrder >= STAGE_EIN_APPLICATION || formationComplete) {
+          if (!classification.formationInProgress || formationStageOrder >= STAGE_EIN_APPLICATION || classification.formationComplete) {
             acctChecks.push({
               id: `ss4_missing_${acct.id.slice(0, 8)}`,
               category: "EIN Pipeline",
@@ -988,7 +1023,7 @@ export async function GET(req: NextRequest) {
 
       // ── Portal transition — only for legacy clients OR post-formation (stage 5+) ──
       // For formation in progress (stages 1-4): portal transition is premature
-      const isFormationEarlyStage = isFormationInProgress && formationStageOrder < STAGE_POST_FORMATION
+      const isFormationEarlyStage = classification.formationInProgress && formationStageOrder < STAGE_POST_FORMATION
       if (!acct.portal_account && acct.status === "Active" && acct.account_type === "Client") {
         if (isFormationEarlyStage) {
           // Don't show portal transition for formation clients in early stages
