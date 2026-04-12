@@ -20,6 +20,7 @@ const ALLOWED_FIELDS = [
   "referrer_name",
   "call_date",
   "call_notes",
+  "status",
 ]
 
 export async function POST(request: Request) {

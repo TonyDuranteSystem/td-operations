@@ -298,9 +298,23 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             <div className="flex justify-between items-center">
               <dt className="text-muted-foreground">Status</dt>
               <dd>
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] ?? 'bg-zinc-100'}`}>
-                  {lead.status ?? '\u2014'}
-                </span>
+                <EditableField
+                  leadId={lead.id}
+                  field="status"
+                  value={lead.status}
+                  type="select"
+                  options={[
+                    { value: 'New', label: 'New' },
+                    { value: 'Call Scheduled', label: 'Call Scheduled' },
+                    { value: 'Call Done', label: 'Call Done' },
+                    { value: 'Offer Sent', label: 'Offer Sent' },
+                    { value: 'Negotiating', label: 'Negotiating' },
+                    { value: 'Paid', label: 'Paid' },
+                    { value: 'Converted', label: 'Converted' },
+                    { value: 'Lost', label: 'Lost' },
+                    { value: 'Suspended', label: 'Suspended' },
+                  ]}
+                />
               </dd>
             </div>
           </dl>
