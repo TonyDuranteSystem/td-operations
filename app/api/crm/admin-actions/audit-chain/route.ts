@@ -686,6 +686,63 @@ export async function GET(req: NextRequest) {
           : "No passport on file",
     })
 
+    // ── 8. Contact profile completeness (merged from Contact Diagnose) ──
+    const profileMissing: string[] = []
+    if (!contact.date_of_birth) profileMissing.push("date of birth")
+    if (!contact.citizenship) profileMissing.push("citizenship")
+    if (!contact.phone) profileMissing.push("phone")
+    globalChecks.push({
+      id: "profile_completeness",
+      category: "Contact Profile",
+      label: "Profile completeness",
+      status: profileMissing.length === 0 ? "ok" : profileMissing.length <= 1 ? "warning" : "error",
+      detail: profileMissing.length === 0
+        ? "All key fields present (DOB, citizenship, phone)"
+        : `Missing: ${profileMissing.join(", ")}`,
+    })
+
+    // ── 9. Stuck service deliveries (>7 days unchanged) ──
+    const now = new Date()
+    const stuckSDs = services.filter(sd => {
+      if (sd.status !== "active") return false
+      if (!sd.updated_at) return false
+      const daysSince = (now.getTime() - new Date(sd.updated_at).getTime()) / (1000 * 60 * 60 * 24)
+      return daysSince > 7
+    })
+    if (stuckSDs.length > 0) {
+      globalChecks.push({
+        id: "stuck_services",
+        category: "Services",
+        label: "Stuck services",
+        status: "warning",
+        detail: `${stuckSDs.length} active service(s) unchanged for >7 days: ${stuckSDs.map(s => s.service_name || s.service_type).join(", ")}`,
+      })
+    }
+
+    // ── 10. Portal login recency ──
+    if (authUser) {
+      if (!authUser.last_sign_in_at) {
+        globalChecks.push({
+          id: "portal_login",
+          category: "Portal",
+          label: "Portal login",
+          status: "warning",
+          detail: "Auth user exists but has never logged in",
+        })
+      } else {
+        const daysSinceLogin = (now.getTime() - new Date(authUser.last_sign_in_at).getTime()) / (1000 * 60 * 60 * 24)
+        if (daysSinceLogin > 30) {
+          globalChecks.push({
+            id: "portal_login",
+            category: "Portal",
+            label: "Portal login",
+            status: "info",
+            detail: `Last login ${Math.round(daysSinceLogin)} days ago (${authUser.last_sign_in_at.split("T")[0]})`,
+          })
+        }
+      }
+    }
+
     // ═══════════════════════════════════════
     // PER-ACCOUNT CHECKS
     // ═══════════════════════════════════════
@@ -946,24 +1003,9 @@ export async function GET(req: NextRequest) {
           acctChecks.push({
             id: `portal_transition_${acct.id.slice(0, 8)}`,
             category: "Portal",
-            label: "Portal transition",
+            label: "Portal transition needed",
             status: "warning",
-            detail: "Active Client account without portal — needs transition",
-            fix: {
-              action: "run_portal_transition",
-              label: "Run portal transition",
-              params: { account_id: acct.id },
-              description: "Runs full portal transition: Drive scan, document processing, auto-create OA/Lease/MSA, SDs, deadlines, auth user, portal flags.",
-              impact: [
-                "Drive files scanned and processed (OCR + classify)",
-                "OA, Lease, Renewal MSA auto-created if missing",
-                "Service deliveries created (Formation, EIN, ITIN, Renewal, CMRA)",
-                "Deadlines created (Annual Report, RA Renewal)",
-                "Portal flags set (portal_account=true, portal_tier=active)",
-                "Auth user created (does NOT send email — send separately)",
-              ],
-              risk: "high",
-            },
+            detail: `Active Client account without portal — run Portal Transition from the Account page (/accounts/${acct.id})`,
           })
         }
       } else if (acct.portal_account) {
@@ -1206,28 +1248,6 @@ export async function POST(req: NextRequest) {
           detail: "activate-service executed",
           side_effects: ["Check CRM for new account, SDs, portal user, invoice"],
           result,
-        })
-      }
-
-      case "run_portal_transition": {
-        const { account_id } = params as { account_id: string }
-        // Portal transition needs session auth — redirect to account page
-        const { data: transContact } = await supabaseAdmin
-          .from("account_contacts")
-          .select("contact_id")
-          .eq("account_id", account_id)
-          .limit(1)
-          .single()
-
-        if (!transContact) return NextResponse.json({ error: "No contact linked to account" }, { status: 400 })
-
-        // Portal transition needs auth — call directly with supabaseAdmin
-        // Since this is internal, we'll replicate the minimal transition call
-        return NextResponse.json({
-          success: false,
-          detail: "Portal transition must be run from the Account page (uses session auth). Navigate to the account and click 'Portal Transition'.",
-          side_effects: [],
-          redirect: `/accounts/${account_id}`,
         })
       }
 

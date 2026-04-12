@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   X, Loader2, CheckCircle2, AlertCircle, XCircle, Info,
-  RefreshCw, Link2, ChevronDown, ChevronRight,
+  RefreshCw, ChevronDown, ChevronRight, Stethoscope,
   ShieldAlert, ShieldCheck, Shield, Building2, Unlink, Upload, FileText,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -476,7 +476,14 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
                     : check.fix.label}
                 </button>
               ) : (
-                <div className="flex items-center gap-2">
+                <div className="space-y-2">
+                  {check.fix.risk === 'high' && (
+                    <div className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 px-2.5 py-1.5 rounded-lg">
+                      <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                      <span>High-risk action — may send emails or change client portal access. Verify before confirming.</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
@@ -519,6 +526,7 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
                   >
                     Cancel
                   </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -534,9 +542,9 @@ export function ChainAuditDialog({ open, onClose, contactId, contactName }: Prop
         {/* Header */}
         <div className="sticky top-0 z-10 bg-white border-b px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link2 className="h-5 w-5 text-violet-600" />
+            <Stethoscope className="h-5 w-5 text-violet-600" />
             <div>
-              <h2 className="text-lg font-semibold">Client Chain Audit</h2>
+              <h2 className="text-lg font-semibold">Lifecycle Audit</h2>
               <p className="text-sm text-zinc-500">{contactName}</p>
             </div>
           </div>
