@@ -108,8 +108,8 @@ export async function publishOffer(
 
   const subject = emailType === "portal_access"
     ? lang === "it"
-      ? "Il tuo Portale Clienti — Tony Durante LLC"
-      : "Your Client Portal — Tony Durante LLC"
+      ? "La tua Offerta Consulenziale — Tony Durante LLC"
+      : "Your Consulting Proposal — Tony Durante LLC"
     : lang === "it"
       ? "Nuovo documento disponibile — Tony Durante LLC"
       : "New document available — Tony Durante LLC"
@@ -120,8 +120,8 @@ export async function publishOffer(
 
   const plainText = emailType === "portal_access"
     ? lang === "it"
-      ? `Ciao ${firstName}, il tuo portale clienti è pronto. Accedi: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
-      : `Hi ${firstName}, your client portal is ready. Log in: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
+      ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Accedi al portale per consultarla: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
+      : `Hi ${firstName}, your consulting proposal is ready. Log in to review it: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
     : lang === "it"
       ? `Ciao ${firstName}, un nuovo documento è disponibile nel tuo portale: ${portalLoginUrl}`
       : `Hi ${firstName}, a new document is available in your portal: ${portalLoginUrl}`
@@ -205,7 +205,7 @@ export async function publishOffer(
         fn: async () => {
           await supabaseAdmin
             .from("offers")
-            .update({ status: "published" })
+            .update({ status: "sent" })
             .eq("token", token)
         },
       },
@@ -215,7 +215,7 @@ export async function publishOffer(
           if (offer.lead_id) {
             await supabaseAdmin
               .from("leads")
-              .update({ offer_status: "Published" })
+              .update({ offer_status: "Sent", status: "Offer Sent" })
               .eq("id", offer.lead_id)
           }
         },
@@ -295,12 +295,12 @@ function buildPortalAccessEmail(
   if (lang === "it") {
     return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">Il tuo Portale Clienti</h1>
+    <h1 style="color: white; margin: 0; font-size: 22px;">La tua Offerta Consulenziale</h1>
     <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
     <p>Ciao ${firstName},</p>
-    <p>Abbiamo preparato il tuo portale clienti dedicato. Al suo interno troverai un nuovo documento pronto per la tua revisione.</p>
+    <p>Abbiamo preparato la tua offerta consulenziale personalizzata. Accedi al portale per consultarla, e se tutto è in linea con le tue aspettative, potrai firmare il contratto direttamente online.</p>
     <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <table style="width: 100%; border-collapse: collapse;">
         <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Portale</td><td style="padding: 4px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
@@ -324,12 +324,12 @@ function buildPortalAccessEmail(
 
   return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <div style="background: #1e3a5f; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-    <h1 style="color: white; margin: 0; font-size: 22px;">Your Client Portal</h1>
+    <h1 style="color: white; margin: 0; font-size: 22px;">Your Consulting Proposal</h1>
     <p style="color: #93c5fd; margin: 4px 0 0;">Tony Durante LLC</p>
   </div>
   <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
     <p>Hi ${firstName},</p>
-    <p>Your dedicated client portal is ready. Inside you will find a new document available for your review.</p>
+    <p>We have prepared your personalized consulting proposal. Log in to your portal to review it, and if everything meets your expectations, you can sign the contract directly online.</p>
     <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
       <table style="width: 100%; border-collapse: collapse;">
         <tr><td style="padding: 4px 8px; color: #6b7280; font-size: 13px;">Portal</td><td style="padding: 4px 8px; font-weight: bold;"><a href="${portalUrl}" style="color: #2563eb;">${portalUrl}</a></td></tr>
