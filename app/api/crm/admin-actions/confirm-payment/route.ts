@@ -87,11 +87,32 @@ export async function POST(request: Request) {
     // 2. Get offer (may not exist for legacy leads)
     const { data: offer } = await supabaseAdmin
       .from("offers")
-      .select("token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name")
+      .select("token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services")
       .eq("lead_id", lead_id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle()
+
+    // 2b. Preflight: Tax Return requires explicit service_context
+    if (contract_type === "tax_return") {
+      if (!offer) {
+        // Mode 2 (no offer) — block tax_return until an offer with explicit context exists
+        return NextResponse.json(
+          { error: "Tax Return payment requires an offer with explicit Business or Individual classification. Create an offer first, then confirm payment." },
+          { status: 400 },
+        )
+      }
+      const offerServices = Array.isArray(offer.services) ? offer.services as Array<{ service_context?: string }> : []
+      const hasExplicitContext = offerServices.some(
+        s => s.service_context === "business" || s.service_context === "individual"
+      )
+      if (!hasExplicitContext) {
+        return NextResponse.json(
+          { error: "This Tax Return offer requires an explicit Business or Individual classification before payment can be confirmed. Update the offer's service context first." },
+          { status: 400 },
+        )
+      }
+    }
 
     // 3. Handle pending_activation with pessimistic lock
     let activationId: string | null = null

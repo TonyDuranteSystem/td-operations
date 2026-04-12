@@ -53,13 +53,14 @@ const INDIVIDUAL_SERVICE_TYPES = new Set([
 /**
  * Resolve service_context for each pipeline in the offer.
  * Returns true if ANY pipeline is business-context.
- * Tax Return: reads service_context from offer.services[] JSONB. Defaults to 'business' with warning for legacy offers.
+ * Returns 'ambiguous' if Tax Return has no explicit service_context (caller must handle).
+ * Tax Return: reads service_context from offer.services[] JSONB. Refuses to guess for safety.
  */
 function hasBusinessContextPipeline(
   pipelines: string[],
   offerServices: Array<{ pipeline_type?: string; service_context?: string }> | null,
   offerToken: string,
-): boolean {
+): boolean | 'ambiguous' {
   for (const pipeline of pipelines) {
     if (BUSINESS_SERVICE_TYPES.has(pipeline)) return true
     if (INDIVIDUAL_SERVICE_TYPES.has(pipeline)) continue
@@ -72,9 +73,9 @@ function hasBusinessContextPipeline(
       const ctx = svc?.service_context
       if (ctx === 'individual') continue
       if (ctx === 'business') return true
-      // Legacy fallback: no service_context set — default to business + log warning
-      console.warn(`[activate-service] Tax Return missing service_context on offer ${offerToken}, defaulting to business`)
-      return true
+      // No explicit context — refuse to guess, return ambiguous for caller to handle
+      console.warn(`[activate-service] Tax Return missing service_context on offer ${offerToken} — blocking activation`)
+      return 'ambiguous'
     }
 
     // Unknown service type — treat as business (safer: creates account)
@@ -311,9 +312,18 @@ export async function POST(req: NextRequest) {
       // For other contract types: check if any pipeline is business-context
       const offerPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
       const offerServices = Array.isArray(offer?.services) ? offer.services : null
-      const needsBusinessAccount = hasBusinessContextPipeline(offerPipelines, offerServices, activation.offer_token)
+      const businessContextResult = hasBusinessContextPipeline(offerPipelines, offerServices, activation.offer_token)
 
-      if (needsBusinessAccount) {
+      if (businessContextResult === 'ambiguous') {
+        // Tax Return with no explicit service_context — refuse to proceed
+        return NextResponse.json({
+          ok: false,
+          error: "Tax Return activation requires explicit service_context (business or individual) on the offer. Update the offer's services[] before retrying activation.",
+          steps,
+        }, { status: 400 })
+      }
+
+      if (businessContextResult === true) {
         // Standalone business service (tax return, EIN, banking, closure, etc.)
         // The LLC exists in the real world but not in our system — create a One-Time account
         const accountResult = await ensureMinimalAccount({
