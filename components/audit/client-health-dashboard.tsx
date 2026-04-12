@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { retryActivation, repairSdContactId } from '@/app/(dashboard)/client-health/actions'
+import { retryActivation, repairSdContactId, repairAllSdContactIds, type BatchRepairResult } from '@/app/(dashboard)/client-health/actions'
 import { useRouter } from 'next/navigation'
 
 // ─── Types ───
@@ -95,6 +95,9 @@ export function ClientHealthDashboard({
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<'stuck' | 'orphan_accounts' | 'wrong_type' | 'orphan_contacts' | 'sd_contact'>('stuck')
   const [fixingId, setFixingId] = useState<string | null>(null)
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [batchConfirm, setBatchConfirm] = useState(false)
+  const [batchResult, setBatchResult] = useState<BatchRepairResult | null>(null)
 
   const tabs = [
     { key: 'stuck' as const, label: 'Stuck Activations', count: stats.stuck_activations, color: 'text-red-600' },
@@ -308,10 +311,88 @@ export function ClientHealthDashboard({
       {/* ─── SD Missing Contact ─── */}
       {activeTab === 'sd_contact' && (
         <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-700 flex items-center gap-2">
-            <Wrench className="h-4 w-4 text-purple-500" />
-            Active SDs with missing contact_id — need repair
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-zinc-700 flex items-center gap-2">
+              <Wrench className="h-4 w-4 text-purple-500" />
+              Active SDs with missing contact_id — need repair
+            </h2>
+            {sdMissingContact.length > 0 && !batchResult && (
+              <button
+                onClick={() => setBatchConfirm(true)}
+                disabled={batchRunning}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
+              >
+                {batchRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
+                {batchRunning ? 'Repairing...' : 'Repair All'}
+              </button>
+            )}
+          </div>
+
+          {/* Batch confirmation */}
+          {batchConfirm && !batchRunning && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <p className="text-sm font-medium text-amber-900 mb-2">Confirm batch repair</p>
+              <p className="text-xs text-amber-800 mb-3">
+                This will set contact_id on ~{sdMissingContact.reduce((sum, i) => sum + i.missing_count, 0)} active SDs across {sdMissingContact.length} accounts.
+                Each account&apos;s SDs will be linked to its primary contact from account_contacts.
+                Accounts without a linked contact will be skipped.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => {
+                    setBatchConfirm(false)
+                    setBatchRunning(true)
+                    try {
+                      const result = await repairAllSdContactIds()
+                      setBatchResult(result)
+                      toast.success(`Fixed ${result.totalFixed} SDs across ${result.accountsProcessed} accounts`)
+                      router.refresh()
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Batch repair failed')
+                    } finally {
+                      setBatchRunning(false)
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-purple-600 text-white hover:bg-purple-700"
+                >
+                  Confirm: Repair All
+                </button>
+                <button
+                  onClick={() => setBatchConfirm(false)}
+                  className="px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Batch result summary */}
+          {batchResult && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <p className="text-sm font-medium text-green-900 mb-2">Batch repair complete</p>
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <div className="text-lg font-bold text-green-700">{batchResult.totalFixed}</div>
+                  <div className="text-[10px] text-green-600">SDs fixed</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-green-700">{batchResult.accountsProcessed}</div>
+                  <div className="text-[10px] text-green-600">accounts processed</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-amber-600">{batchResult.accountsSkipped}</div>
+                  <div className="text-[10px] text-amber-600">skipped (no contact)</div>
+                </div>
+              </div>
+              {batchResult.errors.length > 0 && (
+                <div className="mt-3 text-xs text-red-700">
+                  {batchResult.errors.length} error(s): {batchResult.errors.map(e => e.accountId.slice(0, 8)).join(', ')}
+                </div>
+              )}
+            </div>
+          )}
+
           {sdMissingContact.length === 0 ? (
             <div className="p-8 text-center text-sm text-zinc-400 bg-zinc-50 rounded-lg">
               <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-400" />

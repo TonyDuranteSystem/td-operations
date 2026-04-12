@@ -102,6 +102,109 @@ export async function repairSdContactId(
   }
 }
 
+// ─── Batch Repair All SD Contact Links ────────────────────
+
+export interface BatchRepairResult {
+  totalFixed: number
+  accountsProcessed: number
+  accountsSkipped: number
+  errors: Array<{ accountId: string; error: string }>
+}
+
+export async function repairAllSdContactIds(): Promise<BatchRepairResult> {
+  // 1. Find all accounts with broken SDs
+  const { data: brokenAccounts } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('account_id')
+    .is('contact_id', null)
+    .not('account_id', 'is', null)
+    .eq('status', 'active')
+
+  if (!brokenAccounts || brokenAccounts.length === 0) {
+    revalidatePath('/client-health')
+    return { totalFixed: 0, accountsProcessed: 0, accountsSkipped: 0, errors: [] }
+  }
+
+  // Deduplicate account IDs
+  const uniqueAccountIds = Array.from(new Set(brokenAccounts.map(sd => sd.account_id as string)))
+
+  // 2. Fetch primary contacts for all accounts in one query
+  const { data: allLinks } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id, contact_id')
+    .in('account_id', uniqueAccountIds)
+
+  const contactMap = new Map<string, string>()
+  for (const link of allLinks ?? []) {
+    // First contact per account wins (same as per-account repair)
+    if (!contactMap.has(link.account_id)) {
+      contactMap.set(link.account_id, link.contact_id)
+    }
+  }
+
+  // 3. Process in batches of 10
+  let totalFixed = 0
+  let accountsProcessed = 0
+  let accountsSkipped = 0
+  const errors: Array<{ accountId: string; error: string }> = []
+
+  const BATCH_SIZE = 10
+  for (let i = 0; i < uniqueAccountIds.length; i += BATCH_SIZE) {
+    const batch = uniqueAccountIds.slice(i, i + BATCH_SIZE)
+
+    const results = await Promise.allSettled(
+      batch.map(async (accountId) => {
+        const contactId = contactMap.get(accountId)
+        if (!contactId) {
+          accountsSkipped++
+          return 0
+        }
+
+        const { data: broken } = await supabaseAdmin
+          .from('service_deliveries')
+          .select('id')
+          .eq('account_id', accountId)
+          .is('contact_id', null)
+          .eq('status', 'active')
+
+        if (!broken || broken.length === 0) return 0
+
+        const { error } = await supabaseAdmin
+          .from('service_deliveries')
+          .update({ contact_id: contactId, updated_at: new Date().toISOString() })
+          .eq('account_id', accountId)
+          .is('contact_id', null)
+          .eq('status', 'active')
+
+        if (error) throw new Error(error.message)
+        return broken.length
+      })
+    )
+
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j]
+      if (r.status === 'fulfilled') {
+        totalFixed += r.value
+        if (contactMap.has(batch[j])) accountsProcessed++
+      } else {
+        errors.push({ accountId: batch[j], error: r.reason?.message || 'Unknown error' })
+      }
+    }
+  }
+
+  // 4. Log to action_log
+  await supabaseAdmin.from('action_log').insert({
+    action_type: 'batch_repair',
+    table_name: 'service_deliveries',
+    record_id: 'batch',
+    summary: `Batch SD contact_id repair: ${totalFixed} SDs fixed across ${accountsProcessed} accounts (${accountsSkipped} skipped, ${errors.length} errors)`,
+    details: { totalFixed, accountsProcessed, accountsSkipped, errorCount: errors.length },
+  })
+
+  revalidatePath('/client-health')
+  return { totalFixed, accountsProcessed, accountsSkipped, errors }
+}
+
 // ─── Sync Portal Tier (3-way) ──────────────────────────────
 
 export async function syncPortalTier(
