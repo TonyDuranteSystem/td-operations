@@ -24,6 +24,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { ACCOUNT_STATUS } from "@/lib/constants"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -462,9 +463,9 @@ export async function advanceServiceDelivery(
 
       await supabaseAdmin
         .from("accounts")
-        .update({ status: "Inactive", portal_account: false, updated_at: new Date().toISOString() })
+        .update({ status: "Closed" satisfies (typeof ACCOUNT_STATUS)[number], portal_account: false, updated_at: new Date().toISOString() })
         .eq("id", delivery.account_id)
-      autoTriggers.push("Account → Inactive, portal deactivated")
+      autoTriggers.push("Account → Closed, portal deactivated")
 
       const { data: openTasks } = await supabaseAdmin
         .from("tasks")

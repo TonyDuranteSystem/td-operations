@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
+import { PAYMENT_STATUS } from "@/lib/constants"
 
 interface ConfirmPaymentBody {
   lead_id: string
@@ -275,7 +276,7 @@ export async function POST(request: Request) {
         amount_currency: currency,
         payment_method: payment_method || "wire",
         paid_date: payment_date || new Date().toISOString().split("T")[0],
-        status: "paid",
+        status: "Paid" satisfies (typeof PAYMENT_STATUS)[number],
         notes: [
           payment_reference ? `Ref: ${payment_reference}` : null,
           paid_by_name ? `Paid by: ${paid_by_name}` : null,
