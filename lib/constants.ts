@@ -91,11 +91,11 @@ export const DEAL_STAGE = [
 ] as const
 
 export const LEAD_STATUS = [
-  'New', 'Call Scheduled', 'Call Done', 'Offer Sent', 'Negotiating', 'Converted', 'Lost', 'Suspended',
+  'New', 'Call Scheduled', 'Call Done', 'Offer Sent', 'Negotiating', 'Paid', 'Converted', 'Lost', 'Suspended',
 ] as const
 
 export const PAYMENT_STATUS = [
-  'Pending', 'Paid', 'Overdue', 'Delinquent', 'Waived', 'Refunded',
+  'Pending', 'Paid', 'Overdue', 'Delinquent', 'Waived', 'Refunded', 'Not Invoiced', 'Cancelled',
 ] as const
 
 export const PAYMENT_PERIOD = [
@@ -120,7 +120,8 @@ export const TAX_RETURN_TYPE = ['SMLLC', 'MMLLC', 'Corp', 'LSE'] as const
 export const TAX_RETURN_STATUS = [
   'Payment Pending', 'Link Sent - Awaiting Data', 'Data Received',
   'Sent to India', 'Extension Filed', 'TR Completed - Awaiting Signature',
-  'TR Filed',
+  'TR Filed', 'Paid - Not Started', 'Activated - Need Link', 'Not Invoiced',
+  'Extension Requested',
 ] as const
 
 export const CONVERSATION_CHANNEL = [

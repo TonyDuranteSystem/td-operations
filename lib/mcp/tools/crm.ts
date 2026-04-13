@@ -6,6 +6,32 @@
 import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
 import { upsertCompany, upsertContact, associateContactToCompany } from "@/lib/hubspot"
 import { logAction } from "@/lib/mcp/action-log"
+import {
+  ACCOUNT_STATUS, PAYMENT_STATUS, TASK_STATUS,
+  LEAD_STATUS, DEAL_STAGE, TAX_RETURN_STATUS,
+} from "@/lib/constants"
+
+/** Status validation map — ENUM-backed tables only (first pass). */
+export const STATUS_VALIDATION_MAP: Record<string, { field: string; allowed: readonly string[] }> = {
+  accounts: { field: "status", allowed: ACCOUNT_STATUS },
+  payments: { field: "status", allowed: PAYMENT_STATUS },
+  tasks: { field: "status", allowed: TASK_STATUS },
+  leads: { field: "status", allowed: LEAD_STATUS },
+  deals: { field: "stage", allowed: DEAL_STAGE },
+  tax_returns: { field: "status", allowed: TAX_RETURN_STATUS },
+}
+
+/**
+ * Validate a status/stage field value before writing to a CRM table.
+ * Returns null if valid or unmapped, error string if invalid.
+ */
+export function validateStatusField(table: string, updates: Record<string, unknown>): string | null {
+  const rule = STATUS_VALIDATION_MAP[table]
+  if (!rule || !(rule.field in updates)) return null
+  const value = updates[rule.field] as string
+  if (rule.allowed.includes(value)) return null
+  return `Invalid ${rule.field} value "${value}" for ${table}. Allowed values: ${rule.allowed.join(", ")}`
+}
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
@@ -760,6 +786,12 @@ export function registerCrmTools(server: McpServer) {
     },
     async ({ table, id, updates }) => {
       try {
+        // ── Status field validation (ENUM-backed tables only) ──
+        const validationError = validateStatusField(table, updates)
+        if (validationError) {
+          return { content: [{ type: "text" as const, text: `❌ ${validationError}` }] }
+        }
+
         const { data, error } = await supabaseAdmin
           .from(table)
           .update({ ...updates, updated_at: new Date().toISOString() })
@@ -792,7 +824,7 @@ export function registerCrmTools(server: McpServer) {
 
         // Post-update hook: installment payment triggers
         let installmentMsg = ""
-        if (table === "payments" && updates.status === "paid") {
+        if (table === "payments" && updates.status === "Paid") {
           try {
             // Check if this is an installment payment
             const paymentType = data.payment_type as string | undefined
