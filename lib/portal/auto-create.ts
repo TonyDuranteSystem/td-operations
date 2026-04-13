@@ -130,8 +130,19 @@ async function createFromEmail(
   if (existingUser) {
     // User exists — resolve contact_id (prefer auth metadata, backfill from caller or DB)
     let resolvedContactId = existingUser.app_metadata?.contact_id || callerContactId
+
+    // Verify the contact still exists (may have been deleted during offer recreate)
+    if (resolvedContactId) {
+      const { data: contactExists } = await supabaseAdmin
+        .from('contacts')
+        .select('id')
+        .eq('id', resolvedContactId)
+        .maybeSingle()
+      if (!contactExists) resolvedContactId = undefined
+    }
+
     if (!resolvedContactId) {
-      // Last resort: look up contact by email
+      // Look up contact by email
       const { data: contactByEmail } = await supabaseAdmin
         .from('contacts')
         .select('id')
