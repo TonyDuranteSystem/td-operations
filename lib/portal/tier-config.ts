@@ -36,6 +36,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'profile',
     'guide',
     'documents',   // Full document upload
+    'pendingSignatures', // SS-4, OA, lease signing during formation
   ],
   active: [
     'dashboard',
