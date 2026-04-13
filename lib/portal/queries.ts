@@ -661,3 +661,63 @@ export async function getPortalActionItems(
 
   return { items, counts }
 }
+
+/**
+ * Get the company communication email for an account.
+ *
+ * Resolution order (deterministic):
+ * 1. accounts.communication_email — if set, use it
+ * 2. Primary contact fallback:
+ *    a. Contacts with role containing 'owner' (case-insensitive)
+ *    b. Among owners: highest ownership_pct, then earliest contacts.created_at
+ *    c. If no owners: same logic across all linked contacts
+ *
+ * Returns null if no contacts are linked.
+ */
+export async function getCompanyEmail(accountId: string): Promise<string | null> {
+  // Step 1: Check communication_email on the account
+  const { data: account } = await supabaseAdmin
+    .from('accounts')
+    .select('communication_email')
+    .eq('id', accountId)
+    .single()
+
+  if (account?.communication_email) {
+    return account.communication_email
+  }
+
+  // Step 2: Deterministic primary contact fallback
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('role, ownership_pct, contacts(email, created_at)')
+    .eq('account_id', accountId)
+
+  if (!links || links.length === 0) return null
+
+  type ContactLink = {
+    role: string | null
+    ownership_pct: number | null
+    contacts: { email: string | null; created_at: string | null } | null
+  }
+
+  const rows = (links as unknown as ContactLink[]).filter(l => l.contacts?.email)
+
+  if (rows.length === 0) return null
+
+  // Sort: owners first, then by ownership_pct desc, then by created_at asc
+  const sorted = [...rows].sort((a, b) => {
+    const aIsOwner = a.role?.toLowerCase().includes('owner') ? 1 : 0
+    const bIsOwner = b.role?.toLowerCase().includes('owner') ? 1 : 0
+    if (bIsOwner !== aIsOwner) return bIsOwner - aIsOwner
+
+    const aPct = a.ownership_pct ?? 0
+    const bPct = b.ownership_pct ?? 0
+    if (bPct !== aPct) return bPct - aPct
+
+    const aDate = a.contacts?.created_at ?? '9999'
+    const bDate = b.contacts?.created_at ?? '9999'
+    return aDate.localeCompare(bDate)
+  })
+
+  return sorted[0].contacts!.email
+}

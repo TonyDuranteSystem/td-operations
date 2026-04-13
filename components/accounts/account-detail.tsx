@@ -747,6 +747,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
+          <EditableField icon={Mail} label="Business Email" value={account.communication_email ?? ''} onSave={makeAccountSaver('communication_email')} />
           <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
           <EditableField icon={Shield} label="Registered Agent" value={account.registered_agent ?? ''} onSave={makeAccountSaver('registered_agent')} />
           <EditableField icon={Calendar} label="RA Renewal" value={account.ra_renewal_date ?? ''} type="date" onSave={makeAccountSaver('ra_renewal_date')} />

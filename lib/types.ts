@@ -88,6 +88,7 @@ export interface Account {
   installment_1_currency: string | null
   installment_2_amount: number | null
   installment_2_currency: string | null
+  communication_email: string | null
   created_at: string
   updated_at: string
 }

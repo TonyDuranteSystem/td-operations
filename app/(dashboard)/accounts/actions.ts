@@ -18,6 +18,7 @@ export async function updateAccountField(
     'registered_agent', 'ra_renewal_date', 'notes',
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
+    'communication_email',
   ]
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }

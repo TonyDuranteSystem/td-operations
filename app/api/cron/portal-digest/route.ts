@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailPost } from '@/lib/gmail'
 import { getGreeting } from '@/lib/greeting'
 import { PORTAL_BASE_URL } from '@/lib/config'
+import { getCompanyEmail } from '@/lib/portal/queries'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
 
@@ -109,27 +110,30 @@ export async function GET(request: NextRequest) {
           .single()
         if (!acctCheck?.portal_account) continue
 
-        // Get primary contact
+        // Get company email (communication_email or primary contact fallback)
+        const companyEmail = await getCompanyEmail(id)
+        if (!companyEmail) continue
+        contactEmail = companyEmail
+
+        // Still need contact details for greeting personalization
         const { data: links } = await supabaseAdmin
           .from('account_contacts')
           .select('contact_id')
           .eq('account_id', id)
           .limit(1)
 
-        if (!links?.length) continue
+        if (links?.length) {
+          const { data: contact } = await supabaseAdmin
+            .from('contacts')
+            .select('full_name, gender, language')
+            .eq('id', links[0].contact_id)
+            .single()
 
-        const { data: contact } = await supabaseAdmin
-          .from('contacts')
-          .select('email, full_name, gender, language')
-          .eq('id', links[0].contact_id)
-          .single()
-
-        if (!contact?.email) continue
-        contactEmail = contact.email
-        _contactName = contact.full_name
-        firstName = contact.full_name?.split(' ')[0] || null
-        gender = contact.gender
-        language = contact.language
+          _contactName = contact?.full_name ?? null
+          firstName = contact?.full_name?.split(' ')[0] || null
+          gender = contact?.gender ?? null
+          language = contact?.language ?? null
+        }
 
         const { data: acct } = await supabaseAdmin
           .from('accounts')
