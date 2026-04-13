@@ -295,6 +295,7 @@ export async function POST(req: NextRequest) {
 
     // ─── STEP 1.5: Ensure Minimal Account (AUTO, formation/onboarding) ──
     let autoAccountId: string | null = offer?.account_id || null
+    let isStandaloneBusinessTR = false
 
     if (!autoAccountId && contactId && (contractType === "formation" || contractType === "onboarding")) {
       const accountResult = await ensureMinimalAccount({
@@ -337,25 +338,36 @@ export async function POST(req: NextRequest) {
       }
 
       if (businessContextResult === true) {
-        // Standalone business service (tax return, EIN, banking, closure, etc.)
-        // The LLC exists in the real world but not in our system — create a One-Time account
-        const accountResult = await ensureMinimalAccount({
-          contactId,
-          clientName: activation.client_name,
-          contractType,
-          offerToken: activation.offer_token,
-          leadId: leadId || undefined,
-          isStandaloneBusiness: true,
-        })
-        if (accountResult.accountId) {
-          autoAccountId = accountResult.accountId
+        if (contractType === "tax_return") {
+          // Standalone BUSINESS Tax Return: defer account creation to company_info intake.
+          // No placeholder account — SD created with contact_id only, account_id=null.
+          isStandaloneBusinessTR = true
           steps.push({
             step: "ensure_account",
-            status: accountResult.created ? "created" : "existing",
-            detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created One-Time" : "already linked"})`,
+            status: "skipped",
+            detail: "Business Tax Return — account deferred to company_info intake",
           })
         } else {
-          steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
+          // Other standalone business services (EIN, banking, closure, etc.)
+          // The LLC exists in the real world but not in our system — create a One-Time account
+          const accountResult = await ensureMinimalAccount({
+            contactId,
+            clientName: activation.client_name,
+            contractType,
+            offerToken: activation.offer_token,
+            leadId: leadId || undefined,
+            isStandaloneBusiness: true,
+          })
+          if (accountResult.accountId) {
+            autoAccountId = accountResult.accountId
+            steps.push({
+              step: "ensure_account",
+              status: accountResult.created ? "created" : "existing",
+              detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created One-Time" : "already linked"})`,
+            })
+          } else {
+            steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
+          }
         }
       } else if (leadId) {
         // Individual-context service — try to resolve from lead (legacy fallback)
@@ -446,15 +458,29 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          const stage = firstStage.get(pipeline) || "Pending"
+          // Tax Return has context-dependent entry points — never use generic firstStage
+          let stage: string
+          let explicitStageOrder: number | null = null
+          if (pipeline === "Tax Return") {
+            if (isStandaloneBusinessTR) {
+              stage = "Company Data Pending"
+              explicitStageOrder = -1
+            } else {
+              stage = "1st Installment Paid"
+            }
+          } else {
+            stage = firstStage.get(pipeline) || "Pending"
+          }
+
           const { data: sd, error: sdErr } = await supabase
             .from("service_deliveries")
             .insert({
               service_type: pipeline,
               service_name: `${pipeline} - ${activation.client_name}`,
-              account_id: accountId,
+              account_id: isStandaloneBusinessTR && pipeline === "Tax Return" ? null : accountId,
               contact_id: contactId,
               stage: stage,
+              stage_order: explicitStageOrder,
               status: "active",
               assigned_to: "Luca",
               notes: `Auto-created from offer ${activation.offer_token}`,

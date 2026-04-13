@@ -24,7 +24,7 @@ import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
  * stored in the "onboarding-uploads" bucket (see wizard-upload/route.ts:35).
  * Instead of a brittle whitelist of field names, detect any value that looks like a storage path. */
 function extractUploadPaths(data: Record<string, unknown>): string[] {
-  const WIZARD_PREFIXES = ['formation/', 'onboarding/', 'tax/', 'tax_return/', 'banking/', 'banking_payset/', 'banking_relay/', 'itin/', 'closure/']
+  const WIZARD_PREFIXES = ['formation/', 'onboarding/', 'tax/', 'tax_return/', 'banking/', 'banking_payset/', 'banking_relay/', 'itin/', 'closure/', 'company_info/']
   const paths: string[] = []
   for (const val of Object.values(data)) {
     if (typeof val === 'string' && WIZARD_PREFIXES.some(p => val.startsWith(p))) {
@@ -41,6 +41,7 @@ function getSubmissionTable(wizardType: string): string | null {
     onboarding: 'onboarding_submissions',
     tax: 'tax_return_submissions',
     tax_return: 'tax_return_submissions',
+    company_info: 'company_info_submissions',
   }
   return map[wizardType] || null
 }
@@ -52,6 +53,7 @@ function getJobType(wizardType: string): string | null {
     onboarding: 'onboarding_setup',
     tax: 'tax_form_setup',
     tax_return: 'tax_form_setup',
+    company_info: 'tax_return_intake',
   }
   return map[wizardType] || null
 }
@@ -85,26 +87,30 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 2. MARK WIZARD_PROGRESS AS SUBMITTED ───
-    if (progress_id) {
-      await supabaseAdmin
-        .from('wizard_progress')
-        .update({
-          data,
-          status: 'submitted',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', progress_id)
-    } else {
-      await supabaseAdmin
-        .from('wizard_progress')
-        .insert({
-          wizard_type,
-          data,
-          account_id: account_id || null,
-          contact_id: contact_id || null,
-          status: 'submitted',
-          current_step: 99,
-        })
+    // For company_info: deferred until AFTER job enqueue succeeds (scoped reorder).
+    // All other wizard types: mark submitted immediately (existing behavior).
+    if (wizard_type !== 'company_info') {
+      if (progress_id) {
+        await supabaseAdmin
+          .from('wizard_progress')
+          .update({
+            data,
+            status: 'submitted',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', progress_id)
+      } else {
+        await supabaseAdmin
+          .from('wizard_progress')
+          .insert({
+            wizard_type,
+            data,
+            account_id: account_id || null,
+            contact_id: contact_id || null,
+            status: 'submitted',
+            current_step: 99,
+          })
+      }
     }
 
     // ─── 3. EXTRACT CLIENT + COMPANY NAMES ───
@@ -373,6 +379,32 @@ export async function POST(req: NextRequest) {
 
       jobId = job.id
       console.warn(`[wizard-submit] Enqueued ${jobType} job ${jobId} for ${clientName}`)
+
+      // company_info scoped reorder: mark wizard_progress as submitted AFTER job enqueue succeeds.
+      // If enqueue failed (threw above), this never runs — portal shows company_info wizard for retry.
+      if (wizard_type === 'company_info') {
+        if (progress_id) {
+          await supabaseAdmin
+            .from('wizard_progress')
+            .update({
+              data,
+              status: 'submitted',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', progress_id)
+        } else {
+          await supabaseAdmin
+            .from('wizard_progress')
+            .insert({
+              wizard_type,
+              data,
+              account_id: account_id || null,
+              contact_id: contact_id || null,
+              status: 'submitted',
+              current_step: 99,
+            })
+        }
+      }
     }
 
     // ─── 6. DIRECT HANDLER EXECUTION (for tax jobs) ───

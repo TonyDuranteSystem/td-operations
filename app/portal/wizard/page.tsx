@@ -15,7 +15,7 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 
-const VALID_WIZARD_TYPES = ['onboarding', 'formation', 'banking', 'banking_payset', 'banking_relay', 'closure', 'itin', 'tax'] as const
+const VALID_WIZARD_TYPES = ['onboarding', 'formation', 'banking', 'banking_payset', 'banking_relay', 'closure', 'itin', 'tax', 'company_info'] as const
 type WizardType = typeof VALID_WIZARD_TYPES[number]
 
 function isValidWizardType(type: string | undefined): type is WizardType {
@@ -95,8 +95,8 @@ export default async function WizardPage({
   if (!forcedType && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
     const sdQuery = accountId
-      ? supabaseAdmin.from('service_deliveries').select('service_type').eq('account_id', accountId).in('status', ['active']).limit(10)
-      : supabaseAdmin.from('service_deliveries').select('service_type').eq('contact_id', contactId).in('status', ['active']).limit(10)
+      ? supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('account_id', accountId).in('status', ['active']).limit(10)
+      : supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('contact_id', contactId).in('status', ['active']).limit(10)
 
     const { data: sds } = await sdQuery
 
@@ -129,7 +129,14 @@ export default async function WizardPage({
       pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
     }
     if (types.includes('Tax Return')) {
-      pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: 'Tax Return' })
+      // Stage-based gating for standalone business Tax Return:
+      // If SD is at "Company Data Pending", show company_info wizard instead of tax wizard.
+      const taxReturnSd = (sds || []).find(s => s.service_type === 'Tax Return')
+      if (taxReturnSd?.stage === 'Company Data Pending') {
+        pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType: 'Tax Return' })
+      } else {
+        pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: 'Tax Return' })
+      }
     }
 
     // If only one pending wizard, use it directly
@@ -287,6 +294,20 @@ export default async function WizardPage({
     submitted: allSubmittedTypes.has(w.type),
   }))
 
+  // Stage-based processing check: if company_info wizard was submitted but SD is still
+  // at "Company Data Pending", the tax_return_intake handler is processing (or failed).
+  // Show a processing message instead of the company_info form.
+  let companyInfoProcessing = false
+  if (wizardType === 'company_info') {
+    const ciProgressQuery = contactId
+      ? supabaseAdmin.from('wizard_progress').select('status').eq('contact_id', contactId).eq('wizard_type', 'company_info').eq('status', 'submitted').limit(1).maybeSingle()
+      : null
+    if (ciProgressQuery) {
+      const { data: ciProgress } = await ciProgressQuery
+      if (ciProgress) companyInfoProcessing = true
+    }
+  }
+
   return (
     <div className="px-4 py-6 lg:px-8">
       {/* Show form selector when multiple wizards are pending (exclude banking — handled by provider picker) */}
@@ -355,8 +376,22 @@ export default async function WizardPage({
           </div>
         </>
       )}
-      {/* Don't render form when on banking picker page (no provider selected) */}
-      {wizardType !== 'banking' && (
+      {/* Company info processing state — handler running after company_info submitted */}
+      {companyInfoProcessing && (
+        <div className="flex flex-col items-center justify-center h-[40vh] text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4" />
+          <h2 className="text-lg font-semibold text-zinc-900 mb-2">
+            {locale === 'it' ? 'Stiamo configurando il tuo account...' : 'Setting up your account...'}
+          </h2>
+          <p className="text-sm text-zinc-500 max-w-md">
+            {locale === 'it'
+              ? 'Le informazioni della tua azienda sono state ricevute. Stiamo preparando tutto per la tua dichiarazione dei redditi. Questa pagina si aggiornerà automaticamente.'
+              : 'Your company information has been received. We are preparing everything for your Tax Return. This page will update automatically.'}
+          </p>
+        </div>
+      )}
+      {/* Don't render form when on banking picker page (no provider selected) or during company_info processing */}
+      {wizardType !== 'banking' && !companyInfoProcessing && (
         <WizardClient
           wizardType={wizardType}
           entityType={entityType}

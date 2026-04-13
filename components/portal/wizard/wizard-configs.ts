@@ -564,6 +564,55 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
   ],
 }
 
+// ─── COMPANY INFO (standalone business Tax Return intake) ──
+
+export const COMPANY_INFO_STEPS: WizardStep[] = [
+  { id: 'company', title: 'Company Information', titleIt: 'Informazioni Società', description: 'Your existing LLC details', descriptionIt: 'Dettagli della tua LLC esistente' },
+  { id: 'documents', title: 'Documents & Review', titleIt: 'Documenti e Revisione', description: 'Upload required documents', descriptionIt: 'Carica i documenti necessari' },
+]
+
+export const COMPANY_INFO_FIELDS: Record<string, FieldConfig[]> = {
+  company: [
+    { name: 'company_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
+    { name: 'state_of_formation', label: 'State of Formation', labelIt: 'Stato di Costituzione', type: 'select', required: true, options: [
+      { value: 'Alabama', label: 'Alabama' }, { value: 'Alaska', label: 'Alaska' },
+      { value: 'Arizona', label: 'Arizona' }, { value: 'Arkansas', label: 'Arkansas' },
+      { value: 'California', label: 'California' }, { value: 'Colorado', label: 'Colorado' },
+      { value: 'Connecticut', label: 'Connecticut' }, { value: 'Delaware', label: 'Delaware' },
+      { value: 'Florida', label: 'Florida' }, { value: 'Georgia', label: 'Georgia' },
+      { value: 'Hawaii', label: 'Hawaii' }, { value: 'Idaho', label: 'Idaho' },
+      { value: 'Illinois', label: 'Illinois' }, { value: 'Indiana', label: 'Indiana' },
+      { value: 'Iowa', label: 'Iowa' }, { value: 'Kansas', label: 'Kansas' },
+      { value: 'Kentucky', label: 'Kentucky' }, { value: 'Louisiana', label: 'Louisiana' },
+      { value: 'Maine', label: 'Maine' }, { value: 'Maryland', label: 'Maryland' },
+      { value: 'Massachusetts', label: 'Massachusetts' }, { value: 'Michigan', label: 'Michigan' },
+      { value: 'Minnesota', label: 'Minnesota' }, { value: 'Mississippi', label: 'Mississippi' },
+      { value: 'Missouri', label: 'Missouri' }, { value: 'Montana', label: 'Montana' },
+      { value: 'Nebraska', label: 'Nebraska' }, { value: 'Nevada', label: 'Nevada' },
+      { value: 'New Hampshire', label: 'New Hampshire' }, { value: 'New Jersey', label: 'New Jersey' },
+      { value: 'New Mexico', label: 'New Mexico' }, { value: 'New York', label: 'New York' },
+      { value: 'North Carolina', label: 'North Carolina' }, { value: 'North Dakota', label: 'North Dakota' },
+      { value: 'Ohio', label: 'Ohio' }, { value: 'Oklahoma', label: 'Oklahoma' },
+      { value: 'Oregon', label: 'Oregon' }, { value: 'Pennsylvania', label: 'Pennsylvania' },
+      { value: 'Rhode Island', label: 'Rhode Island' }, { value: 'South Carolina', label: 'South Carolina' },
+      { value: 'South Dakota', label: 'South Dakota' }, { value: 'Tennessee', label: 'Tennessee' },
+      { value: 'Texas', label: 'Texas' }, { value: 'Utah', label: 'Utah' },
+      { value: 'Vermont', label: 'Vermont' }, { value: 'Virginia', label: 'Virginia' },
+      { value: 'Washington', label: 'Washington' }, { value: 'West Virginia', label: 'West Virginia' },
+      { value: 'Wisconsin', label: 'Wisconsin' }, { value: 'Wyoming', label: 'Wyoming' },
+    ]},
+    { name: 'formation_date', label: 'Formation Date', labelIt: 'Data Costituzione', type: 'date', required: true },
+    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, hint: 'e.g. 30-1482516' },
+    { name: 'business_purpose', label: 'Business Activities', labelIt: 'Attività Aziendali', type: 'textarea', required: true },
+  ],
+  documents: [
+    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, hint: 'Clear photo of passport data page', hintIt: 'Foto chiara della pagina dati del passaporto' },
+    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
+    { name: 'ein_letter', label: 'EIN Letter (CP 575)', labelIt: 'Lettera EIN (CP 575)', type: 'file', required: false },
+    { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
+  ],
+}
+
 /**
  * Get the correct steps and fields based on wizard type and entity type.
  */
@@ -611,6 +660,11 @@ export function getWizardConfig(wizardType: string, entityType?: string, banking
       return {
         steps: BANKING_RELAY_STEPS,
         fields: BANKING_RELAY_FIELDS,
+      }
+    case 'company_info':
+      return {
+        steps: COMPANY_INFO_STEPS,
+        fields: COMPANY_INFO_FIELDS,
       }
     case 'closure':
     case 'company_closure':

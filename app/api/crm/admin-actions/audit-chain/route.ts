@@ -1427,7 +1427,19 @@ export async function POST(req: NextRequest) {
             .order("stage_order")
             .limit(1)
 
-          const firstStage = stages?.[0]
+          let firstStage = stages?.[0]
+
+          // Tax Return: intake stages (stage_order < 1) are only for the business activation path.
+          // Chain audit always starts at "1st Installment Paid".
+          if (pipeline === 'Tax Return' && firstStage && firstStage.stage_order < 1) {
+            const { data: trStages } = await supabaseAdmin
+              .from("pipeline_stages")
+              .select("stage_name, stage_order, auto_tasks")
+              .eq("service_type", "Tax Return")
+              .eq("stage_name", "1st Installment Paid")
+              .limit(1)
+            if (trStages?.[0]) firstStage = trStages[0]
+          }
 
           // Get account name for service_name
           const { data: acct } = await supabaseAdmin

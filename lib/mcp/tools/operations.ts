@@ -985,13 +985,25 @@ export function registerOperationsTools(server: McpServer) {
         }
 
         // Get first pipeline stage
-        const { data: firstStage } = await supabaseAdmin
+        let { data: firstStage } = await supabaseAdmin
           .from("pipeline_stages")
           .select("*")
           .eq("service_type", service_type)
           .order("stage_order")
           .limit(1)
           .single()
+
+        // Tax Return: intake stages (stage_order < 1) are only for the business activation path.
+        // Manual SD creation via sd_create always starts at "1st Installment Paid".
+        if (service_type === "Tax Return" && firstStage && firstStage.stage_order < 1) {
+          const { data: trDefault } = await supabaseAdmin
+            .from("pipeline_stages")
+            .select("*")
+            .eq("service_type", "Tax Return")
+            .eq("stage_name", "1st Installment Paid")
+            .single()
+          if (trDefault) firstStage = trDefault
+        }
 
         // Create delivery
         const { data: delivery, error: cErr } = await supabaseAdmin

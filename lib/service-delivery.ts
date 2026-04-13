@@ -82,6 +82,16 @@ export async function advanceServiceDelivery(
     if (!found) throw new Error(`Stage "${target_stage}" not found. Available: ${stages.map(s => s.stage_name).join(", ")}`)
     targetStage = found
   } else {
+    // Block auto-advance from intake-only stages (stage_order ≤ 0, explicitly set).
+    // These stages have context-dependent next steps that require explicit target_stage.
+    // SDs with stage_order=null (legacy) are unaffected — they resolve to currentOrder=0
+    // via the || 0 fallback, but delivery.stage_order is still null.
+    if (delivery.stage_order !== null && delivery.stage_order <= 0) {
+      throw new Error(
+        `Stage "${delivery.stage}" (order ${delivery.stage_order}) requires explicit target_stage for advancement. ` +
+        `Available: ${stages.map(s => s.stage_name).join(", ")}`
+      )
+    }
     const nextStage = stages.find(s => s.stage_order > currentOrder)
     if (!nextStage) throw new Error("Already at final stage")
     targetStage = nextStage

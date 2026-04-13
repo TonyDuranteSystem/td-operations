@@ -23,6 +23,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { uploadBinaryToDrive } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+import { createAccountFromWizard } from "@/lib/account-from-wizard"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateOnboardingData } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
@@ -177,88 +178,42 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // ─── 0c. CREATE ACCOUNT IF NOT PROVIDED ───
   if (!account_id && company_name && contact_id) {
     try {
-      // Check if account already exists for this company + contact
-      const { data: existingLinks } = await supabaseAdmin
-        .from("account_contacts")
-        .select("account_id, accounts!inner(id, company_name)")
-        .eq("contact_id", contact_id)
+      const acctResult = await createAccountFromWizard({
+        contactId: contact_id,
+        companyName: company_name,
+        entityType: p.entity_type,
+        stateOfFormation: state_of_formation,
+        ein: submitted.ein ? String(submitted.ein) : null,
+        formationDate: submitted.formation_date ? String(submitted.formation_date) : null,
+        accountType: "Client",
+      })
 
-      const existingAccount = existingLinks?.find(
-        (link: Record<string, unknown>) => {
-          const acct = link.accounts as { company_name?: string } | null
-          return acct?.company_name?.toLowerCase() === company_name.toLowerCase()
-        }
-      )
-
-      if (existingAccount) {
-        account_id = existingAccount.account_id as string
+      if (acctResult.error) {
+        result.steps.push(step("account_create", "error", acctResult.error))
+      } else if (!acctResult.created) {
+        account_id = acctResult.accountId
         result.steps.push(step("account_create", "skipped", `Already exists: ${account_id}`))
       } else {
-        // Determine entity type display name
-        const entityDisplay = p.entity_type === "MMLLC" ? "Multi-Member LLC" : "Single Member LLC"
+        account_id = acctResult.accountId
 
-        const { data: newAcct, error: acctErr } = await supabaseAdmin
-          .from("accounts")
-          .insert({
-            company_name,
-            entity_type: entityDisplay,
-            state_of_formation: state_of_formation || null,
-            account_type: "Client",
-            status: "Active",
-            ein_number: submitted.ein ? String(submitted.ein) : null,
-            formation_date: submitted.formation_date ? String(submitted.formation_date) : null,
-          })
-          .select("id")
-          .single()
+        result.steps.push(step("account_create", "ok", `${company_name} (${p.entity_type}) → linked to contact`))
 
-        if (acctErr || !newAcct) {
-          result.steps.push(step("account_create", "error", acctErr?.message || "insert failed"))
-        } else {
-          account_id = newAcct.id
-
-          // Link contact to account
-          const { error: linkErr } = await supabaseAdmin
-            .from("account_contacts")
-            .insert({ account_id: newAcct.id, contact_id, role: "Owner" })
-
-          if (linkErr && !linkErr.message.includes("duplicate")) {
-            result.steps.push(step("account_create", "ok", `${company_name} — link error: ${linkErr.message}`))
-          } else {
-            result.steps.push(step("account_create", "ok", `${company_name} (${p.entity_type}) → linked to contact`))
-          }
-
-          // Update submission with account_id for traceability
-          if (p.submission_id) {
-            await supabaseAdmin
-              .from("onboarding_submissions")
-              .update({ account_id })
-              .eq("id", p.submission_id)
-          }
-
-          // Update the job itself with account_id
+        // Update submission with account_id for traceability
+        if (p.submission_id) {
           await supabaseAdmin
-            .from("job_queue")
+            .from("onboarding_submissions")
             .update({ account_id })
-            .eq("id", job.id)
+            .eq("id", p.submission_id)
+        }
 
-          // Backfill account_id on contact-only invoices (created at signing, before account existed)
-          if (contact_id) {
-            const { count: backfilledInv } = await supabaseAdmin
-              .from("client_invoices")
-              .update({ account_id, updated_at: new Date().toISOString() })
-              .eq("contact_id", contact_id)
-              .is("account_id", null)
+        // Update the job itself with account_id
+        await supabaseAdmin
+          .from("job_queue")
+          .update({ account_id })
+          .eq("id", job.id)
 
-            const { count: backfilledPay } = await supabaseAdmin
-              .from("payments")
-              .update({ account_id, updated_at: new Date().toISOString() })
-              .eq("contact_id", contact_id)
-              .is("account_id", null)
-
-            if ((backfilledInv ?? 0) > 0 || (backfilledPay ?? 0) > 0) {
-              result.steps.push(step("invoice_backfill", "ok", `Backfilled account_id on ${backfilledInv ?? 0} invoices, ${backfilledPay ?? 0} payments`))
-            }
-          }
+        if (acctResult.backfilled.invoices > 0 || acctResult.backfilled.payments > 0) {
+          result.steps.push(step("invoice_backfill", "ok", `Backfilled account_id on ${acctResult.backfilled.invoices} invoices, ${acctResult.backfilled.payments} payments`))
         }
       }
     } catch (e) {

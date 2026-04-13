@@ -253,8 +253,8 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - sop_get: Get full SOP content by ID.
 - sd_search: Search service delivery pipeline (detailed execution steps).
 - sd_pipeline: Visual pipeline summary — Kanban-style counts by stage for a service type.
-- sd_advance_stage: Advance a service delivery to the next pipeline stage. Auto-creates tasks from pipeline_stages.auto_tasks with delivery_id + stage_order linking. Use sd_search first to find the delivery ID.
-- sd_create: Create a new service delivery at the first pipeline stage. Auto-creates initial tasks with delivery_id + stage_order. Use when starting LLC Formation, Tax Return, etc.
+- sd_advance_stage: Advance a service delivery to the next pipeline stage. Auto-creates tasks from pipeline_stages.auto_tasks with delivery_id + stage_order linking. Use sd_search first to find the delivery ID. IMPORTANT: For Tax Return SDs at "Company Data Pending" or "Paid - Awaiting Data", you MUST specify target_stage explicitly (e.g. target_stage="Data Received"). Auto-advance (no target_stage) is blocked for these intake stages.
+- sd_create: Create a new service delivery at the first pipeline stage. Auto-creates initial tasks with delivery_id + stage_order. Use when starting LLC Formation, Tax Return, etc. Note: Tax Return sd_create always starts at "1st Installment Paid" (intake stages are only created via activate-service for standalone business Tax Return).
 - AUTO-ADVANCE: When ALL tasks for a pipeline stage are marked Done, the delivery AUTOMATICALLY advances to the next stage (if auto_advance=true on that stage). This happens via crm_update_record when closing a task. Stages with auto_advance=false (State Filing, EIN Application, Closing, all Tax Return stages) must be advanced manually with sd_advance_stage. Tasks are linked to deliveries via tasks.delivery_id (NOT tasks.service_id which links to the services table).
 
 ### Documents (13 tools: doc_*)
