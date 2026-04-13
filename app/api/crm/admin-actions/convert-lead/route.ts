@@ -85,7 +85,6 @@ export async function POST(request: Request) {
           email: lead.email,
           phone: lead.phone,
           language: lead.language === "Italian" ? "it" : "en",
-          role: "Owner",
           is_test: lead.is_test || false,
         })
         .select("id")

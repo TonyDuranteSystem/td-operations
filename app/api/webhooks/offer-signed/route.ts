@@ -186,7 +186,6 @@ export async function POST(req: NextRequest) {
               citizenship: lead.citizenship || null,
               date_of_birth: lead.date_of_birth || null,
               gender: lead.gender || null,
-              role: "Owner",
               status: "active",
             })
             .select("id")
@@ -301,8 +300,9 @@ export async function POST(req: NextRequest) {
     // Log action
     await supabase.from("action_log").insert({
       action_type: "offer_signed",
-      entity_type: "pending_activations",
-      entity_id: activation.id,
+      table_name: "pending_activations",
+      record_id: activation.id,
+      summary: `Contract signed: ${offer.client_name} (${offer_token}) — ${paymentMethod}, ${totalAmount} ${(() => { const raw = summaryArr[0]?.total || ""; return raw.includes("€") || raw.toUpperCase().includes("EUR") ? "EUR" : "USD" })()}`,
       details: {
         offer_token,
         client_name: offer.client_name,

@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
         } else {
           const { data: newC } = await supabaseAdmin.from("contacts").insert({
             full_name: lead.full_name, email: lead.email, phone: lead.phone,
-            language: lead.language === "Italian" ? "it" : "en", role: "Owner",
+            language: lead.language === "Italian" ? "it" : "en",
           }).select("id").single()
           if (newC) { contactId = newC.id; results.push({ step: "contact_created", status: "ok", detail: contactId }) }
         }

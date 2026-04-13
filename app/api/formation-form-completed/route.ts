@@ -91,7 +91,6 @@ export async function POST(req: NextRequest) {
               email: lead.email,
               phone: lead.phone,
               language: leadLanguage,
-              role: "Owner",
             })
             .select("id")
             .single()

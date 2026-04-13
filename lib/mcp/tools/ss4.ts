@@ -94,7 +94,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         if (!contactId) {
           const { data: links } = await supabaseAdmin
             .from("account_contacts")
-            .select("contact_id, contacts(id, full_name, email, role)")
+            .select("contact_id, role, contacts(id, full_name, email)")
             .eq("account_id", params.account_id)
 
           if (!links?.length) {
@@ -104,8 +104,8 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
           // For MMLLC with multiple members: require explicit contact_id selection
           if (entityType === "MMLLC" && links.length > 1) {
             const memberList = links.map((l, i) => {
-              const c = l.contacts as unknown as { id: string; full_name: string; email: string; role: string } | null
-              return `  ${i + 1}. ${c?.full_name || "Unknown"} (${c?.role || "Member"}) — contact_id: ${l.contact_id}`
+              const c = l.contacts as unknown as { id: string; full_name: string; email: string } | null
+              return `  ${i + 1}. ${c?.full_name || "Unknown"} (${(l as unknown as { role: string }).role || "Member"}) — contact_id: ${l.contact_id}`
             }).join("\n")
 
             return { content: [{ type: "text" as const, text: [
