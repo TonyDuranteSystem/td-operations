@@ -214,7 +214,6 @@ export async function POST(req: NextRequest) {
                 email: lead.email,
                 phone: lead.phone,
                 language: lead.language === "Italian" ? "it" : "en",
-                role: "Owner",
               })
               .select()
               .single()
@@ -269,7 +268,6 @@ export async function POST(req: NextRequest) {
                 email: leads[0].email,
                 phone: leads[0].phone,
                 language: leads[0].language === "Italian" ? "it" : "en",
-                role: "Owner",
               })
               .select()
               .single()
