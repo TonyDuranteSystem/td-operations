@@ -141,6 +141,17 @@ async function createFromEmail(
       resolvedContactId = contactByEmail?.id
     }
 
+    // If still no contact, create one (same as new-user path)
+    // This guarantees contact_id is always set before returning success
+    if (!resolvedContactId) {
+      const { data: createdContact } = await supabaseAdmin
+        .from('contacts')
+        .insert({ full_name: fullName, email, language: language === 'it' ? 'Italian' : 'English' })
+        .select('id')
+        .single()
+      resolvedContactId = createdContact?.id
+    }
+
     // Update contact tier
     if (resolvedContactId) {
       await supabaseAdmin
