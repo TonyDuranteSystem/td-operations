@@ -46,6 +46,71 @@ export async function updateContactField(
   }
 
   return safeAction(async () => {
+    // ─── Email change: sync contacts.email → auth.users.email ───
+    if (field === 'email' && value) {
+      // Step 1: Capture old email for potential revert
+      const { data: currentContact } = await supabaseAdmin
+        .from('contacts')
+        .select('email')
+        .eq('id', contactId)
+        .single()
+      const oldEmail = currentContact?.email || null
+
+      // Step 2: Look up portal user by contact_id
+      const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers()
+      const authUser = authUsers?.users?.find(
+        u => u.app_metadata?.contact_id === contactId
+      )
+
+      // Step 3: If portal user exists, update auth email FIRST
+      if (authUser) {
+        const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(
+          authUser.id,
+          { email: value }
+        )
+        if (authError) {
+          throw new Error(`Cannot change email: ${authError.message}`)
+        }
+      }
+
+      // Step 4: Update contacts.email
+      const result = await updateWithLock('contacts', contactId, { email: value }, updatedAt)
+      if (!result.success) {
+        // Step 5: Revert auth if contacts update failed
+        if (authUser && oldEmail) {
+          const { error: revertError } = await supabaseAdmin.auth.admin.updateUserById(
+            authUser.id,
+            { email: oldEmail }
+          )
+          if (revertError) {
+            // Desync: auth has new email, contacts has old email — log for remediation
+            try {
+              await supabaseAdmin.from('action_log').insert({
+                actor: 'system',
+                action_type: 'update',
+                table_name: 'contacts',
+                record_id: contactId,
+                summary: `DESYNC: auth.users.email updated to ${value} but contacts.email update failed and auth revert failed. Manual remediation needed.`,
+                details: { contact_id: contactId, auth_user_id: authUser.id, old_email: oldEmail, new_email: value, revert_error: revertError.message },
+              })
+            } catch { /* non-blocking — best effort logging */ }
+          }
+        }
+        throw new Error(result.error)
+      }
+
+      // Step 6: Cross-account revalidation for email changes
+      const { data: links } = await supabaseAdmin
+        .from('account_contacts')
+        .select('account_id')
+        .eq('contact_id', contactId)
+      for (const link of links ?? []) {
+        revalidatePath(`/accounts/${link.account_id}`)
+      }
+      return
+    }
+
+    // ─── Non-email fields: existing behavior ───
     const result = await updateWithLock('contacts', contactId, { [field]: value || null }, updatedAt)
     if (!result.success) throw new Error(result.error)
     if (accountId) revalidatePath(`/accounts/${accountId}`)
