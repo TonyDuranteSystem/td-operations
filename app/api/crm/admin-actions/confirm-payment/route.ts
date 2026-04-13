@@ -21,6 +21,7 @@ import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { PAYMENT_STATUS } from "@/lib/constants"
+import { INTERNAL_BASE_URL } from "@/lib/config"
 
 interface ConfirmPaymentBody {
   lead_id: string
@@ -310,9 +311,7 @@ export async function POST(request: Request) {
     // 7. Call activate-service (SAME chain as Whop webhook)
     let activationResult = null
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:3000")
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
 
       const res = await fetch(`${baseUrl}/api/workflows/activate-service`, {
         method: "POST",

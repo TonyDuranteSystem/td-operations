@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { INTERNAL_BASE_URL } from '@/lib/config'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 import {
@@ -206,9 +207,7 @@ export async function markInvoicePaid(
         .eq('id', pendingAct.id)
 
       // Trigger activate-service (non-blocking)
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : 'http://localhost:3000')
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
       fetch(`${baseUrl}/api/workflows/activate-service`, {
         method: 'POST',
         headers: {

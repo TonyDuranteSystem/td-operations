@@ -22,6 +22,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
+import { INTERNAL_BASE_URL } from "@/lib/config"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -204,7 +205,7 @@ export async function GET(req: NextRequest) {
               }
 
               // Trigger activate-service
-              const baseUrl2 = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL}`
+              const baseUrl2 = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
               try {
                 const activateRes = await fetch(`${baseUrl2}/api/workflows/activate-service`, {
                   method: "POST",

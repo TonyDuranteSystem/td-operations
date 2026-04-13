@@ -16,6 +16,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
+import { INTERNAL_BASE_URL } from "@/lib/config"
 
 // Common business words excluded from name matching to prevent false positives
 const STOP_WORDS = new Set([
@@ -469,9 +470,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         .eq("id", pendingAct.id)
 
       // Trigger activate-service (non-blocking)
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:3000")
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
       fetch(`${baseUrl}/api/workflows/activate-service`, {
         method: "POST",
         headers: {

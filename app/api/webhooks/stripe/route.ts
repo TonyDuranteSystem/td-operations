@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
+import { INTERNAL_BASE_URL } from "@/lib/config"
 
 // Lightweight types for Stripe objects (v22 has different namespace pattern)
 interface StripeEvent {
@@ -372,9 +373,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
 
       // Trigger activate-service workflow
       try {
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
-          ? `https://${process.env.VERCEL_URL}`
-          : "http://localhost:3000")
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
         const activateRes = await fetch(`${baseUrl}/api/workflows/activate-service`, {
           method: "POST",
           headers: {
