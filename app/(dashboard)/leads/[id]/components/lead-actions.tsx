@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { retryActivation } from '@/app/(dashboard)/client-health/actions'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
@@ -82,6 +83,7 @@ export function LeadActions({
   const [resendingOffer, setResendingOffer] = useState(false)
   const [revisingOffer, setRevisingOffer] = useState(false)
   const [settingDiscussion, setSettingDiscussion] = useState(false)
+  const [retryingActivation, setRetryingActivation] = useState(false)
 
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
@@ -236,6 +238,28 @@ export function LeadActions({
     }
   }
 
+  const needsRetryActivation = isConverted && !isActivated && activation?.status === 'payment_confirmed' && !!offer?.token
+
+  const doRetryActivation = () => {
+    if (!offer?.token) return
+    setRetryingActivation(true)
+    startTransition(async () => {
+      try {
+        const result = await retryActivation(offer.token)
+        if (result.success) {
+          toast.success('Activation completed successfully')
+          router.refresh()
+        } else {
+          toast.error(result.error || 'Activation failed')
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Activation failed')
+      } finally {
+        setRetryingActivation(false)
+      }
+    })
+  }
+
   if (isConverted && isActivated) {
     return (
       <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
@@ -348,6 +372,18 @@ export function LeadActions({
             >
               <CreditCard className="h-4 w-4" />
               Confirm Payment
+            </button>
+          )}
+
+          {/* Retry Activation (stuck at payment_confirmed) */}
+          {needsRetryActivation && (
+            <button
+              onClick={doRetryActivation}
+              disabled={retryingActivation || isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 transition-colors"
+            >
+              {retryingActivation ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              Retry Activation
             </button>
           )}
 

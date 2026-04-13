@@ -38,7 +38,7 @@ export async function retryActivation(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
         },
-        body: JSON.stringify({ offer_token: offerToken }),
+        body: JSON.stringify({ pending_activation_id: pa.id }),
       }
     )
 
@@ -49,6 +49,7 @@ export async function retryActivation(
     }
 
     revalidatePath('/client-health')
+    revalidatePath('/leads')
     return { success: true }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
