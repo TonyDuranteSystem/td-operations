@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
+import { INTERNAL_BASE_URL } from '@/lib/config'
 
 // ─── Retry Stuck Activation ────────────────────────────────
 
@@ -30,7 +31,7 @@ export async function retryActivation(
 
     // Call the activate-service endpoint
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/workflows/activate-service`,
+      `${process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL}/api/workflows/activate-service`,
       {
         method: 'POST',
         headers: {
