@@ -437,16 +437,18 @@ WITH audit_results AS (
   UNION ALL
 
   -- CHECK 29: Portal tier mismatch between contacts and accounts
-  -- A contact's portal_tier should match all their linked accounts' portal_tier
+  -- Linkage: account_contacts junction table (accounts has no direct contact_id column).
+  -- Fixed 2026-04-14 P0.2: was JOIN accounts a ON a.contact_id = c.id (column does not exist).
   SELECT
     'portal_tier_contact_account_mismatch',
     'contacts / accounts',
     'P1',
     COUNT(DISTINCT c.id)::int,
     LEFT(STRING_AGG(DISTINCT c.id::text, ', '), 200),
-    'Contacts whose portal_tier differs from their account portal_tier'
+    'Contacts whose portal_tier differs from their linked account portal_tier'
   FROM contacts c
-  JOIN accounts a ON a.contact_id = c.id
+  JOIN account_contacts ac ON ac.contact_id = c.id
+  JOIN accounts a ON a.id = ac.account_id
   WHERE c.portal_tier IS DISTINCT FROM a.portal_tier
     AND c.portal_tier IS NOT NULL
     AND a.portal_tier IS NOT NULL
@@ -454,33 +456,45 @@ WITH audit_results AS (
   UNION ALL
 
   -- CHECK 30: Portal tier mismatch between contacts and auth.users
-  -- auth.users stores portal_tier in raw_user_meta_data->>'portal_tier'
+  -- Linkage: auth.users.raw_app_meta_data->>'contact_id' stores the contact UUID
+  -- (see lib/portal-auth.ts:10 and lib/mcp/tools/portal.ts:1074).
+  -- portal_tier is also stored in raw_app_meta_data, not raw_user_meta_data.
+  -- Fixed 2026-04-14 P0.2: was JOIN on c.auth_uid (column does not exist) and
+  -- read from raw_user_meta_data (wrong JSONB column).
   SELECT
     'portal_tier_contact_auth_mismatch',
     'contacts / auth.users',
     'P1',
     COUNT(*)::int,
     LEFT(STRING_AGG(c.id::text, ', '), 200),
-    'Contacts whose portal_tier differs from auth.users metadata'
+    'Contacts whose portal_tier differs from auth.users app_metadata portal_tier'
   FROM contacts c
-  JOIN auth.users u ON c.auth_uid = u.id
-  WHERE c.portal_tier IS DISTINCT FROM (u.raw_user_meta_data->>'portal_tier')
+  JOIN auth.users u ON (u.raw_app_meta_data->>'contact_id')::uuid = c.id
+  WHERE c.portal_tier IS DISTINCT FROM (u.raw_app_meta_data->>'portal_tier')
     AND c.portal_tier IS NOT NULL
-    AND (u.raw_user_meta_data->>'portal_tier') IS NOT NULL
+    AND (u.raw_app_meta_data->>'portal_tier') IS NOT NULL
 
   UNION ALL
 
-  -- CHECK 31: Auth users with no matching contact
+  -- CHECK 31: Client-role auth users with no matching contact
+  -- Linkage: auth.users.raw_app_meta_data->>'contact_id' (not contacts.auth_uid).
+  -- Narrowed to role=client because internal staff (Antonio, Luca) are auth users
+  -- without contacts by design.
+  -- Fixed 2026-04-14 P0.2: was LEFT JOIN on c.auth_uid (column does not exist).
   SELECT
     'orphan_auth_users',
     'auth.users',
     'P1',
     COUNT(*)::int,
     LEFT(STRING_AGG(u.id::text, ', '), 200),
-    'auth.users with no matching contact (by auth_uid)'
+    'auth.users with role=client but no matching contact via app_metadata.contact_id'
   FROM auth.users u
-  LEFT JOIN contacts c ON c.auth_uid = u.id
-  WHERE c.id IS NULL
+  WHERE (u.raw_app_meta_data->>'role') = 'client'
+    AND NOT EXISTS (
+      SELECT 1 FROM contacts c
+      WHERE (u.raw_app_meta_data->>'contact_id') IS NOT NULL
+        AND c.id = (u.raw_app_meta_data->>'contact_id')::uuid
+    )
 
   UNION ALL
 

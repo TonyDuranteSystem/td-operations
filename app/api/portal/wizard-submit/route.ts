@@ -34,7 +34,16 @@ function extractUploadPaths(data: Record<string, unknown>): string[] {
   return paths
 }
 
-/** Map wizard_type to submission table name */
+/** Map wizard_type to submission table name.
+ * Fixed 2026-04-14 P0.5: itin was missing, silently dropping portal ITIN
+ * submissions (Damiano Mocellin 2026-04-13, Antonio Truocchio 2026-04-06).
+ * Plan: docs/2026-04-14-restructure-plan-final-v1.md §4 P0.5.
+ * closure is confirmed as a valid portal wizard type per
+ * app/portal/wizard/page.tsx VALID_WIZARD_TYPES but is deferred to Phase 1
+ * because there are no currently-stuck closure clients (verified via
+ * wizard_progress query on 2026-04-14) and adding it safely requires a
+ * closure-wizard-setup handler + unit test that would exceed Phase 0 scope.
+ * banking_payset / banking_relay are handled inline below at step 4b. */
 function getSubmissionTable(wizardType: string): string | null {
   const map: Record<string, string> = {
     formation: 'formation_submissions',
@@ -42,11 +51,13 @@ function getSubmissionTable(wizardType: string): string | null {
     tax: 'tax_return_submissions',
     tax_return: 'tax_return_submissions',
     company_info: 'company_info_submissions',
+    itin: 'itin_submissions',
   }
   return map[wizardType] || null
 }
 
-/** Map wizard_type to job_type for the background handler */
+/** Map wizard_type to job_type for the background handler.
+ * Fixed 2026-04-14 P0.5: itin was missing. See getSubmissionTable comment. */
 function getJobType(wizardType: string): string | null {
   const map: Record<string, string> = {
     formation: 'formation_setup',
@@ -54,6 +65,7 @@ function getJobType(wizardType: string): string | null {
     tax: 'tax_form_setup',
     tax_return: 'tax_form_setup',
     company_info: 'tax_return_intake',
+    itin: 'itin_wizard_setup',
   }
   return map[wizardType] || null
 }

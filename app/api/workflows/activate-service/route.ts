@@ -18,6 +18,11 @@
  * After 5 successful confirmations → auto mode.
  */
 
+// Added 2026-04-14 P0.7: protect complex bundled activations (15+ sequential
+// steps) from mid-execution Vercel timeout. Without this, a partial failure
+// left clients half-activated with no visible alert.
+export const maxDuration = 60
+
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"

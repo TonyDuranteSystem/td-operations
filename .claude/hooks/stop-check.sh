@@ -3,7 +3,7 @@
 # Outputs concrete data so the prompt hook knows WHAT to save
 set -euo pipefail
 
-REPO_DIR="/Users/tonydurante/Desktop/td-operations"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # Get tool call count
 COUNTER_FILE=$(ls /tmp/claude-cc-counter-* 2>/dev/null | head -1)

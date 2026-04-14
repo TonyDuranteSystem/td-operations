@@ -16,6 +16,10 @@
  * No auth required (public endpoint -- only triggers internal notifications)
  */
 
+// Added 2026-04-14 P0.7: protect the 7-step auto-chain from mid-execution
+// Vercel timeout (Drive folder + PDF + email + task + SD ensure + history + log).
+export const maxDuration = 60
+
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 

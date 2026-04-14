@@ -18,6 +18,10 @@
  * No auth required (public endpoint - only triggers internal notifications)
  */
 
+// Added 2026-04-14 P0.7: protect the 8-step auto-chain from mid-execution
+// Vercel timeout (Drive folder + PDF gen + docs + email + task + history + log).
+export const maxDuration = 60
+
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
@@ -184,44 +188,71 @@ export async function POST(req: NextRequest) {
       if (sub.account_id) orFilters.push(`account_id.eq.${sub.account_id}`)
       if (contactId) orFilters.push(`contact_id.eq.${contactId}`)
 
-      const { data: existingSd } = await supabaseAdmin
+      // Fixed 2026-04-14 P0.4: four sites were writing to a ghost column on
+      // service_deliveries — the real column is "stage". Silently produced
+      // "stuck at Data Collection" for Manuel Burdo and the external ITIN
+      // form class. Also destructures .error on the supabase calls so future
+      // failures do not fall into the same silent-write hole. See plan
+      // docs/2026-04-14-restructure-plan-final-v1.md §4 P0.4.
+      const { data: existingSd, error: existingSdError } = await supabaseAdmin
         .from("service_deliveries")
-        .select("id, current_stage")
+        .select("id, stage")
         .eq("service_type", "ITIN")
         .or(orFilters.join(","))
         .eq("status", "active")
         .limit(1)
 
+      if (existingSdError) {
+        console.error("[itin-form-completed] service_deliveries SELECT failed:", existingSdError)
+        results.push({ step: "sd_select", status: "error", detail: existingSdError.message })
+      }
+
       if (existingSd?.length) {
         deliveryId = existingSd[0].id
         // Advance to Document Preparation
-        if (existingSd[0].current_stage === "Data Collection") {
-          await supabaseAdmin.from("service_deliveries").update({
-            current_stage: "Document Preparation",
-            updated_at: new Date().toISOString(),
-          }).eq("id", deliveryId)
-          results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> Document Preparation` })
+        if (existingSd[0].stage === "Data Collection") {
+          const { error: advanceError } = await supabaseAdmin
+            .from("service_deliveries")
+            .update({
+              stage: "Document Preparation",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", deliveryId)
+
+          if (advanceError) {
+            console.error("[itin-form-completed] SD stage advance failed:", advanceError)
+            results.push({ step: "sd_advance", status: "error", detail: advanceError.message })
+          } else {
+            results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> Document Preparation` })
+          }
         }
       } else {
         // Auto-create SD
-        const { data: stages } = await supabaseAdmin
+        const { data: stages, error: stagesError } = await supabaseAdmin
           .from("pipeline_stages").select("stage_name")
           .eq("service_type", "ITIN").order("stage_order").limit(2)
 
+        if (stagesError) {
+          console.error("[itin-form-completed] pipeline_stages SELECT failed:", stagesError)
+        }
+
         const secondStage = stages?.[1]?.stage_name || "Document Preparation"
 
-        const { data: newSd } = await supabaseAdmin.from("service_deliveries").insert({
+        const { data: newSd, error: newSdError } = await supabaseAdmin.from("service_deliveries").insert({
           service_type: "ITIN",
           service_name: `ITIN - ${clientName}`,
           account_id: sub.account_id || null,
           contact_id: contactId,
-          current_stage: secondStage, // Start at Document Preparation since data is already received
+          stage: secondStage, // Start at Document Preparation since data is already received
           status: "active",
           assigned_to: "Luca",
           notes: `Auto-created from ITIN form ${token}`,
         }).select("id").single()
 
-        if (newSd) {
+        if (newSdError) {
+          console.error("[itin-form-completed] service_deliveries INSERT failed:", newSdError)
+          results.push({ step: "sd_created", status: "error", detail: newSdError.message })
+        } else if (newSd) {
           deliveryId = newSd.id
           results.push({ step: "sd_created", status: "ok", detail: `SD auto-created at Document Preparation: ${deliveryId}` })
         }

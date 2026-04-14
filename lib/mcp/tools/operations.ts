@@ -1109,8 +1109,10 @@ export function registerOperationsTools(server: McpServer) {
           .order("created_at", { ascending: false })
 
         // 3. Find tasks still open where related service was updated recently
+        // Fixed 2026-04-14 P0.6: was { query: ... } — exec_sql expects
+        // { sql_query: ... }. Silently returned empty results from Claude.ai.
         const { data: openTasksWithUpdatedServices } = await supabaseAdmin.rpc("exec_sql", {
-          query: `
+          sql_query: `
             SELECT t.id, t.task_title, t.status, t.account_id, a.company_name,
                    s.notes as service_notes, s.updated_at as service_updated
             FROM tasks t
@@ -1130,8 +1132,10 @@ export function registerOperationsTools(server: McpServer) {
         })
 
         // 4. Find active deliveries with stage but open tasks from previous stages
+        // Fixed 2026-04-14 P0.6: was { query: ... } — exec_sql expects
+        // { sql_query: ... }. Silently returned empty results from Claude.ai.
         const { data: stageOrphans } = await supabaseAdmin.rpc("exec_sql", {
-          query: `
+          sql_query: `
             SELECT sd.id as delivery_id, sd.service_name, sd.stage, sd.stage_order,
                    t.id as task_id, t.task_title, t.status as task_status,
                    a.company_name

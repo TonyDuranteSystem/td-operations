@@ -5,7 +5,7 @@ set -euo pipefail
 
 SUPABASE_URL="${SUPABASE_URL:-https://ydzipybqeebtpcvsbtvs.supabase.co}"
 SUPABASE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-}"
-REPO_DIR="/Users/tonydurante/Desktop/td-operations"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Gather git state

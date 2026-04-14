@@ -340,8 +340,10 @@ export function registerReferralTools(server: McpServer) {
           : ""
 
         // Status counts + commission totals in one query
+        // Fixed 2026-04-14 P0.6: was { query: ... } — exec_sql expects
+        // { sql_query: ... }. Silently returned empty results from Claude.ai.
         const { data: stats, error: statsErr } = await supabaseAdmin.rpc("exec_sql", {
-          query: `
+          sql_query: `
             SELECT
               r.status,
               COUNT(*)::int AS count,
