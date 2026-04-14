@@ -9,6 +9,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
+import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
@@ -222,7 +223,7 @@ export default function PortalChatsPage() {
   const { data: threads, isLoading: threadsLoading } = useQuery<ChatThread[]>({
     queryKey: ['portal-chat-threads'],
     queryFn: () => fetch('/api/portal/chat/threads').then(r => r.json()),
-    refetchInterval: 8_000, // faster polling for WhatsApp-like feel
+    refetchInterval: 60_000, // fallback reconciliation; realtime thread-list subscription below is primary
   })
 
   // Fetch messages for selected thread (by account_id or contact_id)
@@ -235,8 +236,68 @@ export default function PortalChatsPage() {
     queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId],
     queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&limit=50`).then(r => r.json()).then(d => d.messages),
     enabled: !!(selectedAccountId || selectedContactId),
-    refetchInterval: 3_000, // faster for active conversation
+    refetchInterval: 30_000, // fallback reconciliation; realtime subscription below is primary
   })
+
+  // Realtime subscription — selected thread messages. Subscribes to portal_messages
+  // INSERT events filtered by account_id or contact_id and appends them to the React
+  // Query cache instantly (WhatsApp/Telegram-like feel). Refetch interval above acts
+  // as a reconciliation fallback if the socket drops.
+  useEffect(() => {
+    const threadId = selectedAccountId || selectedContactId
+    if (!threadId) return
+    const filterColumn = selectedAccountId ? 'account_id' : 'contact_id'
+    const supabase = createSupabaseBrowserClient()
+    const channel = supabase
+      .channel(`admin-portal-chat-${threadId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: `${filterColumn}=eq.${threadId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as ChatMessage
+          queryClient.setQueryData<ChatMessage[]>(
+            ['portal-chat-messages', threadId],
+            (prev) => {
+              if (!prev) return [newMessage]
+              if (prev.some(m => m.id === newMessage.id)) return prev
+              return [...prev, newMessage]
+            }
+          )
+        }
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [selectedAccountId, selectedContactId, queryClient])
+
+  // Realtime subscription — global portal_messages INSERT → invalidate thread list
+  // so the sidebar sees new last-message previews and unread badges immediately.
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient()
+    const channel = supabase
+      .channel('admin-portal-chat-thread-list')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'portal_messages',
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+        }
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [queryClient])
 
   // Fetch message action tags for the selected thread
   const { data: messageActions } = useQuery<MessageAction[]>({
