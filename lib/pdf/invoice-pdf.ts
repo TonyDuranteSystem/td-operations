@@ -166,24 +166,38 @@ export async function generateInvoicePdf(input: InvoicePdfInput): Promise<Uint8A
     page.drawLine({ start: { x: 50, y: y + 6 }, end: { x: 545, y: y + 6 }, thickness: 0.3, color: lightGray })
   }
 
-  // Totals
-  y -= 15
+  // Totals — breathing room from items table (Dante 2026-04-08: "il totale
+  // in blu potrebbe scendere più in basso")
+  y -= 32
   page.drawText('Subtotal', { x: 400, y, size: 9, font: helvetica, color: gray })
   page.drawText(`${csym}${Math.abs(input.subtotal).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
 
   if (input.discount > 0 && !isCredit) {
-    y -= 16
+    y -= 18
     page.drawText('Discount', { x: 400, y, size: 9, font: helvetica, color: gray })
     page.drawText(`-${csym}${input.discount.toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: rgb(0.8, 0.2, 0.2) })
   }
 
-  y -= 20
-  page.drawLine({ start: { x: 395, y: y + 8 }, end: { x: 545, y: y + 8 }, thickness: 1, color: accentColor })
-  page.drawText('TOTAL', { x: 400, y, size: 11, font: helveticaBold, color: accentColor })
+  // TOTAL — isolated in a subtle tinted panel so it visually lands lower
+  // on the page and separates cleanly from the subtotal.
+  y -= 32
+  const totalPanelBottom = y - 8
+  const totalPanelHeight = 26
+  const panelTint = isCredit ? rgb(0.98, 0.96, 1) : rgb(0.94, 0.96, 1)
+  page.drawRectangle({ x: 395, y: totalPanelBottom, width: 150, height: totalPanelHeight, color: panelTint })
+  page.drawLine({
+    start: { x: 395, y: totalPanelBottom + totalPanelHeight },
+    end: { x: 545, y: totalPanelBottom + totalPanelHeight },
+    thickness: 1.5,
+    color: accentColor,
+  })
+  page.drawText('TOTAL', { x: 405, y, size: 12, font: helveticaBold, color: accentColor })
   const totalStr = isCredit
     ? `-${csym}${Math.abs(input.total).toFixed(2)}`
     : `${csym}${input.total.toFixed(2)}`
-  page.drawText(totalStr, { x: 470, y, size: 11, font: helveticaBold, color: accentColor })
+  page.drawText(totalStr, { x: 470, y, size: 12, font: helveticaBold, color: accentColor })
+  // Drop the following content further down so the total doesn't hug the bank details block.
+  y -= 18
 
   // Message / Payment terms
   if (input.message) {
