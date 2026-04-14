@@ -83,10 +83,15 @@ export function WizardClient({
         body: fd,
       })
 
-      if (!res.ok) return null
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        console.error('[wizard-upload] failed', { status: res.status, error: errText, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
+        return null
+      }
       const { path } = await res.json()
       return path
-    } catch {
+    } catch (err) {
+      console.error('[wizard-upload] network error', { err, fieldName, fileName: file.name, fileSize: file.size, fileType: file.type, wizardType })
       return null
     }
   }, [wizardType, accountId, contactId])
