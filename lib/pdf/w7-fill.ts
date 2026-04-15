@@ -57,6 +57,7 @@
  */
 
 import { PDFDocument } from "pdf-lib"
+import { embedUnicodeFonts } from "./unicode-fonts"
 
 const W7_PDF_URL = "https://www.irs.gov/pub/irs-pdf/fw7.pdf"
 
@@ -132,6 +133,7 @@ async function downloadW7(): Promise<Buffer> {
 export async function fillW7(data: W7FillData): Promise<Uint8Array> {
   const pdfBytes = await downloadW7()
   const pdf = await PDFDocument.load(pdfBytes)
+  const { regular: unicodeFont } = await embedUnicodeFonts(pdf)
   const form = pdf.getForm()
 
   const setText = (fieldName: string, value: string | undefined) => {
@@ -235,6 +237,9 @@ export async function fillW7(data: W7FillData): Promise<Uint8Array> {
   setText(`${P}.f1_45[0]`, AGENT.company)      // Name of company
   setText(`${P}.f1_46[0]`, AGENT.ein)          // EIN
 
+  // Replace the form's default Helvetica/WinAnsi appearances with the Unicode
+  // font so non-Latin-1 characters (e.g. Maltese ħ) render correctly when flattened.
+  form.updateFieldAppearances(unicodeFont)
   // Flatten so fields appear as static text
   form.flatten()
 

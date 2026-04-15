@@ -1,4 +1,5 @@
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import { PDFDocument, rgb } from 'pdf-lib'
+import { embedUnicodeFonts } from './unicode-fonts'
 
 export interface InvoicePdfInput {
   // Header
@@ -55,8 +56,7 @@ export interface InvoicePdfInput {
 export async function generateInvoicePdf(input: InvoicePdfInput): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
   const page = pdfDoc.addPage([595, 842]) // A4
-  const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica)
-  const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const { regular: helvetica, bold: helveticaBold } = await embedUnicodeFonts(pdfDoc)
 
   const blue = rgb(0.15, 0.39, 0.92)
   const black = rgb(0, 0, 0)

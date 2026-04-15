@@ -32,10 +32,11 @@
  *   SIGNATURE (y≈45): left blank              APPLICANT fax (y≈50): x=465
  */
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
+import { PDFDocument, rgb } from "pdf-lib"
 import { readFile } from "fs/promises"
 import { join } from "path"
 import { existsSync } from "fs"
+import { embedUnicodeFonts } from "./unicode-fonts"
 
 // TD LLC Office — mailing address for all client LLCs
 const TD_OFFICE = {
@@ -115,8 +116,7 @@ const CHECK_SIZE = 8
 export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   const templateBytes = await loadTemplate()
   const pdf = await PDFDocument.load(templateBytes)
-  const font = await pdf.embedFont(StandardFonts.Helvetica)
-  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold)
+  const { regular: font, bold: boldFont } = await embedUnicodeFonts(pdf)
   const page = pdf.getPage(0)
   const black = rgb(0, 0, 0)
 

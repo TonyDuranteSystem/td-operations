@@ -10,7 +10,8 @@
  * Returns a Uint8Array (PDF bytes) ready for Drive upload.
  */
 
-import { PDFDocument, rgb, StandardFonts, PDFFont } from "pdf-lib"
+import { PDFDocument, rgb, PDFFont } from "pdf-lib"
+import { embedUnicodeFonts } from "./unicode-fonts"
 
 export interface IntercompanyAgreementInput {
   // Operating Company (the one generating revenue)
@@ -44,9 +45,8 @@ export async function generateIntercompanyAgreementPDF(
   input: IntercompanyAgreementInput
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
-  const font = await doc.embedFont(StandardFonts.Helvetica)
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold)
-  const italic = await doc.embedFont(StandardFonts.HelveticaOblique)
+  const { regular: font, bold, oblique } = await embedUnicodeFonts(doc, { oblique: true })
+  const italic = oblique as PDFFont
 
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT])
   let y = PAGE_HEIGHT - MARGIN

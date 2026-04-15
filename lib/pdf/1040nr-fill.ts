@@ -55,6 +55,7 @@
  */
 
 import { PDFDocument } from "pdf-lib"
+import { embedUnicodeFonts } from "./unicode-fonts"
 
 const F1040NR_URL = "https://www.irs.gov/pub/irs-pdf/f1040nr.pdf"
 const SCHEDULE_OI_URL = "https://www.irs.gov/pub/irs-pdf/f1040nro.pdf"
@@ -94,6 +95,7 @@ const P2 = "topmostSubform[0].Page2[0]"
 export async function fill1040NR(data: F1040NRFillData): Promise<Uint8Array> {
   const pdfBytes = await downloadPdf(F1040NR_URL)
   const pdf = await PDFDocument.load(pdfBytes)
+  const { regular: unicodeFont } = await embedUnicodeFonts(pdf)
   const form = pdf.getForm()
 
   const setText = (name: string, val: string | undefined) => {
@@ -162,6 +164,8 @@ export async function fill1040NR(data: F1040NRFillData): Promise<Uint8Array> {
   setText(`${P2}.f2_55[0]`, PREPARER.address)   // Firm's address
   setText(`${P2}.f2_56[0]`, PREPARER.ein)       // Firm's EIN
 
+  // Apply Unicode font to all field appearances before flattening
+  form.updateFieldAppearances(unicodeFont)
   form.flatten()
   return pdf.save()
 }
@@ -170,6 +174,7 @@ export async function fill1040NR(data: F1040NRFillData): Promise<Uint8Array> {
 export async function fillScheduleOI(data: F1040NRFillData): Promise<Uint8Array> {
   const pdfBytes = await downloadPdf(SCHEDULE_OI_URL)
   const pdf = await PDFDocument.load(pdfBytes)
+  const { regular: unicodeFont } = await embedUnicodeFonts(pdf)
   const form = pdf.getForm()
 
   // Schedule OI uses prefix: form1040-NR[0].Page1[0]
@@ -218,6 +223,8 @@ export async function fillScheduleOI(data: F1040NRFillData): Promise<Uint8Array>
   // Item I — Prior year return: No
   setCheck(`${P}.c1_6[1]`, true)
 
+  // Apply Unicode font to all field appearances before flattening
+  form.updateFieldAppearances(unicodeFont)
   form.flatten()
   return pdf.save()
 }

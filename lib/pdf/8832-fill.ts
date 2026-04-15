@@ -37,7 +37,8 @@
  *   TITLE     (y≈555): x=480
  */
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
+import { PDFDocument, rgb } from "pdf-lib"
+import { embedUnicodeFonts } from "./unicode-fonts"
 
 // TD LLC Office — used for all client LLC forms
 const TD_OFFICE = {
@@ -100,8 +101,7 @@ const CHECK_SIZE = 8
 export async function fill8832(data: Form8832FillData): Promise<Uint8Array> {
   const templateBytes = await loadTemplate()
   const pdf = await PDFDocument.load(templateBytes)
-  const font = await pdf.embedFont(StandardFonts.Helvetica)
-  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold)
+  const { regular: font, bold: boldFont } = await embedUnicodeFonts(pdf)
   const black = rgb(0, 0, 0)
 
   const drawText = (

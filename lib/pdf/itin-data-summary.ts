@@ -4,7 +4,8 @@
  * Saved to Drive as a record of what was collected.
  */
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
+import { PDFDocument, rgb } from "pdf-lib"
+import { embedUnicodeFonts } from "./unicode-fonts"
 
 export interface ITINSummaryData {
   // Personal
@@ -45,8 +46,7 @@ export interface ITINSummaryData {
 export async function generateITINSummaryPDF(data: ITINSummaryData): Promise<Uint8Array> {
   const pdf = await PDFDocument.create()
   const page = pdf.addPage([612, 792]) // US Letter
-  const font = await pdf.embedFont(StandardFonts.Helvetica)
-  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold)
+  const { regular: font, bold: fontBold } = await embedUnicodeFonts(pdf)
 
   const blue = rgb(0.12, 0.23, 0.37) // #1e3a5f
   const black = rgb(0, 0, 0)
