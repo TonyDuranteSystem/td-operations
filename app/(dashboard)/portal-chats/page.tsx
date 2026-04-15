@@ -229,6 +229,20 @@ export default function PortalChatsPage() {
     refetchInterval: 60_000, // fallback reconciliation; realtime thread-list subscription below is primary
   })
 
+  // Fetch open-task counts per thread. Merged with the threads list client-side
+  // to render the orange dot next to the blue unread-messages badge and to
+  // surface the total open-task count in the browser tab title. Invalidated
+  // by the tasks realtime subscription below.
+  const { data: openTaskCounts } = useQuery<{
+    by_account: Record<string, number>
+    by_contact: Record<string, number>
+    total: number
+  }>({
+    queryKey: ['portal-chat-open-task-counts'],
+    queryFn: () => fetch('/api/tasks/open-counts').then(r => r.json()),
+    refetchInterval: 120_000, // fallback reconciliation; realtime subscription below is primary
+  })
+
   // Fetch messages for selected thread (by account_id or contact_id)
   const chatQueryParam = selectedAccountId
     ? `account_id=${selectedAccountId}`
@@ -301,6 +315,59 @@ export default function PortalChatsPage() {
       supabase.removeChannel(channel)
     }
   }, [queryClient])
+
+  // Realtime subscription — global tasks INSERT/UPDATE/DELETE → invalidate
+  // open-task counts + active thread tasks list + fire toast and sound for
+  // INSERTs (Phase 2 Layer 1). Covers all task creation paths: sd_advance_stage
+  // auto-tasks, the inline Create Task dialog, crm_create_task MCP, and future
+  // event-bridge hooks from Phase 4.
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient()
+    const channel = supabase
+      .channel('admin-portal-chat-tasks')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (payload: any) => {
+          // Invalidate counts + any per-thread tasks panel that's currently open
+          queryClient.invalidateQueries({ queryKey: ['portal-chat-open-task-counts'] })
+          queryClient.invalidateQueries({ queryKey: ['portal-chat-thread-tasks'] })
+
+          // Toast + sound only on fresh INSERTs (not updates/deletes)
+          if (payload.eventType === 'INSERT' && payload.new) {
+            const newTask = payload.new as { task_title?: string; account_id?: string; contact_id?: string }
+            const threadCompany = threads?.find(t =>
+              (newTask.account_id && t.account_id === newTask.account_id)
+              || (newTask.contact_id && t.contact_id === newTask.contact_id)
+            )?.company_name
+            const title = newTask.task_title ?? 'New task'
+            const prefix = threadCompany ? `${threadCompany}: ` : ''
+            toast(`✅ ${prefix}${title}`, { duration: 6000 })
+            playSound()
+
+            // Desktop browser notification (reuses existing permission grant)
+            if (notificationsEnabled) {
+              try {
+                new Notification(`✅ New task${threadCompany ? ' — ' + threadCompany : ''}`, {
+                  body: title.slice(0, 120),
+                  icon: '/portal-icon-192.png',
+                  tag: 'portal-chat-task',
+                })
+              } catch { /* some browsers block */ }
+            }
+          }
+        }
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [queryClient, threads, playSound, notificationsEnabled])
 
   // Fetch message action tags for the selected thread
   const { data: messageActions } = useQuery<MessageAction[]>({
@@ -605,10 +672,17 @@ export default function PortalChatsPage() {
     if (!threads) return
 
     const totalUnread = threads.reduce((sum, t) => sum + t.unread_count, 0)
+    const totalOpenTasks = openTaskCounts?.total ?? 0
 
-    // Update tab title with unread count
-    if (totalUnread > 0) {
+    // Update tab title with unread count AND open task count (Phase 2 Layer 1).
+    // Format: (52/3) Portal Chats — 52 unread messages, 3 open tasks.
+    // Omits each segment when its count is zero.
+    if (totalUnread > 0 && totalOpenTasks > 0) {
+      document.title = `(${totalUnread}/${totalOpenTasks}) Portal Chats`
+    } else if (totalUnread > 0) {
       document.title = `(${totalUnread}) Portal Chats`
+    } else if (totalOpenTasks > 0) {
+      document.title = `(${totalOpenTasks} tasks) Portal Chats`
     } else {
       document.title = 'Portal Chats'
     }
@@ -636,7 +710,7 @@ export default function PortalChatsPage() {
     }
 
     prevTotalUnreadRef.current = totalUnread
-  }, [threads, playSound, notificationsEnabled])
+  }, [threads, openTaskCounts?.total, playSound, notificationsEnabled])
 
   // Reset tab title on unmount
   useEffect(() => {
@@ -973,11 +1047,29 @@ export default function PortalChatsPage() {
                       )}
                     </div>
                   </div>
-                  {thread.unread_count > 0 && (
-                    <span className="ml-2 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white">
-                      {thread.unread_count}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                    {/* Task dot: orange pill showing open-task count for this thread (Phase 2 Layer 1) */}
+                    {(() => {
+                      const taskCount = thread.account_id
+                        ? openTaskCounts?.by_account?.[thread.account_id] ?? 0
+                        : thread.contact_id
+                          ? openTaskCounts?.by_contact?.[thread.contact_id] ?? 0
+                          : 0
+                      return taskCount > 0 ? (
+                        <span
+                          className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-orange-500 text-white"
+                          title={`${taskCount} open task${taskCount === 1 ? '' : 's'}`}
+                        >
+                          {taskCount}
+                        </span>
+                      ) : null
+                    })()}
+                    {thread.unread_count > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-blue-600 text-white">
+                        {thread.unread_count}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-xs text-zinc-500 truncate flex-1">{thread.last_message}</p>
