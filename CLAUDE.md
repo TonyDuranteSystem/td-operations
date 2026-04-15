@@ -126,6 +126,7 @@ Before saying "it works" or "done", run `npm run test:unit`. If you didn't run t
 - **R089** — Never use Make, Zapier, n8n — all automation via Supabase Edge Functions.
 - **R090** — Never commit `.env.local` or credentials.
 - **R091** — Never create README.md or documentation files unless asked.
+- **R092** — Client invoice emails MUST direct clients to the portal to pay (`portal.tonydurante.us` → Fatture/Invoices → Expenses). NEVER embed Stripe checkout links, wire transfer details, or any payment credentials directly in the email body. The portal's Pay button (dev task `b08fb88a`, `components/portal/td-pay-modal.tsx`) is the canonical payment entry point.
 
 <!-- TIER2:END -->
 
