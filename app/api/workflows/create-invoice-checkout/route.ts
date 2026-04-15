@@ -69,17 +69,23 @@ export async function POST(req: NextRequest) {
     const currency = rawCurrency as "usd" | "eur"
 
     // Resolve client name + email
+    // Email resolution order (first hit wins):
+    //   1. payment.contact_id → contacts.email
+    //   2. account_contacts owner → contacts.email
+    //   3. accounts.communication_email (fallback for accounts with no linked owner)
     let clientName = "Client"
     let clientEmail: string | undefined
+    let accountCommunicationEmail: string | null = null
 
-    // Name: prefer account.company_name
+    // Fetch account info (name + fallback email) first
     if (payment.account_id) {
       const { data: account } = await supabase
         .from("accounts")
-        .select("company_name")
+        .select("company_name, communication_email")
         .eq("id", payment.account_id)
         .single()
       if (account?.company_name) clientName = account.company_name
+      if (account?.communication_email) accountCommunicationEmail = account.communication_email
     }
 
     // Email: prefer direct contact_id on payment, fall back to account owner
@@ -108,6 +114,11 @@ export async function POST(req: NextRequest) {
           .single()
         if (contact?.email) clientEmail = contact.email
       }
+    }
+
+    // Final fallback: account.communication_email
+    if (!clientEmail && accountCommunicationEmail) {
+      clientEmail = accountCommunicationEmail
     }
 
     if (!clientEmail) {
