@@ -55,10 +55,13 @@ async function loadFontBytes(filename: string): Promise<Buffer> {
     return readFile(localPath)
   }
 
+  // Always fetch from the public client-facing domain, NEVER from VERCEL_URL.
+  // VERCEL_URL is the deployment-specific URL (e.g. td-operations-xyz.vercel.app)
+  // which is behind Vercel Deployment Protection and returns 401 for
+  // unauthenticated requests — the exact bug fixed for server-to-server
+  // self-calls in commits b953aaa / 386390a (see session-context).
   const baseUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    (process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}`) ||
-    "https://app.tonydurante.us"
+    process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"
   const res = await fetch(`${baseUrl}/fonts/${filename}`)
   if (!res.ok) {
     throw new Error(`Failed to load font ${filename}: ${res.status} ${res.statusText}`)
