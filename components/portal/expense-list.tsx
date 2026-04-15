@@ -3,8 +3,9 @@
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
-import { Search, FileText, Building2, Upload, PenLine, Download, Loader2 } from 'lucide-react'
+import { Search, FileText, Building2, Upload, PenLine, Download, Loader2, CreditCard } from 'lucide-react'
 import { toast } from 'sonner'
+import { TdPayModal } from './td-pay-modal'
 
 interface Expense {
   id: string
@@ -49,6 +50,7 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [payingExpense, setPayingExpense] = useState<Expense | null>(null)
 
   const handleDownloadPdf = async (exp: Expense) => {
     if (!exp.td_payment_id) return
@@ -120,7 +122,7 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
 
       {/* Table */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="hidden md:grid md:grid-cols-[1fr,120px,100px,90px,80px,80px,40px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
+        <div className="hidden md:grid md:grid-cols-[1fr,120px,100px,90px,80px,80px,80px] gap-3 px-4 py-3 border-b bg-zinc-50 text-xs font-medium text-zinc-500 uppercase">
           <span>{isIt ? 'Fornitore' : 'Vendor'}</span>
           <span>{isIt ? 'N. Fattura' : 'Invoice #'}</span>
           <span className="text-right">{isIt ? 'Importo' : 'Amount'}</span>
@@ -141,7 +143,7 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
             const src = SOURCE_CONFIG[exp.source] || SOURCE_CONFIG.manual
             const SourceIcon = src.icon
             return (
-              <div key={exp.id} className="grid grid-cols-1 md:grid-cols-[1fr,120px,100px,90px,80px,80px,40px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
+              <div key={exp.id} className="grid grid-cols-1 md:grid-cols-[1fr,120px,100px,90px,80px,80px,80px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-medium truncate">{exp.vendor_name}</span>
                   {exp.attachment_url && (
@@ -169,7 +171,16 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
                     {src.label}
                   </span>
                 </span>
-                <span className="flex justify-center">
+                <span className="flex items-center justify-center gap-1">
+                  {exp.source === 'td_invoice' && exp.td_payment_id && (exp.status === 'Pending' || exp.status === 'Overdue') && (
+                    <button
+                      onClick={() => setPayingExpense(exp)}
+                      className="p-1 rounded hover:bg-blue-50 text-blue-600 hover:text-blue-700"
+                      title={isIt ? 'Paga' : 'Pay'}
+                    >
+                      <CreditCard className="h-4 w-4" />
+                    </button>
+                  )}
                   {exp.td_payment_id ? (
                     <button
                       onClick={() => handleDownloadPdf(exp)}
@@ -190,6 +201,18 @@ export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale:
           })
         )}
       </div>
+
+      {/* TD Invoice Pay Modal */}
+      {payingExpense && payingExpense.td_payment_id && (
+        <TdPayModal
+          paymentId={payingExpense.td_payment_id}
+          invoiceNumber={payingExpense.invoice_number || payingExpense.internal_ref || 'Invoice'}
+          amount={Number(payingExpense.total)}
+          currency={payingExpense.currency}
+          locale={locale}
+          onClose={() => setPayingExpense(null)}
+        />
+      )}
     </div>
   )
 }
