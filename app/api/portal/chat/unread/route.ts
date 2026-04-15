@@ -5,8 +5,10 @@ import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * POST /api/portal/chat/unread
- * Admin only: marks client messages in a thread as unread (resets read_at to null).
- * Used when admin reads a message but wants to come back to it later.
+ * Admin only: marks ONLY the most recent client message in a thread as unread
+ * (resets read_at to null). Used when admin reads a message but wants to come
+ * back to it later. Older messages in the thread keep their read_at untouched —
+ * only the latest one drives the unread badge count.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -20,15 +22,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   }
 
-  // Reset read_at on client messages for this thread
-  const { error, count } = await supabaseAdmin
+  // Find the most recent client message in this thread
+  const { data: latest, error: findError } = await supabaseAdmin
     .from('portal_messages')
-    .update({ read_at: null })
+    .select('id')
     .eq('account_id', account_id)
     .eq('sender_type', 'client')
-    .not('read_at', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (findError) return NextResponse.json({ error: findError.message }, { status: 500 })
+  if (!latest) return NextResponse.json({ unmarked: 0 })
+
+  // Reset read_at on just that single message
+  const { error } = await supabaseAdmin
+    .from('portal_messages')
+    .update({ read_at: null })
+    .eq('id', latest.id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json({ unmarked: count ?? 0 })
+  return NextResponse.json({ unmarked: 1 })
 }
