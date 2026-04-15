@@ -29,33 +29,60 @@
 import type { PDFDocument, PDFFont } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import { readFile } from "fs/promises"
+import { existsSync } from "fs"
 import { join } from "path"
 
 const FONTS_DIR = join(process.cwd(), "public", "fonts")
 
 // Cache font bytes across invocations in the same Node process so we only
-// touch the filesystem once per cold start.
+// touch the filesystem (or fetch the URL) once per cold start.
 let regularBytesCache: Buffer | null = null
 let boldBytesCache: Buffer | null = null
 let obliqueBytesCache: Buffer | null = null
 
+/**
+ * Load a font file by name. Mirrors the template-loading pattern used in
+ * lib/pdf/8832-fill.ts and lib/pdf/ss4-fill.ts: try the local filesystem
+ * first (works in `npm run dev` and in builds where output file tracing
+ * bundled public/), then fall back to fetching the font from the app's
+ * own static-asset URL (works on Vercel serverless functions where
+ * public/fonts/* is served via the CDN but not always included in the
+ * function's filesystem bundle at /var/task/public/).
+ */
+async function loadFontBytes(filename: string): Promise<Buffer> {
+  const localPath = join(FONTS_DIR, filename)
+  if (existsSync(localPath)) {
+    return readFile(localPath)
+  }
+
+  const baseUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.VERCEL_URL && `https://${process.env.VERCEL_URL}`) ||
+    "https://app.tonydurante.us"
+  const res = await fetch(`${baseUrl}/fonts/${filename}`)
+  if (!res.ok) {
+    throw new Error(`Failed to load font ${filename}: ${res.status} ${res.statusText}`)
+  }
+  return Buffer.from(await res.arrayBuffer())
+}
+
 async function loadRegularBytes(): Promise<Buffer> {
   if (!regularBytesCache) {
-    regularBytesCache = await readFile(join(FONTS_DIR, "DejaVuSans.ttf"))
+    regularBytesCache = await loadFontBytes("DejaVuSans.ttf")
   }
   return regularBytesCache
 }
 
 async function loadBoldBytes(): Promise<Buffer> {
   if (!boldBytesCache) {
-    boldBytesCache = await readFile(join(FONTS_DIR, "DejaVuSans-Bold.ttf"))
+    boldBytesCache = await loadFontBytes("DejaVuSans-Bold.ttf")
   }
   return boldBytesCache
 }
 
 async function loadObliqueBytes(): Promise<Buffer> {
   if (!obliqueBytesCache) {
-    obliqueBytesCache = await readFile(join(FONTS_DIR, "DejaVuSans-Oblique.ttf"))
+    obliqueBytesCache = await loadFontBytes("DejaVuSans-Oblique.ttf")
   }
   return obliqueBytesCache
 }
