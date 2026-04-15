@@ -245,6 +245,16 @@ export async function sendNewInvoice(paymentId: string): Promise<ActionResult> {
 }
 
 export async function sendInvoiceReminder(paymentId: string): Promise<ActionResult> {
+  // Pre-check: if the invoice is still Draft, delegate to sendNewInvoice so the
+  // client receives a real HTML+PDF invoice email (not a plain-text reminder).
+  // Root cause of the Apr 2026 "no PDF" incidents (Zhang Holding INV-002040-MNXKCUEJ
+  // et al): this function used to double as a "send" for Draft invoices while
+  // emailing a plain-text note with no PDF and no bank details.
+  const { supabaseAdmin: _adminPre } = await import('@/lib/supabase-admin')
+  const { data: preCheck } = await _adminPre
+    .from('payments').select('invoice_status').eq('id', paymentId).maybeSingle()
+  if (preCheck?.invoice_status === 'Draft') return sendNewInvoice(paymentId)
+
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
 
@@ -306,16 +316,9 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
     }).eq('id', paymentId)
     if (reminderErr) throw new Error(`Failed to update reminder count: ${reminderErr.message}`)
 
-    // Mark as Sent if still Draft
-    if (status === 'Draft') {
-      const { error: sentUpdateErr } = await supabaseAdmin.from('payments').update({
-        invoice_status: 'Sent', status: 'Pending', updated_at: new Date().toISOString(),
-      }).eq('id', paymentId)
-      if (sentUpdateErr) throw new Error(`Failed to mark invoice as sent: ${sentUpdateErr.message}`)
-      // Sync to client_expenses
-      const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
-      await syncTDInvoiceStatus(paymentId, 'Sent')
-    }
+    // Note: Draft invoices are handled by the pre-check at the top of this
+    // function (delegated to sendNewInvoice for the real PDF+HTML path).
+    // By the time we reach here, invoice_status is Sent/Overdue/Partial.
 
     revalidatePath('/finance')
   }, {
