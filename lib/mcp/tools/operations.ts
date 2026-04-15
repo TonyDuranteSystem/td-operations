@@ -164,7 +164,7 @@ export function registerOperationsTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "crm_create_task",
-    "Create a new task/ticket. Assign to a team member, set priority and category, link to an account/deal/service. Returns the created task with ID.",
+    "Create a new task/ticket. Assign to a team member, set priority and category, link to an account/deal/service. Optional attachments array with {url, name, type?} entries renders as clickable chips on the task card (used for ITIN PDFs and similar docs). Returns the created task with ID.",
     {
       task_title: z.string().describe("Task title"),
       assigned_to: z.string().describe("Assignee name (e.g., 'Luca', 'Antonio')"),
@@ -178,8 +178,18 @@ export function registerOperationsTools(server: McpServer) {
       delivery_id: z.string().uuid().optional().describe("Link to service delivery UUID (service_deliveries table, for pipeline tracking)"),
       stage_order: z.number().optional().describe("Pipeline stage_order (auto-set by sd_advance_stage, rarely needed manually)"),
       status: z.string().optional().describe("Initial status: To Do (default), In Progress, Waiting"),
+      attachments: z
+        .array(
+          z.object({
+            url: z.string().url().describe("Publicly accessible URL (typically a Google Drive file URL)"),
+            name: z.string().describe("Display name (e.g. 'W-7_Antonio_Truocchio.pdf')"),
+            type: z.string().optional().describe("Optional MIME type hint (e.g. 'application/pdf')"),
+          })
+        )
+        .optional()
+        .describe("Optional file attachments rendered as clickable chips on the task card"),
     },
-    async ({ task_title, assigned_to, priority, category, due_date, description, account_id, deal_id, service_id, delivery_id, stage_order, status }) => {
+    async ({ task_title, assigned_to, priority, category, due_date, description, account_id, deal_id, service_id, delivery_id, stage_order, status, attachments }) => {
       try {
         const insert: Record<string, unknown> = {
           task_title,
@@ -194,6 +204,7 @@ export function registerOperationsTools(server: McpServer) {
           delivery_id: delivery_id || null,
           stage_order: stage_order || null,
           status: status || "To Do",
+          attachments: attachments || [],
           created_by: "Claude",
         }
 

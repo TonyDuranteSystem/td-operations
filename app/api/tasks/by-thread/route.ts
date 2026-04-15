@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
   let query = supabaseAdmin
     .from('tasks')
     .select(
-      'id, task_title, status, priority, due_date, assigned_to, category, description, account_id, delivery_id, updated_at, created_at, contact_id, stage_order, accounts(company_name), service_deliveries(service_type)'
+      'id, task_title, status, priority, due_date, assigned_to, category, description, account_id, delivery_id, updated_at, created_at, contact_id, stage_order, attachments, accounts(company_name), service_deliveries(service_type)'
     )
 
   if (accountId) {

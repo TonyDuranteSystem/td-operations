@@ -1,3 +1,12 @@
+export interface TaskAttachment {
+  /** Publicly accessible URL (typically a Google Drive file URL). */
+  url: string
+  /** Display name shown on the task card (e.g. "W-7_Antonio_Truocchio.pdf"). */
+  name: string
+  /** Optional MIME type hint (e.g. "application/pdf"). */
+  type?: string
+}
+
 export interface Task {
   id: string
   task_title: string
@@ -11,6 +20,13 @@ export interface Task {
   delivery_id?: string | null
   company_name: string | null
   service_type?: string | null
+  /**
+   * Optional attachments array (jsonb column on tasks table). Rendered as
+   * clickable chips below the task title in the Tasks sub-tab of portal chat
+   * (see components/tasks/task-card.tsx). Used for ITIN PDF rescue and any
+   * other task that needs a client-facing document link.
+   */
+  attachments?: TaskAttachment[]
   updated_at: string
   created_at: string
 }

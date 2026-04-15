@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useTransition } from 'react'
-import { Check, RotateCw, ChevronUp, ChevronDown, Clock, AlertCircle } from 'lucide-react'
+import { useTransition } from 'react'
+import { Check, RotateCw, ChevronUp, ChevronDown, Clock, Paperclip, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
@@ -28,7 +28,6 @@ function isFollowUp(task: Task, today: string): boolean {
 
 export function TaskCard({ task, today, onEdit }: { task: Task; today: string; onEdit?: (task: Task) => void }) {
   const [isPending, startTransition] = useTransition()
-  const [showActions, setShowActions] = useState(false)
 
   const dueInfo = task.due_date ? getDaysLabel(task.due_date, today) : null
   const followUp = isFollowUp(task, today)
@@ -115,6 +114,29 @@ export function TaskCard({ task, today, onEdit }: { task: Task; today: string; o
       >
         {task.task_title}
       </button>
+
+      {/* Attachments — rendered as clickable chips with filename + external-link icon.
+          Used for ITIN rescue PDFs (W-7, 1040-NR, Schedule OI) and any task that
+          needs Luca/staff to download/print a file. */}
+      {task.attachments && task.attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {task.attachments.map((att, i) => (
+            <a
+              key={`${att.url}-${i}`}
+              href={att.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs hover:bg-blue-100 transition-colors"
+              title={att.name}
+            >
+              <Paperclip className="h-3 w-3 shrink-0" />
+              <span className="truncate max-w-[160px]">{att.name}</span>
+              <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
+            </a>
+          ))}
+        </div>
+      )}
 
       {/* Bottom row: assignee + SLA + actions */}
       <div className="flex items-center justify-between">
