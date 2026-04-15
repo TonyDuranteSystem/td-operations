@@ -58,10 +58,15 @@ export async function updateContactField(
       const oldEmail = currentContact?.email || null
 
       // Step 2: Look up portal user by contact_id
-      const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers()
-      const authUser = authUsers?.users?.find(
-        u => u.app_metadata?.contact_id === contactId
-      )
+      // NOTE: supabaseAdmin.auth.admin.listUsers() return type destructures to
+      // a union where `data` can be `never` under strict TS if not narrowed.
+      // Cast the inner users array to the expected User shape for type safety.
+      const listUsersResult = await supabaseAdmin.auth.admin.listUsers()
+      const users = (listUsersResult.data?.users ?? []) as Array<{
+        id: string
+        app_metadata?: { contact_id?: string }
+      }>
+      const authUser = users.find(u => u.app_metadata?.contact_id === contactId)
 
       // Step 3: If portal user exists, update auth email FIRST
       if (authUser) {
