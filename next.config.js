@@ -7,6 +7,16 @@ const nextConfig = {
     // ESLint still runs in pre-commit (lint-staged) and pre-push hooks.
     ignoreDuringBuilds: true,
   },
+  // Explicitly bundle the Unicode TTF fonts into every serverless function
+  // that may touch lib/pdf/*. Vercel's output file tracing does not follow
+  // `readFile(join(process.cwd(), 'public/fonts/*.ttf'))` calls automatically
+  // because they are runtime-resolved paths, so without this the fonts are
+  // left in /public as static assets and are NOT available at /var/task/public/
+  // inside the function sandbox. See dev_task 208d20be + commit a8003b3e.
+  outputFileTracingIncludes: {
+    '/api/**/*': ['./public/fonts/**'],
+    '/app/api/**/*': ['./public/fonts/**'],
+  },
   images: {
     remotePatterns: [
       {
