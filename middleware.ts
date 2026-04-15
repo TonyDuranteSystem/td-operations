@@ -175,6 +175,12 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|templates/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf|webmanifest)$).*)',
+    // Exclude static asset directories and common binary/font extensions so the
+    // middleware doesn't try to auth-gate public files. The `fonts/` prefix and
+    // the `ttf|otf|woff|woff2` extensions were added so that PDF generators can
+    // fetch DejaVu Sans from public/fonts/* at runtime (see lib/pdf/unicode-fonts.ts
+    // and dev_task 208d20be). `templates/` is excluded for the same reason for
+    // ss4-blank.pdf / 8832-blank.pdf.
+    '/((?!_next/static|_next/image|favicon.ico|templates/|fonts/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf|webmanifest|ttf|otf|woff|woff2)$).*)',
   ],
 }
