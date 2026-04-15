@@ -13,6 +13,7 @@ import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/clie
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
+import { ThreadTasksPanel } from '@/components/portal-chats/thread-tasks-panel'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -105,6 +106,8 @@ export default function PortalChatsPage() {
   const [pendingAdminFile, setPendingAdminFile] = useState<PendingAdminFile | null>(null)
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
+  // Right-pane sub-tab: switches between chat messages and the per-thread Tasks list
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'tasks'>('messages')
   // Internal team chat
   const [sidebarView, setSidebarView] = useState<'chats' | 'internal'>('chats')
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
@@ -1401,6 +1404,41 @@ export default function PortalChatsPage() {
               })()}
             </div>
 
+            {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
+            {selectedAccountId && (
+              <div className="flex border-b bg-white shrink-0">
+                <button
+                  onClick={() => setChatViewMode('messages')}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                    chatViewMode === 'messages'
+                      ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/30'
+                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Messages
+                </button>
+                <button
+                  onClick={() => setChatViewMode('tasks')}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                    chatViewMode === 'tasks'
+                      ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/30'
+                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                  )}
+                >
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  Tasks
+                </button>
+              </div>
+            )}
+
+            {chatViewMode === 'tasks' && selectedAccountId ? (
+              <ThreadTasksPanel accountId={selectedAccountId} contactId={selectedContactId} />
+            ) : (
+            <>
+
             {/* Messages */}
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
               {messagesLoading ? (
@@ -1852,6 +1890,8 @@ export default function PortalChatsPage() {
                 )}
               </div>
             </div>
+            </>
+            )}
           </>
         )}
       </div>
