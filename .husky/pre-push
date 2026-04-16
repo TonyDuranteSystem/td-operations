@@ -38,6 +38,20 @@ if [ -n "$HARDCODED" ]; then
   exit 1
 fi
 
+# P2.4 rule 4 — Block hardcoded absolute /Users/ paths in Claude hook scripts.
+# Hook scripts run on every developer's machine; absolute paths break on any
+# other setup. Derive paths from $(dirname "$0") or $HOME instead.
+HOOK_ABS_PATHS=$(grep -nE '/Users/[A-Za-z]' .claude/hooks/*.sh 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)
+if [ -n "$HOOK_ABS_PATHS" ]; then
+  echo ""
+  echo "❌ PUSH BLOCKED — P2.4 rule 4: hardcoded /Users/... path in .claude/hooks/*.sh"
+  echo "   Hook scripts must work on every dev machine; use \$(dirname \"\$0\") or \$HOME."
+  echo ""
+  echo "$HOOK_ABS_PATHS"
+  echo ""
+  exit 1
+fi
+
 echo "🔍 Running ESLint on changed files..."
 CHANGED_TS=$(git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' 2>/dev/null)
 if [ -n "$CHANGED_TS" ]; then
@@ -52,6 +66,33 @@ if [ -n "$CHANGED_TS" ]; then
   echo "✅ ESLint passed."
 else
   echo "   No .ts/.tsx files changed — skipping lint."
+fi
+
+# P2.5 — Schema drift check. Regenerate types from Supabase and compare to
+# the committed files. If they differ, the schema changed and the dev forgot
+# to regenerate → block.
+#
+# Graceful fallback: if gen:types fails (Supabase CLI unavailable, offline,
+# auth expired), warn but don't block — pre-push must work on every dev
+# machine including offline ones. The CI workflow will still catch drift.
+echo "🔄 Checking schema drift (P2.5)..."
+# Snapshot current committed types, regenerate, diff, restore on failure.
+if npm run gen:types > /tmp/td-gen-types.log 2>&1; then
+  if ! git diff --quiet lib/database.types.ts lib/db-check-types.ts 2>/dev/null; then
+    echo ""
+    echo "❌ PUSH BLOCKED — P2.5: generated DB types differ from committed types."
+    echo "   The Supabase schema has drifted. Either:"
+    echo "   (a) commit the regenerated types: git add lib/database.types.ts lib/db-check-types.ts && git commit --amend"
+    echo "   (b) discard the schema change:    git checkout lib/database.types.ts lib/db-check-types.ts"
+    echo ""
+    git diff --stat lib/database.types.ts lib/db-check-types.ts
+    echo ""
+    exit 1
+  fi
+  echo "✅ Schema in sync."
+else
+  echo "⚠️  Could not regenerate types (Supabase CLI unavailable or offline). Skipping schema drift check."
+  echo "    Details: /tmp/td-gen-types.log"
 fi
 
 echo "🧪 Running unit tests before push..."

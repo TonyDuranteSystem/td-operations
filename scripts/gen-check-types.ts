@@ -78,10 +78,13 @@ async function main() {
   }
 
   const rows = data as CheckRow[]
+  // Intentionally no timestamp in the generated file — the git log tells us
+  // when it was last regenerated, and keeping the file deterministic is a
+  // requirement of the P2.5 pre-push schema-drift check (every run must
+  // produce byte-identical output when the schema hasn't changed).
   const lines: string[] = [
     "/**",
     " * Auto-generated CHECK constraint types from Supabase public schema.",
-    ` * Generated: ${new Date().toISOString()}`,
     " * Source: scripts/gen-check-types.ts",
     " * DO NOT EDIT — regenerate with: npx tsx scripts/gen-check-types.ts",
     " */",

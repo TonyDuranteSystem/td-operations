@@ -23,13 +23,65 @@
       "ignoreRestSiblings": true
     }],
 
-    "no-restricted-syntax": ["error",
+    "no-restricted-syntax": ["warn",
       {
         "selector": "TSAsExpression[typeAnnotation.typeName.name='SupabaseClient']",
         "message": "Do not cast to SupabaseClient — use the typed client from lib/supabase-admin.ts instead."
+      },
+      {
+        "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.type='MemberExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value=/^(service_deliveries|payments|accounts|contacts|tasks)$/]",
+        "message": "P2.4 rule 1: raw .insert/.update/.upsert on protected tables (service_deliveries, payments, accounts, contacts, tasks) must go through lib/operations/. Move this write through the appropriate helper (lib/operations/service-delivery.ts / payment.ts / portal.ts)."
+      },
+      {
+        "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql']",
+        "message": "P2.4 rule 5: direct .rpc('exec_sql', ...) is only allowed in lib/mcp/tools/sql.ts (the execute_sql tool) and app/api/cron/audit-health-check/route.ts (the audit cron). Elsewhere, use dedicated MCP tools or crm_update_record."
+      },
+      {
+        "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql'] Property[key.name='query']",
+        "message": "P2.4 rule 6: the exec_sql RPC parameter is `sql_query`, not `query`. This bug silently caused the 2026-04-09→14 Phase 0 audit-cron zero-findings failure (plan §4 line 47). Rename the key to `sql_query`."
       }
     ]
   },
+  "overrides": [
+    {
+      "files": ["lib/operations/**/*.ts"],
+      "rules": {
+        "no-restricted-syntax": ["warn",
+          {
+            "selector": "TSAsExpression[typeAnnotation.typeName.name='SupabaseClient']",
+            "message": "Do not cast to SupabaseClient — use the typed client from lib/supabase-admin.ts instead."
+          },
+          {
+            "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql'] Property[key.name='query']",
+            "message": "P2.4 rule 6: the exec_sql RPC parameter is `sql_query`, not `query`."
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "lib/mcp/tools/sql.ts",
+        "app/api/cron/audit-health-check/route.ts",
+        "scripts/gen-check-types.ts"
+      ],
+      "rules": {
+        "no-restricted-syntax": ["warn",
+          {
+            "selector": "TSAsExpression[typeAnnotation.typeName.name='SupabaseClient']",
+            "message": "Do not cast to SupabaseClient — use the typed client from lib/supabase-admin.ts instead."
+          },
+          {
+            "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.type='MemberExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value=/^(service_deliveries|payments|accounts|contacts|tasks)$/]",
+            "message": "P2.4 rule 1: raw .insert/.update/.upsert on protected tables must go through lib/operations/."
+          },
+          {
+            "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql'] Property[key.name='query']",
+            "message": "P2.4 rule 6: the exec_sql RPC parameter is `sql_query`, not `query`."
+          }
+        ]
+      }
+    }
+  ],
   "ignorePatterns": [
     "node_modules/",
     ".next/",

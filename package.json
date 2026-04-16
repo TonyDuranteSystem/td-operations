@@ -17,7 +17,7 @@
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "lint:ci": "eslint . --ext .ts,.tsx",
     "lint:staged": "lint-staged",
-    "gen:types": "supabase gen types typescript --project-id ydzipybqeebtpcvsbtvs --schema public > lib/database.types.ts && npx tsx scripts/gen-check-types.ts"
+    "gen:types": "npx --yes supabase gen types typescript --project-id ydzipybqeebtpcvsbtvs --schema public > lib/database.types.ts && npx tsx scripts/gen-check-types.ts"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
