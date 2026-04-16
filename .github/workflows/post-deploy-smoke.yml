@@ -6,8 +6,10 @@
 #   2. https://td-operations.vercel.app/api/cron/audit-health-check (Bearer CRON_SECRET, JSON with findings array)
 #   3. https://portal.tonydurante.us/portal/login                   (HTTP 200)
 #
-# On any failure, posts to /api/internal/smoke-alert which sends an HTML
+# On any failure, posts to /api/webhooks/smoke-alert which sends an HTML
 # email to support@tonydurante.us via the Gmail Service Account.
+# (/api/webhooks is in middleware.ts PUBLIC_PREFIXES; Bearer auth happens
+# at the route level.)
 #
 # This workflow does NOT block the deploy — Vercel ships independently.
 # A red status here means "deploy is live but something broke", not "deploy
@@ -36,33 +38,38 @@ jobs:
     steps:
       - name: Wait for Vercel deploy
         # Vercel typically deploys in 60-120s. We poll the app URL for up to
-        # 5 minutes, treating any 200 response as "deploy is live". If we
-        # never see a 200, we still proceed to the smoke section so the
-        # failure shows up there with a useful error.
+        # 5 minutes, treating any 2xx or 3xx response as "deploy is live".
+        # (The app root 307-redirects to /login under middleware auth.)
+        # If we never see a response, we still proceed to the smoke section
+        # so the failure shows up there with a useful error.
         run: |
           set +e
           for i in $(seq 1 30); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://app.tonydurante.us/)
-            if [ "$STATUS" = "200" ]; then
-              echo "✅ Deploy reachable after ${i}0s"
-              exit 0
-            fi
+            case "$STATUS" in
+              2*|3*)
+                echo "✅ Deploy reachable (HTTP $STATUS) after ~$((i*10))s"
+                exit 0
+                ;;
+            esac
             echo "Attempt ${i}/30: app returned $STATUS, sleeping 10s..."
             sleep 10
           done
-          echo "⚠️ App did not return 200 within 5 minutes — proceeding to smoke checks anyway"
+          echo "⚠️ App did not return 2xx/3xx within 5 minutes — proceeding to smoke checks anyway"
 
       - name: Smoke check 1 — app root
         id: check_app
+        # App root is auth-gated (middleware redirects to /login for
+        # unauthenticated sessions) so we accept 200 or any 3xx as
+        # "server alive". 4xx/5xx is a real failure.
         run: |
           set +e
           STATUS=$(curl -s -o /tmp/app_body -w "%{http_code}" --max-time 15 https://app.tonydurante.us/)
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          if [ "$STATUS" = "200" ]; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-          fi
+          case "$STATUS" in
+            2*|3*) echo "result=pass" >> "$GITHUB_OUTPUT" ;;
+            *)     echo "result=fail" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Smoke check 2 — audit-health-check cron
         id: check_audit
@@ -91,16 +98,17 @@ jobs:
 
       - name: Smoke check 3 — portal login
         id: check_portal
+        # Portal login is a public path but can 3xx under various Vercel
+        # edge configurations. Accept 200 or 3xx as "server alive".
         run: |
           set +e
           STATUS=$(curl -s -o /tmp/portal_body -w "%{http_code}" --max-time 15 \
             https://portal.tonydurante.us/portal/login)
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          if [ "$STATUS" = "200" ]; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-          fi
+          case "$STATUS" in
+            2*|3*) echo "result=pass" >> "$GITHUB_OUTPUT" ;;
+            *)     echo "result=fail" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Compose failure payload
         id: failures
@@ -162,7 +170,7 @@ jobs:
             -H "Authorization: Bearer $CRON_SECRET" \
             -H "Content-Type: application/json" \
             --data @/tmp/smoke_payload.json \
-            https://td-operations.vercel.app/api/internal/smoke-alert)
+            https://td-operations.vercel.app/api/webhooks/smoke-alert)
           echo "smoke-alert returned $STATUS"
           cat /tmp/alert_resp
           if [ "$STATUS" != "200" ]; then

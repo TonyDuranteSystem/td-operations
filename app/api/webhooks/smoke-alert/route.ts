@@ -1,10 +1,17 @@
 /**
- * Internal endpoint: smoke-alert
+ * Webhook endpoint: smoke-alert
  *
  * P2.6 — called by .github/workflows/post-deploy-smoke.yml when one of the
  * post-deploy smoke checks fails. Sends an HTML email to support@tonydurante.us
  * via the existing Gmail Service Account helper. Does NOT block deploys —
  * pure alerting.
+ *
+ * Why /api/webhooks/ and not /api/internal/: middleware.ts PUBLIC_PREFIXES
+ * exempts /api/webhooks (external-party POSTs, Bearer-authed at route level).
+ * /api/internal/* is middleware-gated and returns 307 for unauthenticated
+ * callers — which is correct for admin endpoints but wrong for a GH
+ * Actions webhook. Path chosen to keep middleware.ts (protected file)
+ * untouched.
  *
  * Auth: Bearer CRON_SECRET (re-used so we don't need a new secret on Vercel
  * or in GitHub Actions secrets). The smoke workflow already needs CRON_SECRET
