@@ -24,6 +24,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -144,7 +145,7 @@ export async function POST(req: NextRequest) {
             service_type: "Company Formation",
             service_name: `Company Formation - ${leadName} (${llcName})`,
             contact_id: contactId,
-            current_stage: firstStage,
+            stage: firstStage,
             status: "active",
             assigned_to: "Luca",
             notes: `Auto-created from formation form ${token}`,
@@ -482,10 +483,10 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
     try {
       await supabaseAdmin.from("action_log").insert({
         action_type: "formation_form_completed",
-        entity_type: "formation_submissions",
-        entity_id: submission_id,
+        table_name: "formation_submissions",
+        record_id: submission_id,
         summary: `Formation form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
-        details: { token, lead_id: leadId, contact_id: contactId, results },
+        details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
       })
     } catch { /* non-blocking */ }
 

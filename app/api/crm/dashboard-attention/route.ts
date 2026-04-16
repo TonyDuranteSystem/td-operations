@@ -46,7 +46,7 @@ export async function GET() {
     // 1. Signed but not paid (> 3 days)
     supabaseAdmin
       .from('pending_activations')
-      .select('id, contact_id, signed_at, contacts(full_name)')
+      .select('id, lead_id, client_name, signed_at')
       .not('signed_at', 'is', null)
       .is('payment_confirmed_at', null)
       .is('activated_at', null),
@@ -54,15 +54,15 @@ export async function GET() {
     // 2. Paid but not activated
     supabaseAdmin
       .from('pending_activations')
-      .select('id, contact_id, payment_confirmed_at, contacts(full_name)')
+      .select('id, lead_id, client_name, payment_confirmed_at')
       .not('payment_confirmed_at', 'is', null)
       .is('activated_at', null),
 
     // 3. Overdue invoices (max 90 days)
     supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, amount, currency, due_date, account_id, accounts(company_name)')
-      .eq('status', 'pending')
+      .select('id, invoice_number, amount, amount_currency, due_date, account_id, accounts(company_name)')
+      .eq('status', 'Pending')
       .lt('due_date', today)
       .gt('due_date', maxOverdueDate)
       .order('due_date', { ascending: true })
@@ -71,15 +71,15 @@ export async function GET() {
     // 4. Stuck service deliveries (same stage > 7 days, not blocked/completed)
     supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_name, stage, stage_updated_at, account_id, accounts(company_name)')
+      .select('id, service_name, stage, stage_entered_at, account_id, accounts(company_name)')
       .eq('status', 'active')
-      .not('stage_updated_at', 'is', null)
+      .not('stage_entered_at', 'is', null)
       .limit(30),
 
     // 5. Unmatched bank feeds (> $500, > 2 days old)
     supabaseAdmin
       .from('td_bank_feeds')
-      .select('id, amount, sender_name, transaction_date, bank_source')
+      .select('id, amount, sender_name, transaction_date, source')
       .eq('status', 'unmatched')
       .gt('amount', 500)
       .order('transaction_date', { ascending: false })
@@ -134,9 +134,7 @@ export async function GET() {
     if (!signedAt) continue
     const days = differenceInDays(now, signedAt)
     if (days < 3) continue
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contact = pa.contacts as any
-    const name = contact?.full_name ?? 'Unknown'
+    const name = pa.client_name ?? 'Unknown'
     items.push({
       id: `pa-pay-${pa.id}`,
       type: 'awaiting_payment',
@@ -144,8 +142,7 @@ export async function GET() {
       title: `Awaiting Payment: ${name}`,
       subtitle: `Signed ${days} days ago, no payment yet`,
       age: `${days}d`,
-      link: pa.contact_id ? `/contacts/${pa.contact_id}` : '/',
-      contact_id: pa.contact_id ?? undefined,
+      link: pa.lead_id ? `/leads?id=${pa.lead_id}` : '/',
     })
   }
 
@@ -154,9 +151,7 @@ export async function GET() {
     const paidAt = pa.payment_confirmed_at ? new Date(pa.payment_confirmed_at) : null
     if (!paidAt) continue
     const days = differenceInDays(now, paidAt)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contact = pa.contacts as any
-    const name = contact?.full_name ?? 'Unknown'
+    const name = pa.client_name ?? 'Unknown'
     items.push({
       id: `pa-onb-${pa.id}`,
       type: 'ready_to_onboard',
@@ -164,8 +159,7 @@ export async function GET() {
       title: `Ready to Onboard: ${name}`,
       subtitle: days > 0 ? `Paid ${days} days ago, not yet activated` : 'Payment just confirmed',
       age: days > 0 ? `${days}d` : 'new',
-      link: pa.contact_id ? `/contacts/${pa.contact_id}` : '/',
-      contact_id: pa.contact_id ?? undefined,
+      link: pa.lead_id ? `/leads?id=${pa.lead_id}` : '/',
     })
   }
 
@@ -178,7 +172,7 @@ export async function GET() {
     const accounts = inv.accounts as any
     const companyName = (Array.isArray(accounts) ? accounts[0]?.company_name : accounts?.company_name) ?? 'Unknown'
     const amount = Number(inv.amount)
-    const formatted = inv.currency === 'EUR'
+    const formatted = inv.amount_currency === 'EUR'
       ? `\u20AC${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
       : `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
     items.push({
@@ -195,8 +189,8 @@ export async function GET() {
 
   // 4. Stuck services (> 7 days at same stage)
   for (const sd of stuckServices.data ?? []) {
-    if (!sd.stage_updated_at) continue
-    const days = differenceInDays(now, new Date(sd.stage_updated_at))
+    if (!sd.stage_entered_at) continue
+    const days = differenceInDays(now, new Date(sd.stage_entered_at))
     if (days < 7) continue
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const accounts = sd.accounts as any
@@ -225,7 +219,7 @@ export async function GET() {
       type: 'unmatched_payment',
       urgency: days > 7 ? 'red' : 'amber',
       title: `Unmatched: $${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-      subtitle: `From ${feed.sender_name || feed.bank_source || 'Unknown'} (${days}d ago)`,
+      subtitle: `From ${feed.sender_name || feed.source || 'Unknown'} (${days}d ago)`,
       age: `${days}d`,
       link: '/finance?tab=bank',
     })

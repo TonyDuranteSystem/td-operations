@@ -6,7 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalTaxReturns } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
-import { FileText, Upload, CheckCircle2, Clock, AlertCircle, CalendarClock, Shield } from 'lucide-react'
+import { FileText, CheckCircle2, Clock, AlertCircle, CalendarClock, Shield } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { TaxDocumentUpload } from '@/components/portal/tax-document-upload'
@@ -58,12 +58,12 @@ export default async function TaxDocumentsPage() {
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {taxReturns.map(tr => {
-              const isOverdue = tr.deadline && new Date(tr.deadline) < new Date() && tr.status !== 'Filed' && tr.status !== 'Complete'
-              const statusColor = tr.status === 'Filed' || tr.status === 'Complete'
+              const isOverdue = tr.deadline && new Date(tr.deadline) < new Date() && tr.status !== 'TR Filed'
+              const statusColor = tr.status === 'TR Filed'
                 ? 'bg-emerald-100 text-emerald-700'
                 : isOverdue ? 'bg-red-100 text-red-700'
                 : 'bg-amber-100 text-amber-700'
-              const StatusIcon = tr.status === 'Filed' || tr.status === 'Complete'
+              const StatusIcon = tr.status === 'TR Filed'
                 ? CheckCircle2 : isOverdue ? AlertCircle : Clock
               return (
                 <div key={tr.id} className="bg-white rounded-xl border shadow-sm p-5">
@@ -80,7 +80,7 @@ export default async function TaxDocumentsPage() {
                       </div>
                     </div>
                     <StatusIcon className={cn('h-5 w-5',
-                      tr.status === 'Filed' || tr.status === 'Complete' ? 'text-emerald-500' :
+                      tr.status === 'TR Filed' ? 'text-emerald-500' :
                       isOverdue ? 'text-red-500' : 'text-amber-500'
                     )} />
                   </div>

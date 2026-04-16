@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
 import crypto from "crypto"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -88,12 +89,12 @@ export async function POST(req: NextRequest) {
     // Log
     await supabaseAdmin.from("action_log").insert({
       action_type: "relay_webhook",
-      entity_type: "td_bank_feeds",
-      entity_id: feed.id,
+      table_name: "td_bank_feeds",
+      record_id: feed.id,
       summary: matchResult.matched
         ? `Relay deposit $${amount} auto-matched to invoice ${matchResult.invoiceNumber}`
         : `Relay deposit $${amount} stored (unmatched)`,
-      details: { amount, sender: txn.counterparty_name, matchResult },
+      details: { amount, sender: txn.counterparty_name, matchResult } as unknown as Json,
     })
 
     return NextResponse.json({

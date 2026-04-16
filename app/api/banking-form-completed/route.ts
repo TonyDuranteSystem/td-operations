@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
             description,
             assigned_to: "Luca",
             priority: "High",
-            category: "Banking",
+            category: "Banking" as never,
             status: "To Do",
             account_id: sub.account_id,
             created_by: "System",

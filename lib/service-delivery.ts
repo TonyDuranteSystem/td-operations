@@ -107,7 +107,7 @@ export async function advanceServiceDelivery(
         .select("id, status")
         .eq("account_id", delivery.account_id)
         .ilike("task_title", `%quality check%`)
-        .in("status", ["todo", "in_progress"])
+        .in("status", ["To Do", "In Progress"])
         .limit(1)
       if (approvalTasks?.length) {
         return {
@@ -165,8 +165,8 @@ export async function advanceServiceDelivery(
         .insert({
           task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
           assigned_to: taskDef.assigned_to || "Luca",
-          category: taskDef.category || "Internal",
-          priority: taskDef.priority || "Normal",
+          category: (taskDef.category || "Internal") as never,
+          priority: (taskDef.priority || "Normal") as never,
           description: taskDef.description || `Auto-created by pipeline advance to "${targetStage.stage_name}"`,
           status: "To Do",
           account_id: delivery.account_id,

@@ -15,9 +15,9 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
-import type { Job, JobResult } from "../queue"
-import { updateJobProgress } from "../queue"
+import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -28,13 +28,13 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
   return { name, status, detail, timestamp: new Date().toISOString() }
 }
 
-const BASE_URL = APP_BASE_URL
+const _BASE_URL = APP_BASE_URL
 
 export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> {
   const p = job.payload as unknown as WelcomePackagePayload
   const result: JobResult = { steps: [] }
   const today = new Date().toISOString().slice(0, 10)
-  const now = new Date().toISOString()
+  const _now = new Date().toISOString()
   const year = new Date().getFullYear()
 
   // ─── 1. FETCH ACCOUNT ───
@@ -152,7 +152,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           member_name: contact.full_name,
           member_address: account.physical_address || null,
           member_email: contact.email || null,
-          members: membersJson,
+          members: membersJson as unknown as Json,
           effective_date: account.formation_date || today,
           business_purpose: "any and all lawful business activities",
           initial_contribution: "$0 (No initial capital contribution required)",

@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 export function registerITINFormTools(server: McpServer) {
 
@@ -22,6 +23,7 @@ export function registerITINFormTools(server: McpServer) {
       contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
       language: z.enum(["en", "it"]).optional().describe("Form language (auto-detected from lead/contact language if omitted)"),
     },
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async ({ lead_id, account_id, contact_id, language }) => {
       try {
         if (!lead_id && !account_id) {
@@ -31,7 +33,7 @@ export function registerITINFormTools(server: McpServer) {
         let fullName = ""
         let email = ""
         let phone = ""
-        let detectedLang = "en"
+        let _detectedLang = "en"
         let resolvedContactId = contact_id || null
 
         // Get data from lead or account+contact
@@ -46,7 +48,7 @@ export function registerITINFormTools(server: McpServer) {
           fullName = lead.full_name || ""
           email = lead.email || ""
           phone = lead.phone || ""
-          detectedLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
+          _detectedLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
 
           // Check if contact already exists
           if (!resolvedContactId && lead.email) {
@@ -78,7 +80,7 @@ export function registerITINFormTools(server: McpServer) {
               fullName = contact.full_name || ""
               email = contact.email || ""
               phone = contact.phone || ""
-              detectedLang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
+              _detectedLang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
             }
           }
         }
@@ -144,7 +146,7 @@ export function registerITINFormTools(server: McpServer) {
             account_id: account_id || null,
             contact_id: resolvedContactId,
             language: formLang,
-            prefilled_data: prefilled,
+            prefilled_data: prefilled as unknown as Json,
             status: "pending",
           })
           .select("id, token")
@@ -882,7 +884,7 @@ ${hr}
 
 // ─── Email Template: ITIN Signing (sent with W-7 + 1040-NR attached) ───
 
-function generateITINSigningEmail(firstName: string, lang: "en" | "it"): string {
+function _generateITINSigningEmail(firstName: string, lang: "en" | "it"): string {
   const hr = '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />'
   const sTd = 'style="padding:10px 12px;background:#f0f5fb;border:1px solid #d1d5db;font-weight:bold;width:32px;text-align:center;color:#1e3a5f"'
   const bTd = 'style="padding:10px 12px;border:1px solid #d1d5db"'

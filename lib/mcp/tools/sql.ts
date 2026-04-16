@@ -345,8 +345,8 @@ export function registerSqlTools(server: McpServer) {
               sql_query: countQuery,
             })
 
-            const rows = Array.isArray(countData) ? countData : []
-            const affectedRows = rows[0]?.affected_rows ?? 0
+            const rows = (Array.isArray(countData) ? countData : []) as Array<Record<string, unknown>>
+            const affectedRows = (rows[0]?.affected_rows as number) ?? 0
 
             if (affectedRows > 50) {
               return {

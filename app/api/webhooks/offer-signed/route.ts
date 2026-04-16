@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify the offer was actually signed (has signature + signed status)
-    if (!offer.signed_at && offer.status !== "signed" && offer.status !== "completed") {
+    if (offer.status !== "signed" && offer.status !== "completed") {
       console.error("[offer-signed] Offer not signed:", offer_token, "status:", offer.status)
       return NextResponse.json({ error: "Offer not signed" }, { status: 403 })
     }
@@ -52,12 +52,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Determine payment method from offer
-    const links = Array.isArray(offer.payment_links) ? offer.payment_links : []
+    const links = (Array.isArray(offer.payment_links) ? offer.payment_links : []) as Array<Record<string, unknown>>
     const hasCheckoutLink = links.length > 0
     const hasBank = !!offer.bank_details
     // Detect gateway from payment_links metadata or URL pattern
     const gatewayType = hasCheckoutLink
-      ? (links[0]?.gateway || (links[0]?.url?.includes("stripe.com") ? "stripe" : "whop"))
+      ? ((links[0]?.gateway as string) || ((links[0]?.url as string)?.includes("stripe.com") ? "stripe" : "whop"))
       : null
     const paymentMethod = hasCheckoutLink ? gatewayType : hasBank ? "bank_transfer" : "unknown"
 
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     // Calculate total from selected_services (respects client's service selection)
     let totalAmount = 0
     const services = Array.isArray(offer.services) ? offer.services : []
-    const selectedServices: string[] = Array.isArray(offer.selected_services) ? offer.selected_services : []
+    const selectedServices: string[] = Array.isArray(offer.selected_services) ? offer.selected_services as unknown as string[] : []
 
     for (const svc of services) {
       const name = (svc as Record<string, unknown>).name as string || ""
@@ -171,7 +171,7 @@ export async function POST(req: NextRequest) {
       if (!contactId && offer.lead_id) {
         const { data: lead } = await supabase
           .from("leads")
-          .select("full_name, email, phone, language, citizenship, date_of_birth, gender")
+          .select("full_name, email, phone, language")
           .eq("id", offer.lead_id)
           .single()
 
@@ -183,9 +183,6 @@ export async function POST(req: NextRequest) {
               email: lead.email,
               phone: lead.phone,
               language: lead.language === "Italian" ? "it" : "en",
-              citizenship: lead.citizenship || null,
-              date_of_birth: lead.date_of_birth || null,
-              gender: lead.gender || null,
               status: "active",
             })
             .select("id")
@@ -262,7 +259,7 @@ export async function POST(req: NextRequest) {
         if (invoiceResult.invoiceNumber && offer.bank_details) {
           const bankDetails = typeof offer.bank_details === "string"
             ? JSON.parse(offer.bank_details)
-            : { ...offer.bank_details }
+            : { ...(offer.bank_details as Record<string, unknown>) }
           bankDetails.reference = `${invoiceResult.invoiceNumber} - ${offer.client_name}`
           await supabase
             .from("offers")
@@ -281,17 +278,17 @@ export async function POST(req: NextRequest) {
 
     // Update bundled_pipelines based on selected_services (remove deselected optional service pipelines)
     if (offer.selected_services && Array.isArray(offer.selected_services) && offer.bundled_pipelines) {
-      const selectedNames = new Set(offer.selected_services)
-      const services = Array.isArray(offer.services) ? offer.services : []
+      const selectedNames = new Set(offer.selected_services as string[])
+      const services = (Array.isArray(offer.services) ? offer.services : []) as Array<Record<string, unknown>>
       // Find optional services that were deselected
       const deselectedPipelines = new Set<string>()
       for (const svc of services) {
-        if ((svc as any).optional && !selectedNames.has(svc.name) && (svc as any).pipeline_type) {
-          deselectedPipelines.add((svc as any).pipeline_type)
+        if (svc.optional && !selectedNames.has(svc.name as string) && svc.pipeline_type) {
+          deselectedPipelines.add(svc.pipeline_type as string)
         }
       }
       if (deselectedPipelines.size > 0) {
-        const finalPipelines = (offer.bundled_pipelines as string[]).filter(p => !deselectedPipelines.has(p))
+        const finalPipelines = (offer.bundled_pipelines as unknown as string[]).filter(p => !deselectedPipelines.has(p))
         await supabase.from("offers").update({ bundled_pipelines: finalPipelines }).eq("token", offer_token)
         console.warn(`[offer-signed] Updated bundled_pipelines: removed ${Array.from(deselectedPipelines).join(", ")}`)
       }
@@ -335,15 +332,15 @@ export async function POST(req: NextRequest) {
       } else if (offer.lead_id) {
         const { data: lead } = await supabase
           .from("leads")
-          .select("account_id")
+          .select("converted_to_account_id")
           .eq("id", offer.lead_id)
           .maybeSingle()
 
-        if (lead?.account_id) {
+        if (lead?.converted_to_account_id) {
           const { data: acct } = await supabase
             .from("accounts")
             .select("drive_folder_id")
-            .eq("id", lead.account_id)
+            .eq("id", lead.converted_to_account_id)
             .single()
           driveFolderId = acct?.drive_folder_id || null
         }
@@ -375,10 +372,10 @@ export async function POST(req: NextRequest) {
 
           // Auto-save to documents table for portal visibility
           if (offer.lead_id) {
-            const { data: leadForDoc } = await supabase.from("leads").select("account_id").eq("id", offer.lead_id).maybeSingle()
-            if (leadForDoc?.account_id) {
+            const { data: leadForDoc } = await supabase.from("leads").select("converted_to_account_id").eq("id", offer.lead_id).maybeSingle()
+            if (leadForDoc?.converted_to_account_id) {
               await autoSaveDocument({
-                accountId: leadForDoc.account_id,
+                accountId: leadForDoc.converted_to_account_id,
                 fileName,
                 documentType: 'Signed Contract',
                 category: 5, // Correspondence

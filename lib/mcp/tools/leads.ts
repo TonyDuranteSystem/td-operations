@@ -33,9 +33,11 @@ export function registerLeadTools(server: McpServer) {
           .limit(Math.min(limit || 25, 100))
 
         if (query) q = q.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
-        if (status) q = q.eq("status", status)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (status) q = q.eq("status", status as any)
         if (source) q = q.ilike("source", `%${source}%`)
-        if (channel) q = q.eq("channel", channel)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (channel) q = q.eq("channel", channel as any)
         if (language) q = q.ilike("language", `%${language}%`)
 
         const { data, error } = await q
@@ -186,10 +188,11 @@ export function registerLeadTools(server: McpServer) {
               lines.push(`   ${preview}`)
             }
 
-            if (Array.isArray(call.action_items) && call.action_items.length > 0) {
-              lines.push(`   Action items: ${call.action_items.length}`)
-              for (const item of call.action_items.slice(0, 5)) {
-                const text = typeof item === "string" ? item : item.text || item.description || JSON.stringify(item)
+            const callActions = call.action_items as unknown as Array<Record<string, unknown>> | null
+            if (Array.isArray(callActions) && callActions.length > 0) {
+              lines.push(`   Action items: ${callActions.length}`)
+              for (const item of callActions.slice(0, 5)) {
+                const text = typeof item === "string" ? item : (item as Record<string, unknown>).text || (item as Record<string, unknown>).description || JSON.stringify(item)
                 lines.push(`   • ${text}`)
               }
             }
@@ -280,7 +283,7 @@ export function registerLeadTools(server: McpServer) {
 
         const { data, error } = await supabaseAdmin
           .from("leads")
-          .insert(insert)
+          .insert(insert as never)
           .select("*")
           .single()
 

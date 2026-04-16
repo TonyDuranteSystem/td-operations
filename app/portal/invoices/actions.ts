@@ -179,8 +179,8 @@ export async function splitInvoice(
       .maybeSingle()
     if (linkedPay) {
       await supabaseAdmin.from('payments').update({
-        status: 'Split',
-        invoice_status: 'Split',
+        status: 'Split' as never,
+        invoice_status: 'Split' as never,
         updated_at: new Date().toISOString(),
       }).eq('id', linkedPay.id)
     }
@@ -205,7 +205,7 @@ export async function splitInvoice(
         contact_id: parent.contact_id || undefined,
         customer_id: parent.customer_id || undefined,
         line_items: lineItems,
-        currency: parent.currency,
+        currency: parent.currency as never,
         due_date: inst.due_date,
         notes: parent.notes || undefined,
         message: parent.message || undefined,
@@ -342,12 +342,22 @@ export async function deleteTemplate(id: string, accountId: string): Promise<Act
   })
 }
 
-export async function listTemplates(accountId: string) {
+interface TemplateRow {
+  id: string
+  name: string
+  customer_id: string | null
+  currency: string
+  items: { description: string; quantity: number; unit_price: number }[]
+  message: string | null
+  created_at: string
+}
+
+export async function listTemplates(accountId: string): Promise<TemplateRow[]> {
   const { data } = await supabaseAdmin
     .from('client_invoice_templates')
     .select('id, name, customer_id, currency, items, message, created_at')
     .eq('account_id', accountId)
     .order('created_at', { ascending: false })
 
-  return data ?? []
+  return (data ?? []) as unknown as TemplateRow[]
 }

@@ -25,6 +25,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -428,10 +429,10 @@ export async function POST(req: NextRequest) {
     try {
       await supabaseAdmin.from("action_log").insert({
         action_type: "itin_form_completed",
-        entity_type: "itin_submissions",
-        entity_id: submission_id,
+        table_name: "itin_submissions",
+        record_id: submission_id,
         summary: `ITIN form completed: ${displayName}. ${docsGenerated ? "W-7 + 1040-NR generated." : "Doc generation pending."} Luca notified.`,
-        details: { token, lead_id: sub.lead_id, contact_id: contactId, account_id: sub.account_id, docs_generated: docsGenerated, results },
+        details: { token, lead_id: sub.lead_id, contact_id: contactId, account_id: sub.account_id, docs_generated: docsGenerated, results } as unknown as Json,
       })
     } catch { /* non-blocking */ }
 

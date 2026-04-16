@@ -87,7 +87,7 @@ export async function onFirstInstallmentPaid(
           service_name: `CMRA ${year} - ${account.company_name}`,
           account_id: accountId,
           contact_id: contactId,
-          current_stage: cmraStage?.[0]?.stage_name || "Lease Created",
+          stage: cmraStage?.[0]?.stage_name || "Lease Created",
           status: "active",
           assigned_to: "Luca",
           notes: `Auto-created from 1st installment ${year}`,
@@ -186,7 +186,7 @@ export async function onFirstInstallmentPaid(
           service_name: `Tax Return ${taxYear} - ${account.company_name}`,
           account_id: accountId,
           contact_id: contactId,
-          current_stage: taxStage?.[0]?.stage_name || "Activated",
+          stage: taxStage?.[0]?.stage_name || "Activated",
           status: "active",
           assigned_to: "Luca",
           notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.`,
@@ -213,11 +213,11 @@ export async function onFirstInstallmentPaid(
         await supabaseAdmin.from("tax_returns").insert({
           account_id: accountId,
           tax_year: taxYear,
-          return_type: returnType,
+          return_type: returnType as never,
           status: "Paid - Not Started",
           paid: true,
           paid_date: new Date().toISOString().split("T")[0],
-        })
+        } as never)
         steps.push({ step: "tax_return_record", status: "ok", detail: `Created for ${taxYear} (${returnType})` })
       }
     }
@@ -331,24 +331,24 @@ export async function onSecondInstallmentPaid(
   try {
     const { data: taxSd } = await supabaseAdmin
       .from("service_deliveries")
-      .select("id, current_stage")
+      .select("id, stage")
       .eq("account_id", accountId)
       .eq("service_type", "Tax Return")
       .eq("status", "active")
       .maybeSingle()
 
-    if (taxSd && taxSd.current_stage === "Awaiting 2nd Payment") {
+    if (taxSd && taxSd.stage === "Awaiting 2nd Payment") {
       await supabaseAdmin
         .from("service_deliveries")
         .update({
-          current_stage: "Ready for Filing",
+          stage: "Ready for Filing",
           updated_at: new Date().toISOString(),
         })
         .eq("id", taxSd.id)
 
       steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Ready for Filing` })
     } else if (taxSd) {
-      steps.push({ step: "tax_sd_advance", status: "skipped", detail: `SD at "${taxSd.current_stage}", not awaiting payment` })
+      steps.push({ step: "tax_sd_advance", status: "skipped", detail: `SD at "${taxSd.stage}", not awaiting payment` })
     }
   } catch (e) {
     steps.push({ step: "tax_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
@@ -392,7 +392,7 @@ export async function onSecondInstallmentPaid(
         description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
         assigned_to: "Luca",
         priority: "High",
-        category: "Tax",
+        category: "Tax" as never,
         status: "To Do",
         account_id: accountId,
         created_by: "System",

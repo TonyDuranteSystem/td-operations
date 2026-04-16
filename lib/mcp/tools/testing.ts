@@ -441,8 +441,10 @@ async function scenarioTaxAnnual(): Promise<TestScenarioResult> {
     .from('tax_returns')
     .insert({
       account_id: accountId,
+      company_name: 'TEST - Existing Corp LLC',
+      deadline: `${new Date().getFullYear()}-04-15`,
       tax_year: new Date().getFullYear() - 1,
-      return_type: '5472',
+      return_type: '5472' as never,
       status: 'Paid - Not Started',
       paid: true,
     })
@@ -538,7 +540,7 @@ export async function countTestRecords(): Promise<CleanupCounts> {
 
   for (const table of tables) {
     const { count } = await supabaseAdmin
-      .from(table)
+      .from(table as never)
       .select('id', { count: 'exact', head: true })
       .eq('is_test', true)
     counts[table] = count ?? 0
@@ -571,7 +573,7 @@ export async function deleteTestRecords(): Promise<CleanupCounts> {
     .from('contacts')
     .select('id')
     .eq('is_test', true)
-  const testContactIds = testContacts?.map(r => r.id) || []
+  const _testContactIds = testContacts?.map(r => r.id) || []
 
   // Delete in dependency order (children first)
 
@@ -606,7 +608,7 @@ export async function deleteTestRecords(): Promise<CleanupCounts> {
   const testTables = ['payments', 'service_deliveries', 'accounts', 'contacts', 'leads']
   for (const table of testTables) {
     const { count } = await supabaseAdmin
-      .from(table)
+      .from(table as never)
       .delete({ count: 'exact' })
       .eq('is_test', true)
     deleted[table] = count ?? 0

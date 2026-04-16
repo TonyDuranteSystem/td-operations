@@ -51,11 +51,11 @@ export async function findAndLinkCall(
       .order('created_at', { ascending: false })
       .limit(200)
 
-    const callMatches: CallMatch[] = (recentCalls || []).filter(call => {
+    const callMatches = (recentCalls || []).filter(call => {
       const attendees = call.attendees as Array<{ name?: string; email?: string }> | null
       if (!Array.isArray(attendees)) return false
       return attendees.some(a => a.email?.toLowerCase() === email)
-    })
+    }) as unknown as CallMatch[]
 
     if (callMatches.length === 0) {
       return { success: false, error: 'No matching call found for this email' }
@@ -162,7 +162,7 @@ export async function searchCallsByName(
       .order('created_at', { ascending: false })
       .limit(10)
 
-    return { calls: data || [] }
+    return { calls: (data || []) as unknown as CallMatch[] }
   } catch {
     return { calls: [] }
   }
@@ -202,7 +202,7 @@ export async function toggleOfferDiscussion(
     await supabaseAdmin
       .from('leads')
       .update({
-        offer_status: newStatus === 'under_discussion' ? 'Under Discussion' : 'Published',
+        offer_status: (newStatus === 'under_discussion' ? 'Under Discussion' : 'Published') as never,
         updated_at: new Date().toISOString(),
       })
       .eq('id', leadId)

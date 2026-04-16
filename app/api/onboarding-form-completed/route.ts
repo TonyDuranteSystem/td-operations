@@ -24,6 +24,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -142,7 +143,7 @@ export async function POST(req: NextRequest) {
             service_type: "Client Onboarding",
             service_name: `Client Onboarding - ${leadName} (${companyName})`,
             contact_id: contactId,
-            current_stage: firstStage,
+            stage: firstStage,
             status: "active",
             assigned_to: "Luca",
             notes: `Auto-created from onboarding form ${token}`,
@@ -375,7 +376,7 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
           description: `Onboarding form completed for ${leadName}.\n\nCompany: ${companyName}\nState: ${submittedData.state || sub.state || "N/A"}\nEIN: ${submittedData.ein || "N/A"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Run onboarding_form_review(token="${token}", apply_changes=true)\n3. Start RA change on Harbor Compliance\n4. Mark this task as Done when CRM setup is complete`,
           assigned_to: "Luca",
           priority: "High",
-          category: "Onboarding",
+          category: "Onboarding" as never,
           status: "To Do",
           due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           delivery_id: deliveryId || null,
@@ -437,10 +438,10 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
     try {
       await supabaseAdmin.from("action_log").insert({
         action_type: "onboarding_form_completed",
-        entity_type: "onboarding_submissions",
-        entity_id: submission_id,
+        table_name: "onboarding_submissions",
+        record_id: submission_id,
         summary: `Onboarding form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
-        details: { token, lead_id: leadId, contact_id: contactId, results },
+        details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
       })
     } catch { /* non-blocking */ }
 

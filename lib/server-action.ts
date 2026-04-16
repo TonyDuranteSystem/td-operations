@@ -95,8 +95,8 @@ export async function updateWithLock(
     // the record but the Next.js RSC cache served a stale updated_at.
     const retryNow = new Date().toISOString()
     const { error: retryError } = await supabaseAdmin
-      .from(table)
-      .update({ ...updates, updated_at: retryNow })
+      .from(table as never)
+      .update({ ...updates, updated_at: retryNow } as never)
       .eq("id", id)
 
     if (retryError) {

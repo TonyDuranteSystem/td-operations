@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
       .select('value')
       .eq('key', 'ai_agent')
       .single()
-    if (!aiSetting?.value?.enabled_for_team) {
+    if (!(aiSetting?.value as Record<string, unknown> | null)?.enabled_for_team) {
       return NextResponse.json({ error: 'AI Agent is not enabled for team members. Ask your admin to enable it in Team Management.' }, { status: 403 })
     }
   }

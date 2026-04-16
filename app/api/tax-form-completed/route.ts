@@ -262,7 +262,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
             ].join("\n"),
             assigned_to: "Luca",
             priority: "High",
-            category: "Tax",
+            category: "Tax" as never,
             status: "To Do",
             account_id: sub.account_id,
             created_by: "System",
@@ -310,17 +310,17 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
       try {
         const { data: sd } = await supabaseAdmin
           .from("service_deliveries")
-          .select("id, current_stage")
+          .select("id, stage")
           .eq("account_id", sub.account_id)
           .eq("service_type", "Tax Return")
           .eq("status", "active")
           .limit(1)
           .maybeSingle()
 
-        if (sd && (sd.current_stage === "Data Link Sent" || sd.current_stage === "Activated")) {
+        if (sd && (sd.stage === "Data Link Sent" || sd.stage === "Activated")) {
           await supabaseAdmin
             .from("service_deliveries")
-            .update({ current_stage: "Data Received", updated_at: new Date().toISOString() })
+            .update({ stage: "Data Received", updated_at: new Date().toISOString() })
             .eq("id", sd.id)
           results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Received` })
         }

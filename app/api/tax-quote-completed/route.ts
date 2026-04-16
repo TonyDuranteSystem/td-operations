@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
           phone: sub.client_phone || null,
           source: "Tax Quote Form",
           reason: `Tax Return ${sub.tax_year} - ${llcTypeLabel}`,
-          channel: "Website",
+          channel: "Website" as never,
           language: sub.language === "it" ? "Italian" : "English",
           status: "New",
           notes: `Auto-created from tax quote form.\nLLC: ${sub.llc_name}\nState: ${sub.llc_state}\nType: ${llcTypeLabel}\nTax Year: ${sub.tax_year}`,

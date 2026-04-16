@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
     })
 
     // Fallback: if exec_sql RPC doesn't exist, run checks individually
-    const findings = error ? await runChecksIndividually() : (rows as AuditRow[])
+    const findings = error ? await runChecksIndividually() : (rows as unknown as AuditRow[])
 
     const p0Count = findings.filter((r) => r.severity === "P0").length
     const p1Count = findings.filter((r) => r.severity === "P1").length
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
         title: `[AUTO] Audit Health Check: ${p0Count} P0 issue(s) found`,
         status: "todo",
         priority: "high",
-        type: "bug",
+        type: "bugfix",
         progress_log: JSON.stringify(
           p0Findings.map((f) => ({
             date: new Date().toISOString().split("T")[0],
@@ -244,15 +244,15 @@ async function runChecksIndividually(): Promise<AuditRow[]> {
       // as the main path at line 27-28. Fallback was also silently returning
       // empty rows from exec_sql.
       const { data } = await supabaseAdmin.rpc("exec_sql", { sql_query: check.sql })
-      const row = Array.isArray(data) ? data[0] : null
-      const cnt = row?.cnt ?? 0
+      const row = Array.isArray(data) ? data[0] as Record<string, unknown> | null : null
+      const cnt = (row?.cnt as number) ?? 0
       if (cnt > 0) {
         results.push({
           check_name: check.name,
           table_name: check.table,
           severity: check.severity,
           records_affected: cnt,
-          sample_ids: row?.vals ?? null,
+          sample_ids: (row?.vals as string) ?? null,
           description: `${check.desc}: ${cnt} rows`,
         })
       }

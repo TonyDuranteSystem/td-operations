@@ -34,8 +34,10 @@ export function registerMessagingTools(server: McpServer) {
           .order("last_message_at", { ascending: false, nullsFirst: false })
           .range(offset, offset + Math.min(limit, 100) - 1)
 
+        // @ts-expect-error Type instantiation is excessively deep
         if (channel_id) q = q.eq("channel_id", channel_id)
         if (unread_only) q = q.gt("unread_count", 0)
+        // @ts-expect-error Type instantiation is excessively deep
         if (account_id) q = q.eq("account_id", account_id)
 
         const { data, error } = await q

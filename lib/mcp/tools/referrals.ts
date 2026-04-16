@@ -55,7 +55,7 @@ export function registerReferralTools(server: McpServer) {
 
         const { data, error } = await supabaseAdmin
           .from("referrals")
-          .insert(insert)
+          .insert(insert as never)
           .select()
           .single()
 
@@ -262,7 +262,7 @@ export function registerReferralTools(server: McpServer) {
 
         const { data: payout, error: payErr } = await supabaseAdmin
           .from("referral_payouts")
-          .insert(payoutInsert)
+          .insert(payoutInsert as never)
           .select()
           .single()
 
@@ -357,7 +357,7 @@ export function registerReferralTools(server: McpServer) {
         })
 
         // If rpc doesn't exist, fall back to raw query
-        let statusRows = stats
+        let statusRows: Array<Record<string, unknown>> | null = stats as unknown as Array<Record<string, unknown>> | null
         if (statsErr) {
           const { data: fallback } = await supabaseAdmin
             .from("referrals")
@@ -429,9 +429,9 @@ export function registerReferralTools(server: McpServer) {
         lines.push("═══ STATUS SUMMARY ═══")
         if (statusRows && Array.isArray(statusRows)) {
           for (const row of statusRows) {
-            const s = row.status || "unknown"
+            const s = String(row.status || "unknown")
             const icon = statusIcons[s] || "•"
-            lines.push(`${icon} ${s}: ${row.count}  (commission: €${Number(row.total_commission).toFixed(0)}, paid: €${Number(row.total_paid).toFixed(0)})`)
+            lines.push(`${icon} ${s}: ${row.count}  (commission: \u20AC${Number(row.total_commission).toFixed(0)}, paid: \u20AC${Number(row.total_paid).toFixed(0)})`)
             if (s === "converted") totalPending += Number(row.total_commission) - Number(row.total_paid)
             if (["credited", "paid"].includes(s)) totalPaidOut += Number(row.total_paid)
           }

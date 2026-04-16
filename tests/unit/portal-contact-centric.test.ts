@@ -51,7 +51,8 @@ describe('Contact-centric architecture rules', () => {
 
   it('realtime filter uses correct column based on available ID', () => {
     // With account_id
-    const filterColumn1 = 'test-account' ? 'account_id' : 'contact_id'
+    const testAccount: string | null = 'test-account'
+    const filterColumn1 = testAccount ? 'account_id' : 'contact_id'
     expect(filterColumn1).toBe('account_id')
 
     // Without account_id (contact only)

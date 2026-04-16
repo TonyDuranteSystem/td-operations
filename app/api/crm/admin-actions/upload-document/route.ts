@@ -247,6 +247,7 @@ export async function POST(req: NextRequest) {
       await supabaseAdmin.from('portal_messages').insert({
         contact_id: contactId,
         account_id: accountId,
+        sender_id: 'system',
         sender_type: 'admin',
         message: chatMsg,
       })

@@ -11,6 +11,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import type { Json } from '@/lib/database.types'
 
 const MERCURY_BASE = 'https://api.mercury.com/api/v1'
 
@@ -192,7 +193,7 @@ export async function syncMercuryTransactions(
             sender_name: senderName,
             sender_reference: senderReference,
             memo,
-            raw_data: txn as unknown as Record<string, unknown>,
+            raw_data: txn as unknown as Json,
             status: isIncoming ? 'unmatched' : 'outgoing',
           }, { onConflict: 'external_id' })
 

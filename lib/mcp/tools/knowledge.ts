@@ -103,7 +103,7 @@ export function registerKnowledgeTools(server: McpServer) {
           await supabaseAdmin
             .from("approved_responses")
             .update({
-              usage_count: (data.usage_count || 0) + 1,
+              usage_count: ((data as Record<string, unknown>).usage_count as number || 0) + 1,
               last_used_date: new Date().toISOString().split("T")[0],
             })
             .eq("id", id)
@@ -162,7 +162,7 @@ export function registerKnowledgeTools(server: McpServer) {
               title,
               category,
               response_text: content,
-              service_type,
+              service_type: service_type as never,
               language: language || "en",
               tags,
               notes,

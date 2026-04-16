@@ -996,7 +996,7 @@ async function runSqlQuery(p: any) {
   if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b/i.test(sql)) {
     return JSON.stringify({ error: 'Write operations are not allowed' })
   }
-  const { data, error } = await supabaseAdmin.rpc('execute_sql', { query: sql })
+  const { data, error } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql })
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
 }
@@ -1281,6 +1281,7 @@ async function updateContact(p: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function advanceServiceStage(p: any) {
   // Find the active service_delivery for this service
+  // @ts-expect-error Type instantiation is excessively deep
   const { data: delivery, error: dErr } = await supabaseAdmin
     .from('service_deliveries')
     .select('*')
@@ -1311,7 +1312,7 @@ async function advanceServiceStage(p: any) {
   }
 
   // Update delivery to the next stage
-  const isCompleted = nextStage.is_final === true
+  const isCompleted = (nextStage as Record<string, unknown>).is_final === true
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const deliveryUpdate: Record<string, any> = {
     stage: nextStage.stage_name,
@@ -1344,8 +1345,8 @@ async function advanceServiceStage(p: any) {
         .insert({
           task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
           assigned_to: taskDef.assigned_to || 'Luca',
-          category: taskDef.category || 'Internal',
-          priority: taskDef.priority || 'Normal',
+          category: (taskDef.category || 'Internal') as never,
+          priority: (taskDef.priority || 'Normal') as never,
           description: taskDef.description || `Auto-created by pipeline advance to "${nextStage.stage_name}"`,
           status: 'To Do',
           account_id: delivery.account_id,
@@ -1384,7 +1385,7 @@ async function logConversation(p: any) {
 
   const { data, error } = await supabaseAdmin
     .from('conversations')
-    .insert(insert)
+    .insert(insert as never)
     .select('id, topic, channel, status')
     .single()
   if (error) return JSON.stringify({ error: error.message })

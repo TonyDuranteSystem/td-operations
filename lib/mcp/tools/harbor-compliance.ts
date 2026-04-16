@@ -107,37 +107,15 @@ Use hc_list_companies to verify after syncing.`,
           return { content: [{ type: "text" as const, text: `Account "${account.company_name || account.id}" missing company_name or state_of_formation.` }] }
         }
 
-        // Fetch primary contact for address
-        const { data: contactLinks } = await supabaseAdmin
-          .from("account_contacts")
-          .select("contact_id")
-          .eq("account_id", params.account_id)
-          .limit(1)
-
-        let address = {
+        // Default to TD's physical address — contacts table has no address columns.
+        // When HC integration needs per-client addresses, a dedicated address source
+        // (e.g. accounts.physical_address or a future addresses table) should be used.
+        const address = {
           address_line_1: "10225 Ulmerton Rd",
           locality: "Largo",
           administrative_area: { id: "" }, // will be resolved
           postal_code: "33771",
           country: { id: "" }, // US
-        }
-
-        if (contactLinks?.length) {
-          const { data: contact } = await supabaseAdmin
-            .from("contacts")
-            .select("address_line1, city, state, zip_code, country")
-            .eq("id", contactLinks[0].contact_id)
-            .single()
-
-          if (contact?.address_line1) {
-            address = {
-              address_line_1: contact.address_line1,
-              locality: contact.city || "Largo",
-              administrative_area: { id: contact.state || "" },
-              postal_code: contact.zip_code || "",
-              country: { id: contact.country || "US" },
-            }
-          }
         }
 
         // Map entity_type to HC business structure

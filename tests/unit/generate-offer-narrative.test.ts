@@ -50,15 +50,15 @@ describe('validateNarrative', () => {
     n.intro_en = ''
     const result = validateNarrative(n)
     expect(result.valid).toBe(false)
-    if (!result.valid) expect(result.error).toContain('intro_en')
+    if (!result.valid) expect((result as { valid: false; error: string }).error).toContain('intro_en')
   })
 
   it('rejects missing intro_it', () => {
     const n = validNarrative()
-    ;(n as Record<string, unknown>).intro_it = 123
+    ;(n as unknown as Record<string, unknown>).intro_it = 123
     const result = validateNarrative(n)
     expect(result.valid).toBe(false)
-    if (!result.valid) expect(result.error).toContain('intro_it')
+    if (!result.valid) expect((result as { valid: false; error: string }).error).toContain('intro_it')
   })
 
   it('rejects empty strategy array', () => {
@@ -66,7 +66,7 @@ describe('validateNarrative', () => {
     n.strategy = []
     const result = validateNarrative(n)
     expect(result.valid).toBe(false)
-    if (!result.valid) expect(result.error).toContain('strategy')
+    if (!result.valid) expect((result as { valid: false; error: string }).error).toContain('strategy')
   })
 
   it('rejects strategy items with missing fields', () => {
@@ -74,7 +74,7 @@ describe('validateNarrative', () => {
     n.strategy = [{ step_number: 1, title: 'OK' } as any]
     const result = validateNarrative(n)
     expect(result.valid).toBe(false)
-    if (!result.valid) expect(result.error).toContain('strategy')
+    if (!result.valid) expect((result as { valid: false; error: string }).error).toContain('strategy')
   })
 
   it('rejects empty next_steps array', () => {

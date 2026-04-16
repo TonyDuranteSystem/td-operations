@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 export function registerOnboardingTools(server: McpServer) {
 
@@ -16,7 +17,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_create",
-    "Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (${APP_BASE_URL}/onboarding-form/{token}/{access_code}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.",
+    `Create an onboarding data collection form for a client with an existing LLC. Pre-fills owner info from lead. Entity type (SMLLC/MMLLC) and state set as metadata. Returns the form URL (${APP_BASE_URL}/onboarding-form/{token}/{access_code}). Admin preview: append ?preview=td to the form URL to bypass the email gate. ALWAYS provide the admin preview link after creating a form so Antonio can review it before sending. Use gmail_send to send the link. Unlike formation_form_create, this is for clients who already have an LLC and need management services.`,
     {
       lead_id: z.string().uuid().describe("Lead UUID"),
       entity_type: z.enum(["SMLLC", "MMLLC"]).optional().default("SMLLC").describe("Entity type (default: SMLLC)"),
@@ -76,11 +77,11 @@ export function registerOnboardingTools(server: McpServer) {
         if (contactId) {
           const { data: ct } = await supabaseAdmin
             .from("contacts")
-            .select("itin, itin_issue_date, citizenship, date_of_birth")
+            .select("itin_number, itin_issue_date, citizenship, date_of_birth")
             .eq("id", contactId)
             .single()
           if (ct) {
-            if (ct.itin) prefilled.owner_itin = ct.itin
+            if (ct.itin_number) prefilled.owner_itin = ct.itin_number
             if (ct.itin_issue_date) prefilled.owner_itin_issue_date = ct.itin_issue_date
             if (ct.citizenship) prefilled.owner_nationality = ct.citizenship
             if (ct.date_of_birth) prefilled.owner_dob = ct.date_of_birth
@@ -125,7 +126,7 @@ export function registerOnboardingTools(server: McpServer) {
             entity_type: entity_type || "SMLLC",
             state: state || "NM",
             language: formLang,
-            prefilled_data: prefilled,
+            prefilled_data: prefilled as unknown as Json,
             status: "pending",
           })
           .select("id, token, access_code")
@@ -404,7 +405,7 @@ export function registerOnboardingTools(server: McpServer) {
               if (!ownerFullName) throw new Error("Cannot create contact: owner name is empty")
               const { data: newContact, error: createErr } = await supabaseAdmin
                 .from("contacts")
-                .insert({ ...contactFields, status: "Active" })
+                .insert({ ...contactFields, status: "Active" } as never)
                 .select("id")
                 .single()
               if (createErr || !newContact) {
@@ -564,7 +565,7 @@ export function registerOnboardingTools(server: McpServer) {
               if (!companyName) throw new Error("Cannot create account: company name is empty")
               const { data: newAcct, error: acctCreateErr } = await supabaseAdmin
                 .from("accounts")
-                .insert({ ...acctFields, status: "Active" })
+                .insert({ ...acctFields, status: "Active" } as never)
                 .select("id")
                 .single()
               if (acctCreateErr || !newAcct) {

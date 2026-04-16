@@ -28,7 +28,8 @@ export function registerOperationsTools(server: McpServer) {
           .neq("status", "Cancelled")
 
         if (assigned_to) q = q.ilike("assigned_to", `%${assigned_to}%`)
-        if (category) q = q.eq("category", category)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (category) q = q.eq("category", category as any)
 
         const { data, error } = await q
         if (error) throw new Error(error.message)
@@ -210,7 +211,7 @@ export function registerOperationsTools(server: McpServer) {
 
         const { data, error } = await supabaseAdmin
           .from("tasks")
-          .insert(insert)
+          .insert(insert as never)
           .select("*")
           .single()
 
@@ -427,7 +428,7 @@ export function registerOperationsTools(server: McpServer) {
 
         const { data, error } = await supabaseAdmin
           .from("accounts")
-          .insert(insert)
+          .insert(insert as never)
           .select("*")
           .single()
 
@@ -497,7 +498,7 @@ export function registerOperationsTools(server: McpServer) {
 
         const { data, error } = await supabaseAdmin
           .from("contacts")
-          .insert(insert)
+          .insert(insert as never)
           .select("*")
           .single()
 
@@ -619,7 +620,8 @@ export function registerOperationsTools(server: McpServer) {
 
         if (account_id) q = q.eq("account_id", account_id)
         if (contact_id) q = q.eq("contact_id", contact_id)
-        if (channel) q = q.eq("channel", channel)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (channel) q = q.eq("channel", channel as any)
         if (category) q = q.eq("category", category)
         if (query) q = q.or(`topic.ilike.%${query}%,client_message.ilike.%${query}%`)
         if (date_from) q = q.gte("date", `${date_from}T00:00:00`)
@@ -686,7 +688,8 @@ export function registerOperationsTools(server: McpServer) {
           .order("title")
 
         if (query) q = q.or(`title.ilike.%${query}%,content.ilike.%${query}%`)
-        if (service_type) q = q.eq("service_type", service_type)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (service_type) q = q.eq("service_type", service_type as any)
 
         const { data, error } = await q
         if (error) throw new Error(error.message)
@@ -1050,8 +1053,8 @@ export function registerOperationsTools(server: McpServer) {
             await supabaseAdmin.from("tasks").insert({
               task_title: `[${name}] ${taskDef.title}`,
               assigned_to: taskDef.assigned_to || "Luca",
-              category: taskDef.category || "Internal",
-              priority: taskDef.priority || "Normal",
+              category: (taskDef.category || "Internal") as never,
+              priority: (taskDef.priority || "Normal") as never,
               description: `Auto-created on service delivery creation`,
               status: "To Do",
               account_id,
@@ -1185,15 +1188,17 @@ export function registerOperationsTools(server: McpServer) {
         }
 
         // Issue: tasks open but service updated
-        if (openTasksWithUpdatedServices?.length) {
-          for (const row of openTasksWithUpdatedServices) {
-            issues.push(`⚠️ **${row.company_name}**: Task "${row.task_title}" still ${row.task_status}, but service was updated ${new Date(row.service_updated).toLocaleString("it-IT", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })}`)
+        const taskRows = openTasksWithUpdatedServices as unknown as Array<Record<string, unknown>> | null
+        if (taskRows?.length) {
+          for (const row of taskRows) {
+            issues.push(`⚠️ **${row.company_name}**: Task "${row.task_title}" still ${row.task_status}, but service was updated ${new Date(row.service_updated as string).toLocaleString("it-IT", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })}`)
           }
         }
 
         // Issue: stage orphan tasks
-        if (stageOrphans?.length) {
-          for (const row of stageOrphans) {
+        const orphanRows = stageOrphans as unknown as Array<Record<string, unknown>> | null
+        if (orphanRows?.length) {
+          for (const row of orphanRows) {
             issues.push(`⚠️ **${row.company_name}**: Delivery at stage "${row.stage}" but task "${row.task_title}" still ${row.task_status}`)
           }
         }

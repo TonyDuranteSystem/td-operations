@@ -103,7 +103,7 @@ export default async function DashboardLayout({
       .select('value')
       .eq('key', 'ai_agent')
       .single()
-    showAiAgent = aiSetting?.value?.enabled_for_team === true
+    showAiAgent = (aiSetting?.value as Record<string, unknown> | null)?.enabled_for_team === true
   }
 
   return (

@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { matchAndReconcile } from "@/lib/bank-feed-matcher"
 import crypto from "crypto"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -84,12 +85,12 @@ export async function POST(req: NextRequest) {
 
     await supabaseAdmin.from("action_log").insert({
       action_type: "banking_circle_webhook",
-      entity_type: "td_bank_feeds",
-      entity_id: feed.id,
+      table_name: "td_bank_feeds",
+      record_id: feed.id,
       summary: matchResult.matched
         ? `BC deposit €${amount} auto-matched to invoice ${matchResult.invoiceNumber}`
         : `BC deposit €${amount} stored (unmatched)`,
-      details: { amount, currency: txn.currency, sender: txn.debtorName, matchResult },
+      details: { amount, currency: txn.currency, sender: txn.debtorName, matchResult } as unknown as Json,
     })
 
     return NextResponse.json({

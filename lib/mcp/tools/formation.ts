@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 export function registerFormationTools(server: McpServer) {
 
@@ -92,7 +93,7 @@ export function registerFormationTools(server: McpServer) {
             entity_type: entity_type || "SMLLC",
             state: state || "NM",
             language: formLang,
-            prefilled_data: prefilled,
+            prefilled_data: prefilled as unknown as Json,
             status: "pending",
           })
           .select("id, token, access_code")
@@ -387,11 +388,12 @@ export function registerFormationTools(server: McpServer) {
           lines.push(`➡️ Check progress: job_status('${jobId}')`)
 
           // Upgrade portal tier: onboarding → active
-          if (sub.account_id) {
+          const formAccountId = (sub as Record<string, unknown>).account_id as string | undefined
+          if (formAccountId) {
             await supabaseAdmin
               .from("accounts")
               .update({ portal_tier: "active", updated_at: new Date().toISOString() })
-              .eq("id", sub.account_id)
+              .eq("id", formAccountId)
               .in("portal_tier", ["onboarding"])
             lines.push(`🔓 Portal tier upgraded: onboarding → active`)
           }
@@ -559,7 +561,7 @@ Note: Steps are now auto-executed at payment. This tool is for manual recovery o
           .from("pending_activations")
           .update({
             status: "activated",
-            prepared_steps: preparedSteps,
+            prepared_steps: preparedSteps as unknown as Json,
             activated_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
@@ -568,9 +570,10 @@ Note: Steps are now auto-executed at payment. This tool is for manual recovery o
         // Log successful confirmation
         await supabaseAdmin.from("action_log").insert({
           action_type: "formation_confirmed",
-          entity_type: "pending_activations",
-          entity_id: activation_id,
-          details: { execution_results: executionResults },
+          table_name: "pending_activations",
+          record_id: activation_id,
+          summary: `Formation confirmed for activation ${activation_id}`,
+          details: { execution_results: executionResults } as unknown as Json,
         })
 
         for (const r of executionResults) {

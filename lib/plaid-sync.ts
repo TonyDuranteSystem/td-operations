@@ -6,6 +6,7 @@
 
 import { plaidClient } from '@/lib/plaid'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import type { Json } from '@/lib/database.types'
 
 export async function syncPlaidTransactions(accessToken: string, bankName: string) {
   // Get cursor from last sync
@@ -42,7 +43,7 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
         sender_name: txn.merchant_name ?? txn.name,
         sender_reference: txn.payment_meta?.reference_number ?? null,
         memo: txn.name,
-        raw_data: txn as unknown as Record<string, unknown>,
+        raw_data: txn as unknown as Json,
         status: isIncoming ? 'unmatched' : 'outgoing',
       }, { onConflict: 'external_id' })
 
@@ -60,7 +61,7 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
         .update({
           memo: txn.name,
           sender_name: txn.merchant_name ?? txn.name,
-          raw_data: txn as unknown as Record<string, unknown>,
+          raw_data: txn as unknown as Json,
         })
         .eq('external_id', txn.transaction_id)
 

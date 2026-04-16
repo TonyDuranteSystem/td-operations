@@ -4,6 +4,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 
 export interface JobPayload {
   [key: string]: unknown
@@ -58,7 +59,7 @@ export async function enqueueJob(params: {
     .from("job_queue")
     .insert({
       job_type: params.job_type,
-      payload: params.payload,
+      payload: params.payload as unknown as Json,
       priority: params.priority ?? 5,
       max_attempts: params.max_attempts ?? 3,
       account_id: params.account_id || null,
@@ -88,7 +89,7 @@ export async function claimNextJob(): Promise<Job | null> {
   const { data, error } = await supabaseAdmin.rpc("claim_next_job")
   if (error) throw new Error(`claim_next_job failed: ${error.message}`)
   if (!data || (Array.isArray(data) && data.length === 0)) return null
-  return Array.isArray(data) ? data[0] : data
+  return (Array.isArray(data) ? data[0] : data) as unknown as Job
 }
 
 /**
@@ -97,7 +98,7 @@ export async function claimNextJob(): Promise<Job | null> {
 export async function updateJobProgress(jobId: string, result: JobResult): Promise<void> {
   const { error } = await supabaseAdmin
     .from("job_queue")
-    .update({ result })
+    .update({ result: result as unknown as Json })
     .eq("id", jobId)
   if (error) throw new Error(`updateJobProgress failed: ${error.message}`)
 }
@@ -110,7 +111,7 @@ export async function completeJob(jobId: string, result: JobResult): Promise<voi
     .from("job_queue")
     .update({
       status: "completed",
-      result,
+      result: result as unknown as Json,
       completed_at: new Date().toISOString(),
     })
     .eq("id", jobId)
@@ -139,7 +140,7 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
         status: "pending",
         attempts,
         error: errorMsg,
-        result: result || undefined,
+        result: (result || undefined) as unknown as Json,
         started_at: null,
       })
       .eq("id", jobId)
@@ -152,7 +153,7 @@ export async function failJob(jobId: string, errorMsg: string, result?: JobResul
         status: "failed",
         attempts,
         error: errorMsg,
-        result: result || undefined,
+        result: (result || undefined) as unknown as Json,
         completed_at: new Date().toISOString(),
       })
       .eq("id", jobId)

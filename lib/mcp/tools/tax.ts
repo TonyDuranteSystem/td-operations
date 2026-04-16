@@ -10,6 +10,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, findTaxFolder, findOrCreateYearFolder as _findOrCreateYearFolder, downloadFileBinary } from "@/lib/google-drive"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
+import type { Json } from "@/lib/database.types"
 
 export function registerTaxTools(server: McpServer) {
 
@@ -39,8 +40,10 @@ export function registerTaxTools(server: McpServer) {
           .limit(Math.min(limit || 50, 200))
 
         if (tax_year) q = q.eq("tax_year", tax_year)
-        if (status) q = q.eq("status", status)
-        if (return_type) q = q.eq("return_type", return_type)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (status) q = q.eq("status", status as any)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (return_type) q = q.eq("return_type", return_type as any)
         if (account_id) q = q.eq("account_id", account_id)
         if (contact_id) q = q.eq("contact_id", contact_id)
         if (company_name) q = q.ilike("company_name", `%${company_name}%`)
@@ -125,7 +128,8 @@ export function registerTaxTools(server: McpServer) {
           .select("*, accounts!left(is_test)")
           .eq("tax_year", year)
 
-        if (return_type) q = q.eq("return_type", return_type)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (return_type) q = q.eq("return_type", return_type as any)
 
         const { data: rawData, error } = await q
         if (error) throw new Error(error.message)
@@ -432,7 +436,7 @@ export function registerTaxTools(server: McpServer) {
             tax_year,
             entity_type,
             language: formLang,
-            prefilled_data: prefilled,
+            prefilled_data: prefilled as unknown as Json,
             has_articles_on_file: hasArticles,
             has_ein_letter_on_file: hasEin,
             tax_return_id: taxReturn?.id || null,
@@ -1162,7 +1166,7 @@ export function registerTaxTools(server: McpServer) {
         // Advance SD if appropriate
         const { data: sd } = await supabaseAdmin
           .from("service_deliveries")
-          .select("id, current_stage")
+          .select("id, stage")
           .eq("account_id", account_id)
           .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
           .eq("status", "active")
@@ -1172,7 +1176,7 @@ export function registerTaxTools(server: McpServer) {
           await supabaseAdmin
             .from("service_deliveries")
             .update({
-              current_stage: "Preparation - Sent to Accountant",
+              stage: "Preparation - Sent to Accountant",
               updated_at: new Date().toISOString(),
             })
             .eq("id", sd.id)

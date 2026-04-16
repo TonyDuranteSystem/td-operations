@@ -207,14 +207,15 @@ async function createServiceDelivery(
 
     let tasksCreated = 0
     if (pipelineStage?.auto_tasks && Array.isArray(pipelineStage.auto_tasks)) {
-      for (const taskDef of pipelineStage.auto_tasks) {
-        const title = taskDef.title || taskDef.task
+      for (const rawTask of pipelineStage.auto_tasks) {
+        const taskDef = rawTask as Record<string, unknown>
+        const title = (taskDef.title as string) || (taskDef.task as string)
         if (!title) continue
         await supabaseAdmin.from("tasks").insert({
           task_title: title,
-          assigned_to: taskDef.assigned_to || "Luca",
-          category: taskDef.category || "Internal",
-          priority: taskDef.priority || "Normal",
+          assigned_to: (taskDef.assigned_to as string) || "Luca",
+          category: ((taskDef.category as string) || "Internal") as never,
+          priority: ((taskDef.priority as string) || "Normal") as never,
           status: "To Do",
           account_id: accountId,
           delivery_id: sd.id,
@@ -494,7 +495,7 @@ async function createTaxReturnRecord(
         account_id: accountId,
         company_name: companyName,
         client_name: contactName,
-        return_type: returnType,
+        return_type: returnType as never,
         tax_year: taxYear,
         deadline,
         status: isBundled ? "Paid - Not Started" : "Not Invoiced",

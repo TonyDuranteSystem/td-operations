@@ -22,6 +22,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
 
     const llcName = String(submittedData.llc_name || "Unknown LLC")
     const llcEin = String(submittedData.llc_ein || "N/A")
-    const llcState = String(submittedData.llc_state || sub.state || "N/A")
+    const llcState = String(submittedData.llc_state || (sub as Record<string, unknown>).state || "N/A")
     const formationYear = String(submittedData.formation_year || "N/A")
     const taxFiled = String(submittedData.tax_returns_filed || "N/A")
     const taxYears = String(submittedData.tax_returns_years || "N/A")
@@ -163,7 +164,7 @@ export async function POST(req: NextRequest) {
             service_name: `Company Closure - ${llcName}`,
             account_id: accountId,
             contact_id: contactId,
-            current_stage: firstStage,
+            stage: firstStage,
             status: "active",
             assigned_to: "Luca",
             notes: `Auto-created from closure form ${token}`,
@@ -283,10 +284,10 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
     try {
       await supabaseAdmin.from("action_log").insert({
         action_type: "closure_form_completed",
-        entity_type: "closure_submissions",
-        entity_id: submission_id,
+        table_name: "closure_submissions",
+        record_id: submission_id,
         summary: `Closure form completed: ${llcName} (${clientName}). Drive saved, Luca notified.`,
-        details: { token, lead_id: leadId, contact_id: contactId, account_id: accountId, results },
+        details: { token, lead_id: leadId, contact_id: contactId, account_id: accountId, results } as unknown as Json,
       })
     } catch { /* non-blocking */ }
 

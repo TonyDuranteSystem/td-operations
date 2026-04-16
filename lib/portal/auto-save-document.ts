@@ -50,7 +50,7 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
 
     const { data, error } = await supabaseAdmin
       .from('documents')
-      .insert(record)
+      .insert(record as never)
       .select('id')
       .single()
 

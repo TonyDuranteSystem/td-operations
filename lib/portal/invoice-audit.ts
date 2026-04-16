@@ -7,6 +7,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import type { Json } from '@/lib/database.types'
 
 export type InvoiceAuditAction =
   | 'created'
@@ -38,9 +39,9 @@ export function logInvoiceAudit(entry: InvoiceAuditEntry): void {
       .insert({
         invoice_id: entry.invoice_id,
         action: entry.action,
-        changed_fields: entry.changed_fields ?? null,
-        previous_values: entry.previous_values ?? null,
-        new_values: entry.new_values ?? null,
+        changed_fields: (entry.changed_fields ?? null) as unknown as Json,
+        previous_values: (entry.previous_values ?? null) as unknown as Json,
+        new_values: (entry.new_values ?? null) as unknown as Json,
         performed_by: entry.performed_by ?? 'system',
       })
   ).then(({ error }) => {

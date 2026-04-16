@@ -150,7 +150,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           .from("accounts")
           .insert({
             company_name: companyName,
-            entity_type: entityType,
+            entity_type: entityType as never,
             state_of_formation: stateCode,
             account_type: "Formation",
             status: "Pending Formation",
@@ -185,6 +185,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       if (accountId) {
         await supabaseAdmin
           .from("formation_submissions")
+          // @ts-expect-error account_id may exist as DB column not in generated types
           .update({ account_id: accountId })
           .eq("id", p.submission_id)
 
@@ -465,7 +466,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       assigned_to: "Luca",
       priority: "High",
       category: "Formation",
-      status: "todo",
+      status: "To Do",
       ...(accountId ? { account_id: accountId } : {}),
     })
 

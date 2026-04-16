@@ -1216,7 +1216,8 @@ export function registerDocTools(server: McpServer) {
           .select("id, company_name, entity_type, state_of_formation, status, client_health")
           .eq("status", "Active")
           .or("is_test.is.null,is_test.eq.false")
-        if (entity_type) accountsQuery = accountsQuery.eq("entity_type", entity_type)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (entity_type) accountsQuery = accountsQuery.eq("entity_type", entity_type as any)
         if (state) accountsQuery = accountsQuery.eq("state_of_formation", state)
 
         const [accountsRes, requirementsRes, docsRes] = await Promise.all([

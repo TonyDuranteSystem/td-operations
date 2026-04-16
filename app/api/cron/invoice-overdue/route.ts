@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
 
     const { data: overdueInvoices } = await supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, due_date, reminder_count, account_id, amount, currency')
+      .select('id, invoice_number, due_date, reminder_count, account_id, amount, amount_currency')
       .eq('invoice_status', 'Overdue')
       .order('due_date', { ascending: true })
 

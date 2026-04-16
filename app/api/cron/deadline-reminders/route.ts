@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
+import type { Json } from "@/lib/database.types"
 
 interface _DeadlineCheck {
   type: string
@@ -60,7 +61,7 @@ export async function GET(req: NextRequest) {
       task_title: title,
       description,
       assigned_to: "Luca",
-      priority,
+      priority: priority as never,
       category: "Filing",
       status: "To Do",
       due_date: dueDate,
@@ -148,7 +149,8 @@ export async function GET(req: NextRequest) {
           .from("tax_returns")
           .select("id, account_id, return_type, status, extension_filed")
           .eq("tax_year", year - 1) // Filing for previous year
-          .in("return_type", td.returnTypes)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .in("return_type", td.returnTypes as any)
           .not("status", "eq", "TR Filed")
 
         if (unfiled?.length) {
@@ -236,9 +238,9 @@ export async function GET(req: NextRequest) {
     // Log
     await supabaseAdmin.from("action_log").insert({
       action_type: "deadline_reminders_cron",
-      entity_type: "system",
+      table_name: "system",
       summary: `Deadline check: ${results.map(r => `${r.type}(${r.count})`).join(", ") || "nothing due"}`,
-      details: { date: today, results },
+      details: { date: today, results } as unknown as Json,
     })
 
     logCron({ endpoint: "/api/cron/deadline-reminders", status: "success", duration_ms: Date.now() - startTime, details: { date: today, results } })

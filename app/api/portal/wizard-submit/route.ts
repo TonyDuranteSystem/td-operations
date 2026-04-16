@@ -188,15 +188,15 @@ export async function POST(req: NextRequest) {
       if (taxYear !== null) submissionRecord.tax_year = taxYear
 
       const { data: sub, error: subErr } = await supabaseAdmin
-        .from(submissionTable)
-        .upsert(submissionRecord, { onConflict: 'token' })
+        .from(submissionTable as never)
+        .upsert(submissionRecord as never, { onConflict: 'token' })
         .select('id')
         .single()
 
       if (subErr) {
         console.error('[wizard-submit] Submission upsert failed:', subErr.message)
       }
-      submissionId = sub?.id || null
+      submissionId = (sub as Record<string, unknown> | null)?.id as string || null
     }
 
     // ─── 4b. BANKING WIZARD — PDF + Drive + Notifications (inline, no background job) ───

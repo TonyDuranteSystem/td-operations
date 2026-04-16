@@ -13,6 +13,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 export function registerClosureTools(server: McpServer) {
 
@@ -91,12 +92,12 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         if (account_id) {
           const { data: account } = await supabaseAdmin
             .from("accounts")
-            .select("name, ein, state_of_formation")
+            .select("company_name, ein_number, state_of_formation")
             .eq("id", account_id)
             .single()
           if (account) {
-            llcName = account.name || ""
-            llcEin = account.ein || ""
+            llcName = account.company_name || ""
+            llcEin = account.ein_number || ""
             llcState = account.state_of_formation || ""
           }
         }
@@ -149,7 +150,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
             contact_id: resolvedContactId,
             account_id: account_id || null,
             language: lang,
-            prefilled_data: prefilled,
+            prefilled_data: prefilled as unknown as Json,
             status: "pending",
           })
           .select("id, token, access_code")

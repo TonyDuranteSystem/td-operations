@@ -129,7 +129,7 @@ describe('buildEmailCallMap', () => {
     const map = buildEmailCallMap(calls)
     // call-2 has a null-email attendee — should not be in the map
     let hasNull = false
-    for (const [key] of map) {
+    for (const [key] of Array.from(map)) {
       if (key === '' || key === 'null' || key === 'undefined') hasNull = true
     }
     expect(hasNull).toBe(false)

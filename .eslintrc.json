@@ -21,7 +21,14 @@
       "argsIgnorePattern": "^_",
       "varsIgnorePattern": "^_",
       "ignoreRestSiblings": true
-    }]
+    }],
+
+    "no-restricted-syntax": ["error",
+      {
+        "selector": "TSAsExpression[typeAnnotation.typeName.name='SupabaseClient']",
+        "message": "Do not cast to SupabaseClient — use the typed client from lib/supabase-admin.ts instead."
+      }
+    ]
   },
   "ignorePatterns": [
     "node_modules/",

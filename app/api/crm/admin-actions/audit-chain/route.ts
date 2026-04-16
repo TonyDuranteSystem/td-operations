@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { INTERNAL_BASE_URL } from "@/lib/config"
 import { classifyAccount } from "@/lib/account-classification"
+import type { Json } from "@/lib/database.types"
 
 // ─── Types ───
 
@@ -1223,7 +1224,7 @@ export async function POST(req: NextRequest) {
           contact_id,
           account_id: params.account_id ?? null,
           amount,
-          amount_currency: currency,
+          amount_currency: currency as "USD" | "EUR",
           status: "Paid",
           payment_method: payment_method ?? "Wire Transfer",
           description: description ?? "Setup fee",
@@ -1311,7 +1312,7 @@ export async function POST(req: NextRequest) {
           .from("accounts")
           .insert({
             company_name: companyName,
-            entity_type: entityType,
+            entity_type: entityType as never,
             state_of_formation: stateOfFormation,
             formation_date: formationDate,
             status: accountStatus,
@@ -1378,7 +1379,7 @@ export async function POST(req: NextRequest) {
 
         // Build stage history with all skipped stages
         const currentOrder = delivery.stage_order || 0
-        const history = [...(delivery.stage_history || [])]
+        const history = [...((delivery.stage_history as Array<Record<string, unknown>>) || [])]
         // Add current stage to history
         history.push({ stage: delivery.stage, stage_order: currentOrder, entered_at: delivery.stage_entered_at, exited_at: new Date().toISOString(), notes: "Skipped — caught up via chain audit" })
         // Add intermediate skipped stages
@@ -1395,7 +1396,7 @@ export async function POST(req: NextRequest) {
             stage: target.stage_name,
             stage_order: target.stage_order,
             stage_entered_at: new Date().toISOString(),
-            stage_history: history,
+            stage_history: history as unknown as Json,
             updated_at: new Date().toISOString(),
           })
           .eq("id", delivery_id)

@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     const chatId = `${digits}@c.us`
 
     // Find the WhatsApp Lead channel (default channel for outbound)
+    // @ts-expect-error Type instantiation is excessively deep
     const { data: channels } = await supabaseAdmin
       .from('messaging_channels')
       .select('id')

@@ -26,10 +26,10 @@ export async function POST(request: NextRequest) {
   try {
     // Build context from CRM
     const [accountRes, servicesRes, deadlinesRes, paymentsRes] = await Promise.all([
-      supabaseAdmin.from('accounts').select('company_name, entity_type, state_of_formation, ein, status, notes').eq('id', account_id).single(),
-      supabaseAdmin.from('service_deliveries').select('service_type, current_stage, status, notes').eq('account_id', account_id).eq('status', 'active').limit(10),
+      supabaseAdmin.from('accounts').select('company_name, entity_type, state_of_formation, ein_number, status, notes').eq('id', account_id).single(),
+      supabaseAdmin.from('service_deliveries').select('service_type, stage, status, notes').eq('account_id', account_id).eq('status', 'active').limit(10),
       supabaseAdmin.from('deadlines').select('deadline_type, due_date, status').eq('account_id', account_id).eq('status', 'Pending').limit(10),
-      supabaseAdmin.from('payments').select('amount, currency, status, payment_type, due_date').eq('account_id', account_id).order('created_at', { ascending: false }).limit(5),
+      supabaseAdmin.from('payments').select('amount, amount_currency, status, installment, due_date').eq('account_id', account_id).order('created_at', { ascending: false }).limit(5),
     ])
 
     const account = accountRes.data
@@ -84,13 +84,13 @@ export async function POST(request: NextRequest) {
 You are helping the admin team (Antonio and Luca) with client management. You have access to the client's CRM data and conversation history.
 
 Client: ${account?.company_name ?? 'Unknown'}
-Entity: ${account?.entity_type ?? 'N/A'} | State: ${account?.state_of_formation ?? 'N/A'} | EIN: ${account?.ein ?? 'N/A'}
+Entity: ${account?.entity_type ?? 'N/A'} | State: ${account?.state_of_formation ?? 'N/A'} | EIN: ${account?.ein_number ?? 'N/A'}
 Status: ${account?.status ?? 'N/A'}
 ${account?.notes ? `Notes: ${account.notes.slice(0, 300)}` : ''}
 
-Active Services: ${services.length ? services.map(s => `${s.service_type} (${s.current_stage})`).join(', ') : 'None'}
+Active Services: ${services.length ? services.map(s => `${s.service_type} (${s.stage})`).join(', ') : 'None'}
 Pending Deadlines: ${deadlines.length ? deadlines.map(d => `${d.deadline_type} due ${d.due_date}`).join(', ') : 'None'}
-Recent Payments: ${payments.length ? payments.map(p => `${p.amount} ${p.currency} (${p.status})`).join(', ') : 'None'}
+Recent Payments: ${payments.length ? payments.map(p => `${p.amount} ${p.amount_currency} (${p.status})`).join(', ') : 'None'}
 
 ${kbContext}
 

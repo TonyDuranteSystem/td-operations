@@ -48,7 +48,7 @@ describe('ensureCompanyFolder — dedup behavior', () => {
     vi.mocked(supabaseAdmin.from).mockReturnValue({
       select: mockSelect,
       update: vi.fn().mockReturnValue({ eq: vi.fn() }),
-    } as ReturnType<typeof supabaseAdmin.from>)
+    } as unknown as ReturnType<typeof supabaseAdmin.from>)
   })
 
   it('links existing folder when exactly one name match exists', async () => {
@@ -131,7 +131,7 @@ describe('ensureCompanyFolder — dedup behavior', () => {
     vi.mocked(supabaseAdmin.from).mockReturnValue({
       select: mockSelect,
       update: vi.fn().mockReturnValue({ eq: vi.fn() }),
-    } as ReturnType<typeof supabaseAdmin.from>)
+    } as unknown as ReturnType<typeof supabaseAdmin.from>)
 
     // listFiles for existing folder
     mockListFolderAnyDrive.mockResolvedValueOnce({

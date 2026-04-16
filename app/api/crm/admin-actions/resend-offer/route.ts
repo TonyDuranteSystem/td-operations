@@ -111,10 +111,10 @@ export async function POST(request: Request) {
 
     // Log to email_tracking (for audit, NOT for idempotency blocking)
     await supabaseAdmin.from("email_tracking").insert({
-      id: trackingId,
+      tracking_id: trackingId,
       offer_token: offer.token,
-      recipient_email: offer.client_email,
-      email_type: "resend_reminder",
+      recipient: offer.client_email,
+      subject: "resend_reminder",
       gmail_message_id: gmailResult.id,
     })
 

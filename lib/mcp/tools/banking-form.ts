@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import type { Json } from "@/lib/database.types"
 
 export function registerBankingFormTools(server: McpServer) {
 
@@ -115,7 +116,7 @@ export function registerBankingFormTools(server: McpServer) {
             contact_id: resolvedContactId,
             provider,
             language: formLang,
-            prefilled_data: prefilled,
+            prefilled_data: prefilled as unknown as Json,
             status: "pending",
           })
           .select("id, token, access_code")
@@ -356,7 +357,7 @@ export function registerBankingFormTools(server: McpServer) {
             const { error: svcErr } = await supabaseAdmin
               .from("services")
               .update({
-                status: "Data Collected",
+                status: "Data Collected" as never,
                 notes: `Banking form completed ${new Date().toISOString()}`,
                 updated_at: new Date().toISOString(),
               })

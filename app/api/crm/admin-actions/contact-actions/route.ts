@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
   try {
@@ -188,8 +189,8 @@ export async function POST(req: NextRequest) {
               .insert({
                 task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
                 assigned_to: taskDef.assigned_to || "Luca",
-                category: taskDef.category || "Internal",
-                priority: taskDef.priority || "Normal",
+                category: (taskDef.category || "Internal") as never,
+                priority: (taskDef.priority || "Normal") as never,
                 description: taskDef.description || `Auto-created by pipeline advance to "${targetStage.stage_name}"`,
                 status: "To Do",
                 account_id: delivery.account_id,
@@ -261,7 +262,7 @@ export async function POST(req: NextRequest) {
             const taxYear = new Date().getFullYear()
             await supabaseAdmin
               .from("tax_returns")
-              .update({ status: taxStatus, updated_at: new Date().toISOString() })
+              .update({ status: taxStatus as never, updated_at: new Date().toISOString() })
               .eq("account_id", delivery.account_id)
               .eq("tax_year", taxYear)
             sideEffects.push(`Tax return synced: ${taxStatus}`)
@@ -461,7 +462,7 @@ export async function POST(req: NextRequest) {
             selected_name: selectedName,
             wizard_progress_id: wizardProgressId,
             all_names: [wizardData.llc_name_1, wizardData.llc_name_2, wizardData.llc_name_3].filter(Boolean),
-          },
+          } as unknown as Json,
         })
 
         result = {

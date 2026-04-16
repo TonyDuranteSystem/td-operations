@@ -4,6 +4,7 @@ import { plaidClient } from '@/lib/plaid'
 import { isAdmin } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { CountryCode } from 'plaid'
+import type { Json } from '@/lib/database.types'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
       institution_id: institutionId,
       institution_name: institutionName,
       bank_name,
-      accounts,
+      accounts: accounts as unknown as Json,
       status: 'active',
       last_synced_at: null,
     }, { onConflict: 'item_id' })

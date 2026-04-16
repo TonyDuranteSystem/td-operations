@@ -4,6 +4,7 @@ import { APP_BASE_URL } from '@/lib/config'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 import { getBankDetailsByPreference, type BankPreference } from '@/app/offer/[token]/contract/bank-defaults'
+import type { Json } from '@/lib/database.types'
 
 export async function POST(req: NextRequest) {
   try {
@@ -138,7 +139,7 @@ export async function POST(req: NextRequest) {
         cost_summary,
         recurring_costs: recurring_costs || null,
         bundled_pipelines: bundled_pipelines || [],
-        bank_details,
+        bank_details: bank_details as unknown as Json,
         lead_id: lead_id || null,
         account_id: account_id || null,
         required_documents: required_documents || null,

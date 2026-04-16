@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
 import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/account-create'
+import type { Json } from '@/lib/database.types'
 
 export async function updateAccountField(
   accountId: string,
@@ -615,7 +616,7 @@ export async function changeAccountStatus(
       record_id: accountId,
       account_id: accountId,
       summary: `Status changed: ${oldStatus} → ${newStatus}`,
-      details: { oldStatus, newStatus, options, cascadesApplied, cascadesFailed, note },
+      details: { oldStatus, newStatus, options, cascadesApplied, cascadesFailed, note } as unknown as Json,
     })
   } catch {
     // Audit log is non-blocking

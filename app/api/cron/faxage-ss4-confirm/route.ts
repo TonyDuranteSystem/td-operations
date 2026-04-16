@@ -24,6 +24,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailGet, gmailPost, getHeader, GmailAPIMessage, extractBody } from '@/lib/gmail'
+import type { Json } from '@/lib/database.types'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const IRS_FAX_NUMBER = '(855)641-6935'
@@ -318,7 +319,7 @@ async function logCron(status: string, details: Record<string, unknown>): Promis
     await supabaseAdmin.from('cron_log').insert({
       endpoint: CRON_ENDPOINT,
       status,
-      details,
+      details: details as unknown as Json,
       executed_at: new Date().toISOString(),
     })
   } catch (e) {

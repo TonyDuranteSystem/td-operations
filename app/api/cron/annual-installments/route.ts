@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { generateInvoiceNumber } from "@/lib/invoice-number"
 import { logCron } from "@/lib/cron-log"
+import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -285,9 +286,9 @@ ${skipped.length > 0 ? `<h3>Skipped:</h3><ul>${skipped.map(r => `<li>${r.company
     // Log
     await supabaseAdmin.from("action_log").insert({
       action_type: "annual_installment_cron",
-      entity_type: "payments",
+      table_name: "payments",
       summary: `${installmentLabel} ${year}: ${created.length} created, ${sendResults.filter(r => r.sent).length} sent, ${skipped.length} skipped`,
-      details: { installment: installmentNumber, year, results, sendResults },
+      details: { installment: installmentNumber, year, results, sendResults } as unknown as Json,
     })
 
     logCron({ endpoint: "/api/cron/annual-installments", status: "success", duration_ms: Date.now() - startTime, details: { installment: installmentLabel, year, created: created.length, sent: sendResults.filter(r => r.sent).length, skipped: skipped.length } })

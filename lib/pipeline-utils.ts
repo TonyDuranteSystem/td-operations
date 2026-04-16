@@ -94,8 +94,8 @@ export async function advanceToEinSubmitted(
       await supabaseAdmin.from('tasks').insert({
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || 'Luca',
-        category: taskDef.category || 'Internal',
-        priority: taskDef.priority || 'Normal',
+        category: (taskDef.category || 'Internal') as never,
+        priority: (taskDef.priority || 'Normal') as never,
         description: taskDef.description || `Auto-created: Pipeline advanced to EIN Submitted by ${actor}.`,
         status: 'To Do',
         account_id: delivery.account_id,
@@ -284,8 +284,8 @@ export async function advanceFormationToStage(
       const { error: tErr } = await supabaseAdmin.from('tasks').insert({
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || 'Luca',
-        category: taskDef.category || 'Internal',
-        priority: taskDef.priority || 'Normal',
+        category: (taskDef.category || 'Internal') as never,
+        priority: (taskDef.priority || 'Normal') as never,
         description: taskDef.description || `Auto-created: Pipeline advanced to "${targetStage.stage_name}" by ${actor}.`,
         status: 'To Do',
         account_id: delivery.account_id,

@@ -25,6 +25,7 @@ export async function createCompanyFolder(accountId: string): Promise<ActionResu
     if (!account.state_of_formation) throw new Error('Account has no state of formation')
 
     // Get primary contact for folder naming
+    // @ts-expect-error Type instantiation is excessively deep
     const { data: contacts } = await supabaseAdmin
       .from('contacts')
       .select('first_name, last_name')

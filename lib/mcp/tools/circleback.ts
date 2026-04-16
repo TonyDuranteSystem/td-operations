@@ -105,14 +105,16 @@ export function registerCirclebackTools(server: McpServer) {
         if (data.recording_url) lines.push(`Recording: ${data.recording_url}`)
         if (data.lead_id) lines.push(`Linked Lead: ${data.lead_id}`)
         if (data.account_id) lines.push(`Linked Account: ${data.account_id}`)
-        if (Array.isArray(data.tags) && data.tags.length > 0) lines.push(`Tags: ${data.tags.join(", ")}`)
+        const tags = data.tags as unknown as string[] | null
+        if (Array.isArray(tags) && tags.length > 0) lines.push(`Tags: ${tags.join(", ")}`)
 
         // Attendees
-        if (Array.isArray(data.attendees) && data.attendees.length > 0) {
+        const attendees = data.attendees as unknown as Array<Record<string, unknown>> | null
+        if (Array.isArray(attendees) && attendees.length > 0) {
           lines.push("")
           lines.push("── Attendees ──")
-          for (const a of data.attendees) {
-            const name = a.name || a.email || "Unknown"
+          for (const a of attendees) {
+            const name = (a.name as string) || (a.email as string) || "Unknown"
             const email = a.email ? ` <${a.email}>` : ""
             lines.push(`  ${name}${email}`)
           }
@@ -126,29 +128,31 @@ export function registerCirclebackTools(server: McpServer) {
         }
 
         // Action items
-        if (Array.isArray(data.action_items) && data.action_items.length > 0) {
+        const actionItems = data.action_items as unknown as Array<Record<string, unknown>> | null
+        if (Array.isArray(actionItems) && actionItems.length > 0) {
           lines.push("")
           lines.push("── Action Items ──")
-          for (const item of data.action_items) {
-            const text = typeof item === "string" ? item : item.text || item.description || JSON.stringify(item)
+          for (const item of actionItems) {
+            const text = typeof item === "string" ? item : (item.text as string) || (item.description as string) || JSON.stringify(item)
             const assignee = item.assignee ? ` (@${item.assignee})` : ""
             lines.push(`  - ${text}${assignee}`)
           }
         }
 
         // Transcript (truncate to avoid huge responses)
-        if (Array.isArray(data.transcript) && data.transcript.length > 0) {
+        const transcript = data.transcript as unknown as Array<Record<string, unknown>> | null
+        if (Array.isArray(transcript) && transcript.length > 0) {
           lines.push("")
           lines.push("── Transcript ──")
           const maxEntries = 50
-          const entries = data.transcript.slice(0, maxEntries)
+          const entries = transcript.slice(0, maxEntries)
           for (const entry of entries) {
-            const speaker = entry.speaker || entry.name || "?"
-            const text = entry.text || entry.content || ""
+            const speaker = (entry.speaker as string) || (entry.name as string) || "?"
+            const text = (entry.text as string) || (entry.content as string) || ""
             lines.push(`  [${speaker}]: ${text}`)
           }
-          if (data.transcript.length > maxEntries) {
-            lines.push(`  ... (${data.transcript.length - maxEntries} more entries)`)
+          if (transcript.length > maxEntries) {
+            lines.push(`  ... (${transcript.length - maxEntries} more entries)`)
           }
         }
 

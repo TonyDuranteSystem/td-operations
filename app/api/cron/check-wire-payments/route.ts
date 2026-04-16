@@ -146,7 +146,7 @@ export async function GET(req: NextRequest) {
           .limit(200)
 
         for (const pending of stillPending) {
-          const pendingAmount = parseFloat(pending.amount)
+          const pendingAmount = parseFloat(String(pending.amount))
           const clientNameLower = (pending.client_name || "").toLowerCase()
 
           for (const feed of recentFeeds || []) {

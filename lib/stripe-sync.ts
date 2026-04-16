@@ -10,6 +10,7 @@
 
 import StripeConstructor from "stripe"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 
 type StripeClient = ReturnType<typeof StripeConstructor>
 
@@ -100,7 +101,7 @@ export async function syncStripeCharges(
         sender_name: senderName,
         sender_reference: senderReference,
         memo: memo || null,
-        raw_data: charge,
+        raw_data: charge as unknown as Json,
         status: "unmatched",
       }
 

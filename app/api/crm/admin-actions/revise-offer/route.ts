@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
+import type { Json } from "@/lib/database.types"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -107,7 +108,7 @@ export async function POST(request: Request) {
         cost_summary: original.cost_summary,
         recurring_costs: original.recurring_costs,
         bundled_pipelines: original.bundled_pipelines,
-        bank_details: bankDetails,
+        bank_details: bankDetails as unknown as Json,
         lead_id: original.lead_id,
         account_id: original.account_id,
         required_documents: original.required_documents,

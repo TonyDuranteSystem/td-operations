@@ -223,7 +223,7 @@ export default async function PortalDashboardPage() {
       </div>
 
       {/* Tax Banner — shown for active tax returns (all states until filed) */}
-      {taxReturns.filter(tr => tr.status !== 'Filed' && tr.status !== 'Completed' && tr.status !== 'Cancelled').slice(0, 1).map(tr => (
+      {taxReturns.filter(tr => tr.status !== 'TR Filed').slice(0, 1).map(tr => (
         <TaxBanner
           key={tr.id}
           taxYear={tr.tax_year}

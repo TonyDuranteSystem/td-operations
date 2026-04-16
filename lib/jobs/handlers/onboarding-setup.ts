@@ -27,6 +27,7 @@ import { createAccountFromWizard } from "@/lib/account-from-wizard"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateOnboardingData } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
+import type { Json } from "@/lib/database.types"
 
 interface OnboardingPayload {
   token: string
@@ -506,7 +507,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 member_name: oaContact.full_name,
                 member_address: oaAccount.physical_address || null,
                 member_email: oaContact.email || null,
-                members: membersJson,
+                members: membersJson as unknown as Json,
                 effective_date: oaAccount.formation_date || today,
                 business_purpose: "any and all lawful business activities",
                 initial_contribution: "$0 (No initial capital contribution required)",
@@ -581,10 +582,11 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
           if (offer?.services && Array.isArray(offer.services)) {
             // Prefer the recommended service, fallback to first
-            const svc = offer.services.find((s: Record<string, unknown>) => s.recommended) || offer.services[0]
+            const svcs = offer.services as Array<Record<string, unknown>>
+            const svc = svcs.find((s) => s.recommended) || svcs[0]
             if (svc?.price && typeof svc.price === "string") {
               // Parse price strings like "EUR 2,300", "$1,500", "USD 900"
-              const match = svc.price.match(/^(EUR|USD|\$|€)?\s*([\d,.]+)$/i)
+              const match = (svc.price as string).match(/^(EUR|USD|\$|€)?\s*([\d,.]+)$/i)
               if (match) {
                 const currencyPart = (match[1] || "").toUpperCase()
                 sdCurrency = currencyPart === "EUR" || currencyPart === "€" ? "EUR" : "USD"
@@ -652,8 +654,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           .insert({
             task_title: td.title,
             assigned_to: td.assigned_to,
-            category: td.category,
-            priority: td.priority,
+            category: td.category as never,
+            priority: td.priority as never,
             status: "To Do",
             account_id,
             created_by: "Claude",

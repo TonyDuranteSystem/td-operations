@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
+import type { Json } from '@/lib/database.types'
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ export async function createLeadFromIntake(
 
     const { data: newLead, error: insertErr } = await supabaseAdmin
       .from('leads')
-      .insert(leadRecord)
+      .insert(leadRecord as Record<string, unknown> as never)
       .select('id')
       .single()
 
@@ -113,7 +114,7 @@ export async function createLeadFromIntake(
       .from('webhook_events')
       .update({
         review_status: 'converted',
-        payload: { ...payload, converted_lead_id: newLead.id },
+        payload: { ...payload, converted_lead_id: newLead.id } as unknown as Json,
       })
       .eq('id', webhookEventId)
 
@@ -166,7 +167,7 @@ export async function linkIntakeToExisting(
       .from('webhook_events')
       .update({
         review_status: 'linked',
-        payload: { ...payload, linked_lead_id: leadId },
+        payload: { ...payload, linked_lead_id: leadId } as unknown as Json,
       })
       .eq('id', webhookEventId)
 

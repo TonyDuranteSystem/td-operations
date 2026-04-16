@@ -985,6 +985,7 @@ export async function POST(req: NextRequest) {
           .from("service_deliveries")
           .insert({
             service_type: params.service_type,
+            service_name: params.service_type,
             account_id: params.account_id || null,
             contact_id: params.contact_id || null,
             status: "active",
@@ -1004,6 +1005,7 @@ export async function POST(req: NextRequest) {
             .from("service_deliveries")
             .insert({
               service_type: p,
+              service_name: p,
               account_id: params.account_id || null,
               contact_id: params.contact_id || null,
               status: "active",

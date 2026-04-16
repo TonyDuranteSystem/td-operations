@@ -9,6 +9,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import type { Json } from '@/lib/database.types'
 
 const AIRWALLEX_BASE = 'https://api.airwallex.com/api/v1'
 
@@ -134,7 +135,7 @@ export async function syncAirwallexDeposits(
             sender_name: deposit.sender?.name ?? null,
             sender_reference: deposit.reference ?? null,
             memo: [deposit.sender?.name, deposit.reference].filter(Boolean).join(' — '),
-            raw_data: deposit as unknown as Record<string, unknown>,
+            raw_data: deposit as unknown as Json,
             status: 'unmatched',
           }, { onConflict: 'external_id' })
 

@@ -162,7 +162,7 @@ export async function POST(req: NextRequest) {
             description: "Lease signed. Next: prepare Form 1583, collect IDs, notarize (Antonio).",
             assigned_to: "Luca",
             priority: "High",
-            category: "CMRA",
+            category: "CMRA" as never,
             status: "To Do",
             account_id: lease.account_id,
             created_by: "System",

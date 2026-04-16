@@ -43,7 +43,7 @@ test.describe.serial('Portal Flow: Chat', () => {
     await page.goto(`${PORTAL}/portal/chat`)
     await page.waitForTimeout(3000)
     if (page.url().includes('/login')) await portalLogin(page)
-    expect(page.url()).toContain('/chat').catch(() => true)
+    expect(page.url()).toContain('/chat')
     const content = await page.textContent('main')
     expect(content!.length).toBeGreaterThan(10)
   })

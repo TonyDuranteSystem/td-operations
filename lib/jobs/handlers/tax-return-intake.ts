@@ -206,7 +206,10 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
       const { data: newTR, error: trErr } = await supabaseAdmin
         .from("tax_returns")
         .insert({
-          account_id: accountId,
+          account_id: accountId!,
+          company_name: companyName,
+          return_type: (p.entity_type || "SMLLC") as never,
+          deadline: `${currentYear + 1}-04-15`,
           tax_year: currentYear,
           data_received: false,
           paid: true,

@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     const { data: overdue, error: err } = await supabase
       .from("payments")
       .select(`
-        id, amount, currency, due_date, status, description, payment_type,
+        id, amount, amount_currency, due_date, status, description, installment,
         account_id, contact_id,
         accounts!payments_account_id_fkey(company_name),
         contacts!payments_contact_id_fkey(full_name, email)
@@ -89,9 +89,9 @@ export async function GET(req: NextRequest) {
         const contact = (p as Record<string, unknown>).contacts as { full_name: string; email: string } | null
         const daysOverdue = (p as Record<string, unknown>).days_overdue as number
         lines.push(
-          `- **${account?.company_name || "N/A"}** — $${p.amount} ${p.currency || "USD"} ` +
+          `- **${account?.company_name || "N/A"}** — $${p.amount} ${p.amount_currency || "USD"} ` +
           `(due: ${p.due_date}, ${daysOverdue}d overdue) ` +
-          `${p.description || p.payment_type || ""} ` +
+          `${p.description || p.installment || ""} ` +
           `[${contact?.full_name || "no contact"}]`
         )
       }

@@ -25,6 +25,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+import type { Json } from "@/lib/database.types"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
@@ -321,7 +322,7 @@ export async function POST(req: NextRequest) {
     } else if (!autoAccountId && contactId) {
       // For other contract types: check if any pipeline is business-context
       const offerPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
-      const offerServices = Array.isArray(offer?.services) ? offer.services : null
+      const offerServices = Array.isArray(offer?.services) ? offer.services as unknown as Record<string, unknown>[] : null
       const businessContextResult = hasBusinessContextPipeline(offerPipelines, offerServices, activation.offer_token)
 
       if (businessContextResult === 'ambiguous') {
@@ -374,8 +375,8 @@ export async function POST(req: NextRequest) {
         }
       } else if (leadId) {
         // Individual-context service — try to resolve from lead (legacy fallback)
-        const { data: lead } = await supabase.from("leads").select("account_id").eq("id", leadId).maybeSingle()
-        autoAccountId = lead?.account_id || null
+        const { data: lead } = await supabase.from("leads").select("converted_to_account_id").eq("id", leadId).maybeSingle()
+        autoAccountId = lead?.converted_to_account_id || null
       }
     }
 
@@ -421,7 +422,7 @@ export async function POST(req: NextRequest) {
             firstStageData.set(s.service_type, {
               stage_name: s.stage_name,
               stage_order: s.stage_order,
-              auto_tasks: Array.isArray(s.auto_tasks) ? s.auto_tasks : [],
+              auto_tasks: Array.isArray(s.auto_tasks) ? s.auto_tasks as unknown as Array<{ title: string; assigned_to: string; category: string; priority?: string }> : [],
             })
           }
         }
@@ -504,8 +505,8 @@ export async function POST(req: NextRequest) {
                 await supabase.from("tasks").insert({
                   task_title: `[${serviceName}] ${taskDef.title}`,
                   assigned_to: taskDef.assigned_to || "Luca",
-                  category: taskDef.category || "Internal",
-                  priority: taskDef.priority || "Normal",
+                  category: (taskDef.category || "Internal") as never,
+                  priority: (taskDef.priority || "Normal") as never,
                   description: "Auto-created on service delivery creation",
                   status: "To Do",
                   account_id: accountId,
@@ -757,7 +758,7 @@ export async function POST(req: NextRequest) {
           mark_as_paid: true,
           paid_date: today,
           payment_method: activation.payment_method || "Whop",
-          whop_payment_id: activation.whop_payment_id || null,
+          whop_payment_id: activation.whop_membership_id || null,
         })
 
         // Store payment reference on activation for traceability
@@ -915,13 +916,13 @@ export async function POST(req: NextRequest) {
       if (lead) {
         // Check if form already exists
         const { data: existingForm } = await supabase
-          .from(formConfig.table)
+          .from(formConfig.table as never)
           .select("token")
           .eq(formConfig.leadIdField, leadId)
           .limit(1)
 
         if (existingForm && existingForm.length > 0) {
-          steps.push({ step: "data_form", status: "existing", detail: `${formConfig.formName} already exists: ${existingForm[0].token}` })
+          steps.push({ step: "data_form", status: "existing", detail: `${formConfig.formName} already exists: ${(existingForm[0] as Record<string, unknown>).token}` })
         } else {
           const formLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
 
@@ -960,7 +961,7 @@ export async function POST(req: NextRequest) {
       .from("pending_activations")
       .update({
         status: "activated",
-        prepared_steps: preparedSteps.length > 0 ? preparedSteps : null,
+        prepared_steps: preparedSteps.length > 0 ? preparedSteps as unknown as Json : null,
         confirmation_mode: "auto",
         activated_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -1034,8 +1035,9 @@ ${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
     // Log action
     await supabase.from("action_log").insert({
       action_type: "service_activated",
-      entity_type: "pending_activations",
-      entity_id: pending_activation_id,
+      table_name: "pending_activations",
+      record_id: pending_activation_id,
+      summary: `Service activated: ${contractType} (${isAutoMode ? "auto" : "supervised"})`,
       details: {
         steps,
         contract_type: contractType,
@@ -1045,7 +1047,7 @@ ${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
         mode: isAutoMode ? "auto" : "supervised",
         lead_id: leadId,
         contact_id: contactId,
-      },
+      } as unknown as Json,
     })
 
     // eslint-disable-next-line no-console -- API route log for observability

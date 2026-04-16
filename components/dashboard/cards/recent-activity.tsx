@@ -45,16 +45,16 @@ export async function RecentActivityCard() {
     // Recent payments received (last 48h)
     supabaseAdmin
       .from('payments')
-      .select('id, amount, currency, payment_date, account_id, accounts(company_name)')
-      .eq('status', 'paid')
-      .gte('payment_date', since.split('T')[0])
-      .order('payment_date', { ascending: false })
+      .select('id, amount, amount_currency, paid_date, account_id, accounts(company_name)')
+      .eq('status', 'Paid')
+      .gte('paid_date', since.split('T')[0])
+      .order('paid_date', { ascending: false })
       .limit(10),
 
     // Recent signatures (last 48h)
     supabaseAdmin
       .from('pending_activations')
-      .select('id, contact_id, signed_at, contacts(full_name)')
+      .select('id, lead_id, client_name, signed_at')
       .not('signed_at', 'is', null)
       .gte('signed_at', since)
       .order('signed_at', { ascending: false })
@@ -69,7 +69,7 @@ export async function RecentActivityCard() {
     const accounts = p.accounts as any
     const companyName = (Array.isArray(accounts) ? accounts[0]?.company_name : accounts?.company_name) ?? 'Unknown'
     const amount = Number(p.amount)
-    const formatted = p.currency === 'EUR'
+    const formatted = p.amount_currency === 'EUR'
       ? `\u20AC${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
       : `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
     events.push({
@@ -77,23 +77,21 @@ export async function RecentActivityCard() {
       icon: 'payment',
       title: `Payment received: ${formatted}`,
       subtitle: companyName,
-      time: p.payment_date ?? '',
+      time: p.paid_date ?? '',
       link: '/finance',
     })
   }
 
   // Process signatures
   for (const s of signaturesResult.data ?? []) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contact = s.contacts as any
-    const name = contact?.full_name ?? 'Unknown'
+    const name = s.client_name ?? 'Unknown'
     events.push({
       id: `sig-${s.id}`,
       icon: 'signed',
       title: `Contract signed`,
       subtitle: name,
       time: s.signed_at ?? '',
-      link: s.contact_id ? `/contacts/${s.contact_id}` : '/',
+      link: s.lead_id ? `/leads?id=${s.lead_id}` : '/',
     })
   }
 

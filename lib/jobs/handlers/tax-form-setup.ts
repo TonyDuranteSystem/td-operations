@@ -218,7 +218,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           ].join("\n"),
           assigned_to: "Luca",
           priority: "High",
-          category: "Tax",
+          category: "Tax" as never,
           status: "To Do",
           account_id: p.account_id,
           created_by: "System",
@@ -264,7 +264,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
     try {
       const { data: sdRecord } = await supabaseAdmin
         .from("service_deliveries")
-        .select("id, stage, stage_order, stage_history, current_stage")
+        .select("id, stage, stage_order, stage_history")
         .eq("account_id", p.account_id)
         .or("service_type.eq.Tax Return,service_type.eq.Tax Return Filing")
         .eq("status", "active")
@@ -275,7 +275,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         const history = Array.isArray(sdRecord.stage_history) ? sdRecord.stage_history : []
         history.push({
           event: "tax_form_submitted",
-          from_stage: sdRecord.stage || sdRecord.current_stage,
+          from_stage: sdRecord.stage,
           to_stage: "Data Received",
           advanced_at: now,
           notes: "Client submitted tax form via portal (auto-advanced by tax_form_setup)",
@@ -287,7 +287,6 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
             stage: "Data Received",
             stage_order: 5,
             stage_entered_at: now,
-            current_stage: "Data Received",
             stage_history: history,
           })
           .eq("id", sdRecord.id)

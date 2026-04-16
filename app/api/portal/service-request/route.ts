@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
         description: `Service requested via Client Portal.\n\nClient: ${clientName}${companyName ? `\nCompany: ${companyName}` : ''}\nEmail: ${contact?.email || user.email}\n\nDetails:\n${details}`,
         status: 'To Do',
         priority: urgency === 'urgent' ? 'Urgent' : 'Normal',
-        category: SERVICE_CATEGORIES[service_id] || 'Client Response',
+        category: (SERVICE_CATEGORIES[service_id] || 'Client Response') as never,
         assigned_to: 'Antonio',
         account_id: accountId || null,
         contact_id: targetContactId || null,

@@ -131,8 +131,8 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
       const { error: tErr } = await supabaseAdmin.from("tasks").insert({
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || "Luca",
-        category: taskDef.category || "Internal",
-        priority: taskDef.priority || "Normal",
+        category: (taskDef.category || "Internal") as never,
+        priority: (taskDef.priority || "Normal") as never,
         description: taskDef.description || `Auto-created by pipeline advance to "${nextStage.stage_name}"`,
         status: "To Do",
         account_id: delivery.account_id,
@@ -182,8 +182,10 @@ export function registerCrmTools(server: McpServer) {
 
       if (query) q = q.ilike('company_name', `%${query}%`)
       if (state) q = q.eq('state_of_formation', state)
-      if (status) q = q.eq('status', status)
-      if (entity_type) q = q.eq('entity_type', entity_type)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (status) q = q.eq('status', status as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (entity_type) q = q.eq('entity_type', entity_type as any)
       if (client_health) q = q.eq('client_health', client_health)
 
       const { data, error } = await q
@@ -261,10 +263,12 @@ export function registerCrmTools(server: McpServer) {
         .order('due_date', { ascending: false })
         .limit(Math.min(limit || 50, 200))
 
-      if (status) q = q.eq('status', status)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (status) q = q.eq('status', status as any)
       if (account_id) q = q.eq('account_id', account_id)
       if (contact_id) q = q.eq('contact_id', contact_id)
-      if (currency) q = q.eq('amount_currency', currency)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (currency) q = q.eq('amount_currency', currency as any)
       if (min_amount) q = q.gte('amount', min_amount)
       if (max_amount) q = q.lte('amount', max_amount)
       if (year) q = q.eq('year', year)
@@ -363,10 +367,13 @@ export function registerCrmTools(server: McpServer) {
         .order('due_date', { ascending: true })
         .limit(Math.min(limit || 50, 200))
 
-      if (status) q = q.eq('status', status)
-      if (priority) q = q.eq('priority', priority)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (status) q = q.eq('status', status as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (priority) q = q.eq('priority', priority as any)
       if (assigned_to) q = q.ilike('assigned_to', `%${assigned_to}%`)
-      if (category) q = q.eq('category', category)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (category) q = q.eq('category', category as any)
       if (account_id) q = q.eq('account_id', account_id)
       if (contact_id) q = q.eq('contact_id', contact_id)
 
@@ -401,7 +408,8 @@ export function registerCrmTools(server: McpServer) {
         .order('updated_at', { ascending: false })
         .limit(Math.min(limit || 50, 100))
 
-      if (stage) q = q.eq('stage', stage)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (stage) q = q.eq('stage', stage as any)
       if (deal_type) q = q.eq('deal_type', deal_type)
       if (account_id) q = q.eq('account_id', account_id)
 
@@ -634,7 +642,7 @@ export function registerCrmTools(server: McpServer) {
             .from("documents")
             .select("id, status, category_name, account_id"),
           supabaseAdmin.from("tasks").select("id, status, priority"),
-          supabaseAdmin.from("deals").select("id, stage, value"),
+          supabaseAdmin.from("deals").select("id, stage, amount"),
         ])
 
         const accounts = accountsRes.data || []
@@ -691,9 +699,9 @@ export function registerCrmTools(server: McpServer) {
           payByStatus[p.status || "unknown"] = (payByStatus[p.status || "unknown"] || 0) + 1
           payByCurrency[p.amount_currency || "USD"] = (payByCurrency[p.amount_currency || "USD"] || 0) + amt
 
-          if (p.status === "paid") totalPaid += amt
-          else if (p.status === "overdue") totalOverdue += amt
-          else if (p.status === "pending") totalPending += amt
+          if (p.status === "Paid") totalPaid += amt
+          else if (p.status === "Overdue") totalOverdue += amt
+          else if (p.status === "Pending") totalPending += amt
         }
 
         // ── Documents ──
@@ -721,7 +729,7 @@ export function registerCrmTools(server: McpServer) {
         let dealTotalValue = 0
         for (const d of deals) {
           dealByStage[d.stage || "unknown"] = (dealByStage[d.stage || "unknown"] || 0) + 1
-          dealTotalValue += (d.value as number) || 0
+          dealTotalValue += (d.amount as number) || 0
         }
 
         // ── Build Output ──
@@ -806,7 +814,7 @@ export function registerCrmTools(server: McpServer) {
           action_type: "update",
           table_name: table,
           record_id: id,
-          account_id: table === "accounts" ? id : (data.account_id || null),
+          account_id: table === "accounts" ? id : ((data as Record<string, unknown>).account_id as string || null),
           summary: `Updated ${table}: ${Object.keys(updates).join(", ")}`,
           details: { fields_changed: Object.keys(updates), new_values: updates },
         })
@@ -827,8 +835,8 @@ export function registerCrmTools(server: McpServer) {
         if (table === "payments" && updates.status === "Paid") {
           try {
             // Check if this is an installment payment
-            const paymentType = data.payment_type as string | undefined
-            const paymentAccountId = data.account_id as string | undefined
+            const paymentType = (data as Record<string, unknown>).payment_type as string | undefined
+            const paymentAccountId = (data as Record<string, unknown>).account_id as string | undefined
 
             if (paymentAccountId && (paymentType === "1st_installment" || paymentType === "2nd_installment")) {
               const year = new Date().getFullYear()

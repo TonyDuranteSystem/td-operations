@@ -45,7 +45,7 @@ describe('createAccountFromWizard', () => {
   })
 
   it('maps MMLLC to Multi-Member LLC display name', () => {
-    const smllcDisplay = 'SMLLC' === 'MMLLC' ? 'Multi-Member LLC' : 'Single Member LLC'
+    const smllcDisplay = ('SMLLC' as string) === 'MMLLC' ? 'Multi-Member LLC' : 'Single Member LLC'
     const mmllcType = 'MMLLC'
     const mmllcDisplay = mmllcType === 'MMLLC' ? 'Multi-Member LLC' : 'Single Member LLC'
     expect(smllcDisplay).toBe('Single Member LLC')

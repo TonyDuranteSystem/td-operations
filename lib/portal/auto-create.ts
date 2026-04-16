@@ -318,21 +318,21 @@ export async function ensureMinimalAccount(params: {
     return { accountId: existingLink.account_id, created: false }
   }
 
-  // Also check if lead has an account_id
+  // Also check if lead has a converted_to_account_id
   if (leadId) {
     const { data: lead } = await supabaseAdmin
       .from('leads')
-      .select('account_id')
+      .select('converted_to_account_id')
       .eq('id', leadId)
       .maybeSingle()
-    if (lead?.account_id) {
+    if (lead?.converted_to_account_id) {
       // Link contact to existing account
       await supabaseAdmin.from('account_contacts').upsert({
-        account_id: lead.account_id,
+        account_id: lead.converted_to_account_id,
         contact_id: contactId,
         role: 'Owner',
       }, { onConflict: 'account_id,contact_id' })
-      return { accountId: lead.account_id, created: false }
+      return { accountId: lead.converted_to_account_id, created: false }
     }
   }
 
@@ -382,11 +382,11 @@ export async function ensureMinimalAccount(params: {
     .eq("contact_id", contactId)
     .is("account_id", null)
 
-  // Update lead.account_id if lead exists
+  // Update lead.converted_to_account_id if lead exists
   if (leadId) {
     await supabaseAdmin
       .from('leads')
-      .update({ account_id: account.id })
+      .update({ converted_to_account_id: account.id })
       .eq('id', leadId)
   }
 

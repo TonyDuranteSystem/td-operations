@@ -1864,15 +1864,8 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
           return { content: [{ type: "text" as const, text: "Error: At least one of account_id or contact_id is required." }] }
         }
 
-        // Get admin sender ID (Antonio's auth user)
-        const { data: adminUser } = await supabaseAdmin
-          .from("contacts")
-          .select("auth_user_id")
-          .eq("email", "antonio.durante@tonydurante.us")
-          .single()
-
-        // Fallback: use a known admin auth ID
-        const senderId = adminUser?.auth_user_id || "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+        // Admin sender ID (Antonio's auth user ID)
+        const senderId = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 
         const { data: msg, error } = await supabaseAdmin
           .from("portal_messages")

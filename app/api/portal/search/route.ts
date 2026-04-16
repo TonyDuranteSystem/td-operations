@@ -60,19 +60,19 @@ export async function GET(request: NextRequest) {
   async function searchServices(): Promise<EnhancedSearchResult[]> {
     const { data } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_name, service_type, current_stage, status')
+      .select('id, service_name, service_type, stage, status')
       .eq('account_id', accountId)
       .or(`service_name.ilike.${pattern},service_type.ilike.${pattern}`)
       .limit(limit)
     return (data ?? []).map((s: any) => ({
       id: s.id,
       title: s.service_name ?? s.service_type,
-      subtitle: [s.status, s.current_stage].filter(Boolean).join(' \u00b7 '),
+      subtitle: [s.status, s.stage].filter(Boolean).join(' \u00b7 '),
       type: 'service' as const,
       href: '/portal/services',
       preview: {
         service_type: s.service_type,
-        stage: s.current_stage,
+        stage: s.stage,
         status: s.status,
       },
     }))
