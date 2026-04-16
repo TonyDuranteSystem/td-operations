@@ -37,25 +37,45 @@ jobs:
 
     steps:
       - name: Wait for Vercel deploy
-        # Vercel typically deploys in 60-120s. We poll the app URL for up to
-        # 5 minutes, treating any 2xx or 3xx response as "deploy is live".
-        # (The app root 307-redirects to /login under middleware auth.)
-        # If we never see a response, we still proceed to the smoke section
-        # so the failure shows up there with a useful error.
+        # Poll the smoke-alert endpoint with a bad bearer. A 401 response
+        # means the endpoint is live AND rejecting auth — i.e. THIS commit's
+        # code is deployed. Polling app.tonydurante.us/ would return 307
+        # from the PREVIOUS deploy too, so it can't tell us whether the
+        # new code has landed yet.
+        #
+        # 404 = endpoint not deployed yet. 401 = deployed. Anything else =
+        # treat as "probably fine, proceed" so we don't block on edge
+        # cases like Vercel auth gates in front of the origin.
+        #
+        # First-ever push of this workflow + endpoint will max out the
+        # 5-minute ceiling and proceed — after that, every push sees the
+        # endpoint from the previous deploy until the new one lands.
         run: |
           set +e
+          SMOKE_URL="https://td-operations.vercel.app/api/webhooks/smoke-alert"
           for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://app.tonydurante.us/)
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+              -X POST \
+              -H "Authorization: Bearer deploy-check-invalid-token" \
+              -H "Content-Type: application/json" \
+              --data '{"failures":[]}' \
+              "$SMOKE_URL")
             case "$STATUS" in
-              2*|3*)
-                echo "✅ Deploy reachable (HTTP $STATUS) after ~$((i*10))s"
+              401)
+                echo "✅ New deploy live after ~$((i*10))s (smoke-alert returned 401 — endpoint deployed, bearer check active)"
+                exit 0
+                ;;
+              404)
+                echo "Attempt ${i}/30: smoke-alert 404 — deploy not live yet, sleeping 10s..."
+                sleep 10
+                ;;
+              *)
+                echo "Attempt ${i}/30: smoke-alert returned $STATUS — treating as live, proceeding"
                 exit 0
                 ;;
             esac
-            echo "Attempt ${i}/30: app returned $STATUS, sleeping 10s..."
-            sleep 10
           done
-          echo "⚠️ App did not return 2xx/3xx within 5 minutes — proceeding to smoke checks anyway"
+          echo "⚠️ smoke-alert did not return 401 within 5 minutes — proceeding to checks anyway"
 
       - name: Smoke check 1 — app root
         id: check_app
