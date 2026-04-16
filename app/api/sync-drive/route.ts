@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { SignJWT, importPKCS8 } from "jose";
+import { logCron } from "@/lib/cron-log";
 
 export const maxDuration = 300;
 
@@ -235,6 +236,19 @@ export async function GET(req: NextRequest) {
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
     await syncFolder(token, supabase, ROOT_FOLDER_ID, "", stats);
 
+    logCron({
+      endpoint: "/api/sync-drive",
+      status: stats.failed === 0 ? "success" : "error",
+      duration_ms: Date.now() - start,
+      details: {
+        uploaded: stats.uploaded,
+        unchanged: stats.unchanged,
+        failed: stats.failed,
+        skipped: stats.skipped,
+        sample_errors: stats.errors.slice(0, 5),
+      },
+    });
+
     return NextResponse.json({
       success: true,
       stats,
@@ -242,6 +256,12 @@ export async function GET(req: NextRequest) {
       timestamp: new Date().toISOString(),
     });
   } catch (e: any) {
+    logCron({
+      endpoint: "/api/sync-drive",
+      status: "error",
+      duration_ms: Date.now() - start,
+      error_message: e?.message ?? String(e),
+    });
     return NextResponse.json(
       { error: e.message, stats },
       { status: 500 }

@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { refreshAccessToken, storeTokens } from '@/lib/quickbooks'
+import { logCron } from '@/lib/cron-log'
 
 function isAuthorized(request: NextRequest): boolean {
   const authHeader = request.headers.get('authorization')
@@ -32,6 +33,7 @@ function isAuthorized(request: NextRequest): boolean {
 }
 
 export async function GET(request: NextRequest) {
+  const startMs = Date.now()
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -52,6 +54,12 @@ export async function GET(request: NextRequest) {
 
     if (error || !token) {
       console.error('[QB Cron] No active token found')
+      logCron({
+        endpoint: '/api/qb/refresh',
+        status: 'error',
+        duration_ms: Date.now() - startMs,
+        error_message: 'No active token found',
+      })
       return NextResponse.json(
         { error: 'No active token found. Re-authorize at /api/qb/authorize' },
         { status: 404 }
@@ -63,6 +71,12 @@ export async function GET(request: NextRequest) {
     const refreshExpiresAt = new Date(token.refresh_token_expires_at)
     if (now >= refreshExpiresAt) {
       console.error('[QB Cron] Refresh token EXPIRED — manual re-auth required')
+      logCron({
+        endpoint: '/api/qb/refresh',
+        status: 'error',
+        duration_ms: Date.now() - startMs,
+        error_message: 'Refresh token expired — manual re-auth required',
+      })
       return NextResponse.json(
         { error: 'Refresh token expired. Re-authorize at /api/qb/authorize' },
         { status: 401 }
@@ -72,8 +86,8 @@ export async function GET(request: NextRequest) {
     // Calculate days until refresh token expires
     const daysRemaining = Math.floor((refreshExpiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 
-    // Refresh the token
-    console.log(`[QB Cron] Refreshing access token... (refresh token: ${daysRemaining} days remaining)`)
+    // Refresh the token (console.warn so pre-push lint tolerates it per R067)
+    console.warn(`[QB Cron] Refreshing access token... (refresh token: ${daysRemaining} days remaining)`)
     const newTokenData = await refreshAccessToken(token.refresh_token)
     await storeTokens(newTokenData, token.created_by)
 
@@ -82,7 +96,17 @@ export async function GET(request: NextRequest) {
     const newRefreshExpires = new Date(now.getTime() + newTokenData.x_refresh_token_expires_in * 1000)
     const newDaysRemaining = Math.floor((newRefreshExpires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 
-    console.log(`[QB Cron] ✅ Token refreshed. Access expires: ${newAccessExpires.toISOString()}, Refresh: ${newDaysRemaining} days`)
+    console.warn(`[QB Cron] ✅ Token refreshed. Access expires: ${newAccessExpires.toISOString()}, Refresh: ${newDaysRemaining} days`)
+
+    logCron({
+      endpoint: '/api/qb/refresh',
+      status: 'success',
+      duration_ms: Date.now() - startMs,
+      details: {
+        access_token_expires_at: newAccessExpires.toISOString(),
+        refresh_token_days_remaining: newDaysRemaining,
+      },
+    })
 
     return NextResponse.json({
       success: true,
@@ -94,6 +118,12 @@ export async function GET(request: NextRequest) {
 
   } catch (err) {
     console.error('[QB Cron] Error:', err)
+    logCron({
+      endpoint: '/api/qb/refresh',
+      status: 'error',
+      duration_ms: Date.now() - startMs,
+      error_message: err instanceof Error ? err.message : String(err),
+    })
     return NextResponse.json(
       { error: 'Token refresh failed', details: String(err) },
       { status: 500 }
