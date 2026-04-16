@@ -65,6 +65,17 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+echo "🧪 Running integration tests before push (P1.7 characterization)..."
+npm run test:integration 2>&1 | tail -5
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ INTEGRATION TESTS FAILED — push blocked."
+  echo "   Run 'npm run test:integration' to see failures, fix them, then push again."
+  echo ""
+  exit 1
+fi
+
 echo "🔨 Running build check before push (Node $(node -v))..."
 npm run build > /dev/null 2>&1
 

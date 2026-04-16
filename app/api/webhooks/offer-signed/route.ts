@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { decideInvoiceAtSigning, getServiceLabel } from "@/lib/portal/offer-invoice-policy"
 
 export async function POST(req: NextRequest) {
   try {
@@ -219,12 +220,13 @@ export async function POST(req: NextRequest) {
     let invoiceId: string | null = null
     const contractType = offer.contract_type || "formation"
     try {
-      if (contactId && totalAmount > 0 && contractType !== "renewal") {
-        const serviceLabel = contractType === "formation" ? "LLC Formation"
-          : contractType === "onboarding" ? "LLC Onboarding"
-          : contractType === "tax_return" ? "Tax Return"
-          : contractType === "itin" ? "ITIN Application"
-          : "Service"
+      const invoiceDecision = decideInvoiceAtSigning({
+        contract_type: contractType,
+        contact_id: contactId,
+        total_amount: totalAmount,
+      })
+      if (invoiceDecision.create) {
+        const serviceLabel = getServiceLabel(contractType)
 
         const currency = (() => {
           const raw = summaryArr[0]?.total || summaryArr[0]?.total_label || ""
@@ -270,7 +272,9 @@ export async function POST(req: NextRequest) {
 
         console.warn(`[offer-signed] TD invoice ${invoiceResult.invoiceNumber} created for ${offer.client_name} (contact-only, unpaid)`)
       } else {
-        console.warn(`[offer-signed] Skipped invoice: contactId=${contactId}, amount=${totalAmount}`)
+        console.warn(
+          `[offer-signed] Skipped invoice: reason=${invoiceDecision.reason}, contactId=${contactId}, amount=${totalAmount}, contract_type=${contractType}`,
+        )
       }
     } catch (invErr) {
       console.error("[offer-signed] Invoice creation failed:", invErr instanceof Error ? invErr.message : String(invErr))

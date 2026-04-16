@@ -14,13 +14,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
-
-const VALID_WIZARD_TYPES = ['onboarding', 'formation', 'banking', 'banking_payset', 'banking_relay', 'closure', 'itin', 'tax', 'company_info'] as const
-type WizardType = typeof VALID_WIZARD_TYPES[number]
-
-function isValidWizardType(type: string | undefined): type is WizardType {
-  return VALID_WIZARD_TYPES.includes(type as WizardType)
-}
+import { isValidWizardType, type WizardType } from '@/lib/portal/wizard-map'
 
 export default async function WizardPage({
   searchParams,

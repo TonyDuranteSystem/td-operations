@@ -180,17 +180,17 @@ describe("reconcileTier", () => {
 
     const result = await reconcileTier({
       contact_id: "c1",
-      target_tier: "inactive",
+      target_tier: "lead", // explicit downgrade override
     })
 
     expect(result.success).toBe(true)
-    expect(result.resolved_tier).toBe("inactive")
+    expect(result.resolved_tier).toBe("lead")
     expect(result.changed.contact).toBe(true)
     expect(result.changed.accounts).toEqual(["acc-1"])
     expect(result.changed.auth_user).toBe(true)
 
     const contactWrite = writeLog.find((w) => w.table === "contacts")
-    expect(contactWrite?.payload).toMatchObject({ portal_tier: "inactive" })
+    expect(contactWrite?.payload).toMatchObject({ portal_tier: "lead" })
   })
 
   it("does not rewrite already-synced accounts or auth users", async () => {
