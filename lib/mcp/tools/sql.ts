@@ -21,12 +21,38 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 
-// Tables where mass operations (>50 rows) require explicit confirmation
-const PROTECTED_TABLES = [
+// Tables where mass operations (> per-table threshold) require explicit
+// confirmation, and where all mutations require a `reason:` param (P2.3).
+//
+// Extended 2026-04-16 per plan §4 P2.3 directive "Add missing heavily-written
+// tables to PROTECTED_TABLES" — based on P2.2 60-day traffic classification
+// (`sysdoc_read('ops-2026-04-16-raw-sql-classification')`):
+//   - `services`         — 260 writes/60d (heaviest non-protected target;
+//                          cascade-delete target during account reclass)
+//   - `pipeline_stages`  —  59 writes/60d (schema-adjacent; bad writes
+//                          break auto-advance across all SDs)
+//   - `client_invoices`  —  19 writes/60d (R027: TD systems NEVER write —
+//                          guard codifies the rule in the execute_sql path)
+export const PROTECTED_TABLES = [
   "accounts", "contacts", "payments", "services",
   "service_deliveries", "tax_returns", "tasks", "documents",
   "deals", "leads", "offers", "deadlines",
+  // Added by P2.3:
+  "pipeline_stages", "client_invoices",
+  // Note: "services" is already in the list above.
 ]
+
+// Per-table dry-run threshold (P2.3 directive: "Lower the 50-row dry-run
+// threshold for core-pipeline tables like service_deliveries"). If a
+// protected table is not listed here, DEFAULT_DRY_RUN_THRESHOLD applies.
+export const DEFAULT_DRY_RUN_THRESHOLD = 50
+export const PROTECTED_TABLE_THRESHOLDS: Record<string, number> = {
+  service_deliveries: 10,
+}
+
+export function thresholdFor(table: string): number {
+  return PROTECTED_TABLE_THRESHOLDS[table] ?? DEFAULT_DRY_RUN_THRESHOLD
+}
 
 // ─── SQL Preprocessing ───────────────────────────────────────
 
@@ -129,6 +155,8 @@ interface ValidationResult {
   mutationType?: "UPDATE" | "DELETE" | "INSERT"
   affectedTable?: string
   whereClause?: string
+  /** For INSERT: tuple count parsed from VALUES (...) list. */
+  insertRowCount?: number
 }
 
 /** Check a single SQL statement (or CTE body) for dangerous operations */
@@ -181,7 +209,45 @@ function validateStatement(stmt: string, _isCtebody = false): ValidationResult {
 
   if (insertMatch) {
     const table = insertMatch[2].toLowerCase()
-    return { allowed: true, isMutation: true, mutationType: "INSERT", affectedTable: table }
+    // P2.3: count VALUES tuples as a crude insert-size estimate so we can
+    // gate bulk INSERTs the same way we gate UPDATE/DELETE (plan directive
+    // "Extend dry-run to INSERTs"). INSERT ... SELECT can't be counted
+    // cheaply pre-execution — treated as 1 row; the protected-table mode
+    // guard still forces a reason:.
+    let insertRowCount = 1
+    const valuesMatch = upper.match(/\bVALUES\s*\(/)
+    if (valuesMatch) {
+      // Count (...) tuples at top-level after the VALUES keyword.
+      // Conservative: count opening parens after VALUES that look like
+      // tuple starts (preceded by start-of-VALUES or comma+whitespace).
+      const afterValues = stmt.substring((stmt.toUpperCase().indexOf("VALUES") + "VALUES".length))
+      let depth = 0
+      let tuples = 0
+      let justSawComma = true // first "(" counts
+      let inSingle = false
+      for (let i = 0; i < afterValues.length; i++) {
+        const ch = afterValues[i]
+        if (ch === "'" && afterValues[i - 1] !== "\\") inSingle = !inSingle
+        if (inSingle) continue
+        if (ch === "(") {
+          if (depth === 0 && justSawComma) tuples++
+          depth++
+        } else if (ch === ")") {
+          depth--
+        } else if (depth === 0) {
+          if (ch === ",") justSawComma = true
+          else if (!/\s/.test(ch)) justSawComma = false
+        }
+      }
+      if (tuples > 0) insertRowCount = tuples
+    }
+    return {
+      allowed: true,
+      isMutation: true,
+      mutationType: "INSERT",
+      affectedTable: table,
+      insertRowCount,
+    }
   }
 
   // Read-only
@@ -208,9 +274,14 @@ interface FullValidationResult {
   dryRunTable?: string
   dryRunWhere?: string
   mutationType?: string
+  /** For INSERT: estimated tuple count from VALUES parsing. */
+  insertRowCount?: number
+  /** True when the mutation targets a PROTECTED_TABLES entry. Drives the
+   *  mandatory reason: check added in P2.3. */
+  protectedTableTouched?: boolean
 }
 
-function validateSQL(rawQuery: string): FullValidationResult {
+export function validateSQL(rawQuery: string): FullValidationResult {
   // Step 1: Strip comments
   const cleaned = stripComments(rawQuery)
 
@@ -238,6 +309,12 @@ function validateSQL(rawQuery: string): FullValidationResult {
   let dryRunTable: string | undefined
   let dryRunWhere: string | undefined
   let mutationType: string | undefined
+  let insertRowCount: number | undefined
+  let protectedTableTouched = false
+
+  function noteMutation(table: string | undefined) {
+    if (table && PROTECTED_TABLES.includes(table)) protectedTableTouched = true
+  }
 
   for (const stmt of statements) {
     // Check the main statement
@@ -247,10 +324,20 @@ function validateSQL(rawQuery: string): FullValidationResult {
     }
     if (result.isMutation) {
       overallMutation = true
+      noteMutation(result.affectedTable)
       if (result.mutationType === "UPDATE" || result.mutationType === "DELETE") {
         dryRunTable = result.affectedTable
         dryRunWhere = result.whereClause
         mutationType = result.mutationType
+      } else if (result.mutationType === "INSERT") {
+        // Track INSERT for the dry-run gate; prefer UPDATE/DELETE dry-run
+        // if one was already captured from the main statement (they use
+        // a row-count query, while INSERT uses the parsed tuple count).
+        if (!dryRunTable) {
+          dryRunTable = result.affectedTable
+          mutationType = result.mutationType
+          insertRowCount = result.insertRowCount
+        }
       }
     }
 
@@ -263,20 +350,26 @@ function validateSQL(rawQuery: string): FullValidationResult {
       }
       if (cteResult.isMutation) {
         overallMutation = true
+        noteMutation(cteResult.affectedTable)
         if (cteResult.mutationType === "UPDATE" || cteResult.mutationType === "DELETE") {
           dryRunTable = cteResult.affectedTable
           dryRunWhere = cteResult.whereClause
           mutationType = cteResult.mutationType
+        } else if (cteResult.mutationType === "INSERT" && !dryRunTable) {
+          dryRunTable = cteResult.affectedTable
+          mutationType = cteResult.mutationType
+          insertRowCount = cteResult.insertRowCount
         }
       }
     }
   }
 
-  // Step 5: Determine if dry-run is needed (UPDATE/DELETE on protected tables)
+  // Step 5: Determine if dry-run is needed (UPDATE/DELETE/INSERT on protected
+  // tables). P2.3 extends this from UPDATE/DELETE-only to all three.
   const dryRunNeeded = !!(
     dryRunTable &&
     PROTECTED_TABLES.includes(dryRunTable) &&
-    (mutationType === "UPDATE" || mutationType === "DELETE")
+    (mutationType === "UPDATE" || mutationType === "DELETE" || mutationType === "INSERT")
   )
 
   return {
@@ -286,6 +379,8 @@ function validateSQL(rawQuery: string): FullValidationResult {
     dryRunTable,
     dryRunWhere,
     mutationType,
+    insertRowCount,
+    protectedTableTouched,
   }
 }
 
@@ -298,12 +393,13 @@ export function registerSqlTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "execute_sql",
-    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. Default mode is 'read' — rejects any mutation. Mutations (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies) REQUIRE mode='write' to be set explicitly. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic.",
+    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. Default mode is 'read' — rejects any mutation. Mutations (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies) REQUIRE mode='write' to be set explicitly. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic. Writes to PROTECTED_TABLES require a `reason:` field explaining the change — logged to action_log.details.reason for the weekly audit report (P2.3).",
     {
       query: z.string().describe("SQL query to execute. For SELECT: returns rows as JSON array. For mutations: wrap in a CTE that returns affected rows, e.g. WITH updated AS (UPDATE ... RETURNING *) SELECT * FROM updated"),
       mode: z.enum(["read", "write"]).optional().default("read").describe("Execution mode. 'read' (default) rejects any mutation (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies). 'write' is required to perform any mutation. The model MUST set mode='write' explicitly to write — never implicitly. Pure SELECT queries run in any mode."),
+      reason: z.string().optional().describe("Required for mutations touching a PROTECTED table (accounts, contacts, payments, services, service_deliveries, tax_returns, tasks, documents, deals, leads, offers, deadlines, pipeline_stages, client_invoices). Free-form 1-sentence explanation of WHY this raw SQL write is necessary (e.g. 'cascade cleanup for reclassified account a02bbfa7', 'stage backfill for null_stage SDs'). Logged to action_log.details.reason and surfaced in the weekly by-table report."),
     },
-    async ({ query: sqlQuery, mode }) => {
+    async ({ query: sqlQuery, mode, reason }) => {
       try {
         const startMs = Date.now()
         let dryRunInfo: string | undefined
@@ -337,28 +433,59 @@ export function registerSqlTools(server: McpServer) {
           }
         }
 
+        // ─── REASON: Require a reason: for writes on PROTECTED_TABLES (P2.3) ───
+        // Applies to any mutation that touches a protected table (detected
+        // via noteMutation() across main statement + CTE bodies).
+        if (validation.protectedTableTouched && (!reason || reason.trim().length === 0)) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `🛑 BLOCKED: Writes to PROTECTED tables require a \`reason:\` field explaining WHY this raw SQL write is necessary. Protected tables: ${PROTECTED_TABLES.join(", ")}.\n\nRe-invoke with \`reason: "<1-sentence justification>"\` (e.g. "cascade cleanup for reclassified account a02bbfa7", "stage backfill for null_stage SDs"). The reason is logged to action_log.details.reason.\n\nThe query was NOT executed.`,
+            }],
+          }
+        }
+
         // ─── DRY-RUN: Count affected rows for mutations on protected tables ───
-        if (validation.dryRunNeeded && validation.dryRunTable && validation.dryRunWhere) {
+        // P2.3 extensions:
+        //   (a) Per-table threshold (service_deliveries=10, others=50).
+        //   (b) INSERT gets a dry-run too, using the VALUES tuple count
+        //       parsed during validation (INSERT ... SELECT counts as 1).
+        if (validation.dryRunNeeded && validation.dryRunTable) {
+          const threshold = thresholdFor(validation.dryRunTable)
           try {
-            const countQuery = `SELECT count(*) as affected_rows FROM ${validation.dryRunTable} WHERE ${validation.dryRunWhere}`
-            const { data: countData } = await supabaseAdmin.rpc("exec_sql", {
-              sql_query: countQuery,
-            })
+            let affectedRows: number
 
-            const rows = (Array.isArray(countData) ? countData : []) as Array<Record<string, unknown>>
-            const affectedRows = (rows[0]?.affected_rows as number) ?? 0
+            if (validation.mutationType === "INSERT") {
+              affectedRows = validation.insertRowCount ?? 1
+            } else {
+              // UPDATE / DELETE path — require a WHERE clause.
+              if (!validation.dryRunWhere) {
+                // validateStatement already blocks WHERE-less UPDATE/DELETE,
+                // so this branch is a defensive fallthrough.
+                dryRunInfo = `[Dry-run: could not estimate affected rows — proceed with caution]`
+                // Skip the threshold check and fall through to execution.
+                affectedRows = 0
+              } else {
+                const countQuery = `SELECT count(*) as affected_rows FROM ${validation.dryRunTable} WHERE ${validation.dryRunWhere}`
+                const { data: countData } = await supabaseAdmin.rpc("exec_sql", {
+                  sql_query: countQuery,
+                })
 
-            if (affectedRows > 50) {
+                const rows = (Array.isArray(countData) ? countData : []) as Array<Record<string, unknown>>
+                affectedRows = (rows[0]?.affected_rows as number) ?? 0
+              }
+            }
+
+            if (affectedRows > threshold) {
               return {
                 content: [{
                   type: "text" as const,
-                  text: `⚠️ DRY-RUN: This ${validation.mutationType} would affect ${affectedRows} rows in "${validation.dryRunTable}" (protected table, limit: 50).\n\nThe query was NOT executed. If you need to affect more than 50 rows, split into smaller batches with more specific WHERE clauses, or use the Supabase Dashboard for bulk operations.\n\nQuery: ${sqlQuery}`,
+                  text: `⚠️ DRY-RUN: This ${validation.mutationType} would affect ${affectedRows} rows in "${validation.dryRunTable}" (protected table, limit: ${threshold}).\n\nThe query was NOT executed. If you need to affect more than ${threshold} rows, split into smaller batches with more specific WHERE clauses (or fewer VALUES tuples for INSERT), or use the Supabase Dashboard for bulk operations.\n\nQuery: ${sqlQuery}`,
                 }],
               }
             }
 
-            // Include dry-run info in the response later
-            dryRunInfo = `[Dry-run: ${affectedRows} row(s) will be affected in "${validation.dryRunTable}"]`
+            dryRunInfo = `[Dry-run: ${affectedRows} row(s) will be affected in "${validation.dryRunTable}" (limit ${threshold})]`
           } catch {
             // If dry-run fails (e.g. complex WHERE), proceed with caution
             dryRunInfo = `[Dry-run: could not estimate affected rows — proceed with caution]`
@@ -392,6 +519,8 @@ export function registerSqlTools(server: McpServer) {
         }
 
         // ─── AUDIT: Log mutations to action_log ───
+        // P2.3: include `reason` in details so the weekly by-table report
+        // can surface why each protected-table write happened.
         if (validation.hasMutation) {
           logAction({
             action_type: "execute_sql",
@@ -401,6 +530,8 @@ export function registerSqlTools(server: McpServer) {
               query: sqlQuery,
               mutation_type: validation.mutationType,
               table: validation.dryRunTable,
+              protected_table_touched: validation.protectedTableTouched === true,
+              reason: reason ?? null,
             },
           })
         }
