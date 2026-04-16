@@ -1,6 +1,6 @@
 /**
  * Auto-generated CHECK constraint types from Supabase public schema.
- * Generated: 2026-04-16T14:02:34.952Z
+ * Generated: 2026-04-16T19:19:00.405Z
  * Source: scripts/gen-check-types.ts
  * DO NOT EDIT — regenerate with: npx tsx scripts/gen-check-types.ts
  */

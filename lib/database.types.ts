@@ -3418,6 +3418,39 @@ export type Database = {
           },
         ]
       }
+      deploy_smoke_results: {
+        Row: {
+          any_failed: boolean
+          checked_at: string
+          checks: Json
+          commit_sha: string
+          created_at: string
+          failure_count: number
+          id: string
+          workflow_run_url: string | null
+        }
+        Insert: {
+          any_failed: boolean
+          checked_at?: string
+          checks: Json
+          commit_sha: string
+          created_at?: string
+          failure_count?: number
+          id?: string
+          workflow_run_url?: string | null
+        }
+        Update: {
+          any_failed?: boolean
+          checked_at?: string
+          checks?: Json
+          commit_sha?: string
+          created_at?: string
+          failure_count?: number
+          id?: string
+          workflow_run_url?: string | null
+        }
+        Relationships: []
+      }
       dev_tasks: {
         Row: {
           blockers: string | null
