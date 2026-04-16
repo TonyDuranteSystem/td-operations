@@ -108,8 +108,11 @@ jobs:
             exit 0
           fi
           # Validate JSON has a findings array.
-          HAS_FINDINGS=$(jq -e 'has("findings") and (.findings | type == "array")' /tmp/audit_body 2>/dev/null && echo yes || echo no)
-          if [ "$HAS_FINDINGS" = "yes" ]; then
+          # jq -e exits non-zero when the expression is false/null; redirect
+          # jq's stdout to /dev/null so we rely purely on its exit code.
+          # (The previous form captured jq's "true" stdout into HAS_FINDINGS
+          # which then became "true\nyes" — falsely reported as missing.)
+          if jq -e 'has("findings") and (.findings | type == "array")' /tmp/audit_body >/dev/null 2>&1; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
           else
             echo "result=fail" >> "$GITHUB_OUTPUT"
