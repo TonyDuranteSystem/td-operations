@@ -16,6 +16,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 
 export async function POST(req: NextRequest) {
   try {
@@ -119,16 +120,19 @@ export async function POST(req: NextRequest) {
                 `Action: Schedule live session for OTP verification and application completion.`,
               ].join("\n")
 
-          await supabaseAdmin.from("tasks").insert({
-            task_title: taskTitle,
-            description,
-            assigned_to: "Luca",
-            priority: "High",
-            category: "Banking" as never,
-            status: "To Do",
-            account_id: sub.account_id,
-            created_by: "System",
-          })
+          await dbWriteSafe(
+            supabaseAdmin.from("tasks").insert({
+              task_title: taskTitle,
+              description,
+              assigned_to: "Luca",
+              priority: "High",
+              category: "Banking" as never,
+              status: "To Do",
+              account_id: sub.account_id,
+              created_by: "System",
+            }),
+            "tasks.insert"
+          )
           results.push({ step: "task_created", status: "ok", detail: taskTitle })
         } else {
           results.push({ step: "task_created", status: "skipped", detail: "Already exists" })
@@ -158,10 +162,13 @@ export async function POST(req: NextRequest) {
             note: `${providerName} banking form submitted by client`,
           })
 
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({ stage: "Application Submitted", stage_history: history, updated_at: new Date().toISOString() })
-            .eq("id", sd.id)
+          await dbWrite(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({ stage: "Application Submitted", stage_history: history, updated_at: new Date().toISOString() })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
 
           results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} advanced: Data Collection → Application Submitted` })
         } else if (sd) {
@@ -217,16 +224,19 @@ export async function POST(req: NextRequest) {
 
     // Log to action_log for CRM Recent Activity + realtime notifications
     try {
-      await supabaseAdmin.from("action_log").insert({
-        actor: "system",
-        action_type: "form_submitted",
-        table_name: "banking_submissions",
-        record_id: sub.id,
-        account_id: sub.account_id || null,
-        contact_id: sub.contact_id || null,
-        summary: `Banking form completed: ${companyName} — ${providerName}`,
-        details: { token, provider: sub.provider, company_name: companyName },
-      })
+      await dbWriteSafe(
+        supabaseAdmin.from("action_log").insert({
+          actor: "system",
+          action_type: "form_submitted",
+          table_name: "banking_submissions",
+          record_id: sub.id,
+          account_id: sub.account_id || null,
+          contact_id: sub.contact_id || null,
+          summary: `Banking form completed: ${companyName} — ${providerName}`,
+          details: { token, provider: sub.provider, company_name: companyName },
+        }),
+        "action_log.insert"
+      )
     } catch { /* non-blocking */ }
 
     return NextResponse.json({ ok: true, results })

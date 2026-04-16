@@ -20,6 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -80,29 +81,35 @@ export async function onFirstInstallmentPaid(
         .order("stage_order")
         .limit(1)
 
-      const { data: newSd } = await supabaseAdmin
-        .from("service_deliveries")
-        .insert({
-          service_type: "CMRA Mailing Address",
-          service_name: `CMRA ${year} - ${account.company_name}`,
-          account_id: accountId,
-          contact_id: contactId,
-          stage: cmraStage?.[0]?.stage_name || "Lease Created",
-          status: "active",
-          assigned_to: "Luca",
-          notes: `Auto-created from 1st installment ${year}`,
-        })
-        .select("id")
-        .single()
+      const newSd = await dbWrite(
+        supabaseAdmin
+          .from("service_deliveries")
+          .insert({
+            service_type: "CMRA Mailing Address",
+            service_name: `CMRA ${year} - ${account.company_name}`,
+            account_id: accountId,
+            contact_id: contactId,
+            stage: cmraStage?.[0]?.stage_name || "Lease Created",
+            status: "active",
+            assigned_to: "Luca",
+            notes: `Auto-created from 1st installment ${year}`,
+          })
+          .select("id")
+          .single(),
+        "service_deliveries.insert"
+      )
 
       steps.push({ step: "cmra_sd", status: "ok", detail: `Created: ${newSd?.id}` })
     }
 
     // Update cmra_renewal_date
-    await supabaseAdmin
-      .from("accounts")
-      .update({ cmra_renewal_date: `${year}-12-31`, updated_at: new Date().toISOString() })
-      .eq("id", accountId)
+    await dbWriteSafe(
+      supabaseAdmin
+        .from("accounts")
+        .update({ cmra_renewal_date: `${year}-12-31`, updated_at: new Date().toISOString() })
+        .eq("id", accountId),
+      "accounts.update"
+    )
   } catch (e) {
     steps.push({ step: "cmra_sd", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
@@ -179,20 +186,23 @@ export async function onFirstInstallmentPaid(
         .order("stage_order")
         .limit(1)
 
-      const { data: newSd } = await supabaseAdmin
-        .from("service_deliveries")
-        .insert({
-          service_type: "Tax Return",
-          service_name: `Tax Return ${taxYear} - ${account.company_name}`,
-          account_id: accountId,
-          contact_id: contactId,
-          stage: taxStage?.[0]?.stage_name || "Activated",
-          status: "active",
-          assigned_to: "Luca",
-          notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.`,
-        })
-        .select("id")
-        .single()
+      const newSd = await dbWrite(
+        supabaseAdmin
+          .from("service_deliveries")
+          .insert({
+            service_type: "Tax Return",
+            service_name: `Tax Return ${taxYear} - ${account.company_name}`,
+            account_id: accountId,
+            contact_id: contactId,
+            stage: taxStage?.[0]?.stage_name || "Activated",
+            status: "active",
+            assigned_to: "Luca",
+            notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.`,
+          })
+          .select("id")
+          .single(),
+        "service_deliveries.insert"
+      )
 
       steps.push({ step: "tax_sd", status: "ok", detail: `Created: ${newSd?.id} (tax year ${taxYear})` })
 
@@ -210,14 +220,17 @@ export async function onFirstInstallmentPaid(
         if (entityType.includes("MULTI") || entityType.includes("MMLLC")) returnType = "MMLLC"
         else if (entityType.includes("CORP")) returnType = "Corp"
 
-        await supabaseAdmin.from("tax_returns").insert({
-          account_id: accountId,
-          tax_year: taxYear,
-          return_type: returnType as never,
-          status: "Paid - Not Started",
-          paid: true,
-          paid_date: new Date().toISOString().split("T")[0],
-        } as never)
+        await dbWrite(
+          supabaseAdmin.from("tax_returns").insert({
+            account_id: accountId,
+            tax_year: taxYear,
+            return_type: returnType as never,
+            status: "Paid - Not Started",
+            paid: true,
+            paid_date: new Date().toISOString().split("T")[0],
+          } as never),
+          "tax_returns.insert"
+        )
         steps.push({ step: "tax_return_record", status: "ok", detail: `Created for ${taxYear} (${returnType})` })
       }
     }
@@ -254,17 +267,20 @@ export async function onFirstInstallmentPaid(
 
   // ─── 6. Create task for lease ───
   try {
-    await supabaseAdmin.from("tasks").insert({
-      task_title: `Create lease ${year} -- ${account.company_name}`,
-      description: `1st installment paid. Create and send new lease agreement for ${year}.\n\nUse: lease_create(account_id="${accountId}", suite_number="...")\nThen: lease_send(token)`,
-      assigned_to: "Luca",
-      priority: "High",
-      category: "Document",
-      status: "To Do",
-      due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-      account_id: accountId,
-      created_by: "System",
-    })
+    await dbWriteSafe(
+      supabaseAdmin.from("tasks").insert({
+        task_title: `Create lease ${year} -- ${account.company_name}`,
+        description: `1st installment paid. Create and send new lease agreement for ${year}.\n\nUse: lease_create(account_id="${accountId}", suite_number="...")\nThen: lease_send(token)`,
+        assigned_to: "Luca",
+        priority: "High",
+        category: "Document",
+        status: "To Do",
+        due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        account_id: accountId,
+        created_by: "System",
+      }),
+      "tasks.insert"
+    )
     steps.push({ step: "lease_task", status: "ok" })
   } catch (e) {
     steps.push({ step: "lease_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
@@ -309,14 +325,17 @@ export async function onSecondInstallmentPaid(
         steps.push({ step: "tax_gate", status: "skipped", detail: "Already sent to India" })
       } else {
         // Gate lifted — ready to send to India
-        await supabaseAdmin
-          .from("tax_returns")
-          .update({
-            status: tr.status === "Data Received" ? "Data Received" : tr.status,
-            notes: `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for India.`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", tr.id)
+        await dbWrite(
+          supabaseAdmin
+            .from("tax_returns")
+            .update({
+              status: tr.status === "Data Received" ? "Data Received" : tr.status,
+              notes: `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for India.`,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", tr.id),
+          "tax_returns.update"
+        )
 
         steps.push({ step: "tax_gate", status: "ok", detail: `Gate lifted for ${account.company_name} (${taxYear})` })
       }
@@ -338,13 +357,16 @@ export async function onSecondInstallmentPaid(
       .maybeSingle()
 
     if (taxSd && taxSd.stage === "Awaiting 2nd Payment") {
-      await supabaseAdmin
-        .from("service_deliveries")
-        .update({
-          stage: "Ready for Filing",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", taxSd.id)
+      await dbWrite(
+        supabaseAdmin
+          .from("service_deliveries")
+          .update({
+            stage: "Ready for Filing",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", taxSd.id),
+        "service_deliveries.update"
+      )
 
       steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Ready for Filing` })
     } else if (taxSd) {
@@ -387,16 +409,19 @@ export async function onSecondInstallmentPaid(
       .maybeSingle()
 
     if (tr?.data_received) {
-      await supabaseAdmin.from("tasks").insert({
-        task_title: `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`,
-        description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
-        assigned_to: "Luca",
-        priority: "High",
-        category: "Tax" as never,
-        status: "To Do",
-        account_id: accountId,
-        created_by: "System",
-      })
+      await dbWriteSafe(
+        supabaseAdmin.from("tasks").insert({
+          task_title: `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`,
+          description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
+          assigned_to: "Luca",
+          priority: "High",
+          category: "Tax" as never,
+          status: "To Do",
+          account_id: accountId,
+          created_by: "System",
+        }),
+        "tasks.insert"
+      )
       steps.push({ step: "india_task", status: "ok", detail: "Data ready + paid — task created to send to India" })
     }
   } catch (e) {

@@ -22,6 +22,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -157,20 +158,23 @@ export async function POST(req: NextRequest) {
 
         const firstStage = stages?.[0]?.stage_name || "Data Collection"
 
-        const { data: newSd } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_type: "Company Closure",
-            service_name: `Company Closure - ${llcName}`,
-            account_id: accountId,
-            contact_id: contactId,
-            stage: firstStage,
-            status: "active",
-            assigned_to: "Luca",
-            notes: `Auto-created from closure form ${token}`,
-          })
-          .select("id")
-          .single()
+        const newSd = await dbWrite(
+          supabaseAdmin
+            .from("service_deliveries")
+            .insert({
+              service_type: "Company Closure",
+              service_name: `Company Closure - ${llcName}`,
+              account_id: accountId,
+              contact_id: contactId,
+              stage: firstStage,
+              status: "active",
+              assigned_to: "Luca",
+              notes: `Auto-created from closure form ${token}`,
+            })
+            .select("id")
+            .single(),
+          "service_deliveries.insert"
+        )
 
         if (newSd) {
           deliveryId = newSd.id
@@ -235,21 +239,24 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
 
     // ---- STEP 5: Create task for Luca ----
     try {
-      await supabaseAdmin
-        .from("tasks")
-        .insert({
-          task_title: `Start closure: ${llcName} (${llcState})`,
-          description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
-          assigned_to: "Luca",
-          priority: "High",
-          category: "Filing",
-          status: "To Do",
-          due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          delivery_id: deliveryId || null,
-          account_id: accountId || null,
-          contact_id: contactId || null,
-          created_by: "System",
-        })
+      await dbWriteSafe(
+        supabaseAdmin
+          .from("tasks")
+          .insert({
+            task_title: `Start closure: ${llcName} (${llcState})`,
+            description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
+            assigned_to: "Luca",
+            priority: "High",
+            category: "Filing",
+            status: "To Do",
+            due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            delivery_id: deliveryId || null,
+            account_id: accountId || null,
+            contact_id: contactId || null,
+            created_by: "System",
+          }),
+        "tasks.insert"
+      )
 
       results.push({ step: "luca_task", status: "ok", detail: `Task created. Delivery: ${deliveryId || "none"}` })
     } catch (e) {
@@ -266,13 +273,16 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
           .single()
 
         if (sd) {
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({
-              notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data saved to Drive. Luca notified.`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", sd.id)
+          await dbWriteSafe(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({
+                notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data saved to Drive. Luca notified.`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
           results.push({ step: "sd_update", status: "ok" })
         }
       } catch (e) {
@@ -282,13 +292,16 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
 
     // ---- STEP 7: Log action ----
     try {
-      await supabaseAdmin.from("action_log").insert({
-        action_type: "closure_form_completed",
-        table_name: "closure_submissions",
-        record_id: submission_id,
-        summary: `Closure form completed: ${llcName} (${clientName}). Drive saved, Luca notified.`,
-        details: { token, lead_id: leadId, contact_id: contactId, account_id: accountId, results } as unknown as Json,
-      })
+      await dbWriteSafe(
+        supabaseAdmin.from("action_log").insert({
+          action_type: "closure_form_completed",
+          table_name: "closure_submissions",
+          record_id: submission_id,
+          summary: `Closure form completed: ${llcName} (${clientName}). Drive saved, Luca notified.`,
+          details: { token, lead_id: leadId, contact_id: contactId, account_id: accountId, results } as unknown as Json,
+        }),
+        "action_log.insert"
+      )
     } catch { /* non-blocking */ }
 
     // eslint-disable-next-line no-console

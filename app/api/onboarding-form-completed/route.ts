@@ -24,6 +24,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -89,16 +90,19 @@ export async function POST(req: NextRequest) {
       } else if (lead) {
         // AUTO-CREATE contact from lead data
         try {
-          const { data: newContact } = await supabaseAdmin
-            .from("contacts")
-            .insert({
-              full_name: lead.full_name,
-              email: lead.email,
-              phone: lead.phone,
-              language: leadLanguage,
-            })
-            .select("id")
-            .single()
+          const newContact = await dbWrite(
+            supabaseAdmin
+              .from("contacts")
+              .insert({
+                full_name: lead.full_name,
+                email: lead.email,
+                phone: lead.phone,
+                language: leadLanguage,
+              })
+              .select("id")
+              .single(),
+            "contacts.insert"
+          )
 
           if (newContact) {
             contactId = newContact.id
@@ -137,19 +141,22 @@ export async function POST(req: NextRequest) {
         const firstStage = stages?.[0]?.stage_name || "Data Collection"
         const companyName = submittedData.company_name || "Existing LLC"
 
-        const { data: newSd } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_type: "Client Onboarding",
-            service_name: `Client Onboarding - ${leadName} (${companyName})`,
-            contact_id: contactId,
-            stage: firstStage,
-            status: "active",
-            assigned_to: "Luca",
-            notes: `Auto-created from onboarding form ${token}`,
-          })
-          .select("id")
-          .single()
+        const newSd = await dbWrite(
+          supabaseAdmin
+            .from("service_deliveries")
+            .insert({
+              service_type: "Client Onboarding",
+              service_name: `Client Onboarding - ${leadName} (${companyName})`,
+              contact_id: contactId,
+              stage: firstStage,
+              status: "active",
+              assigned_to: "Luca",
+              notes: `Auto-created from onboarding form ${token}`,
+            })
+            .select("id")
+            .single(),
+          "service_deliveries.insert"
+        )
 
         if (newSd) {
           deliveryId = newSd.id
@@ -182,10 +189,13 @@ export async function POST(req: NextRequest) {
 
         if (Object.keys(updates).length > 0) {
           updates.updated_at = new Date().toISOString()
-          await supabaseAdmin
-            .from("contacts")
-            .update(updates)
-            .eq("id", contactId)
+          await dbWrite(
+            supabaseAdmin
+              .from("contacts")
+              .update(updates)
+              .eq("id", contactId),
+            "contacts.update"
+          )
 
           results.push({ step: "crm_update", status: "ok", detail: `Contact updated: ${Object.keys(updates).join(", ")}` })
         }
@@ -273,18 +283,21 @@ export async function POST(req: NextRequest) {
         }
 
         if (refCompanyName) {
-          await supabaseAdmin
-            .from("tasks")
-            .insert({
-              task_title: `[REFERRAL] Approve credit note for ${refCompanyName}`,
-              description: `Referrer: ${referrerName} (${refCompanyName})\nReferred client: ${leadName}\nCommission: 10% (verify on offer)\n\nCreate QB credit note for ${refCompanyName} once approved.`,
-              assigned_to: "Antonio",
-              priority: "High",
-              category: "Payment",
-              status: "To Do",
-              account_id: refAccountId || null,
-              created_by: "System",
-            })
+          await dbWriteSafe(
+            supabaseAdmin
+              .from("tasks")
+              .insert({
+                task_title: `[REFERRAL] Approve credit note for ${refCompanyName}`,
+                description: `Referrer: ${referrerName} (${refCompanyName})\nReferred client: ${leadName}\nCommission: 10% (verify on offer)\n\nCreate QB credit note for ${refCompanyName} once approved.`,
+                assigned_to: "Antonio",
+                priority: "High",
+                category: "Payment",
+                status: "To Do",
+                account_id: refAccountId || null,
+                created_by: "System",
+              }),
+            "tasks.insert"
+          )
 
           results.push({ step: "referral", status: "ok", detail: `Referrer: ${referrerName} (${refCompanyName}). Task created for Antonio.` })
         }
@@ -369,40 +382,46 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
     try {
       const companyName = submittedData.company_name || "Existing LLC"
 
-      const { data: task } = await supabaseAdmin
-        .from("tasks")
-        .insert({
-          task_title: `Review onboarding data: ${leadName} - ${companyName}`,
-          description: `Onboarding form completed for ${leadName}.\n\nCompany: ${companyName}\nState: ${submittedData.state || sub.state || "N/A"}\nEIN: ${submittedData.ein || "N/A"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Run onboarding_form_review(token="${token}", apply_changes=true)\n3. Start RA change on Harbor Compliance\n4. Mark this task as Done when CRM setup is complete`,
-          assigned_to: "Luca",
-          priority: "High",
-          category: "Onboarding" as never,
-          status: "To Do",
-          due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          delivery_id: deliveryId || null,
-          contact_id: contactId || null,
-          created_by: "System",
-        })
-        .select("id")
-        .single()
-
-      results.push({ step: "luca_task", status: "ok", detail: `Task created: ${task?.id}. Delivery: ${deliveryId || "none"}` })
-
-      if (!hasPassport) {
-        await supabaseAdmin
+      const task = await dbWrite(
+        supabaseAdmin
           .from("tasks")
           .insert({
-            task_title: `[MISSING] Request passport from ${leadName}`,
-            description: `The onboarding form was submitted WITHOUT a passport.\nEmail the client at ${leadEmail} to request a clear passport scan.\nUse email only, never WhatsApp for official documents.`,
+            task_title: `Review onboarding data: ${leadName} - ${companyName}`,
+            description: `Onboarding form completed for ${leadName}.\n\nCompany: ${companyName}\nState: ${submittedData.state || sub.state || "N/A"}\nEIN: ${submittedData.ein || "N/A"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Run onboarding_form_review(token="${token}", apply_changes=true)\n3. Start RA change on Harbor Compliance\n4. Mark this task as Done when CRM setup is complete`,
             assigned_to: "Luca",
-            priority: "Urgent",
-            category: "Document",
+            priority: "High",
+            category: "Onboarding" as never,
             status: "To Do",
-            due_date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
             delivery_id: deliveryId || null,
             contact_id: contactId || null,
             created_by: "System",
           })
+          .select("id")
+          .single(),
+        "tasks.insert"
+      )
+
+      results.push({ step: "luca_task", status: "ok", detail: `Task created: ${task?.id}. Delivery: ${deliveryId || "none"}` })
+
+      if (!hasPassport) {
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `[MISSING] Request passport from ${leadName}`,
+              description: `The onboarding form was submitted WITHOUT a passport.\nEmail the client at ${leadEmail} to request a clear passport scan.\nUse email only, never WhatsApp for official documents.`,
+              assigned_to: "Luca",
+              priority: "Urgent",
+              category: "Document",
+              status: "To Do",
+              due_date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || null,
+              contact_id: contactId || null,
+              created_by: "System",
+            }),
+          "tasks.insert"
+        )
         results.push({ step: "passport_task", status: "ok", detail: "Urgent task created to request passport" })
       }
     } catch (e) {
@@ -420,13 +439,16 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
 
         if (sd) {
           const currentNotes = sd.notes || ""
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({
-              notes: currentNotes + `\n${new Date().toISOString().split("T")[0]}: Onboarding form completed. Data applied to CRM. Luca notified.`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", sd.id)
+          await dbWriteSafe(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({
+                notes: currentNotes + `\n${new Date().toISOString().split("T")[0]}: Onboarding form completed. Data applied to CRM. Luca notified.`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
           results.push({ step: "sd_update", status: "ok", detail: `SD ${sd.id} notes updated` })
         }
       } catch (e) {
@@ -436,13 +458,16 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
 
     // ---- STEP 9: Log action ----
     try {
-      await supabaseAdmin.from("action_log").insert({
-        action_type: "onboarding_form_completed",
-        table_name: "onboarding_submissions",
-        record_id: submission_id,
-        summary: `Onboarding form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
-        details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
-      })
+      await dbWriteSafe(
+        supabaseAdmin.from("action_log").insert({
+          action_type: "onboarding_form_completed",
+          table_name: "onboarding_submissions",
+          record_id: submission_id,
+          summary: `Onboarding form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
+          details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
+        }),
+        "action_log.insert"
+      )
     } catch { /* non-blocking */ }
 
     // eslint-disable-next-line no-console

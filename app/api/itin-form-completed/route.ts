@@ -24,6 +24,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -91,10 +92,13 @@ export async function POST(req: NextRequest) {
         if (existing?.length) {
           contactId = existing[0].id
         } else {
-          const { data: newC } = await supabaseAdmin.from("contacts").insert({
-            full_name: lead.full_name, email: lead.email, phone: lead.phone,
-            language: lead.language === "Italian" ? "it" : "en",
-          }).select("id").single()
+          const newC = await dbWrite(
+            supabaseAdmin.from("contacts").insert({
+              full_name: lead.full_name, email: lead.email, phone: lead.phone,
+              language: lead.language === "Italian" ? "it" : "en",
+            }).select("id").single(),
+            "contacts.insert"
+          )
           if (newC) { contactId = newC.id; results.push({ step: "contact_created", status: "ok", detail: contactId }) }
         }
       }
@@ -125,7 +129,10 @@ export async function POST(req: NextRequest) {
 
         if (Object.keys(updates).length > 0) {
           updates.updated_at = new Date().toISOString()
-          await supabaseAdmin.from("contacts").update(updates).eq("id", contactId)
+          await dbWrite(
+            supabaseAdmin.from("contacts").update(updates).eq("id", contactId),
+            "contacts.update"
+          )
           results.push({ step: "crm_update", status: "ok", detail: `Updated: ${Object.keys(updates).filter(k => k !== "updated_at").join(", ")}` })
         } else {
           results.push({ step: "crm_update", status: "skipped", detail: "No changes" })
@@ -212,17 +219,20 @@ export async function POST(req: NextRequest) {
         deliveryId = existingSd[0].id
         // Advance to Document Preparation
         if (existingSd[0].stage === "Data Collection") {
-          const { error: advanceError } = await supabaseAdmin
-            .from("service_deliveries")
-            .update({
-              stage: "Document Preparation",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", deliveryId)
+          const { error: advanceError } = await dbWriteSafe(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({
+                stage: "Document Preparation",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", deliveryId),
+            "service_deliveries.update"
+          )
 
           if (advanceError) {
             console.error("[itin-form-completed] SD stage advance failed:", advanceError)
-            results.push({ step: "sd_advance", status: "error", detail: advanceError.message })
+            results.push({ step: "sd_advance", status: "error", detail: advanceError })
           } else {
             results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> Document Preparation` })
           }
@@ -239,20 +249,23 @@ export async function POST(req: NextRequest) {
 
         const secondStage = stages?.[1]?.stage_name || "Document Preparation"
 
-        const { data: newSd, error: newSdError } = await supabaseAdmin.from("service_deliveries").insert({
-          service_type: "ITIN",
-          service_name: `ITIN - ${clientName}`,
-          account_id: sub.account_id || null,
-          contact_id: contactId,
-          stage: secondStage, // Start at Document Preparation since data is already received
-          status: "active",
-          assigned_to: "Luca",
-          notes: `Auto-created from ITIN form ${token}`,
-        }).select("id").single()
+        const { data: newSd, error: newSdError } = await dbWriteSafe(
+          supabaseAdmin.from("service_deliveries").insert({
+            service_type: "ITIN",
+            service_name: `ITIN - ${clientName}`,
+            account_id: sub.account_id || null,
+            contact_id: contactId,
+            stage: secondStage, // Start at Document Preparation since data is already received
+            status: "active",
+            assigned_to: "Luca",
+            notes: `Auto-created from ITIN form ${token}`,
+          }).select("id").single(),
+          "service_deliveries.insert"
+        )
 
         if (newSdError) {
           console.error("[itin-form-completed] service_deliveries INSERT failed:", newSdError)
-          results.push({ step: "sd_created", status: "error", detail: newSdError.message })
+          results.push({ step: "sd_created", status: "error", detail: newSdError })
         } else if (newSd) {
           deliveryId = newSd.id
           results.push({ step: "sd_created", status: "ok", detail: `SD auto-created at Document Preparation: ${deliveryId}` })
@@ -388,21 +401,24 @@ export async function POST(req: NextRequest) {
         .from("tasks").select("id").eq("task_title", taskTitle).maybeSingle()
 
       if (!existingTask) {
-        await supabaseAdmin.from("tasks").insert({
-          task_title: taskTitle,
-          description: docsGenerated
-            ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Largo FL.`
-            : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
-          assigned_to: "Luca",
-          priority: "High",
-          category: "KYC",
-          status: "To Do",
-          due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          delivery_id: deliveryId || undefined,
-          account_id: sub.account_id || undefined,
-          contact_id: contactId || undefined,
-          created_by: "System",
-        })
+        await dbWriteSafe(
+          supabaseAdmin.from("tasks").insert({
+            task_title: taskTitle,
+            description: docsGenerated
+              ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Largo FL.`
+              : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
+            assigned_to: "Luca",
+            priority: "High",
+            category: "KYC",
+            status: "To Do",
+            due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            delivery_id: deliveryId || undefined,
+            account_id: sub.account_id || undefined,
+            contact_id: contactId || undefined,
+            created_by: "System",
+          }),
+          "tasks.insert"
+        )
         results.push({ step: "task_created", status: "ok", detail: taskTitle })
       }
     } catch (e) {
@@ -415,10 +431,13 @@ export async function POST(req: NextRequest) {
         const { data: sdRec } = await supabaseAdmin
           .from("service_deliveries").select("id, notes").eq("id", deliveryId).single()
         if (sdRec) {
-          await supabaseAdmin.from("service_deliveries").update({
-            notes: (sdRec.notes || "") + `\n${new Date().toISOString().split("T")[0]}: ITIN form completed. CRM updated. ${docsGenerated ? "W-7 + 1040-NR generated." : "Doc generation pending."} Luca notified.`,
-            updated_at: new Date().toISOString(),
-          }).eq("id", sdRec.id)
+          await dbWriteSafe(
+            supabaseAdmin.from("service_deliveries").update({
+              notes: (sdRec.notes || "") + `\n${new Date().toISOString().split("T")[0]}: ITIN form completed. CRM updated. ${docsGenerated ? "W-7 + 1040-NR generated." : "Doc generation pending."} Luca notified.`,
+              updated_at: new Date().toISOString(),
+            }).eq("id", sdRec.id),
+            "service_deliveries.update"
+          )
         }
       } catch (e) {
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
@@ -427,13 +446,16 @@ export async function POST(req: NextRequest) {
 
     // --- STEP 8: Log action ---
     try {
-      await supabaseAdmin.from("action_log").insert({
-        action_type: "itin_form_completed",
-        table_name: "itin_submissions",
-        record_id: submission_id,
-        summary: `ITIN form completed: ${displayName}. ${docsGenerated ? "W-7 + 1040-NR generated." : "Doc generation pending."} Luca notified.`,
-        details: { token, lead_id: sub.lead_id, contact_id: contactId, account_id: sub.account_id, docs_generated: docsGenerated, results } as unknown as Json,
-      })
+      await dbWriteSafe(
+        supabaseAdmin.from("action_log").insert({
+          action_type: "itin_form_completed",
+          table_name: "itin_submissions",
+          record_id: submission_id,
+          summary: `ITIN form completed: ${displayName}. ${docsGenerated ? "W-7 + 1040-NR generated." : "Doc generation pending."} Luca notified.`,
+          details: { token, lead_id: sub.lead_id, contact_id: contactId, account_id: sub.account_id, docs_generated: docsGenerated, results } as unknown as Json,
+        }),
+        "action_log.insert"
+      )
     } catch { /* non-blocking */ }
 
     // eslint-disable-next-line no-console

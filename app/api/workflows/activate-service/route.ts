@@ -25,6 +25,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
@@ -213,22 +214,25 @@ export async function POST(req: NextRequest) {
             contactId = existingContact[0].id
             steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact exists: ${contactId}` })
           } else {
-            const { data: newContact, error: cErr } = await supabase
-              .from("contacts")
-              .insert({
-                full_name: lead.full_name,
-                email: lead.email,
-                phone: lead.phone,
-                language: lead.language === "Italian" ? "it" : "en",
-              })
-              .select()
-              .single()
+            const { data: newContact, error: cErr } = await dbWriteSafe(
+              supabase
+                .from("contacts")
+                .insert({
+                  full_name: lead.full_name,
+                  email: lead.email,
+                  phone: lead.phone,
+                  language: lead.language === "Italian" ? "it" : "en",
+                })
+                .select()
+                .single(),
+              "contacts.insert"
+            )
 
             if (newContact) {
               contactId = newContact.id
               steps.push({ step: "lead_to_contact", status: "created", detail: `Contact created: ${contactId}` })
             } else {
-              steps.push({ step: "lead_to_contact", status: "error", detail: cErr?.message })
+              steps.push({ step: "lead_to_contact", status: "error", detail: cErr || undefined })
             }
           }
         }
@@ -267,16 +271,19 @@ export async function POST(req: NextRequest) {
           if (existingContact && existingContact.length > 0) {
             contactId = existingContact[0].id
           } else {
-            const { data: newContact } = await supabase
-              .from("contacts")
-              .insert({
-                full_name: leads[0].full_name,
-                email: leads[0].email,
-                phone: leads[0].phone,
-                language: leads[0].language === "Italian" ? "it" : "en",
-              })
-              .select()
-              .single()
+            const { data: newContact } = await dbWriteSafe(
+              supabase
+                .from("contacts")
+                .insert({
+                  full_name: leads[0].full_name,
+                  email: leads[0].email,
+                  phone: leads[0].phone,
+                  language: leads[0].language === "Italian" ? "it" : "en",
+                })
+                .select()
+                .single(),
+              "contacts.insert"
+            )
             if (newContact) contactId = newContact.id
           }
         }
@@ -389,10 +396,13 @@ export async function POST(req: NextRequest) {
         .single()
 
       if (currentAcct && currentAcct.account_type !== "Client") {
-        await supabase
-          .from("accounts")
-          .update({ account_type: "Client", updated_at: new Date().toISOString() })
-          .eq("id", autoAccountId)
+        await dbWrite(
+          supabase
+            .from("accounts")
+            .update({ account_type: "Client", updated_at: new Date().toISOString() })
+            .eq("id", autoAccountId),
+          "accounts.update"
+        )
         steps.push({
           step: "upgrade_account_type",
           status: "done",
@@ -476,24 +486,27 @@ export async function POST(req: NextRequest) {
             stage = firstStage.get(pipeline) || "Pending"
           }
 
-          const { data: sd, error: sdErr } = await supabase
-            .from("service_deliveries")
-            .insert({
-              service_type: pipeline,
-              service_name: `${pipeline} - ${activation.client_name}`,
-              account_id: isStandaloneBusinessTR && pipeline === "Tax Return" ? null : accountId,
-              contact_id: contactId,
-              stage: stage,
-              stage_order: explicitStageOrder,
-              status: "active",
-              assigned_to: "Luca",
-              notes: `Auto-created from offer ${activation.offer_token}`,
-            })
-            .select("id")
-            .single()
+          const { data: sd, error: sdErr } = await dbWriteSafe(
+            supabase
+              .from("service_deliveries")
+              .insert({
+                service_type: pipeline,
+                service_name: `${pipeline} - ${activation.client_name}`,
+                account_id: isStandaloneBusinessTR && pipeline === "Tax Return" ? null : accountId,
+                contact_id: contactId,
+                stage: stage,
+                stage_order: explicitStageOrder,
+                status: "active",
+                assigned_to: "Luca",
+                notes: `Auto-created from offer ${activation.offer_token}`,
+              })
+              .select("id")
+              .single(),
+            "service_deliveries.insert"
+          )
 
           if (sdErr) {
-            sdResults.push({ pipeline, status: "error", id: sdErr.message })
+            sdResults.push({ pipeline, status: "error", id: sdErr })
           } else {
             sdResults.push({ pipeline, status: "created", id: sd?.id })
 
@@ -502,17 +515,20 @@ export async function POST(req: NextRequest) {
             if (sd?.id && stageData?.auto_tasks?.length) {
               const serviceName = `${pipeline} - ${activation.client_name}`
               for (const taskDef of stageData.auto_tasks) {
-                await supabase.from("tasks").insert({
-                  task_title: `[${serviceName}] ${taskDef.title}`,
-                  assigned_to: taskDef.assigned_to || "Luca",
-                  category: (taskDef.category || "Internal") as never,
-                  priority: (taskDef.priority || "Normal") as never,
-                  description: "Auto-created on service delivery creation",
-                  status: "To Do",
-                  account_id: accountId,
-                  delivery_id: sd.id,
-                  stage_order: stageData.stage_order,
-                })
+                await dbWriteSafe(
+                  supabase.from("tasks").insert({
+                    task_title: `[${serviceName}] ${taskDef.title}`,
+                    assigned_to: taskDef.assigned_to || "Luca",
+                    category: (taskDef.category || "Internal") as never,
+                    priority: (taskDef.priority || "Normal") as never,
+                    description: "Auto-created on service delivery creation",
+                    status: "To Do",
+                    account_id: accountId,
+                    delivery_id: sd.id,
+                    stage_order: stageData.stage_order,
+                  }),
+                  "tasks.insert"
+                )
               }
             }
           }
@@ -555,10 +571,13 @@ export async function POST(req: NextRequest) {
           .limit(1)
 
         if (existingTr && existingTr.length > 0) {
-          await supabase
-            .from("tax_returns")
-            .update({ paid: true, paid_date: today })
-            .eq("id", existingTr[0].id)
+          await dbWriteSafe(
+            supabase
+              .from("tax_returns")
+              .update({ paid: true, paid_date: today })
+              .eq("id", existingTr[0].id),
+            "tax_returns.update"
+          )
           steps.push({ step: "tax_return_paid", status: "updated", detail: `tax_returns ${existingTr[0].id.slice(0, 8)} marked paid (included in deal)` })
         } else {
           steps.push({ step: "tax_return_paid", status: "skipped", detail: `No tax_returns record found for ${currentYear - 1}` })
@@ -591,10 +610,13 @@ export async function POST(req: NextRequest) {
 
         if (newIdx > currentIdx) {
           // 1. Update contacts.portal_tier
-          await supabase
-            .from("contacts")
-            .update({ portal_tier: "onboarding" })
-            .eq("id", contactId)
+          await dbWrite(
+            supabase
+              .from("contacts")
+              .update({ portal_tier: "onboarding" })
+              .eq("id", contactId),
+            "contacts.update"
+          )
 
           // 2. Update auth.users.app_metadata.portal_tier (same pattern as upgradePortalTier)
           if (currentContact?.email) {
@@ -679,11 +701,14 @@ export async function POST(req: NextRequest) {
 
         // Backfill account_id on the existing invoice if we now have one
         if (autoAccountId) {
-          await supabase
-            .from("client_invoices")
-            .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
-            .eq("id", activation.portal_invoice_id)
-            .is("account_id", null)
+          await dbWriteSafe(
+            supabase
+              .from("client_invoices")
+              .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
+              .eq("id", activation.portal_invoice_id)
+              .is("account_id", null),
+            "client_invoices.update"
+          )
 
           // Also update the linked payment record
           const { data: linkedPay } = await supabase
@@ -693,11 +718,14 @@ export async function POST(req: NextRequest) {
             .limit(1)
             .maybeSingle()
           if (linkedPay) {
-            await supabase
-              .from("payments")
-              .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
-              .eq("id", linkedPay.id)
-              .is("account_id", null)
+            await dbWriteSafe(
+              supabase
+                .from("payments")
+                .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
+                .eq("id", linkedPay.id)
+                .is("account_id", null),
+              "payments.update"
+            )
           }
         }
 
@@ -762,10 +790,13 @@ export async function POST(req: NextRequest) {
         })
 
         // Store payment reference on activation for traceability
-        await supabase
-          .from("pending_activations")
-          .update({ portal_invoice_id: invoiceResult.paymentId })
-          .eq("id", pending_activation_id)
+        await dbWriteSafe(
+          supabase
+            .from("pending_activations")
+            .update({ portal_invoice_id: invoiceResult.paymentId })
+            .eq("id", pending_activation_id),
+          "pending_activations.update"
+        )
 
         steps.push({
           step: "crm_invoice",
@@ -811,15 +842,18 @@ export async function POST(req: NextRequest) {
           referrerContactId = referrerContacts[0].id
         } else {
           // Create minimal contact for the referrer
-          const { data: newReferrer } = await supabase
-            .from("contacts")
-            .insert({
-              full_name: offer.referrer_name,
-              email: offer.referrer_email || null,
-              referrer_type: offer.referrer_type || null,
-            })
-            .select("id")
-            .single()
+          const { data: newReferrer } = await dbWriteSafe(
+            supabase
+              .from("contacts")
+              .insert({
+                full_name: offer.referrer_name,
+                email: offer.referrer_email || null,
+                referrer_type: offer.referrer_type || null,
+              })
+              .select("id")
+              .single(),
+            "contacts.insert"
+          )
           referrerContactId = newReferrer?.id || null
         }
 
@@ -852,38 +886,44 @@ export async function POST(req: NextRequest) {
           const commissionCurrency = "EUR"
 
           // d. Insert referral record
-          const { data: referral, error: refErr } = await supabase
-            .from("referrals")
-            .insert({
-              referrer_contact_id: referrerContactId,
-              referrer_account_id: offer.referrer_account_id || null,
-              referred_contact_id: contactId || null,
-              referred_account_id: autoAccountId || null,
-              referred_lead_id: leadId || null,
-              referred_name: offer.client_name || activation.client_name,
-              offer_token: activation.offer_token,
-              status: "converted",
-              commission_type: commissionType,
-              commission_pct: commissionPct,
-              commission_amount: commissionAmount || null,
-              commission_currency: commissionCurrency,
-            })
-            .select("id")
-            .single()
+          const { data: referral, error: refErr } = await dbWriteSafe(
+            supabase
+              .from("referrals")
+              .insert({
+                referrer_contact_id: referrerContactId,
+                referrer_account_id: offer.referrer_account_id || null,
+                referred_contact_id: contactId || null,
+                referred_account_id: autoAccountId || null,
+                referred_lead_id: leadId || null,
+                referred_name: offer.client_name || activation.client_name,
+                offer_token: activation.offer_token,
+                status: "converted",
+                commission_type: commissionType,
+                commission_pct: commissionPct,
+                commission_amount: commissionAmount || null,
+                commission_currency: commissionCurrency,
+              })
+              .select("id")
+              .single(),
+            "referrals.insert"
+          )
 
           if (refErr) {
-            steps.push({ step: "referral", status: "error", detail: `Insert failed: ${refErr.message}` })
+            steps.push({ step: "referral", status: "error", detail: `Insert failed: ${refErr}` })
           } else {
             // e. Create follow-up task
-            await supabase.from("tasks").insert({
-              task_title: `Process referral commission — ${offer.referrer_name} → ${activation.client_name} (${commissionAmount ? `${commissionAmount} ${commissionCurrency}` : "TBD"})`,
-              assigned_to: "Antonio",
-              category: "Payment",
-              priority: "Normal",
-              status: "To Do",
-              account_id: autoAccountId || null,
-              description: `Referral by ${offer.referrer_name} (${offer.referrer_type || "client"}). Commission: ${commissionType} — ${commissionAmount || "TBD"} ${commissionCurrency}. Offer: ${activation.offer_token}.`,
-            })
+            await dbWriteSafe(
+              supabase.from("tasks").insert({
+                task_title: `Process referral commission — ${offer.referrer_name} → ${activation.client_name} (${commissionAmount ? `${commissionAmount} ${commissionCurrency}` : "TBD"})`,
+                assigned_to: "Antonio",
+                category: "Payment",
+                priority: "Normal",
+                status: "To Do",
+                account_id: autoAccountId || null,
+                description: `Referral by ${offer.referrer_name} (${offer.referrer_type || "client"}). Commission: ${commissionType} — ${commissionAmount || "TBD"} ${commissionCurrency}. Offer: ${activation.offer_token}.`,
+              }),
+              "tasks.insert"
+            )
 
             // f. Info line for team notification email
             referralNoteLine = `📎 Referral: ${offer.referrer_name} (${offer.referrer_type || "client"}) — commission ${commissionAmount || "TBD"} ${commissionCurrency}`
@@ -957,27 +997,33 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    await supabase
-      .from("pending_activations")
-      .update({
-        status: "activated",
-        prepared_steps: preparedSteps.length > 0 ? preparedSteps as unknown as Json : null,
-        confirmation_mode: "auto",
-        activated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", pending_activation_id)
+    await dbWrite(
+      supabase
+        .from("pending_activations")
+        .update({
+          status: "activated",
+          prepared_steps: preparedSteps.length > 0 ? preparedSteps as unknown as Json : null,
+          confirmation_mode: "auto",
+          activated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pending_activation_id),
+      "pending_activations.update"
+    )
 
     // ─── STEP 4b: Mark offer as completed (AUTO) ──────────
     // Stripe webhook already does this (stripe/route.ts:328-334), but wire-paid
     // and admin-confirmed cases skip the Stripe webhook, so we handle it here
     // to ensure offer completion for ALL payment paths.
     if (activation.offer_token) {
-      const { error: offerUpdErr } = await supabase
-        .from("offers")
-        .update({ status: "completed", updated_at: new Date().toISOString() })
-        .eq("token", activation.offer_token)
-        .eq("status", "signed") // Only update signed → completed, not other statuses
+      const { error: offerUpdErr } = await dbWriteSafe(
+        supabase
+          .from("offers")
+          .update({ status: "completed", updated_at: new Date().toISOString() })
+          .eq("token", activation.offer_token)
+          .eq("status", "signed"), // Only update signed → completed, not other statuses
+        "offers.update"
+      )
       if (!offerUpdErr) {
         steps.push({ step: "offer_completion", status: "done", detail: `Offer ${activation.offer_token} → completed` })
       } else {
@@ -1033,22 +1079,25 @@ ${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
     }
 
     // Log action
-    await supabase.from("action_log").insert({
-      action_type: "service_activated",
-      table_name: "pending_activations",
-      record_id: pending_activation_id,
-      summary: `Service activated: ${contractType} (${isAutoMode ? "auto" : "supervised"})`,
-      details: {
-        steps,
-        contract_type: contractType,
-        bundled_pipelines: pipelines,
-        service_deliveries: sdResults,
-        prepared_steps: preparedSteps.length,
-        mode: isAutoMode ? "auto" : "supervised",
-        lead_id: leadId,
-        contact_id: contactId,
-      } as unknown as Json,
-    })
+    await dbWriteSafe(
+      supabase.from("action_log").insert({
+        action_type: "service_activated",
+        table_name: "pending_activations",
+        record_id: pending_activation_id,
+        summary: `Service activated: ${contractType} (${isAutoMode ? "auto" : "supervised"})`,
+        details: {
+          steps,
+          contract_type: contractType,
+          bundled_pipelines: pipelines,
+          service_deliveries: sdResults,
+          prepared_steps: preparedSteps.length,
+          mode: isAutoMode ? "auto" : "supervised",
+          lead_id: leadId,
+          contact_id: contactId,
+        } as unknown as Json,
+      }),
+      "action_log.insert"
+    )
 
     // eslint-disable-next-line no-console -- API route log for observability
     console.log(`[activate-service] ${contractType.toUpperCase()} | ${isAutoMode ? "AUTO" : "SUPERVISED"} | ${activation.client_name} | ${pipelines.length} pipelines`)

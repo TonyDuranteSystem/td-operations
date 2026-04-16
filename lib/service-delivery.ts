@@ -23,6 +23,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 
@@ -141,41 +142,46 @@ export async function advanceServiceDelivery(
 
   // 6. Update delivery
   const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
-  const { error: uErr } = await supabaseAdmin
-    .from("service_deliveries")
-    .update({
-      stage: targetStage.stage_name,
-      stage_order: targetStage.stage_order,
-      stage_entered_at: new Date().toISOString(),
-      stage_history: stageHistory,
-      status: isCompleted ? "completed" : "active",
-      ...(isCompleted ? { end_date: new Date().toISOString().split("T")[0] } : {}),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", delivery_id)
-  if (uErr) throw new Error(`Update failed: ${uErr.message}`)
+  await dbWrite(
+    supabaseAdmin
+      .from("service_deliveries")
+      .update({
+        stage: targetStage.stage_name,
+        stage_order: targetStage.stage_order,
+        stage_entered_at: new Date().toISOString(),
+        stage_history: stageHistory,
+        status: isCompleted ? "completed" : "active",
+        ...(isCompleted ? { end_date: new Date().toISOString().split("T")[0] } : {}),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", delivery_id),
+    "service_deliveries.update"
+  )
 
   // 7. Create auto-tasks (unless skipped)
   const createdTasks: string[] = []
   const failedTasks: { title: string; error: string }[] = []
   if (!skip_tasks && targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
     for (const taskDef of targetStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
-      const { error: tErr } = await supabaseAdmin
-        .from("tasks")
-        .insert({
-          task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
-          assigned_to: taskDef.assigned_to || "Luca",
-          category: (taskDef.category || "Internal") as never,
-          priority: (taskDef.priority || "Normal") as never,
-          description: taskDef.description || `Auto-created by pipeline advance to "${targetStage.stage_name}"`,
-          status: "To Do",
-          account_id: delivery.account_id,
-          deal_id: delivery.deal_id,
-          delivery_id: delivery.id,
-          stage_order: targetStage.stage_order,
-        })
+      const { error: tErr } = await dbWriteSafe(
+        supabaseAdmin
+          .from("tasks")
+          .insert({
+            task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
+            assigned_to: taskDef.assigned_to || "Luca",
+            category: (taskDef.category || "Internal") as never,
+            priority: (taskDef.priority || "Normal") as never,
+            description: taskDef.description || `Auto-created by pipeline advance to "${targetStage.stage_name}"`,
+            status: "To Do",
+            account_id: delivery.account_id,
+            deal_id: delivery.deal_id,
+            delivery_id: delivery.id,
+            stage_order: targetStage.stage_order,
+          }),
+        "tasks.insert"
+      )
       if (tErr) {
-        failedTasks.push({ title: taskDef.title, error: tErr.message })
+        failedTasks.push({ title: taskDef.title, error: tErr })
       } else {
         createdTasks.push(taskDef.title)
       }
@@ -199,10 +205,13 @@ export async function advanceServiceDelivery(
         .single()
 
       if (acct?.portal_tier === "active") {
-        await supabaseAdmin
-          .from("accounts")
-          .update({ portal_tier: "full", updated_at: new Date().toISOString() })
-          .eq("id", delivery.account_id)
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("accounts")
+            .update({ portal_tier: "full", updated_at: new Date().toISOString() })
+            .eq("id", delivery.account_id),
+          "accounts.update"
+        )
         autoTriggers.push("Portal tier upgraded: active → full")
       }
     }
@@ -271,7 +280,10 @@ export async function advanceServiceDelivery(
             trUpdates.india_status = "Sent - Pending"
           }
 
-          await supabaseAdmin.from("tax_returns").update(trUpdates).eq("id", tr.id)
+          await dbWriteSafe(
+            supabaseAdmin.from("tax_returns").update(trUpdates).eq("id", tr.id),
+            "tax_returns.update"
+          )
           autoTriggers.push(`Tax return synced: ${tr.status} → ${newStatus}`)
         }
       }
@@ -294,10 +306,13 @@ export async function advanceServiceDelivery(
         currentDate.setFullYear(currentDate.getFullYear() + 1)
         const newDate = currentDate.toISOString().split("T")[0]
 
-        await supabaseAdmin
-          .from("accounts")
-          .update({ ra_renewal_date: newDate, updated_at: new Date().toISOString() })
-          .eq("id", delivery.account_id)
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("accounts")
+            .update({ ra_renewal_date: newDate, updated_at: new Date().toISOString() })
+            .eq("id", delivery.account_id),
+          "accounts.update"
+        )
         autoTriggers.push(`RA renewal date updated: ${acct.ra_renewal_date} → ${newDate}`)
       }
 
@@ -309,11 +324,14 @@ export async function advanceServiceDelivery(
         .in("status", ["To Do", "In Progress"])
 
       if (openTasks?.length) {
-        await supabaseAdmin
-          .from("tasks")
-          .update({ status: "Done", updated_at: new Date().toISOString() })
-          .eq("delivery_id", delivery_id)
-          .in("status", ["To Do", "In Progress"])
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("tasks")
+            .update({ status: "Done", updated_at: new Date().toISOString() })
+            .eq("delivery_id", delivery_id)
+            .in("status", ["To Do", "In Progress"]),
+          "tasks.update"
+        )
         autoTriggers.push(`Closed ${openTasks.length} related task(s)`)
       }
     } catch (raErr) {
@@ -335,10 +353,13 @@ export async function advanceServiceDelivery(
         currentDate.setFullYear(currentDate.getFullYear() + 1)
         const newDate = currentDate.toISOString().split("T")[0]
 
-        await supabaseAdmin
-          .from("accounts")
-          .update({ annual_report_due_date: newDate, updated_at: new Date().toISOString() })
-          .eq("id", delivery.account_id)
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("accounts")
+            .update({ annual_report_due_date: newDate, updated_at: new Date().toISOString() })
+            .eq("id", delivery.account_id),
+          "accounts.update"
+        )
         autoTriggers.push(`Annual report due date updated: ${acct.annual_report_due_date} → ${newDate}`)
       }
 
@@ -350,11 +371,14 @@ export async function advanceServiceDelivery(
         .in("status", ["To Do", "In Progress"])
 
       if (arTasks?.length) {
-        await supabaseAdmin
-          .from("tasks")
-          .update({ status: "Done", updated_at: new Date().toISOString() })
-          .eq("delivery_id", delivery_id)
-          .in("status", ["To Do", "In Progress"])
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("tasks")
+            .update({ status: "Done", updated_at: new Date().toISOString() })
+            .eq("delivery_id", delivery_id)
+            .in("status", ["To Do", "In Progress"]),
+          "tasks.update"
+        )
         autoTriggers.push(`Closed ${arTasks.length} related task(s)`)
       }
     } catch (arErr) {
@@ -396,7 +420,10 @@ export async function advanceServiceDelivery(
         }
         if (Object.keys(renewals).length > 0) {
           renewals.updated_at = new Date().toISOString()
-          await supabaseAdmin.from("accounts").update(renewals).eq("id", delivery.account_id)
+          await dbWriteSafe(
+            supabaseAdmin.from("accounts").update(renewals).eq("id", delivery.account_id),
+            "accounts.update"
+          )
           const datesList = Object.entries(renewals)
             .filter(([k]) => k !== "updated_at")
             .map(([k, v]) => `${k}=${v}`).join(", ")
@@ -453,18 +480,24 @@ export async function advanceServiceDelivery(
 
       if (activeSds?.length) {
         for (const sd of activeSds) {
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({ status: "cancelled", updated_at: new Date().toISOString() })
-            .eq("id", sd.id)
+          await dbWriteSafe(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({ status: "cancelled", updated_at: new Date().toISOString() })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
         }
         autoTriggers.push(`Cancelled ${activeSds.length} active SDs: ${activeSds.map(s => s.service_type).join(", ")}`)
       }
 
-      await supabaseAdmin
-        .from("accounts")
-        .update({ status: "Closed" satisfies (typeof ACCOUNT_STATUS)[number], portal_account: false, updated_at: new Date().toISOString() })
-        .eq("id", delivery.account_id)
+      await dbWriteSafe(
+        supabaseAdmin
+          .from("accounts")
+          .update({ status: "Closed" satisfies (typeof ACCOUNT_STATUS)[number], portal_account: false, updated_at: new Date().toISOString() })
+          .eq("id", delivery.account_id),
+        "accounts.update"
+      )
       autoTriggers.push("Account → Closed, portal deactivated")
 
       const { data: openTasks } = await supabaseAdmin
@@ -474,15 +507,18 @@ export async function advanceServiceDelivery(
         .in("status", ["To Do", "In Progress", "Waiting"])
 
       if (openTasks?.length) {
-        await supabaseAdmin
-          .from("tasks")
-          .update({ status: "Done", updated_at: new Date().toISOString() })
-          .eq("account_id", delivery.account_id)
-          .in("status", ["To Do", "In Progress", "Waiting"])
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("tasks")
+            .update({ status: "Done", updated_at: new Date().toISOString() })
+            .eq("account_id", delivery.account_id)
+            .in("status", ["To Do", "In Progress", "Waiting"]),
+          "tasks.update"
+        )
         autoTriggers.push(`Closed ${openTasks.length} open tasks`)
       }
 
-      await supabaseAdmin.from("tasks").insert([
+      await dbWriteSafe(supabaseAdmin.from("tasks").insert([
         {
           task_title: `[CLOSURE] Remove RA on Harbor Compliance`,
           description: `Company closure in progress. Remove Registered Agent service from Harbor Compliance portal.`,
@@ -501,7 +537,7 @@ export async function advanceServiceDelivery(
           assigned_to: "Luca", priority: "Normal", category: "Client Communication", status: "To Do",
           account_id: delivery.account_id, delivery_id, created_by: "System",
         },
-      ])
+      ]), "tasks.insert")
       autoTriggers.push("Created 3 closure tasks: Harbor RA, QB invoices, client email")
     } catch (closureErr) {
       autoTriggers.push(`Closure auto-cleanup failed: ${closureErr instanceof Error ? closureErr.message : String(closureErr)}`)

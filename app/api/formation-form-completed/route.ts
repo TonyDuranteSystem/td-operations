@@ -24,6 +24,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -89,16 +90,19 @@ export async function POST(req: NextRequest) {
       } else if (lead) {
         // AUTO-CREATE contact from lead data
         try {
-          const { data: newContact } = await supabaseAdmin
-            .from("contacts")
-            .insert({
-              full_name: lead.full_name,
-              email: lead.email,
-              phone: lead.phone,
-              language: leadLanguage,
-            })
-            .select("id")
-            .single()
+          const newContact = await dbWrite(
+            supabaseAdmin
+              .from("contacts")
+              .insert({
+                full_name: lead.full_name,
+                email: lead.email,
+                phone: lead.phone,
+                language: leadLanguage,
+              })
+              .select("id")
+              .single(),
+            "contacts.insert"
+          )
 
           if (newContact) {
             contactId = newContact.id
@@ -139,19 +143,22 @@ export async function POST(req: NextRequest) {
         const firstStage = stages?.[0]?.stage_name || "Data Collection"
         const llcName = submittedData.llc_name_1 || submittedData.preferred_name_1 || "New LLC"
 
-        const { data: newSd } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_type: "Company Formation",
-            service_name: `Company Formation - ${leadName} (${llcName})`,
-            contact_id: contactId,
-            stage: firstStage,
-            status: "active",
-            assigned_to: "Luca",
-            notes: `Auto-created from formation form ${token}`,
-          })
-          .select("id")
-          .single()
+        const newSd = await dbWrite(
+          supabaseAdmin
+            .from("service_deliveries")
+            .insert({
+              service_type: "Company Formation",
+              service_name: `Company Formation - ${leadName} (${llcName})`,
+              contact_id: contactId,
+              stage: firstStage,
+              status: "active",
+              assigned_to: "Luca",
+              notes: `Auto-created from formation form ${token}`,
+            })
+            .select("id")
+            .single(),
+          "service_deliveries.insert"
+        )
 
         if (newSd) {
           deliveryId = newSd.id
@@ -186,10 +193,13 @@ export async function POST(req: NextRequest) {
 
         if (Object.keys(updates).length > 0) {
           updates.updated_at = new Date().toISOString()
-          await supabaseAdmin
-            .from("contacts")
-            .update(updates)
-            .eq("id", contactId)
+          await dbWrite(
+            supabaseAdmin
+              .from("contacts")
+              .update(updates)
+              .eq("id", contactId),
+            "contacts.update"
+          )
 
           results.push({ step: "crm_update", status: "ok", detail: `Contact updated: ${Object.keys(updates).join(", ")}` })
         }
@@ -287,20 +297,23 @@ export async function POST(req: NextRequest) {
 
         if (refCompanyName) {
           // Create task for Antonio to approve credit note
-          const { data: task } = await supabaseAdmin
-            .from("tasks")
-            .insert({
-              task_title: `[REFERRAL] Approve credit note for ${refCompanyName}`,
-              description: `Referrer: ${referrerName} (${refCompanyName})\nReferred client: ${leadName}\nPayment: EUR 3,000 (check actual amount on offer)\nCommission: 10% = EUR 300 (verify percentage)\n\nCreate QB credit note for ${refCompanyName} once approved.\nUse: qb_create_invoice with negative amount or credit memo.`,
-              assigned_to: "Antonio",
-              priority: "High",
-              category: "Payment",
-              status: "To Do",
-              account_id: refAccountId || null,
-              created_by: "System",
-            })
-            .select("id")
-            .single()
+          const task = await dbWriteSafe(
+            supabaseAdmin
+              .from("tasks")
+              .insert({
+                task_title: `[REFERRAL] Approve credit note for ${refCompanyName}`,
+                description: `Referrer: ${referrerName} (${refCompanyName})\nReferred client: ${leadName}\nPayment: EUR 3,000 (check actual amount on offer)\nCommission: 10% = EUR 300 (verify percentage)\n\nCreate QB credit note for ${refCompanyName} once approved.\nUse: qb_create_invoice with negative amount or credit memo.`,
+                assigned_to: "Antonio",
+                priority: "High",
+                category: "Payment",
+                status: "To Do",
+                account_id: refAccountId || null,
+                created_by: "System",
+              })
+              .select("id")
+              .single(),
+            "tasks.insert"
+          )
 
           // Send notification email to Antonio
           try {
@@ -319,7 +332,7 @@ export async function POST(req: NextRequest) {
               `<p><strong>Referred client:</strong> ${leadName}</p>` +
               `<p><strong>Commission:</strong> 10% (verify on offer)</p>` +
               `<p>Approve the credit note and I will create it in QuickBooks.</p>` +
-              `<p style="font-size:12px;color:#6b7280">Task ID: ${task?.id || "N/A"}</p>` +
+              `<p style="font-size:12px;color:#6b7280">Task ID: ${task.data?.id || "N/A"}</p>` +
               `</div>`
             ).toString("base64url")
             await gmailPost("/messages/send", { raw })
@@ -409,41 +422,47 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
       const llcName1 = submittedData.llc_name_1 || submittedData.preferred_name_1 || "N/A"
       // deliveryId already resolved in Step 1B above
 
-      const { data: task } = await supabaseAdmin
-        .from("tasks")
-        .insert({
-          task_title: `Verify data + check LLC name: ${leadName} - ${llcName1}`,
-          description: `Formation form completed for ${leadName}.\n\nLLC 1st choice: ${llcName1}\nState: ${sub.state || "NM"}\nEntity: ${sub.entity_type || "SMLLC"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Check "${llcName1}" availability on ${sub.state || "NM"} SOS portal\n3. If available, confirm with client\n4. Mark this task as Done to advance pipeline`,
-          assigned_to: "Luca",
-          priority: "High",
-          category: "Formation",
-          status: "To Do",
-          due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          delivery_id: deliveryId || null,
-          contact_id: contactId || null,
-          created_by: "System",
-        })
-        .select("id")
-        .single()
+      const task = await dbWrite(
+        supabaseAdmin
+          .from("tasks")
+          .insert({
+            task_title: `Verify data + check LLC name: ${leadName} - ${llcName1}`,
+            description: `Formation form completed for ${leadName}.\n\nLLC 1st choice: ${llcName1}\nState: ${sub.state || "NM"}\nEntity: ${sub.entity_type || "SMLLC"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Check "${llcName1}" availability on ${sub.state || "NM"} SOS portal\n3. If available, confirm with client\n4. Mark this task as Done to advance pipeline`,
+            assigned_to: "Luca",
+            priority: "High",
+            category: "Formation",
+            status: "To Do",
+            due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            delivery_id: deliveryId || null,
+            contact_id: contactId || null,
+            created_by: "System",
+          })
+          .select("id")
+          .single(),
+        "tasks.insert"
+      )
 
       results.push({ step: "luca_task", status: "ok", detail: `Task created: ${task?.id}. Delivery: ${deliveryId || "none"}` })
 
       // Also create passport request task if missing
       if (!hasPassport) {
-        await supabaseAdmin
-          .from("tasks")
-          .insert({
-            task_title: `[MISSING] Request passport from ${leadName}`,
-            description: `The formation form was submitted WITHOUT a passport.\nEmail the client at ${leadEmail} to request a clear passport scan.\nUse email only, never WhatsApp for official documents.`,
-            assigned_to: "Luca",
-            priority: "Urgent",
-            category: "Document",
-            status: "To Do",
-            due_date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            delivery_id: deliveryId || null,
-            contact_id: contactId || null,
-            created_by: "System",
-          })
+        await dbWriteSafe(
+          supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `[MISSING] Request passport from ${leadName}`,
+              description: `The formation form was submitted WITHOUT a passport.\nEmail the client at ${leadEmail} to request a clear passport scan.\nUse email only, never WhatsApp for official documents.`,
+              assigned_to: "Luca",
+              priority: "Urgent",
+              category: "Document",
+              status: "To Do",
+              due_date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || null,
+              contact_id: contactId || null,
+              created_by: "System",
+            }),
+          "tasks.insert"
+        )
 
         results.push({ step: "passport_task", status: "ok", detail: "Urgent task created to request passport" })
       }
@@ -462,13 +481,16 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
 
         if (sd) {
           const currentNotes = sd.notes || ""
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({
-              notes: currentNotes + `\n${new Date().toISOString().split("T")[0]}: Formation form completed. Data applied to CRM. Luca notified.`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", sd.id)
+          await dbWriteSafe(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({
+                notes: currentNotes + `\n${new Date().toISOString().split("T")[0]}: Formation form completed. Data applied to CRM. Luca notified.`,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
 
           results.push({ step: "sd_update", status: "ok", detail: `SD ${sd.id} notes updated` })
         } else {
@@ -481,13 +503,16 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
 
     // ─── STEP 9: Log action ───
     try {
-      await supabaseAdmin.from("action_log").insert({
-        action_type: "formation_form_completed",
-        table_name: "formation_submissions",
-        record_id: submission_id,
-        summary: `Formation form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
-        details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
-      })
+      await dbWriteSafe(
+        supabaseAdmin.from("action_log").insert({
+          action_type: "formation_form_completed",
+          table_name: "formation_submissions",
+          record_id: submission_id,
+          summary: `Formation form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
+          details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
+        }),
+        "action_log.insert"
+      )
     } catch { /* non-blocking */ }
 
     // eslint-disable-next-line no-console

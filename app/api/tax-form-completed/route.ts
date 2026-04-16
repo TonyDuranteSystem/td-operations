@@ -25,6 +25,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
 
@@ -91,7 +92,10 @@ export async function POST(req: NextRequest) {
 
           if (Object.keys(updates).length > 0) {
             updates.updated_at = new Date().toISOString()
-            await supabaseAdmin.from("contacts").update(updates).eq("id", sub.contact_id)
+            await dbWrite(
+              supabaseAdmin.from("contacts").update(updates).eq("id", sub.contact_id),
+              "contacts.update"
+            )
             results.push({ step: "contact_update", status: "ok", detail: `Updated: ${Object.keys(updates).filter(k => k !== "updated_at").join(", ")}` })
           } else {
             results.push({ step: "contact_update", status: "skipped", detail: "No changes detected" })
@@ -125,18 +129,21 @@ export async function POST(req: NextRequest) {
               .eq("id", sub.contact_id)
               .single()
 
-            await supabaseAdmin.from("tasks").insert({
-              task_title: `[MISSING] Request passport from ${contactInfo?.full_name || "client"} (${companyName})`,
-              description: `One-time client ${companyName} submitted tax form but has NO passport on file.\nEmail ${contactInfo?.email || "client"} to request a clear passport scan.\nPassport is required for tax return filing.`,
-              assigned_to: "Luca",
-              priority: "Urgent",
-              category: "Document",
-              status: "To Do",
-              due_date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-              account_id: sub.account_id,
-              contact_id: sub.contact_id,
-              created_by: "System",
-            })
+            await dbWriteSafe(
+              supabaseAdmin.from("tasks").insert({
+                task_title: `[MISSING] Request passport from ${contactInfo?.full_name || "client"} (${companyName})`,
+                description: `One-time client ${companyName} submitted tax form but has NO passport on file.\nEmail ${contactInfo?.email || "client"} to request a clear passport scan.\nPassport is required for tax return filing.`,
+                assigned_to: "Luca",
+                priority: "Urgent",
+                category: "Document",
+                status: "To Do",
+                due_date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+                account_id: sub.account_id,
+                contact_id: sub.contact_id,
+                created_by: "System",
+              }),
+              "tasks.insert"
+            )
             results.push({ step: "passport_check", status: "missing", detail: "One-time client, no passport on file. Urgent task created." })
           } else {
             results.push({ step: "passport_check", status: "ok", detail: "Passport on file" })
@@ -226,10 +233,13 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
             note: `Tax form submitted by client for ${companyName} (${sub.tax_year})`,
           })
 
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({ stage_history: history })
-            .eq("id", sd.id)
+          await dbWriteSafe(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({ stage_history: history })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
 
           results.push({ step: "sd_history", status: "ok", detail: `Updated SD ${sd.id} history (stage: ${sd.stage})` })
         } else {
@@ -251,22 +261,25 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
           .maybeSingle()
 
         if (!existingTask) {
-          await supabaseAdmin.from("tasks").insert({
-            task_title: taskTitle,
-            description: [
-              `Client ${companyName} has submitted tax data for ${sub.tax_year}.`,
-              ``,
-              `Entity type: ${sub.entity_type}`,
-              `Review: tax_form_review(token="${sub.token}")`,
-              `Action: Review data completeness, then apply_changes=true to update CRM.`,
-            ].join("\n"),
-            assigned_to: "Luca",
-            priority: "High",
-            category: "Tax" as never,
-            status: "To Do",
-            account_id: sub.account_id,
-            created_by: "System",
-          })
+          await dbWriteSafe(
+            supabaseAdmin.from("tasks").insert({
+              task_title: taskTitle,
+              description: [
+                `Client ${companyName} has submitted tax data for ${sub.tax_year}.`,
+                ``,
+                `Entity type: ${sub.entity_type}`,
+                `Review: tax_form_review(token="${sub.token}")`,
+                `Action: Review data completeness, then apply_changes=true to update CRM.`,
+              ].join("\n"),
+              assigned_to: "Luca",
+              priority: "High",
+              category: "Tax" as never,
+              status: "To Do",
+              account_id: sub.account_id,
+              created_by: "System",
+            }),
+            "tasks.insert"
+          )
           results.push({ step: "review_task", status: "ok", detail: taskTitle })
         } else {
           results.push({ step: "review_task", status: "skipped", detail: "Already exists" })
@@ -287,15 +300,18 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
           .maybeSingle()
 
         if (tr) {
-          await supabaseAdmin
-            .from("tax_returns")
-            .update({
-              data_received: true,
-              data_received_date: new Date().toISOString().split("T")[0],
-              status: "Data Received",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", tr.id)
+          await dbWrite(
+            supabaseAdmin
+              .from("tax_returns")
+              .update({
+                data_received: true,
+                data_received_date: new Date().toISOString().split("T")[0],
+                status: "Data Received",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", tr.id),
+            "tax_returns.update"
+          )
           results.push({ step: "tax_return_status", status: "ok", detail: `tax_returns ${tr.id} -> Data Received` })
         } else {
           results.push({ step: "tax_return_status", status: "skipped", detail: "No tax_returns record found" })
@@ -318,10 +334,13 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
           .maybeSingle()
 
         if (sd && (sd.stage === "Data Link Sent" || sd.stage === "Activated")) {
-          await supabaseAdmin
-            .from("service_deliveries")
-            .update({ stage: "Data Received", updated_at: new Date().toISOString() })
-            .eq("id", sd.id)
+          await dbWrite(
+            supabaseAdmin
+              .from("service_deliveries")
+              .update({ stage: "Data Received", updated_at: new Date().toISOString() })
+              .eq("id", sd.id),
+            "service_deliveries.update"
+          )
           results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Received` })
         }
       } catch (e) {
@@ -432,29 +451,32 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
                     if (txYear !== sub.tax_year) continue
 
                     const cat = categorizeTransaction(tx, memberNames, [])
-                    await supabaseAdmin
-                      .from("bank_transactions")
-                      .upsert({
-                        account_id: sub.account_id,
-                        tax_year: sub.tax_year,
-                        transaction_date: cat.transaction_date,
-                        description: cat.description,
-                        category: cat.category,
-                        subcategory: cat.subcategory,
-                        counterparty: cat.counterparty,
-                        amount: cat.amount,
-                        currency: cat.currency,
-                        balance_after: cat.balance_after,
-                        bank_name: cat.bank_name,
-                        account_type: cat.account_type,
-                        transaction_ref: cat.transaction_ref,
-                        source_file_id: file.id,
-                        is_related_party: cat.is_related_party,
-                        notes: cat.notes,
-                      }, {
-                        onConflict: "account_id,transaction_ref,transaction_date,amount",
-                        ignoreDuplicates: true,
-                      })
+                    await dbWriteSafe(
+                      supabaseAdmin
+                        .from("bank_transactions")
+                        .upsert({
+                          account_id: sub.account_id,
+                          tax_year: sub.tax_year,
+                          transaction_date: cat.transaction_date,
+                          description: cat.description,
+                          category: cat.category,
+                          subcategory: cat.subcategory,
+                          counterparty: cat.counterparty,
+                          amount: cat.amount,
+                          currency: cat.currency,
+                          balance_after: cat.balance_after,
+                          bank_name: cat.bank_name,
+                          account_type: cat.account_type,
+                          transaction_ref: cat.transaction_ref,
+                          source_file_id: file.id,
+                          is_related_party: cat.is_related_party,
+                          notes: cat.notes,
+                        }, {
+                          onConflict: "account_id,transaction_ref,transaction_date,amount",
+                          ignoreDuplicates: true,
+                        }),
+                      "bank_transactions.upsert"
+                    )
                     totalParsed++
                   }
                 } catch (fileErr) {

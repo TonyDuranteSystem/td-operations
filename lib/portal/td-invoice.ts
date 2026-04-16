@@ -11,6 +11,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { dbWrite, dbWriteSafe } from '@/lib/db'
 import { generateInvoiceNumber } from '@/lib/portal/invoice-number'
 
 // ─── Types ──────────────────────────────────────────
@@ -99,49 +100,51 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const paidDateVal = mark_as_paid ? (paid_date || today) : null
 
   // 3. Create payments record (PRIMARY — CRM + QB source of truth)
-  const { data: payment, error: payErr } = await supabaseAdmin
-    .from('payments')
-    .insert({
-      account_id: account_id || null,
-      contact_id: contact_id || null,
-      invoice_number: invoiceNumber,
-      description: items[0]?.description || 'Invoice',
-      amount: total,
-      amount_paid: amountPaid,
-      amount_due: amountDue,
-      amount_currency: currency,
-      subtotal,
-      discount: 0,
-      total,
-      status: paymentStatus,
-      invoice_status: invoiceStatus,
-      issue_date: today,
-      due_date: due_date || null,
-      paid_date: paidDateVal,
-      payment_method: payment_method || null,
-      whop_payment_id: whop_payment_id || null,
-      notes: notes || null,
-      message: message || null,
-      bank_preference: bank_preference || null,
-      qb_sync_status: 'pending',
-    })
-    .select('id')
-    .single()
-
-  if (payErr || !payment) {
-    throw new Error(`Failed to create payment: ${payErr?.message}`)
-  }
+  const payment = await dbWrite(
+    supabaseAdmin
+      .from('payments')
+      .insert({
+        account_id: account_id || null,
+        contact_id: contact_id || null,
+        invoice_number: invoiceNumber,
+        description: items[0]?.description || 'Invoice',
+        amount: total,
+        amount_paid: amountPaid,
+        amount_due: amountDue,
+        amount_currency: currency,
+        subtotal,
+        discount: 0,
+        total,
+        status: paymentStatus,
+        invoice_status: invoiceStatus,
+        issue_date: today,
+        due_date: due_date || null,
+        paid_date: paidDateVal,
+        payment_method: payment_method || null,
+        whop_payment_id: whop_payment_id || null,
+        notes: notes || null,
+        message: message || null,
+        bank_preference: bank_preference || null,
+        qb_sync_status: 'pending',
+      })
+      .select('id')
+      .single(),
+    'payments.insert'
+  )
 
   // 4. Create payment_items
-  await supabaseAdmin.from('payment_items').insert(
-    items.map((item, i) => ({
-      payment_id: payment.id,
-      description: item.description,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      amount: item.amount,
-      sort_order: i,
-    }))
+  await dbWrite(
+    supabaseAdmin.from('payment_items').insert(
+      items.map((item, i) => ({
+        payment_id: payment.id,
+        description: item.description,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        amount: item.amount,
+        sort_order: i,
+      }))
+    ),
+    'payment_items.insert'
   )
 
   // 5. Generate internal expense reference
@@ -161,34 +164,37 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const internalRef = `EXP-${String(expSeq).padStart(6, '0')}`
 
   // 6. Create client_expenses record (MIRROR — client sees as incoming expense)
-  const { data: expense, error: expErr } = await supabaseAdmin
-    .from('client_expenses')
-    .insert({
-      account_id: account_id || null,
-      contact_id: contact_id || null,
-      vendor_name: 'Tony Durante LLC',
-      invoice_number: invoiceNumber,
-      internal_ref: internalRef,
-      description: items[0]?.description || 'Service invoice',
-      currency,
-      subtotal,
-      tax_amount: taxTotal,
-      total,
-      issue_date: today,
-      due_date: due_date || null,
-      paid_date: paidDateVal,
-      status: mark_as_paid ? 'Paid' : 'Pending',
-      source: 'td_invoice',
-      td_payment_id: payment.id,
-      notes: notes || null,
-      category: 'Services',
-    })
-    .select('id')
-    .single()
+  const { data: expense, error: expErr } = await dbWriteSafe(
+    supabaseAdmin
+      .from('client_expenses')
+      .insert({
+        account_id: account_id || null,
+        contact_id: contact_id || null,
+        vendor_name: 'Tony Durante LLC',
+        invoice_number: invoiceNumber,
+        internal_ref: internalRef,
+        description: items[0]?.description || 'Service invoice',
+        currency,
+        subtotal,
+        tax_amount: taxTotal,
+        total,
+        issue_date: today,
+        due_date: due_date || null,
+        paid_date: paidDateVal,
+        status: mark_as_paid ? 'Paid' : 'Pending',
+        source: 'td_invoice',
+        td_payment_id: payment.id,
+        notes: notes || null,
+        category: 'Services',
+      })
+      .select('id')
+      .single(),
+    'client_expenses.insert'
+  )
 
   if (expErr || !expense) {
     // Payment was created but expense mirror failed — log but don't fail
-    console.error(`[td-invoice] expense mirror failed for ${invoiceNumber}: ${expErr?.message}`)
+    console.error(`[td-invoice] expense mirror failed for ${invoiceNumber}: ${expErr}`)
     return {
       paymentId: payment.id,
       expenseId: '',
@@ -199,15 +205,18 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   }
 
   // 7. Create expense line items
-  await supabaseAdmin.from('client_expense_items').insert(
-    items.map((item, i) => ({
-      expense_id: expense.id,
-      description: item.description,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      amount: item.amount,
-      sort_order: i,
-    }))
+  await dbWriteSafe(
+    supabaseAdmin.from('client_expense_items').insert(
+      items.map((item, i) => ({
+        expense_id: expense.id,
+        description: item.description,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        amount: item.amount,
+        sort_order: i,
+      }))
+    ),
+    'client_expense_items.insert'
   )
 
   return {
@@ -255,8 +264,11 @@ export async function syncTDInvoiceStatus(
     }
   }
 
-  await supabaseAdmin
-    .from('client_expenses')
-    .update(updates)
-    .eq('td_payment_id', paymentId)
+  await dbWriteSafe(
+    supabaseAdmin
+      .from('client_expenses')
+      .update(updates)
+      .eq('td_payment_id', paymentId),
+    'client_expenses.update'
+  )
 }
