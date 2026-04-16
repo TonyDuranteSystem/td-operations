@@ -324,6 +324,7 @@ WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (a
 - storage_*: Supabase Storage files, mirrored to Drive (5 tools).
 - sysdoc_*: System documentation — list, read, create, update (4 tools). Key docs: session-context (lean quick-ref), project-state (milestones), tech-stack (architecture). Use sysdoc_create for session logs.
 - session_checkpoint: ONE-CALL save for session progress. Saves summary + next_steps, resets reminder counter. Use after every significant action.
+- work_*: Cross-machine work locks (3 tools: work_claim, work_release, work_list). **Advisory only** — does NOT block writes. Use BEFORE editing shared files on a multi-machine setup so other sessions can see what you're working on. Partial unique index on (file_path WHERE released_at IS NULL) enforces one active lock per file. Check work_list({include_released:false}) at session start to see what other machines are doing.
 - execute_sql: LAST RESORT — raw SQL. Prefer dedicated tools.
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).

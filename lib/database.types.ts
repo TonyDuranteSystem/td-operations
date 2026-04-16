@@ -9412,6 +9412,36 @@ export type Database = {
           },
         ]
       }
+      work_locks: {
+        Row: {
+          claimed_at: string
+          created_at: string
+          file_path: string
+          id: string
+          locked_by: string
+          reason: string
+          released_at: string | null
+        }
+        Insert: {
+          claimed_at?: string
+          created_at?: string
+          file_path: string
+          id?: string
+          locked_by: string
+          reason: string
+          released_at?: string | null
+        }
+        Update: {
+          claimed_at?: string
+          created_at?: string
+          file_path?: string
+          id?: string
+          locked_by?: string
+          reason?: string
+          released_at?: string | null
+        }
+        Relationships: []
+      }
       write_buffer: {
         Row: {
           action: string

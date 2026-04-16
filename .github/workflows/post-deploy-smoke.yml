@@ -1,0 +1,176 @@
+# P2.6 — Post-deploy smoke checks
+#
+# Vercel auto-deploys on every push to main. This workflow waits for the
+# deploy to be live, then verifies that 3 critical surfaces still respond:
+#   1. https://app.tonydurante.us/                                  (HTTP 200)
+#   2. https://td-operations.vercel.app/api/cron/audit-health-check (Bearer CRON_SECRET, JSON with findings array)
+#   3. https://portal.tonydurante.us/portal/login                   (HTTP 200)
+#
+# On any failure, posts to /api/internal/smoke-alert which sends an HTML
+# email to support@tonydurante.us via the Gmail Service Account.
+#
+# This workflow does NOT block the deploy — Vercel ships independently.
+# A red status here means "deploy is live but something broke", not "deploy
+# failed".
+#
+# Required GitHub repo secret: CRON_SECRET (same value as Vercel env).
+
+name: Post-deploy smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel the previous smoke run if a new push lands first.
+concurrency:
+  group: post-deploy-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Post-deploy smoke checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Wait for Vercel deploy
+        # Vercel typically deploys in 60-120s. We poll the app URL for up to
+        # 5 minutes, treating any 200 response as "deploy is live". If we
+        # never see a 200, we still proceed to the smoke section so the
+        # failure shows up there with a useful error.
+        run: |
+          set +e
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://app.tonydurante.us/)
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Deploy reachable after ${i}0s"
+              exit 0
+            fi
+            echo "Attempt ${i}/30: app returned $STATUS, sleeping 10s..."
+            sleep 10
+          done
+          echo "⚠️ App did not return 200 within 5 minutes — proceeding to smoke checks anyway"
+
+      - name: Smoke check 1 — app root
+        id: check_app
+        run: |
+          set +e
+          STATUS=$(curl -s -o /tmp/app_body -w "%{http_code}" --max-time 15 https://app.tonydurante.us/)
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" = "200" ]; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Smoke check 2 — audit-health-check cron
+        id: check_audit
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set +e
+          # Cron lives on the internal td-operations.vercel.app domain.
+          STATUS=$(curl -s -o /tmp/audit_body -w "%{http_code}" --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            https://td-operations.vercel.app/api/cron/audit-health-check)
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" != "200" ]; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=http_$STATUS" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Validate JSON has a findings array.
+          HAS_FINDINGS=$(jq -e 'has("findings") and (.findings | type == "array")' /tmp/audit_body 2>/dev/null && echo yes || echo no)
+          if [ "$HAS_FINDINGS" = "yes" ]; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=missing_findings_array" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Smoke check 3 — portal login
+        id: check_portal
+        run: |
+          set +e
+          STATUS=$(curl -s -o /tmp/portal_body -w "%{http_code}" --max-time 15 \
+            https://portal.tonydurante.us/portal/login)
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" = "200" ]; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compose failure payload
+        id: failures
+        if: always()
+        run: |
+          set +e
+          FAILED=()
+          if [ "${{ steps.check_app.outputs.result }}" = "fail" ]; then
+            FAILED+=("$(jq -nc \
+              --arg check "app_root_200" \
+              --arg url "https://app.tonydurante.us/" \
+              --arg expected "HTTP 200" \
+              --arg actual "HTTP ${{ steps.check_app.outputs.status }}" \
+              '{check:$check,url:$url,expected:$expected,actual:$actual}')")
+          fi
+          if [ "${{ steps.check_audit.outputs.result }}" = "fail" ]; then
+            FAILED+=("$(jq -nc \
+              --arg check "audit_health_check_json" \
+              --arg url "https://td-operations.vercel.app/api/cron/audit-health-check" \
+              --arg expected "HTTP 200 + JSON.findings array" \
+              --arg actual "HTTP ${{ steps.check_audit.outputs.status }} (${{ steps.check_audit.outputs.reason }})" \
+              '{check:$check,url:$url,expected:$expected,actual:$actual}')")
+          fi
+          if [ "${{ steps.check_portal.outputs.result }}" = "fail" ]; then
+            FAILED+=("$(jq -nc \
+              --arg check "portal_login_200" \
+              --arg url "https://portal.tonydurante.us/portal/login" \
+              --arg expected "HTTP 200" \
+              --arg actual "HTTP ${{ steps.check_portal.outputs.status }}" \
+              '{check:$check,url:$url,expected:$expected,actual:$actual}')")
+          fi
+
+          if [ ${#FAILED[@]} -eq 0 ]; then
+            echo "any_failed=false" >> "$GITHUB_OUTPUT"
+            echo "✅ All 3 smoke checks passed"
+            exit 0
+          fi
+
+          echo "any_failed=true" >> "$GITHUB_OUTPUT"
+          # Build the JSON body for /api/internal/smoke-alert.
+          PAYLOAD=$(jq -nc \
+            --argjson failures "[$(IFS=,; echo "${FAILED[*]}")]" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{failures:$failures,commit_sha:$sha,workflow_run_url:$run,checked_at:$ts}')
+          echo "$PAYLOAD" > /tmp/smoke_payload.json
+          echo "❌ ${#FAILED[@]} smoke check(s) failed:"
+          echo "$PAYLOAD" | jq .
+
+      - name: Send alert email
+        if: steps.failures.outputs.any_failed == 'true'
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          STATUS=$(curl -s -o /tmp/alert_resp -w "%{http_code}" --max-time 30 \
+            -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/smoke_payload.json \
+            https://td-operations.vercel.app/api/internal/smoke-alert)
+          echo "smoke-alert returned $STATUS"
+          cat /tmp/alert_resp
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::smoke-alert endpoint returned $STATUS — email may not have been sent"
+          fi
+
+      - name: Fail workflow if any check failed
+        if: steps.failures.outputs.any_failed == 'true'
+        run: |
+          echo "::error::One or more post-deploy smoke checks failed. See compose-failure-payload step for details."
+          exit 1

@@ -35,6 +35,7 @@
  *   sysdoc_*   — System documentation (read, list, update)
  *   kb_*       — Knowledge base (search, get, create, update articles & responses)
  *   hc_*       — Harbor Compliance (RA changes, deliveries, licenses, company sync)
+ *   work_*     — Cross-machine work locks (claim, release, list) — P2.1 advisory only
  *
  * Deploy: Vercel serverless function (Pro plan, 300s timeout)
  */
@@ -81,6 +82,7 @@ import { registerHarborComplianceTools } from "@/lib/mcp/tools/harbor-compliance
 import { registerDevTaskTools } from "@/lib/mcp/tools/dev-tasks"
 import { registerCalendarTools } from "@/lib/mcp/tools/calendar"
 import { registerReferralTools } from "@/lib/mcp/tools/referrals"
+import { registerLockTools } from "@/lib/mcp/tools/locks"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -136,6 +138,7 @@ const handler = createMcpHandler(
     registerDevTaskTools(server)
     registerCalendarTools(server)
     registerReferralTools(server)
+    registerLockTools(server)
   },
   {
     capabilities: {},
