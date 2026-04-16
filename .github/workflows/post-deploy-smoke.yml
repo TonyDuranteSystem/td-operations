@@ -44,41 +44,41 @@ jobs:
 
     steps:
       - name: Wait for Vercel deploy
-        # Poll the smoke-alert endpoint with a bad bearer. A 401 response
-        # means the endpoint is live AND rejecting auth — i.e. THIS commit's
-        # code is deployed. Polling app.tonydurante.us/ would return 307
-        # from the PREVIOUS deploy too, so it can't tell us whether the
-        # new code has landed yet.
+        # Poll /api/health (public, no auth). When the NEW deploy is live
+        # the endpoint returns 200 + {ok:true,commit_sha:<short>,...}; we
+        # could additionally match the commit_sha against $GITHUB_SHA but
+        # the GitHub runner sees the merged SHA while Vercel builds the
+        # pushed SHA, which may differ for merge queues — so we just use
+        # HTTP 200 as "new code live" and rely on the smoke checks
+        # themselves to catch regressions.
         #
-        # 404 = endpoint not deployed yet. 401 = deployed. Anything else =
-        # treat as "probably fine, proceed" so we don't block on edge
-        # cases like Vercel auth gates in front of the origin.
+        # Why /api/health rather than the webhook-bearer trick used
+        # previously: the wait step needs to poll the newest endpoint
+        # added in the current change set. Polling an endpoint that was
+        # already present on the previous deploy returns 401/200 from
+        # OLD code — see commit 4c4741d where this bug caused the first
+        # run to hit old code and return 307 on /api/health.
         run: |
           set +e
-          SMOKE_URL="https://td-operations.vercel.app/api/webhooks/smoke-alert"
+          HEALTH_URL="https://td-operations.vercel.app/api/health"
           for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-              -X POST \
-              -H "Authorization: Bearer deploy-check-invalid-token" \
-              -H "Content-Type: application/json" \
-              --data '{"failures":[]}' \
-              "$SMOKE_URL")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$HEALTH_URL")
             case "$STATUS" in
-              401)
-                echo "✅ New deploy live after ~$((i*10))s (smoke-alert returned 401 — endpoint deployed, bearer check active)"
+              200)
+                echo "✅ New deploy live after ~$((i*10))s (/api/health returned 200)"
                 exit 0
                 ;;
-              404)
-                echo "Attempt ${i}/30: smoke-alert 404 — deploy not live yet, sleeping 10s..."
+              307|404)
+                echo "Attempt ${i}/30: /api/health returned $STATUS — old deploy still serving, sleeping 10s..."
                 sleep 10
                 ;;
               *)
-                echo "Attempt ${i}/30: smoke-alert returned $STATUS — treating as live, proceeding"
+                echo "Attempt ${i}/30: /api/health returned $STATUS — unexpected but proceeding"
                 exit 0
                 ;;
             esac
           done
-          echo "⚠️ smoke-alert did not return 401 within 5 minutes — proceeding to checks anyway"
+          echo "⚠️ /api/health did not return 200 within 5 minutes — proceeding to checks anyway"
 
       - name: Smoke check 1 — app root (app.tonydurante.us)
         id: check_app
