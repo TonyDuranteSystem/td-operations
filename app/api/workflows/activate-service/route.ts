@@ -27,6 +27,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
+import { createSD } from "@/lib/operations/service-delivery"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
@@ -472,64 +473,69 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // Tax Return has context-dependent entry points — never use generic firstStage
-          let stage: string
-          let explicitStageOrder: number | null = null
+          // Route through P1.6 operation layer (createSD).
+          // Tax Return has context-dependent entry points — pass target_stage
+          // + target_stage_order explicitly so createSD uses the contextual
+          // value instead of defaulting to stage_order=-1 "Company Data
+          // Pending".
+          let createParams: Parameters<typeof createSD>[0]
           if (pipeline === "Tax Return") {
             if (isStandaloneBusinessTR) {
-              stage = "Company Data Pending"
-              explicitStageOrder = -1
-            } else {
-              stage = "1st Installment Paid"
-            }
-          } else {
-            stage = firstStage.get(pipeline) || "Pending"
-          }
-
-          const { data: sd, error: sdErr } = await dbWriteSafe(
-            supabase
-              .from("service_deliveries")
-              .insert({
+              createParams = {
                 service_type: pipeline,
                 service_name: `${pipeline} - ${activation.client_name}`,
-                account_id: isStandaloneBusinessTR && pipeline === "Tax Return" ? null : accountId,
+                account_id: null,
                 contact_id: contactId,
-                stage: stage,
-                stage_order: explicitStageOrder,
-                status: "active",
-                assigned_to: "Luca",
+                target_stage: "Company Data Pending",
+                target_stage_order: -1,
                 notes: `Auto-created from offer ${activation.offer_token}`,
-              })
-              .select("id")
-              .single(),
-            "service_deliveries.insert"
-          )
-
-          if (sdErr) {
-            sdResults.push({ pipeline, status: "error", id: sdErr })
-          } else {
-            sdResults.push({ pipeline, status: "created", id: sd?.id })
-
-            // Auto-create tasks from pipeline_stages.auto_tasks (mirrors sd_create logic)
-            const stageData = firstStageData.get(pipeline)
-            if (sd?.id && stageData?.auto_tasks?.length) {
-              const serviceName = `${pipeline} - ${activation.client_name}`
-              for (const taskDef of stageData.auto_tasks) {
-                await dbWriteSafe(
-                  supabase.from("tasks").insert({
-                    task_title: `[${serviceName}] ${taskDef.title}`,
-                    assigned_to: taskDef.assigned_to || "Luca",
-                    category: (taskDef.category || "Internal") as never,
-                    priority: (taskDef.priority || "Normal") as never,
-                    description: "Auto-created on service delivery creation",
-                    status: "To Do",
-                    account_id: accountId,
-                    delivery_id: sd.id,
-                    stage_order: stageData.stage_order,
-                  }),
-                  "tasks.insert"
-                )
               }
+            } else {
+              createParams = {
+                service_type: pipeline,
+                service_name: `${pipeline} - ${activation.client_name}`,
+                account_id: accountId,
+                contact_id: contactId,
+                target_stage: "1st Installment Paid",
+                notes: `Auto-created from offer ${activation.offer_token}`,
+              }
+            }
+          } else {
+            // All other pipelines — createSD resolves the first stage
+            // from pipeline_stages automatically.
+            createParams = {
+              service_type: pipeline,
+              service_name: `${pipeline} - ${activation.client_name}`,
+              account_id: accountId,
+              contact_id: contactId,
+              notes: `Auto-created from offer ${activation.offer_token}`,
+            }
+          }
+
+          const sd = await createSD(createParams)
+          sdResults.push({ pipeline, status: "created", id: sd.id })
+
+          // Auto-create tasks from pipeline_stages.auto_tasks (mirrors
+          // sd_create logic — kept here because createSD intentionally
+          // does not create tasks on insert).
+          const stageData = firstStageData.get(pipeline)
+          if (sd.id && stageData?.auto_tasks?.length) {
+            const serviceName = `${pipeline} - ${activation.client_name}`
+            for (const taskDef of stageData.auto_tasks) {
+              await dbWriteSafe(
+                supabase.from("tasks").insert({
+                  task_title: `[${serviceName}] ${taskDef.title}`,
+                  assigned_to: taskDef.assigned_to || "Luca",
+                  category: (taskDef.category || "Internal") as never,
+                  priority: (taskDef.priority || "Normal") as never,
+                  description: "Auto-created on service delivery creation",
+                  status: "To Do",
+                  account_id: accountId,
+                  delivery_id: sd.id,
+                  stage_order: stageData.stage_order,
+                }),
+                "tasks.insert"
+              )
             }
           }
         } catch (e) {

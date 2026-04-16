@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { createSD } from "@/lib/operations/service-delivery"
 
 // ─── Types ───
 
@@ -1043,41 +1044,41 @@ export async function POST(req: NextRequest) {
       }
 
       case "create_service_delivery": {
-        const { error } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_type: params.service_type,
+        try {
+          await createSD({
+            service_type: params.service_type as string,
             service_name: `${params.service_type} — ${params.contact_name || "Contact"}`,
-            account_id: params.account_id || null,
-            contact_id: params.contact_id || contact_id,
-            status: "active",
-            stage: "Data Collection",
-            stage_order: 1,
-            assigned_to: "Luca",
+            account_id: (params.account_id as string) || null,
+            contact_id: (params.contact_id as string) || contact_id,
           })
-        result = { success: !error, detail: error ? error.message : `${params.service_type} created` }
+          result = { success: true, detail: `${params.service_type} created` }
+        } catch (e) {
+          result = { success: false, detail: e instanceof Error ? e.message : String(e) }
+        }
         break
       }
 
       case "create_service_deliveries": {
         const pipelines = params.pipelines as string[]
         let created = 0
+        const errors: string[] = []
         for (const p of pipelines) {
-          const { error } = await supabaseAdmin
-            .from("service_deliveries")
-            .insert({
+          try {
+            await createSD({
               service_type: p,
               service_name: p,
-              account_id: params.account_id || null,
-              contact_id: params.contact_id || contact_id,
-              status: "active",
-              stage: "Data Collection",
-              stage_order: 1,
-              assigned_to: "Luca",
+              account_id: (params.account_id as string) || null,
+              contact_id: (params.contact_id as string) || contact_id,
             })
-          if (!error) created++
+            created++
+          } catch (e) {
+            errors.push(`${p}: ${e instanceof Error ? e.message : String(e)}`)
+          }
         }
-        result = { success: created > 0, detail: `Created ${created}/${pipelines.length} services` }
+        result = {
+          success: created > 0,
+          detail: `Created ${created}/${pipelines.length} services${errors.length ? ` (errors: ${errors.join("; ")})` : ""}`,
+        }
         break
       }
 

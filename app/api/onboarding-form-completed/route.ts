@@ -25,6 +25,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -131,37 +132,15 @@ export async function POST(req: NextRequest) {
       if (existingSd?.length) {
         deliveryId = existingSd[0].id
       } else {
-        const { data: stages } = await supabaseAdmin
-          .from("pipeline_stages")
-          .select("stage_name")
-          .eq("service_type", "Client Onboarding")
-          .order("stage_order")
-          .limit(1)
-
-        const firstStage = stages?.[0]?.stage_name || "Data Collection"
         const companyName = submittedData.company_name || "Existing LLC"
-
-        const newSd = await dbWrite(
-          supabaseAdmin
-            .from("service_deliveries")
-            .insert({
-              service_type: "Client Onboarding",
-              service_name: `Client Onboarding - ${leadName} (${companyName})`,
-              contact_id: contactId,
-              stage: firstStage,
-              status: "active",
-              assigned_to: "Luca",
-              notes: `Auto-created from onboarding form ${token}`,
-            })
-            .select("id")
-            .single(),
-          "service_deliveries.insert"
-        )
-
-        if (newSd) {
-          deliveryId = newSd.id
-          results.push({ step: "sd_created", status: "ok", detail: `SD auto-created: ${deliveryId}` })
-        }
+        const newSd = await createSD({
+          service_type: "Client Onboarding",
+          service_name: `Client Onboarding - ${leadName} (${companyName})`,
+          contact_id: contactId,
+          notes: `Auto-created from onboarding form ${token}`,
+        })
+        deliveryId = newSd.id
+        results.push({ step: "sd_created", status: "ok", detail: `SD auto-created: ${deliveryId}` })
       }
     } catch (e) {
       results.push({ step: "sd_check", status: "error", detail: e instanceof Error ? e.message : String(e) })

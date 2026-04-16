@@ -26,6 +26,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder, uploadBinaryToDrive, downloadFileBinary } from "@/lib/google-drive"
 
@@ -322,26 +323,38 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>Bank statem
     }
 
     // ─── 4B. ADVANCE SD to "Data Received" ───
+    // Uses P1.6 operation layer (advanceStageIfAt). Gate matches legacy
+    // stages "Data Link Sent"/"Activated" that live on existing SD rows
+    // even though they aren't in the current Tax Return pipeline — the
+    // gate check is permissive (string match), the target validation is
+    // strict (must be a real pipeline_stages row). skip_tasks=true
+    // because tax_form review task is created manually in STEP 3 above.
     if (sub.account_id) {
       try {
         const { data: sd } = await supabaseAdmin
           .from("service_deliveries")
-          .select("id, stage")
+          .select("id")
           .eq("account_id", sub.account_id)
           .eq("service_type", "Tax Return")
           .eq("status", "active")
           .limit(1)
           .maybeSingle()
 
-        if (sd && (sd.stage === "Data Link Sent" || sd.stage === "Activated")) {
-          await dbWrite(
-            supabaseAdmin
-              .from("service_deliveries")
-              .update({ stage: "Data Received", updated_at: new Date().toISOString() })
-              .eq("id", sd.id),
-            "service_deliveries.update"
-          )
-          results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Received` })
+        if (sd) {
+          const advanceResult = await advanceStageIfAt({
+            delivery_id: sd.id,
+            if_current_stage: ["Data Link Sent", "Activated"],
+            target_stage: "Data Received",
+            actor: "tax-form-completed",
+            notes: `Tax form submitted by client (${sub.tax_year})`,
+            skip_tasks: true,
+          })
+          if (advanceResult.advanced) {
+            results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} -> Data Received` })
+          } else if (advanceResult.current_stage && ["Data Link Sent", "Activated"].includes(advanceResult.current_stage)) {
+            results.push({ step: "sd_advance", status: "error", detail: advanceResult.result?.error || advanceResult.reason })
+          }
+          // Otherwise skipped silently (gate not met) — matches prior behavior
         }
       } catch (e) {
         results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })

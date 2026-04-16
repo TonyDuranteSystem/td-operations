@@ -16,7 +16,8 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { dbWriteSafe } from "@/lib/db"
+import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 
 export async function POST(req: NextRequest) {
   try {
@@ -143,38 +144,37 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 3. ADVANCE SERVICE DELIVERY (Banking Fintech) ───
+    // Uses P1.6 operation layer (advanceStageIfAt). skip_tasks=true because
+    // this route creates its own provider-specific task in STEP 2.
     if (sub.account_id) {
       try {
         const { data: sd } = await supabaseAdmin
           .from("service_deliveries")
-          .select("id, stage, stage_history")
+          .select("id")
           .eq("account_id", sub.account_id)
           .eq("service_type", "Banking Fintech")
           .eq("status", "active")
           .limit(1)
           .maybeSingle()
 
-        if (sd && sd.stage === "Data Collection") {
-          const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
-          history.push({
-            event: "banking_form_submitted",
-            at: new Date().toISOString(),
-            note: `${providerName} banking form submitted by client`,
-          })
-
-          await dbWrite(
-            supabaseAdmin
-              .from("service_deliveries")
-              .update({ stage: "Application Submitted", stage_history: history, updated_at: new Date().toISOString() })
-              .eq("id", sd.id),
-            "service_deliveries.update"
-          )
-
-          results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} advanced: Data Collection → Application Submitted` })
-        } else if (sd) {
-          results.push({ step: "sd_advance", status: "skipped", detail: `SD stage is "${sd.stage}", not "Data Collection"` })
-        } else {
+        if (!sd) {
           results.push({ step: "sd_advance", status: "skipped", detail: "No active Banking Fintech SD found" })
+        } else {
+          const advanceResult = await advanceStageIfAt({
+            delivery_id: sd.id,
+            if_current_stage: "Data Collection",
+            target_stage: "Application Submitted",
+            actor: "banking-form-completed",
+            notes: `${providerName} banking form submitted by client`,
+            skip_tasks: true,
+          })
+          if (advanceResult.advanced) {
+            results.push({ step: "sd_advance", status: "ok", detail: `SD ${sd.id} advanced: Data Collection → Application Submitted` })
+          } else if (advanceResult.current_stage === "Data Collection") {
+            results.push({ step: "sd_advance", status: "error", detail: advanceResult.result?.error || advanceResult.reason })
+          } else {
+            results.push({ step: "sd_advance", status: "skipped", detail: advanceResult.reason })
+          }
         }
       } catch (e) {
         results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })

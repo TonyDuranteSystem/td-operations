@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { INTERNAL_BASE_URL } from "@/lib/config"
 import { classifyAccount } from "@/lib/account-classification"
+import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 
 // ─── Types ───
@@ -1420,28 +1421,6 @@ export async function POST(req: NextRequest) {
 
         const created: string[] = []
         for (const pipeline of pipelines) {
-          // Get first stage
-          const { data: stages } = await supabaseAdmin
-            .from("pipeline_stages")
-            .select("stage_name, stage_order, auto_tasks")
-            .eq("service_type", pipeline)
-            .order("stage_order")
-            .limit(1)
-
-          let firstStage = stages?.[0]
-
-          // Tax Return: intake stages (stage_order < 1) are only for the business activation path.
-          // Chain audit always starts at "1st Installment Paid".
-          if (pipeline === 'Tax Return' && firstStage && firstStage.stage_order < 1) {
-            const { data: trStages } = await supabaseAdmin
-              .from("pipeline_stages")
-              .select("stage_name, stage_order, auto_tasks")
-              .eq("service_type", "Tax Return")
-              .eq("stage_name", "1st Installment Paid")
-              .limit(1)
-            if (trStages?.[0]) firstStage = trStages[0]
-          }
-
           // Get account name for service_name
           const { data: acct } = await supabaseAdmin
             .from("accounts")
@@ -1449,22 +1428,34 @@ export async function POST(req: NextRequest) {
             .eq("id", account_id)
             .single()
 
-          const { error: sdErr } = await supabaseAdmin.from("service_deliveries").insert({
-            service_type: pipeline,
-            service_name: `${pipeline} — ${acct?.company_name ?? "Unknown"}`,
-            pipeline,
-            stage: firstStage?.stage_name ?? "Data Collection",
-            stage_order: firstStage?.stage_order ?? 1,
-            account_id,
-            contact_id,
-            status: "active",
-            assigned_to: "Luca",
-            notes: `Created from chain audit fix`,
-            stage_entered_at: new Date().toISOString(),
-            stage_history: [],
-          })
+          // Tax Return: intake stages (stage_order < 1) are only for the
+          // business activation path. Chain audit always starts at "1st
+          // Installment Paid". For all other service types, createSD
+          // defaults to the lowest stage_order in pipeline_stages.
+          const createParams =
+            pipeline === "Tax Return"
+              ? {
+                  service_type: pipeline,
+                  service_name: `${pipeline} — ${acct?.company_name ?? "Unknown"}`,
+                  account_id,
+                  contact_id,
+                  target_stage: "1st Installment Paid",
+                  notes: "Created from chain audit fix",
+                }
+              : {
+                  service_type: pipeline,
+                  service_name: `${pipeline} — ${acct?.company_name ?? "Unknown"}`,
+                  account_id,
+                  contact_id,
+                  notes: "Created from chain audit fix",
+                }
 
-          if (!sdErr) created.push(pipeline)
+          try {
+            await createSD(createParams)
+            created.push(pipeline)
+          } catch {
+            // Swallow per pipeline — caller aggregates created count
+          }
         }
 
         return NextResponse.json({

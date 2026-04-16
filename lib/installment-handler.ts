@@ -21,6 +21,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { createSD } from "@/lib/operations/service-delivery"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -74,32 +75,15 @@ export async function onFirstInstallmentPaid(
     if (existingCmra?.length) {
       steps.push({ step: "cmra_sd", status: "exists", detail: existingCmra[0].id })
     } else {
-      const { data: cmraStage } = await supabaseAdmin
-        .from("pipeline_stages")
-        .select("stage_name")
-        .eq("service_type", "CMRA Mailing Address")
-        .order("stage_order")
-        .limit(1)
+      const newSd = await createSD({
+        service_type: "CMRA Mailing Address",
+        service_name: `CMRA ${year} - ${account.company_name}`,
+        account_id: accountId,
+        contact_id: contactId,
+        notes: `Auto-created from 1st installment ${year}`,
+      })
 
-      const newSd = await dbWrite(
-        supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_type: "CMRA Mailing Address",
-            service_name: `CMRA ${year} - ${account.company_name}`,
-            account_id: accountId,
-            contact_id: contactId,
-            stage: cmraStage?.[0]?.stage_name || "Lease Created",
-            status: "active",
-            assigned_to: "Luca",
-            notes: `Auto-created from 1st installment ${year}`,
-          })
-          .select("id")
-          .single(),
-        "service_deliveries.insert"
-      )
-
-      steps.push({ step: "cmra_sd", status: "ok", detail: `Created: ${newSd?.id}` })
+      steps.push({ step: "cmra_sd", status: "ok", detail: `Created: ${newSd.id}` })
     }
 
     // Update cmra_renewal_date
@@ -179,32 +163,21 @@ export async function onFirstInstallmentPaid(
     if (existingTr?.length) {
       steps.push({ step: "tax_sd", status: "exists", detail: existingTr[0].id })
     } else {
-      const { data: taxStage } = await supabaseAdmin
-        .from("pipeline_stages")
-        .select("stage_name")
-        .eq("service_type", "Tax Return")
-        .order("stage_order")
-        .limit(1)
+      // Tax Return has stage_order=-1 ("Company Data Pending") as its lowest
+      // row. For an installment-paid flow where we know the 1st installment
+      // IS paid, the correct entry point is stage_order=1 "1st Installment
+      // Paid" — createSD defaults to the lowest stage_order, so we pass the
+      // explicit target_stage here.
+      const newSd = await createSD({
+        service_type: "Tax Return",
+        service_name: `Tax Return ${taxYear} - ${account.company_name}`,
+        account_id: accountId,
+        contact_id: contactId,
+        target_stage: "1st Installment Paid",
+        notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.`,
+      })
 
-      const newSd = await dbWrite(
-        supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_type: "Tax Return",
-            service_name: `Tax Return ${taxYear} - ${account.company_name}`,
-            account_id: accountId,
-            contact_id: contactId,
-            stage: taxStage?.[0]?.stage_name || "Activated",
-            status: "active",
-            assigned_to: "Luca",
-            notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.`,
-          })
-          .select("id")
-          .single(),
-        "service_deliveries.insert"
-      )
-
-      steps.push({ step: "tax_sd", status: "ok", detail: `Created: ${newSd?.id} (tax year ${taxYear})` })
+      steps.push({ step: "tax_sd", status: "ok", detail: `Created: ${newSd.id} (tax year ${taxYear})` })
 
       // Also create/update tax_returns record
       const { data: existingTrRecord } = await supabaseAdmin
@@ -347,6 +320,16 @@ export async function onSecondInstallmentPaid(
   }
 
   // ─── 2. Advance Tax Return SD if at "Awaiting 2nd Payment" ───
+  //
+  // NOTE: target stage "Ready for Filing" is NOT in the Tax Return
+  // pipeline_stages (canonical next stage is "Preparation" stage_order=5).
+  // Repo-wide grep shows "Ready for Filing" is written here but read
+  // nowhere — it's a silent drift left from an older Tax Return pipeline
+  // vocabulary. Kept as a raw `dbWrite` (P1.3-compliant, not P1.6-routed)
+  // so P1.6 does not silently change the stage value on live data.
+  // Follow-up: reconcile Tax Return stage vocabulary under a dedicated
+  // dev_task before routing this advance through advanceStageIfAt (which
+  // would throw on the invalid target).
   try {
     const { data: taxSd } = await supabaseAdmin
       .from("service_deliveries")

@@ -25,6 +25,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -217,58 +218,46 @@ export async function POST(req: NextRequest) {
 
       if (existingSd?.length) {
         deliveryId = existingSd[0].id
-        // Advance to Document Preparation
-        if (existingSd[0].stage === "Data Collection") {
-          const { error: advanceError } = await dbWriteSafe(
-            supabaseAdmin
-              .from("service_deliveries")
-              .update({
-                stage: "Document Preparation",
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", deliveryId),
-            "service_deliveries.update"
-          )
-
-          if (advanceError) {
-            console.error("[itin-form-completed] SD stage advance failed:", advanceError)
-            results.push({ step: "sd_advance", status: "error", detail: advanceError })
-          } else {
-            results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> Document Preparation` })
-          }
+        // Advance Data Collection → Document Preparation via P1.6 operation
+        // layer — gate on current stage to avoid double-advance; skip auto-
+        // tasks because this route creates its own "Review ITIN documents"
+        // task in STEP 6.
+        const advanceResult = await advanceStageIfAt({
+          delivery_id: deliveryId,
+          if_current_stage: "Data Collection",
+          target_stage: "Document Preparation",
+          actor: "itin-form-completed",
+          notes: `ITIN form ${token} submitted`,
+          skip_tasks: true,
+        })
+        if (advanceResult.advanced) {
+          results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> Document Preparation` })
+        } else if (advanceResult.current_stage === "Data Collection") {
+          // Gate matched but advance failed inside advanceServiceDelivery
+          results.push({ step: "sd_advance", status: "error", detail: advanceResult.result?.error || advanceResult.reason })
+        } else {
+          // Gate not matched — SD already moved forward; safe to ignore
+          results.push({ step: "sd_advance", status: "skipped", detail: advanceResult.reason })
         }
       } else {
-        // Auto-create SD
-        const { data: stages, error: stagesError } = await supabaseAdmin
-          .from("pipeline_stages").select("stage_name")
-          .eq("service_type", "ITIN").order("stage_order").limit(2)
-
-        if (stagesError) {
-          console.error("[itin-form-completed] pipeline_stages SELECT failed:", stagesError)
-        }
-
-        const secondStage = stages?.[1]?.stage_name || "Document Preparation"
-
-        const { data: newSd, error: newSdError } = await dbWriteSafe(
-          supabaseAdmin.from("service_deliveries").insert({
+        // Auto-create SD at Document Preparation (stage 2) since the client
+        // has already submitted their ITIN data — we skip the "Data
+        // Collection" intake stage.
+        try {
+          const newSd = await createSD({
             service_type: "ITIN",
             service_name: `ITIN - ${clientName}`,
             account_id: sub.account_id || null,
             contact_id: contactId,
-            stage: secondStage, // Start at Document Preparation since data is already received
-            status: "active",
-            assigned_to: "Luca",
+            target_stage: "Document Preparation",
             notes: `Auto-created from ITIN form ${token}`,
-          }).select("id").single(),
-          "service_deliveries.insert"
-        )
-
-        if (newSdError) {
-          console.error("[itin-form-completed] service_deliveries INSERT failed:", newSdError)
-          results.push({ step: "sd_created", status: "error", detail: newSdError })
-        } else if (newSd) {
+          })
           deliveryId = newSd.id
           results.push({ step: "sd_created", status: "ok", detail: `SD auto-created at Document Preparation: ${deliveryId}` })
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          console.error("[itin-form-completed] createSD failed:", msg)
+          results.push({ step: "sd_created", status: "error", detail: msg })
         }
       }
     } catch (e) {

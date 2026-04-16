@@ -1,11 +1,16 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { createSD } from '@/lib/operations/service-delivery'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * POST /api/crm/admin-actions/create-service
  * Create a service delivery for an account.
+ *
+ * Routes through lib/operations/service-delivery.createSD so the stage is
+ * resolved from pipeline_stages (not hardcoded "Data Collection" which is
+ * only valid for a few service_types — see dev_task 6d2a2be1).
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -35,26 +40,17 @@ export async function POST(request: NextRequest) {
     if (account) serviceName = `${service_type} — ${account.company_name}`
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('service_deliveries')
-    .insert({
-      account_id: account_id || null,
-      contact_id: contact_id || null,
+  try {
+    const data = await createSD({
       service_type,
       service_name: serviceName,
-      stage: 'Data Collection',
-      stage_order: 1,
-      status: 'active',
-      start_date: new Date().toISOString().split('T')[0],
-      assigned_to: 'Luca',
-      notes: notes || null,
+      account_id: account_id || null,
+      contact_id: contact_id || null,
+      notes: notes || undefined,
     })
-    .select('id, service_name, service_type, stage, status')
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ success: true, data })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
-
-  return NextResponse.json({ success: true, data })
 }
