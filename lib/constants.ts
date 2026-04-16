@@ -26,8 +26,7 @@ export const SD_STATUS = [
 ] as const
 
 export const OFFER_STATUS = [
-  'draft', 'sent', 'viewed', 'signed', 'completed', 'expired',
-  'under_discussion', 'superseded',
+  'draft', 'sent', 'viewed', 'accepted', 'signed', 'completed', 'expired',
 ] as const
 
 export const LEASE_STATUS = [
@@ -43,7 +42,7 @@ export const SS4_STATUS = [
 ] as const
 
 export const DEADLINE_STATUS = [
-  'Pending', 'Completed', 'Filed', 'Not Started', 'Overdue',
+  'Pending', 'Completed', 'Filed', 'Not Started', 'Overdue', 'Cancelled',
 ] as const
 
 export const DOCUMENT_STATUS = [
@@ -63,7 +62,7 @@ export const SUBMISSION_STATUS = [
 ] as const
 
 export const PENDING_ACTIVATION_STATUS = [
-  'awaiting_payment', 'payment_confirmed', 'activated',
+  'awaiting_payment', 'payment_confirmed', 'activated', 'expired', 'cancelled',
 ] as const
 
 export const REFERRAL_STATUS = [
@@ -75,7 +74,7 @@ export const SIGNATURE_REQUEST_STATUS = [
 ] as const
 
 export const WIZARD_STATUS = [
-  'in_progress', 'submitted',
+  'in_progress', 'submitted', 'reviewed',
 ] as const
 
 export const PORTAL_TIER = [
