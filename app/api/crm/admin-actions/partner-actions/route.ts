@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 
 export async function POST(req: NextRequest) {
   try {
@@ -133,9 +134,8 @@ export async function POST(req: NextRequest) {
           break
         }
 
-        // Check if portal user already exists
-        const { data: authList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const existingUser = (authList?.users ?? []).find(u => u.email?.toLowerCase() === email.toLowerCase())
+        // Check if portal user already exists (paginated — P1.9)
+        const existingUser = await findAuthUserByEmail(email)
 
         if (existingUser) {
           // Update to partner role

@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { canPerform } from "@/lib/permissions"
 
 export async function POST(request: Request) {
@@ -70,13 +71,10 @@ export async function POST(request: Request) {
       activations = data ?? []
     }
 
-    // 5. Check for portal user by email (same pattern as rest of codebase)
+    // 5. Check for portal user by email (paginated — P1.9)
     let portalUser: { id: string; email: string } | null = null
     if (lead.email) {
-      const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-      const match = (list?.users ?? []).find(
-        (u: { email?: string }) => u.email?.toLowerCase() === lead.email.toLowerCase()
-      )
+      const match = await findAuthUserByEmail(lead.email)
       if (match) {
         portalUser = { id: match.id, email: match.email ?? lead.email }
       }

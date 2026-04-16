@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail, listAllAuthUsers } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { CRM_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
@@ -15,8 +16,8 @@ export async function GET() {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
   }
 
-  const { data } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const dashboardUsers = (data?.users ?? [])
+  const allUsers = await listAllAuthUsers()
+  const dashboardUsers = allUsers
     .filter(u => u.app_metadata?.role !== 'client')
     .map(u => ({
       id: u.id,
@@ -58,9 +59,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'role must be admin or team' }, { status: 400 })
   }
 
-  // Check for duplicate
-  const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const existingUser = (existingList?.users ?? []).find(u => u.email === email)
+  // Check for duplicate (paginated via findAuthUserByEmail — P1.9)
+  const existingUser = await findAuthUserByEmail(email)
   if (existingUser) {
     return NextResponse.json({ error: `User already exists: ${email}` }, { status: 409 })
   }

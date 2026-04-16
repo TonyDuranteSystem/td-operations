@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
 
@@ -133,12 +134,11 @@ export async function GET(req: NextRequest) {
         ? supabaseAdmin.from("banking_submissions").select("id, token, status, provider, submitted_data")
           .eq("contact_id", contactId)
         : { data: [] },
-      // Auth user — check via listUsers API (reliable, not dependent on portal_account flag)
+      // Auth user — paginated lookup via findAuthUserByEmail (P1.9)
       Promise.resolve().then(async () => {
         if (!contactEmail) return { data: [] as { id: string; email: string }[] }
         try {
-          const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-          const found = (list?.users ?? []).find(u => u.email?.toLowerCase() === contactEmail.toLowerCase())
+          const found = await findAuthUserByEmail(contactEmail)
           return { data: found ? [{ id: found.id, email: found.email || contactEmail }] : [] as { id: string; email: string }[] }
         } catch {
           return { data: [] as { id: string; email: string }[] }
@@ -1039,9 +1039,8 @@ export async function POST(req: NextRequest) {
         const portalEmail = (contactForPortal?.email || params.email) as string
         const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
 
-        // Check if user already exists
-        const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const existingUser = (existingList?.users ?? []).find(u => u.email === portalEmail)
+        // Check if user already exists (paginated — P1.9)
+        const existingUser = await findAuthUserByEmail(portalEmail)
 
         if (existingUser) {
           // Fix metadata on existing user

@@ -1,6 +1,7 @@
 'use server'
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { revalidatePath } from 'next/cache'
 import { INTERNAL_BASE_URL } from '@/lib/config'
 
@@ -241,10 +242,9 @@ export async function syncPortalTier(
       }
     }
 
-    // Sync to auth.users metadata
+    // Sync to auth.users metadata (paginated — P1.9)
     if (contact.email) {
-      const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-      const authUser = users?.find(u => u.email?.toLowerCase() === contact.email?.toLowerCase())
+      const authUser = await findAuthUserByEmail(contact.email)
 
       if (authUser) {
         const currentTier = authUser.app_metadata?.portal_tier

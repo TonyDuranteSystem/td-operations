@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
@@ -38,11 +39,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Contact has no email address' }, { status: 400 })
   }
 
-  // Find auth user by email
-  const findAuthUser = async () => {
-    const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-    return (list?.users ?? []).find(u => u.email === contact.email)
-  }
+  // Find auth user by email (paginated — P1.9)
+  const findAuthUser = async () => findAuthUserByEmail(contact.email!)
 
   if (action === 'change_tier') {
     const validTiers = ['lead', 'onboarding', 'active', 'full']

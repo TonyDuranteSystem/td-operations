@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
@@ -197,8 +198,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   }
   if (contact.email) {
     try {
-      const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-      const authUser = (list?.users ?? []).find(u => u.email === contact.email)
+      const authUser = await findAuthUserByEmail(contact.email)
       if (authUser) {
         portalAuth = {
           exists: true,

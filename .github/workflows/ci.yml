@@ -1,0 +1,86 @@
+# P1.8 — Server-side CI mirroring .husky/pre-push
+#
+# The pre-push hook runs only on developer machines. Any push that
+# bypasses pre-push (git push --no-verify, CI deploy workflows, direct
+# web UI edits) can still land a broken main. This workflow runs the
+# same ESLint + unit + integration + build checks on every push to
+# main and every pull request, giving GitHub's main a server-side
+# floor independent of local hook state.
+#
+# Checks (all must pass):
+#   1. Hardcoded client-facing domain check (same grep as pre-push)
+#   2. ESLint on the full codebase (stricter than pre-push's
+#      changed-files scope — CI catches anything pre-push skipped)
+#   3. npm run test:unit
+#   4. npm run test:integration (P1.7)
+#   5. npm run build
+#
+# Not mirrored:
+#   - Remote-sync check (CI IS the remote, doesn't apply)
+#   - Node-version auto-select via nvm (CI uses setup-node instead)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref on new pushes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint + tests + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Block hardcoded client-facing domains
+        # Mirrors .husky/pre-push lines 20-39. Only lib/config.ts,
+        # lib/oauth.ts, lib/mcp/instructions.ts, .well-known, and the
+        # QB OAuth callback paths are allowed to reference the internal
+        # vercel domain.
+        run: |
+          set -e
+          HARDCODED=$(grep -rn "td-operations\.vercel\.app\|offerte\.tonydurante\.us" \
+            --include="*.ts" --include="*.tsx" lib/ app/ 2>/dev/null \
+            | grep -v "node_modules" \
+            | grep -v "lib/config.ts" \
+            | grep -v "lib/oauth.ts" \
+            | grep -v "lib/mcp/instructions.ts" \
+            | grep -v ".well-known" \
+            | grep -v "qb/authorize" \
+            | grep -v "qb/callback" || true)
+          if [ -n "$HARDCODED" ]; then
+            echo "::error::Hardcoded client-facing domain found. Use APP_BASE_URL from lib/config.ts instead."
+            echo "$HARDCODED"
+            exit 1
+          fi
+
+      - name: ESLint (full codebase, max-warnings 0)
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Integration tests (P1.7 characterization)
+        run: npm run test:integration
+
+      - name: Build
+        run: npm run build

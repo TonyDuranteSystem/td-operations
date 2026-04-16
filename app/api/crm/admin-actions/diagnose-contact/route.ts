@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { createSD } from "@/lib/operations/service-delivery"
 
 // ─── Types ───
@@ -135,8 +136,7 @@ export async function GET(req: NextRequest) {
     let authUser: { id: string; email: string; last_sign_in_at: string | null } | null = null
     if (contactEmail) {
       try {
-        const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const found = (list?.users ?? []).find(u => u.email?.toLowerCase() === contactEmail.toLowerCase())
+        const found = await findAuthUserByEmail(contactEmail)
         if (found) {
           authUser = { id: found.id, email: found.email ?? contactEmail, last_sign_in_at: found.last_sign_in_at ?? null }
         }
@@ -877,9 +877,8 @@ export async function POST(req: NextRequest) {
         const portalEmail = (contactForPortal?.email || params.email) as string
         const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
 
-        // Check if user already exists
-        const { data: existingPortalList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const existingPortalUser = (existingPortalList?.users ?? []).find(u => u.email === portalEmail)
+        // Check if user already exists (paginated — P1.9)
+        const existingPortalUser = await findAuthUserByEmail(portalEmail)
 
         if (existingPortalUser) {
           // Fix metadata on existing user
@@ -1013,8 +1012,7 @@ export async function POST(req: NextRequest) {
           .single()
         if (contactData?.email) {
           try {
-            const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-            const authU = (list?.users ?? []).find(u => u.email?.toLowerCase() === (contactData.email as string).toLowerCase())
+            const authU = await findAuthUserByEmail(contactData.email as string)
             if (authU) {
               await supabaseAdmin.auth.admin.updateUserById(authU.id, {
                 app_metadata: { ...authU.app_metadata, portal_tier: tier },

@@ -28,6 +28,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
@@ -624,10 +625,9 @@ export async function POST(req: NextRequest) {
             "contacts.update"
           )
 
-          // 2. Update auth.users.app_metadata.portal_tier (same pattern as upgradePortalTier)
+          // 2. Update auth.users.app_metadata.portal_tier (paginated — P1.9)
           if (currentContact?.email) {
-            const { data: { users } } = await supabase.auth.admin.listUsers({ perPage: 1000 })
-            const authUser = users.find((u: { email?: string }) => u.email === currentContact.email)
+            const authUser = await findAuthUserByEmail(currentContact.email)
             if (authUser) {
               await supabase.auth.admin.updateUserById(authUser.id, {
                 app_metadata: { ...authUser.app_metadata, portal_tier: "onboarding" },

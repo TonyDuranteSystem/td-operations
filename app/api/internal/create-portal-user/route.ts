@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 
 export async function POST(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET
@@ -21,9 +22,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'email and password required' }, { status: 400 })
   }
 
-  // Check if exists
-  const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const existing = (existingList?.users ?? []).find(u => u.email === email)
+  // Check if exists (paginated — P1.9)
+  const existing = await findAuthUserByEmail(email)
   if (existing) {
     return NextResponse.json({ error: 'User already exists', id: existing.id }, { status: 409 })
   }

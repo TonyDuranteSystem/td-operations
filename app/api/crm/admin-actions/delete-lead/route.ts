@@ -14,6 +14,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 
@@ -92,12 +93,9 @@ export async function POST(request: Request) {
       deleted.offers = count ?? 0
     }
 
-    // 5. Delete portal user (auth.users) by email
+    // 5. Delete portal user (auth.users) by email (paginated — P1.9)
     if (lead.email) {
-      const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-      const match = (list?.users ?? []).find(
-        (u: { email?: string }) => u.email?.toLowerCase() === lead.email.toLowerCase()
-      )
+      const match = await findAuthUserByEmail(lead.email)
       if (match) {
         const { error: deleteErr } = await supabaseAdmin.auth.admin.deleteUser(match.id)
         if (!deleteErr) {

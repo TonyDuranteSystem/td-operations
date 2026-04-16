@@ -9,8 +9,8 @@
  * Idempotent: if user already exists, just updates the tier.
  */
 
-import type { User } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import type { PortalTier } from './tier-config'
 
@@ -123,9 +123,10 @@ async function createFromEmail(
   /** Caller-resolved contact_id — used to backfill auth metadata if missing */
   callerContactId?: string,
 ): Promise<AutoCreateResult> {
-  // Check if user already exists
-  const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const existingUser = (existingList?.users ?? []).find(u => u.email === email)
+  // Check if user already exists — paginated via findAuthUserByEmail
+  // (P1.9: replaces the listUsers({ perPage: 1000 }).find pattern that
+  // silently breaks once auth.users > 1000 rows).
+  const existingUser = await findAuthUserByEmail(email)
 
   if (existingUser) {
     // User exists — resolve contact_id (prefer auth metadata, backfill from caller or DB)
@@ -646,8 +647,7 @@ export async function upgradePortalTier(
       .eq('id', link.contact_id)
       .single()
     if (contactRow?.email) {
-      const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-      const authUser = (users as User[]).find(u => u.email === contactRow.email)
+      const authUser = await findAuthUserByEmail(contactRow.email)
       if (authUser) {
         await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
           app_metadata: { ...authUser.app_metadata, portal_tier: newTier },

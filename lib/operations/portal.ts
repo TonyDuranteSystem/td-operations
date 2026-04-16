@@ -16,8 +16,8 @@
  * contacts.portal_tier as the authoritative value.
  */
 
-import type { User } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import {
   autoCreatePortalUser,
   sendPortalWelcomeEmail,
@@ -140,14 +140,9 @@ export async function reconcileTier(
     }
   }
 
-  // 3. Auth user (by email)
+  // 3. Auth user (by email) — paginated via findAuthUserByEmail (P1.9)
   if (contact.email) {
-    const { data: list } = await supabaseAdmin.auth.admin.listUsers({
-      perPage: 1000,
-    })
-    const authUser = (list?.users as User[] | undefined)?.find(
-      (u) => u.email === contact.email,
-    )
+    const authUser = await findAuthUserByEmail(contact.email)
     if (authUser) {
       const currentTier =
         (authUser.app_metadata?.portal_tier as string | undefined) ?? null

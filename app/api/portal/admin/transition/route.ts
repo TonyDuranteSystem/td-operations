@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { logAction } from '@/lib/mcp/action-log'
@@ -386,8 +387,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 4. Create or repair auth user (once) ──
-  const { data: authList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const existingAuth = (authList?.users ?? []).find(u => u.email === contact.email)
+  const existingAuth = contact.email ? await findAuthUserByEmail(contact.email) : null
   const accountIds = activeAccounts.map(a => a.id)
 
   let emailSent = false

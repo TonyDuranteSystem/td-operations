@@ -21,6 +21,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { INTERNAL_BASE_URL } from "@/lib/config"
 import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
@@ -198,14 +199,11 @@ export async function GET(req: NextRequest) {
         : { data: [] },
     ])
 
-    // ── Auth user check ──
+    // ── Auth user check (paginated — P1.9) ──
     let authUser: { id: string; email: string; last_sign_in_at: string | null } | null = null
     if (contactEmail) {
       try {
-        const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const found = (list?.users ?? []).find(
-          u => u.email?.toLowerCase() === contactEmail.toLowerCase()
-        )
+        const found = await findAuthUserByEmail(contactEmail)
         if (found) {
           authUser = { id: found.id, email: found.email ?? contactEmail, last_sign_in_at: found.last_sign_in_at ?? null }
         }

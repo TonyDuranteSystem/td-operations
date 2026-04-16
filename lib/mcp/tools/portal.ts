@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
@@ -652,8 +653,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
         const lang: "en" | "it" = hasItalian ? "it" : "en"
 
         // ─── 3. CHECK / CREATE AUTH USER (once) ───
-        const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const existingAuth = (authUsers?.users ?? []).find(u => u.email === contact.email)
+        const existingAuth = contact.email ? await findAuthUserByEmail(contact.email) : null
 
         let tempPassword = ""
         let portalCreated = false
@@ -886,8 +886,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
             const lang: "en" | "it" = hasItalian ? "it" : "en"
 
             // Auth user create/repair (same logic as portal_transition_setup)
-            const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-            const existingAuth = (authUsers?.users ?? []).find(u => u.email === contact.email)
+            const existingAuth = contact.email ? await findAuthUserByEmail(contact.email) : null
 
             let tempPassword = ""
             if (!existingAuth) {
@@ -1056,8 +1055,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
 
         if (!userEmail) return { content: [{ type: "text" as const, text: "Either account_id or email is required" }] }
 
-        const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-        const existingUser = (existingList?.users ?? []).find(u => u.email === userEmail)
+        const existingUser = await findAuthUserByEmail(userEmail)
         if (existingUser) return { content: [{ type: "text" as const, text: `Portal user already exists: ${userEmail}` }] }
 
         const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`

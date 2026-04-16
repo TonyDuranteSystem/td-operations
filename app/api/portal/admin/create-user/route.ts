@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
@@ -58,9 +59,8 @@ export async function POST(request: NextRequest) {
 
   const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
 
-  // Check if user already exists
-  const { data: existingList } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const existingUser = (existingList?.users ?? []).find(u => u.email === contact.email)
+  // Check if user already exists (paginated — P1.9)
+  const existingUser = await findAuthUserByEmail(contact.email)
 
   if (existingUser) {
     // User already exists — verify/fix metadata and optionally resend credentials

@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 
@@ -26,11 +27,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing email" }, { status: 400 })
     }
 
-    // Find auth user by email
-    const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-    const match = (list?.users ?? []).find(
-      (u: { email?: string }) => u.email?.toLowerCase() === email.toLowerCase()
-    )
+    // Find auth user by email (paginated — P1.9)
+    const match = await findAuthUserByEmail(email)
 
     if (!match) {
       return NextResponse.json({ error: `No portal user found for ${email}` }, { status: 404 })

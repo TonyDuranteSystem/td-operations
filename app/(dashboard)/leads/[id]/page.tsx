@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { BackButton } from '@/components/ui/back-button'
 import {
@@ -134,13 +135,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     activations: activation ? [{ id: activation.id, status: activation.status, created_at: activation.created_at, payment_confirmed_at: activation.payment_confirmed_at, amount: activation.amount, currency: activation.currency }] : [],
   })
 
-  // Check for portal user (admin-only, for delete button visibility)
+  // Check for portal user (admin-only, for delete button visibility) — paginated (P1.9)
   let hasPortalUser = false
   if (admin && lead.email) {
-    const { data: list } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-    hasPortalUser = (list?.users ?? []).some(
-      (u: { email?: string }) => u.email?.toLowerCase() === lead.email.toLowerCase()
-    )
+    const found = await findAuthUserByEmail(lead.email)
+    hasPortalUser = !!found
   }
 
   const selectedServices: string[] = Array.isArray(offer?.selected_services) ? offer.selected_services : []
