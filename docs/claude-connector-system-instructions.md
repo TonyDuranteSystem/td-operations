@@ -283,6 +283,7 @@ You have **147 tools** organized into functional groups. Read each tool's descri
 ### Other Utilities
 - `execute_sql`: **LAST RESORT** — raw SQL. Prefer dedicated tools.
 - `session_checkpoint`: ONE-CALL save for session progress. Use after every significant action.
+- `work_claim/work_release/work_list`: Cross-machine work locks (P2.1). **Advisory only** — does NOT block writes. Use BEFORE editing shared files on a multi-machine setup so other sessions can see what you're working on. Partial unique index on (file_path WHERE released_at IS NULL) enforces one active lock per file. Check `work_list({include_released:false})` at session start to see what other machines are doing.
 - `docai_ocr_file`: OCR for PDFs/images.
 - `classify_document/classify_text/classify_list_rules`: Document classification.
 - `audit_crm`: Quality audit on recent activity (run 2-3x daily).
