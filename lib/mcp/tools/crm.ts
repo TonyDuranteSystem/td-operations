@@ -830,27 +830,37 @@ export function registerCrmTools(server: McpServer) {
           }
         }
 
-        // Post-update hook: installment payment triggers
+        // Post-update hook: installment payment triggers (P1.5)
         let installmentMsg = ""
         if (table === "payments" && updates.status === "Paid") {
           try {
-            // Check if this is an installment payment
-            const paymentType = (data as Record<string, unknown>).payment_type as string | undefined
+            const installment = (data as Record<string, unknown>).installment as string | undefined
             const paymentAccountId = (data as Record<string, unknown>).account_id as string | undefined
 
-            if (paymentAccountId && (paymentType === "1st_installment" || paymentType === "2nd_installment")) {
-              const year = new Date().getFullYear()
+            if (paymentAccountId && (installment === "Installment 1 (Jan)" || installment === "Installment 2 (Jun)")) {
+              // Guard: only fire for recurring clients, not standalone/one-time
+              const { data: acct } = await supabaseAdmin
+                .from("accounts")
+                .select("account_type")
+                .eq("id", paymentAccountId)
+                .single()
 
-              if (paymentType === "1st_installment") {
-                const { onFirstInstallmentPaid } = await import("@/lib/installment-handler")
-                const result = await onFirstInstallmentPaid(paymentAccountId, year)
-                const ok = result.steps.filter(s => s.status === "ok").length
-                installmentMsg = `\n\n📦 1st Installment trigger: ${ok} actions executed (CMRA, Tax Return SDs created)`
+              if (acct?.account_type === "Client") {
+                const year = new Date().getFullYear()
+
+                if (installment === "Installment 1 (Jan)") {
+                  const { onFirstInstallmentPaid } = await import("@/lib/installment-handler")
+                  const result = await onFirstInstallmentPaid(paymentAccountId, year)
+                  const ok = result.steps.filter(s => s.status === "ok").length
+                  installmentMsg = `\n\n📦 1st Installment trigger: ${ok} actions executed (CMRA, Tax Return SDs created)`
+                } else {
+                  const { onSecondInstallmentPaid } = await import("@/lib/installment-handler")
+                  const result = await onSecondInstallmentPaid(paymentAccountId, year)
+                  const ok = result.steps.filter(s => s.status === "ok").length
+                  installmentMsg = `\n\n📦 2nd Installment trigger: ${ok} actions executed (tax return gate lifted)`
+                }
               } else {
-                const { onSecondInstallmentPaid } = await import("@/lib/installment-handler")
-                const result = await onSecondInstallmentPaid(paymentAccountId, year)
-                const ok = result.steps.filter(s => s.status === "ok").length
-                installmentMsg = `\n\n📦 2nd Installment trigger: ${ok} actions executed (tax return gate lifted)`
+                installmentMsg = `\n\nℹ️ Installment trigger skipped: account_type=${acct?.account_type ?? "unknown"} (only fires for Client)`
               }
             }
           } catch {
