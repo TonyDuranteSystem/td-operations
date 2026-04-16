@@ -80,6 +80,33 @@
           }
         ]
       }
+    },
+    {
+      "files": ["app/api/*-form-completed/**/*.ts"],
+      "rules": {
+        "no-restricted-syntax": ["warn",
+          {
+            "selector": "TSAsExpression[typeAnnotation.typeName.name='SupabaseClient']",
+            "message": "Do not cast to SupabaseClient — use the typed client from lib/supabase-admin.ts instead."
+          },
+          {
+            "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.type='MemberExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value=/^(service_deliveries|payments|accounts|contacts|tasks)$/]",
+            "message": "P2.4 rule 1: raw .insert/.update/.upsert on protected tables must go through lib/operations/."
+          },
+          {
+            "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql']",
+            "message": "P2.4 rule 5: direct .rpc('exec_sql', ...) is only allowed in lib/mcp/tools/sql.ts and app/api/cron/audit-health-check/route.ts."
+          },
+          {
+            "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql'] Property[key.name='query']",
+            "message": "P2.4 rule 6: the exec_sql RPC parameter is `sql_query`, not `query`."
+          },
+          {
+            "selector": "VariableDeclarator[id.type='Identifier'][init.type='AwaitExpression'][init.argument.type='CallExpression'][init.argument.callee.type='MemberExpression'][init.argument.callee.property.name=/^(update|insert|upsert|delete|select)$/]",
+            "message": "P2.4 rule 3: form-completed handlers must destructure `error` from Supabase calls. Use `const { data, error } = await supabase.from(X).update(Y)` instead of `const result = await ...`. Silent write failures in form handlers are the exact mode that caused the itin-form-completed bug (plan line 73). If this is not a Supabase call, ignore this warning with a targeted eslint-disable-next-line."
+          }
+        ]
+      }
     }
   ],
   "ignorePatterns": [
