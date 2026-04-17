@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 
 interface ServiceRequestClientProps {
   contactId: string
+  accountId: string
   userName: string
   locale: string
 }
@@ -118,7 +119,7 @@ const T = {
   },
 }
 
-export function ServiceRequestClient({ contactId, userName, locale }: ServiceRequestClientProps) {
+export function ServiceRequestClient({ contactId, accountId, userName, locale }: ServiceRequestClientProps) {
   const router = useRouter()
   const t = locale === 'it' ? T.it : T.en
   const [selected, setSelected] = useState<string | null>(null)
@@ -135,11 +136,15 @@ export function ServiceRequestClient({ contactId, userName, locale }: ServiceReq
       const service = SERVICES.find(s => s.id === selected)
       const serviceName = locale === 'it' ? service?.it.name : service?.en.name
 
-      // Submit via chat API (creates a message visible to staff)
+      // Submit via chat API (creates a message visible to staff).
+      // Pass account_id so the message lands on the account chat — without
+      // it, the row is stored with account_id=NULL and orphaned into the
+      // contact-fallback chat (invisible to the account view).
       await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          account_id: accountId || undefined,
           message: `🛎️ SERVICE REQUEST: ${serviceName}\n\nDetails: ${details.trim()}\nUrgency: ${urgency}\n\nFrom: ${userName}`,
           type: 'service_request',
         }),
