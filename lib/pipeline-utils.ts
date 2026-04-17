@@ -198,17 +198,17 @@ export async function markFaxAsSent(
     }
 
     // 3. Close open fax tasks
-    // eslint-disable-next-line no-restricted-syntax
-    const { data: closedTasks } = await supabaseAdmin
-      .from('tasks')
-      .update({ status: 'Done', updated_at: new Date().toISOString() })
-      .eq('account_id', ss4.account_id)
-      .ilike('task_title', '%Fax%SS-4%')
-      .in('status', ['To Do', 'In Progress', 'Waiting'])
-      .select('id')
-
-    if (closedTasks && closedTasks.length > 0) {
-      side_effects.push(`${closedTasks.length} fax task(s) marked Done`)
+    const { updateTasksBulk } = await import('@/lib/operations/task')
+    const closeResult = await updateTasksBulk({
+      account_id: ss4.account_id,
+      title_ilike: '%Fax%SS-4%',
+      status_in: ['To Do', 'In Progress', 'Waiting'],
+      patch: { status: 'Done' },
+      actor: 'system:ss4-fax-confirmed',
+      summary: 'Auto-closed SS-4 fax tasks after fax confirmation',
+    })
+    if (closeResult.count && closeResult.count > 0) {
+      side_effects.push(`${closeResult.count} fax task(s) marked Done`)
     }
   }
 

@@ -143,6 +143,7 @@ export async function advanceServiceDelivery(
   // 6. Update delivery
   const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
   await dbWrite(
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     supabaseAdmin
       .from("service_deliveries")
       .update({
@@ -164,6 +165,7 @@ export async function advanceServiceDelivery(
   if (!skip_tasks && targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
     for (const taskDef of targetStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
       const { error: tErr } = await dbWriteSafe(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         supabaseAdmin
           .from("tasks")
           .insert({
@@ -206,6 +208,7 @@ export async function advanceServiceDelivery(
 
       if (acct?.portal_tier === "active") {
         await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           supabaseAdmin
             .from("accounts")
             .update({ portal_tier: "full", updated_at: new Date().toISOString() })
@@ -307,6 +310,7 @@ export async function advanceServiceDelivery(
         const newDate = currentDate.toISOString().split("T")[0]
 
         await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           supabaseAdmin
             .from("accounts")
             .update({ ra_renewal_date: newDate, updated_at: new Date().toISOString() })
@@ -324,14 +328,15 @@ export async function advanceServiceDelivery(
         .in("status", ["To Do", "In Progress"])
 
       if (openTasks?.length) {
-        await dbWriteSafe(
-          supabaseAdmin
-            .from("tasks")
-            .update({ status: "Done", updated_at: new Date().toISOString() })
-            .eq("delivery_id", delivery_id)
-            .in("status", ["To Do", "In Progress"]),
-          "tasks.update"
-        )
+        const { updateTasksBulk } = await import("@/lib/operations/task")
+        await updateTasksBulk({
+          delivery_id,
+          status_in: ["To Do", "In Progress"],
+          patch: { status: "Done" },
+          actor: "system:sd-ra-renewal-complete",
+          summary: `Auto-closed ${openTasks.length} task(s) for RA Renewal completion`,
+          account_id: delivery.account_id ?? undefined,
+        })
         autoTriggers.push(`Closed ${openTasks.length} related task(s)`)
       }
     } catch (raErr) {
@@ -354,6 +359,7 @@ export async function advanceServiceDelivery(
         const newDate = currentDate.toISOString().split("T")[0]
 
         await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           supabaseAdmin
             .from("accounts")
             .update({ annual_report_due_date: newDate, updated_at: new Date().toISOString() })
@@ -371,14 +377,15 @@ export async function advanceServiceDelivery(
         .in("status", ["To Do", "In Progress"])
 
       if (arTasks?.length) {
-        await dbWriteSafe(
-          supabaseAdmin
-            .from("tasks")
-            .update({ status: "Done", updated_at: new Date().toISOString() })
-            .eq("delivery_id", delivery_id)
-            .in("status", ["To Do", "In Progress"]),
-          "tasks.update"
-        )
+        const { updateTasksBulk } = await import("@/lib/operations/task")
+        await updateTasksBulk({
+          delivery_id,
+          status_in: ["To Do", "In Progress"],
+          patch: { status: "Done" },
+          actor: "system:sd-annual-report-complete",
+          summary: `Auto-closed ${arTasks.length} task(s) for Annual Report completion`,
+          account_id: delivery.account_id ?? undefined,
+        })
         autoTriggers.push(`Closed ${arTasks.length} related task(s)`)
       }
     } catch (arErr) {
@@ -421,6 +428,7 @@ export async function advanceServiceDelivery(
         if (Object.keys(renewals).length > 0) {
           renewals.updated_at = new Date().toISOString()
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             supabaseAdmin.from("accounts").update(renewals).eq("id", delivery.account_id),
             "accounts.update"
           )
@@ -481,6 +489,7 @@ export async function advanceServiceDelivery(
       if (activeSds?.length) {
         for (const sd of activeSds) {
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             supabaseAdmin
               .from("service_deliveries")
               .update({ status: "cancelled", updated_at: new Date().toISOString() })
@@ -492,6 +501,7 @@ export async function advanceServiceDelivery(
       }
 
       await dbWriteSafe(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         supabaseAdmin
           .from("accounts")
           .update({ status: "Closed" satisfies (typeof ACCOUNT_STATUS)[number], portal_account: false, updated_at: new Date().toISOString() })
@@ -507,17 +517,18 @@ export async function advanceServiceDelivery(
         .in("status", ["To Do", "In Progress", "Waiting"])
 
       if (openTasks?.length) {
-        await dbWriteSafe(
-          supabaseAdmin
-            .from("tasks")
-            .update({ status: "Done", updated_at: new Date().toISOString() })
-            .eq("account_id", delivery.account_id)
-            .in("status", ["To Do", "In Progress", "Waiting"]),
-          "tasks.update"
-        )
+        const { updateTasksBulk } = await import("@/lib/operations/task")
+        await updateTasksBulk({
+          account_id: delivery.account_id,
+          status_in: ["To Do", "In Progress", "Waiting"],
+          patch: { status: "Done" },
+          actor: "system:sd-closure",
+          summary: `Auto-closed ${openTasks.length} open task(s) for account closure`,
+        })
         autoTriggers.push(`Closed ${openTasks.length} open tasks`)
       }
 
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await dbWriteSafe(supabaseAdmin.from("tasks").insert([
         {
           task_title: `[CLOSURE] Remove RA on Harbor Compliance`,

@@ -680,6 +680,7 @@ async function checkPortalMessages(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function createTask(p: any) {
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data, error } = await supabaseAdmin
     .from('tasks')
     .insert({
@@ -942,30 +943,44 @@ async function gmailReadThread(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function updateTask(p: any) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updates: Record<string, any> = {}
-  if (p.status) updates.status = p.status
-  if (p.priority) updates.priority = p.priority
-  if (p.assigned_to) updates.assigned_to = p.assigned_to
+  const { updateTask: updateTaskOp, appendTaskNote } = await import('@/lib/operations/task')
 
-  // Handle notes — append to existing
+  // Handle the notes path separately — operation's appendTaskNote owns the
+  // existing-notes read + dated-append format and the action_log summary.
   if (p.notes) {
-    const { data: existing } = await supabaseAdmin.from('tasks').select('notes').eq('id', p.task_id).single()
-    const timestamp = new Date().toISOString().split('T')[0]
-    const existingNotes = existing?.notes || ''
-    updates.notes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.notes}` : `${timestamp}: ${p.notes}`
+    const noteResult = await appendTaskNote({
+      id: p.task_id,
+      note: p.notes,
+      actor: 'ai-agent',
+    })
+    if (!noteResult.success) return JSON.stringify({ error: noteResult.error })
   }
 
-  if (Object.keys(updates).length === 0) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const patch: Record<string, any> = {}
+  if (p.status) patch.status = p.status
+  if (p.priority) patch.priority = p.priority
+  if (p.assigned_to) patch.assigned_to = p.assigned_to
+
+  if (Object.keys(patch).length === 0 && !p.notes) {
     return JSON.stringify({ error: 'No fields to update. Provide status, notes, priority, or assigned_to.' })
   }
 
-  updates.updated_at = new Date().toISOString()
+  if (Object.keys(patch).length > 0) {
+    const result = await updateTaskOp({
+      id: p.task_id,
+      patch,
+      actor: 'ai-agent',
+      summary: `AI agent updated: ${Object.keys(patch).join(', ')}`,
+    })
+    if (!result.success) return JSON.stringify({ error: result.error })
+  }
+
+  // Return latest row shape for the agent's downstream reasoning.
   const { data, error } = await supabaseAdmin
     .from('tasks')
-    .update(updates)
-    .eq('id', p.task_id)
     .select('id, task_title, status, priority, assigned_to, notes')
+    .eq('id', p.task_id)
     .single()
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify({ success: true, task: data })
@@ -978,6 +993,7 @@ async function updateAccountNotes(p: any) {
   const existingNotes = existing?.notes || ''
   const newNotes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.note}` : `${timestamp}: ${p.note}`
 
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { error } = await supabaseAdmin
     .from('accounts')
     .update({ notes: newNotes })
@@ -996,6 +1012,7 @@ async function runSqlQuery(p: any) {
   if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b/i.test(sql)) {
     return JSON.stringify({ error: 'Write operations are not allowed' })
   }
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data, error } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql })
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify(data ?? [])
@@ -1268,6 +1285,7 @@ async function updateContact(p: any) {
   }
 
   updates.updated_at = new Date().toISOString()
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data, error } = await supabaseAdmin
     .from('contacts')
     .update(updates)
@@ -1329,6 +1347,7 @@ async function advanceServiceStage(p: any) {
     deliveryUpdate.notes = existingNotes ? `${existingNotes}\n${timestamp}: ${p.notes}` : `${timestamp}: ${p.notes}`
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { error: uErr } = await supabaseAdmin
     .from('service_deliveries')
     .update(deliveryUpdate)
@@ -1340,6 +1359,7 @@ async function advanceServiceStage(p: any) {
   if (nextStage.auto_tasks && Array.isArray(nextStage.auto_tasks)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const taskDef of nextStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error: tErr } = await supabaseAdmin
         .from('tasks')
         .insert({

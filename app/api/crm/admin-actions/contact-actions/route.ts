@@ -159,6 +159,7 @@ export async function POST(req: NextRequest) {
 
         // 5. Update delivery
         const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error: uErr } = await supabaseAdmin
           .from("service_deliveries")
           .update({
@@ -184,6 +185,7 @@ export async function POST(req: NextRequest) {
         if (targetStage.auto_tasks && Array.isArray(targetStage.auto_tasks)) {
           let created = 0
           for (const taskDef of targetStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string; description?: string }>) {
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             const { error: tErr } = await supabaseAdmin
               .from("tasks")
               .insert({
@@ -218,6 +220,7 @@ export async function POST(req: NextRequest) {
               .single()
 
             if (acct?.portal_tier === "active") {
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               await supabaseAdmin
                 .from("accounts")
                 .update({ portal_tier: "full", updated_at: new Date().toISOString() })
@@ -333,6 +336,7 @@ export async function POST(req: NextRequest) {
           const acct = existingLinks[0].accounts as unknown as { id: string; company_name: string } | null
           if (acct) {
             accountId = acct.id
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             await supabaseAdmin
               .from("accounts")
               .update({
@@ -344,6 +348,7 @@ export async function POST(req: NextRequest) {
           }
         } else {
           // Create new account
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           const { data: newAccount, error: aErr } = await supabaseAdmin
             .from("accounts")
             .insert({
@@ -386,6 +391,7 @@ export async function POST(req: NextRequest) {
 
         // Update active Company Formation SD service_name if exists
         if (accountId) {
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           const { data: updatedSds } = await supabaseAdmin
             .from("service_deliveries")
             .update({
@@ -507,6 +513,7 @@ export async function POST(req: NextRequest) {
         const einSideEffects: string[] = []
 
         // 1. Update account with EIN
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error: einErr } = await supabaseAdmin
           .from("accounts")
           .update({ ein_number: einFormatted, updated_at: new Date().toISOString() })
@@ -669,6 +676,7 @@ export async function POST(req: NextRequest) {
                         if (passportData.dateOfBirth) passportUpdates.date_of_birth = passportData.dateOfBirth
 
                         if (Object.keys(passportUpdates).length > 0) {
+                          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
                           await supabaseAdmin
                             .from("contacts")
                             .update({ ...passportUpdates, passport_on_file: true, updated_at: new Date().toISOString() })
@@ -684,6 +692,7 @@ export async function POST(req: NextRequest) {
                   } else {
                     docSideEffects.push(`Passport format (${mimeType}) not supported for OCR — manual data entry needed`)
                     // Create manual task
+                    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
                     await supabaseAdmin.from("tasks").insert({
                       task_title: `Manual passport data entry: ${contactName}`,
                       description: `Passport uploaded as ${mimeType}. Manually enter passport_number and passport_expiry_date.`,
@@ -694,6 +703,7 @@ export async function POST(req: NextRequest) {
                       contact_id: contact_id,
                       ...(linkedAccountId ? { account_id: linkedAccountId } : {}),
                     })
+                    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
                     await supabaseAdmin
                       .from("contacts")
                       .update({ passport_on_file: true, updated_at: new Date().toISOString() })
@@ -775,18 +785,23 @@ export async function POST(req: NextRequest) {
           break
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         await supabaseAdmin
           .from("service_deliveries")
           .update({ status: "cancelled", end_date: new Date().toISOString().split("T")[0], updated_at: new Date().toISOString() })
           .eq("id", deliveryId)
 
         // Close any open tasks linked to this SD
-        const { data: closedTasks } = await supabaseAdmin
-          .from("tasks")
-          .update({ status: "Done", updated_at: new Date().toISOString() })
-          .eq("delivery_id", deliveryId)
-          .in("status", ["To Do", "In Progress", "Waiting"])
-          .select("id")
+        const { updateTasksBulk } = await import("@/lib/operations/task")
+        const closeTasksResult = await updateTasksBulk({
+          delivery_id: deliveryId,
+          status_in: ["To Do", "In Progress", "Waiting"],
+          patch: { status: "Done" },
+          actor: "crm-admin:cancel-service",
+          summary: `Auto-closed tasks for cancelled service ${sd.service_name || sd.service_type}`,
+          account_id: sd.account_id,
+        })
+        const tasksClosed = closeTasksResult.count ?? 0
 
         await supabaseAdmin.from("action_log").insert({
           actor: "crm-admin",
@@ -795,7 +810,7 @@ export async function POST(req: NextRequest) {
           record_id: deliveryId,
           account_id: sd.account_id,
           summary: `Service cancelled: ${sd.service_name || sd.service_type}`,
-          details: { delivery_id: deliveryId, tasks_closed: closedTasks?.length ?? 0 },
+          details: { delivery_id: deliveryId, tasks_closed: tasksClosed },
         })
 
         result = {
@@ -803,7 +818,7 @@ export async function POST(req: NextRequest) {
           detail: `Cancelled: ${sd.service_name || sd.service_type}`,
           side_effects: [
             `Service delivery set to cancelled`,
-            closedTasks?.length ? `${closedTasks.length} linked task(s) closed` : "No linked tasks",
+            tasksClosed ? `${tasksClosed} linked task(s) closed` : "No linked tasks",
           ],
         }
         break
@@ -853,6 +868,7 @@ export async function POST(req: NextRequest) {
             if (parsed.expiryDate) updates.passport_expiry_date = parsed.expiryDate
             if (parsed.dateOfBirth) updates.date_of_birth = parsed.dateOfBirth
 
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             await supabaseAdmin.from("contacts").update(updates).eq("id", targetContactId)
 
             const extracted = Object.keys(updates).filter(k => k !== "passport_on_file" && k !== "updated_at")
@@ -871,6 +887,7 @@ export async function POST(req: NextRequest) {
               // Extract issue date from CP565 OCR text (format: "Month DD, YYYY")
               const issueDate = parseItinIssueDateFromOcr(ocrResult.fullText)
 
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               await supabaseAdmin.from("contacts").update({
                 itin_number: itinFormatted,
                 itin_issue_date: issueDate,
