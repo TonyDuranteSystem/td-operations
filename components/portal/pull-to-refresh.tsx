@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 
 const THRESHOLD = 80  // px to pull before triggering refresh
@@ -9,6 +9,7 @@ const MAX_PULL = 120  // px max visual pull distance
 
 export function PullToRefresh() {
   const router = useRouter()
+  const pathname = usePathname()
   const [pullDistance, setPullDistance] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -19,6 +20,8 @@ export function PullToRefresh() {
   const refreshingRef = useRef(false)
 
   useEffect(() => {
+    // Chat page has its own inner scroll — pull-to-refresh conflicts with it.
+    if (pathname === '/portal/chat') return
     // Attach directly to the scrollable container (the portal main element).
     // This is required on iOS Safari: addEventListener on `document` with
     // passive:false still can't reliably cancel the browser's elastic-scroll
@@ -103,13 +106,13 @@ export function PullToRefresh() {
       scrollEl.removeEventListener('touchmove', onTouchMove)
       scrollEl.removeEventListener('touchend', onTouchEnd)
     }
-  }, [router])
+  }, [router, pathname])
 
   const visible = pullDistance > 0 || refreshing
   const progress = Math.min(pullDistance / THRESHOLD, 1)
   const triggered = pullDistance >= THRESHOLD || refreshing
 
-  if (!visible) return null
+  if (!visible || pathname === '/portal/chat') return null
 
   return (
     <div

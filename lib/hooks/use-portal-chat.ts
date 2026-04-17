@@ -24,32 +24,47 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   const filterValue = accountId || contactId
 
   // Load initial messages + mark as read
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      setHasMore(true)
-      try {
-        const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
-        if (res.ok) {
-          const data = await res.json()
-          const msgs = data.messages ?? []
-          setMessages(msgs)
-          setHasMore(msgs.length >= 50)
-          // Mark admin messages as read
-          fetch('/api/portal/chat/read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(accountId ? { account_id: accountId } : { contact_id: contactId }),
-          }).catch(() => {})
-        }
-      } catch {
-        // silent
-      } finally {
-        setLoading(false)
+  const load = useCallback(async () => {
+    setLoading(true)
+    setHasMore(true)
+    try {
+      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
+      if (res.ok) {
+        const data = await res.json()
+        const msgs = data.messages ?? []
+        setMessages(msgs)
+        setHasMore(msgs.length >= 50)
+        fetch('/api/portal/chat/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(accountId ? { account_id: accountId } : { contact_id: contactId }),
+        }).catch(() => {})
       }
+    } catch {
+      // silent
+    } finally {
+      setLoading(false)
     }
-    load()
   }, [accountId, contactId, queryParam])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Refresh without blanking the message list (keeps existing messages visible)
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
+      if (res.ok) {
+        const data = await res.json()
+        const msgs = data.messages ?? []
+        setMessages(msgs)
+        setHasMore(msgs.length >= 50)
+      }
+    } catch {
+      // silent
+    }
+  }, [queryParam])
 
   // Load older messages
   const loadMore = useCallback(async () => {
@@ -141,5 +156,5 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     }
   }, [accountId, contactId, sending])
 
-  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore }
+  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh }
 }
