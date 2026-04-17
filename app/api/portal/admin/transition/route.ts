@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
-import { logAction } from '@/lib/mcp/action-log'
+import { updateAccount } from '@/lib/operations/account'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
 
@@ -273,6 +273,7 @@ export async function POST(request: NextRequest) {
     const createdSDs: string[] = []
 
     if (acct.formation_date && !sdTypes.has('Company Formation')) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'Company Formation', pipeline: 'Company Formation',
         service_name: `Company Formation -- ${acct.company_name}`,
@@ -283,6 +284,7 @@ export async function POST(request: NextRequest) {
       createdSDs.push('Formation')
     }
     if (acct.ein_number && !sdTypes.has('EIN')) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'EIN', pipeline: 'EIN',
         service_name: `EIN -- ${acct.company_name}`,
@@ -294,6 +296,7 @@ export async function POST(request: NextRequest) {
       createdSDs.push('EIN')
     }
     if (contact.itin_number && !sdTypes.has('ITIN')) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'ITIN',
         service_name: `ITIN -- ${acct.company_name}`,
@@ -303,6 +306,7 @@ export async function POST(request: NextRequest) {
       createdSDs.push('ITIN')
     }
     if (!isOneTime && !sdTypes.has('Annual Renewal')) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'Annual Renewal',
         service_name: `Annual Renewal -- ${acct.company_name}`,
@@ -311,6 +315,7 @@ export async function POST(request: NextRequest) {
       createdSDs.push('Annual Renewal')
     }
     if (!isOneTime && !sdTypes.has('CMRA Mailing Address') && isTDAddress(acct.physical_address)) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'CMRA Mailing Address',
         service_name: `CMRA -- ${acct.company_name}`,
@@ -368,22 +373,20 @@ export async function POST(request: NextRequest) {
     }
 
     // ── SET ACCOUNT FLAGS ──
-    await supabaseAdmin.from('accounts').update({
-      portal_account: true,
-      portal_tier: 'active',
-      portal_created_date: new Date().toISOString().split('T')[0],
-      notes: (acct.notes || '') + `\n${new Date().toISOString().split('T')[0]}: Portal transition (CRM button). [PORTAL_TRANSITION]`,
-    }).eq('id', acct.id)
+    await updateAccount({
+      id: acct.id,
+      patch: {
+        portal_account: true,
+        portal_tier: 'active',
+        portal_created_date: new Date().toISOString().split('T')[0],
+        notes: (acct.notes || '') + `\n${new Date().toISOString().split('T')[0]}: Portal transition (CRM button). [PORTAL_TRANSITION]`,
+      },
+      actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
+      summary: `Portal transition (CRM): ${acct.company_name}`,
+    })
 
     acctLines.push('portal_account = true')
     reportLines.push(...acctLines, '')
-
-    logAction({
-      actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
-      action_type: 'update', table_name: 'accounts',
-      record_id: acct.id, account_id: acct.id,
-      summary: `Portal transition (CRM): ${acct.company_name}`,
-    })
   }
 
   // ── 4. Create or repair auth user (once) ──
@@ -437,6 +440,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 5. Update contact ──
+  // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
   await supabaseAdmin.from('contacts').update({ portal_tier: 'active' }).eq('id', contact.id)
 
   const processedCount = activeAccounts.filter(a => !a.portal_account).length

@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
+import { updateAccount } from "@/lib/operations/account"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
 import { gmailPost } from "@/lib/gmail"
@@ -284,6 +285,7 @@ export function registerPortalTools(server: McpServer) {
     const createdSDs: string[] = []
 
     if (account.formation_date && !existingSDTypes.has("Company Formation")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "Company Formation", pipeline: "Company Formation",
         service_name: `Company Formation -- ${account.company_name}`,
@@ -295,6 +297,7 @@ export function registerPortalTools(server: McpServer) {
     }
 
     if (account.ein_number && !existingSDTypes.has("EIN")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "EIN", pipeline: "EIN",
         service_name: `EIN -- ${account.company_name}`,
@@ -306,6 +309,7 @@ export function registerPortalTools(server: McpServer) {
     }
 
     if (!isOneTime && !existingSDTypes.has("Annual Renewal")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "Annual Renewal",
         service_name: `Annual Renewal -- ${account.company_name}`,
@@ -316,6 +320,7 @@ export function registerPortalTools(server: McpServer) {
     }
 
     if (!isOneTime && !existingSDTypes.has("CMRA Mailing Address")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "CMRA Mailing Address",
         service_name: `CMRA -- ${account.company_name}`,
@@ -333,6 +338,7 @@ export function registerPortalTools(server: McpServer) {
       const hasTaxRecord = !!existingTR
       const trStage = hasTaxRecord ? "Data Received" : "1st Installment Paid"
 
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "Tax Return", pipeline: "Tax Return",
         service_name: `Tax Return -- ${account.company_name}`,
@@ -350,6 +356,7 @@ export function registerPortalTools(server: McpServer) {
     }
 
     if (contact.itin_number && !existingSDTypes.has("ITIN")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "ITIN",
         service_name: `ITIN -- ${account.company_name}`,
@@ -361,6 +368,7 @@ export function registerPortalTools(server: McpServer) {
 
     // State RA Renewal SD (Client accounts only)
     if (!isOneTime && !existingSDTypes.has("State RA Renewal")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "State RA Renewal", pipeline: null,
         service_name: `State RA Renewal -- ${account.company_name}`,
@@ -373,6 +381,7 @@ export function registerPortalTools(server: McpServer) {
 
     // State Annual Report SD (Client accounts only)
     if (!isOneTime && !existingSDTypes.has("State Annual Report")) {
+      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "State Annual Report", pipeline: null,
         service_name: `State Annual Report -- ${account.company_name}`,
@@ -433,16 +442,16 @@ export function registerPortalTools(server: McpServer) {
       flags.push(`FLAG: Old TD address (${account.physical_address}) -- will need Form 8822-B to change to Ulmerton (do later)`)
     }
 
-    // UPDATE ACCOUNT FLAGS
-    await supabaseAdmin.from("accounts").update({
-      portal_account: true,
-      portal_tier: "active",
-      portal_created_date: new Date().toISOString().split("T")[0],
-      notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed. [PORTAL_TRANSITION_SETUP]`,
-    }).eq("id", account.id)
-
-    logAction({
-      action_type: "update", table_name: "accounts", record_id: account.id, account_id: account.id,
+    // UPDATE ACCOUNT FLAGS — portal tier + portal_account + dated setup note
+    await updateAccount({
+      id: account.id,
+      patch: {
+        portal_account: true,
+        portal_tier: "active",
+        portal_created_date: new Date().toISOString().split("T")[0],
+        notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed. [PORTAL_TRANSITION_SETUP]`,
+      },
+      actor: "claude.ai",
       summary: `Legacy portal onboard: ${account.company_name} -- ${visibleDocs.length} docs, ${createdSDs.length} SDs, OA: ${oaStatus}, Lease: ${leaseStatus}, MSA: ${msaStatus}`,
     })
 
@@ -536,6 +545,7 @@ export function registerPortalTools(server: McpServer) {
           {
             name: "update_contact_email_tracking",
             fn: async () => {
+              // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
               await supabaseAdmin.from("contacts").update({
                 portal_email_sent_at: new Date().toISOString().split("T")[0],
                 portal_email_template: lang === "it" ? "it-branded-v2" : "en-branded-v2",
@@ -692,6 +702,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
         }
 
         // Update contact tier
+        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
         await supabaseAdmin.from("contacts").update({
           portal_tier: "active",
         }).eq("id", contact.id)
@@ -925,6 +936,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
               })
             }
 
+            // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
             await supabaseAdmin.from("contacts").update({ portal_tier: "active" }).eq("id", contact.id)
 
             // Process each active account
@@ -1093,10 +1105,16 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
             if (existingSds?.length || ss4s?.length) portalTier = "active"
           }
 
-          await supabaseAdmin.from("accounts").update({
-            portal_account: true, portal_tier: portalTier,
-            portal_created_date: new Date().toISOString().split("T")[0],
-          }).eq("id", account_id)
+          await updateAccount({
+            id: account_id,
+            patch: {
+              portal_account: true,
+              portal_tier: portalTier,
+              portal_created_date: new Date().toISOString().split("T")[0],
+            },
+            actor: "claude.ai",
+            summary: `Portal user created (tier=${portalTier})`,
+          })
         }
 
         if (resolvedContactId) {
@@ -1110,6 +1128,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
             portalTier = "active"
           }
 
+          // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
           await supabaseAdmin.from("contacts").update(contactUpdates).eq("id", resolvedContactId)
 
           // Generate referral code for partners
@@ -1117,6 +1136,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
           if (portalRole === "partner") {
             const { generateReferralCode } = await import("@/lib/referral-utils")
             referralCode = await generateReferralCode(userName, supabaseAdmin)
+            // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
             await supabaseAdmin.from("contacts").update({ referral_code: referralCode }).eq("id", resolvedContactId)
           }
         }
@@ -1304,6 +1324,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
                 whopUrl = plan.purchase_url || `https://whop.com/checkout/${plan.id}`
 
                 // Store on payments record (not client_invoices)
+                // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
                 await supabaseAdmin
                   .from("payments")
                   .update({ whop_payment_id: plan.id })
