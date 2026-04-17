@@ -2056,6 +2056,37 @@ function PortalTab({
     }
   }
 
+  const handleReconcileTier = async () => {
+    const ok = confirm(
+      'Reconcile Portal Tier?\n\n' +
+      'Forces this contact\'s tier, all linked accounts, and the portal login to use the same value. ' +
+      'Source of truth is the contact\'s current tier. ' +
+      'Safe to run any time — no-op if everything is already in sync.',
+    )
+    if (!ok) return
+    setLoading('reconcile_tier')
+    try {
+      const res = await fetch('/api/crm/admin-actions/reconcile-portal-tier', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contact.id, reason: 'Reconcile button from Contact → Portal tab' }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        toast.success(data.message)
+        if (data.changed?.contact || data.changed?.accounts?.length > 0 || data.changed?.auth_user) {
+          setTimeout(() => window.location.reload(), 1200)
+        }
+      } else {
+        toast.error(data.error ?? 'Reconcile failed')
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
   return (
     <div className="max-w-lg space-y-6">
       {/* Portal Status */}
@@ -2161,6 +2192,20 @@ function PortalTab({
               </button>
             </div>
           )}
+
+          {/* Reconcile Portal Tier — P3.4 #2. Visible regardless of portalExists
+              because tier drift (contact vs linked accounts vs auth user) can
+              exist whenever the contact has a tier, with or without an auth
+              user. reconcileTier handles the "no auth user" case gracefully. */}
+          <button
+            onClick={handleReconcileTier}
+            disabled={loading === 'reconcile_tier' || !contact.portal_tier}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-medium hover:bg-indigo-100 disabled:opacity-50 transition-colors mt-3"
+            title="Force contact, linked accounts, and portal login to use the same tier"
+          >
+            {loading === 'reconcile_tier' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Reconcile Portal Tier
+          </button>
         </div>
     </div>
   )
