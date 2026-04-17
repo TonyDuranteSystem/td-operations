@@ -14,114 +14,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
-import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { publishOffer } from "@/lib/offers/publish"
-
-// ─── JSONB Validation Helpers ───────────────────────────────
-
-function validateIssues(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (!item.title || !item.description) {
-      return `issues[${i}] must have {title, description}`
-    }
-  }
-  return null
-}
-
-function validateStrategy(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (item.step_number == null || !item.title || !item.description) {
-      return `strategy[${i}] must have {step_number, title, description}`
-    }
-  }
-  return null
-}
-
-function validateServices(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (!item.name || !item.price) {
-      return `services[${i}] must have {name, price} (description, price_label, includes, recommended optional)`
-    }
-  }
-  return null
-}
-
-function validateCostSummary(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (!item.label) {
-      return `cost_summary[${i}] must have {label} (items, total, total_label, rate optional)`
-    }
-  }
-  return null
-}
-
-function validateRecurringCosts(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (!item.label || !item.price) {
-      return `recurring_costs[${i}] must have {label, price}`
-    }
-  }
-  return null
-}
-
-function validateFutureDevelopments(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (!item.text) {
-      return `future_developments[${i}] must have {text}`
-    }
-  }
-  return null
-}
-
-function validateNextSteps(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (item.step_number == null || !item.title || !item.description) {
-      return `next_steps[${i}] must have {step_number, title, description}`
-    }
-  }
-  return null
-}
-
-function validateImmediateActions(items: unknown[]): string | null {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i] as Record<string, unknown>
-    if (!item.title) {
-      return `immediate_actions[${i}] must have {title} (text or description optional)`
-    }
-  }
-  return null
-}
-
-/** Validate all JSONB fields, return first error or null */
-function validateOfferJsonb(params: Record<string, unknown>): string | null {
-  const validators: [string, (items: unknown[]) => string | null][] = [
-    ["issues", validateIssues],
-    ["strategy", validateStrategy],
-    ["services", validateServices],
-    ["additional_services", validateServices],
-    ["cost_summary", validateCostSummary],
-    ["recurring_costs", validateRecurringCosts],
-    ["future_developments", validateFutureDevelopments],
-    ["next_steps", validateNextSteps],
-    ["immediate_actions", validateImmediateActions],
-  ]
-
-  for (const [field, validator] of validators) {
-    const value = params[field]
-    if (value && Array.isArray(value) && value.length > 0) {
-      const error = validator(value)
-      if (error) return error
-    }
-  }
-  return null
-}
+import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
 
@@ -519,166 +413,75 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
       bundled_pipelines: z.array(z.string()).optional().describe("Pipeline types to create on activation. Each entry becomes a separate service_delivery. Values: 'Company Formation', 'ITIN', 'Tax Return', 'EIN', 'Company Closure', 'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address'. Example: ['Company Formation', 'ITIN'] for a formation + ITIN bundle."),
     },
     async (params) => {
-      try {
-        // Validate JSONB fields
-        const validationError = validateOfferJsonb(params as unknown as Record<string, unknown>)
-        if (validationError) {
-          return { content: [{ type: "text" as const, text: `❌ Validation error: ${validationError}` }] }
-        }
+      const result = await createOffer({
+        client_name: params.client_name,
+        client_email: params.client_email,
+        language: params.language,
+        lead_id: params.lead_id,
+        account_id: params.account_id,
+        deal_id: params.deal_id,
+        token: params.token,
+        offer_date: params.offer_date,
+        contract_type: params.contract_type as OfferContractType | undefined,
+        payment_type: params.payment_type as OfferPaymentType,
+        payment_gateway: params.payment_gateway as OfferPaymentGateway | undefined,
+        bank_preference: params.bank_preference,
+        services: params.services,
+        cost_summary: params.cost_summary,
+        recurring_costs: params.recurring_costs,
+        additional_services: params.additional_services,
+        issues: params.issues,
+        immediate_actions: params.immediate_actions,
+        strategy: params.strategy,
+        next_steps: params.next_steps,
+        future_developments: params.future_developments,
+        intro_en: params.intro_en,
+        intro_it: params.intro_it,
+        bundled_pipelines: params.bundled_pipelines,
+        payment_links: params.payment_links,
+        bank_details: params.bank_details,
+        effective_date: params.effective_date,
+        expires_at: params.expires_at,
+        referrer_name: params.referrer_name,
+        referrer_email: params.referrer_email,
+        referrer_type: params.referrer_type,
+        referrer_account_id: params.referrer_account_id,
+        referrer_commission_type: params.referrer_commission_type,
+        referrer_commission_pct: params.referrer_commission_pct,
+        referrer_agreed_price: params.referrer_agreed_price,
+        referrer_notes: params.referrer_notes,
+        source: "mcp-claude",
+      })
 
-        // ─── Duplicate-offer guard (mirrors CRM create-offer/route.ts:75-83) ───
-        if (params.lead_id) {
-          const { data: existingByLead } = await supabaseAdmin
-            .from("offers")
-            .select("token, status")
-            .eq("lead_id", params.lead_id)
-            .not("status", "in", '("expired","completed")')
-            .limit(1)
-          if (existingByLead?.length) {
-            return { content: [{ type: "text" as const, text: `❌ Active offer already exists for this lead: ${existingByLead[0].token} (status: ${existingByLead[0].status}). Use offer_update to modify it, or set its status to 'expired' first.` }] }
-          }
-        }
-        if (params.account_id) {
-          const { data: existingByAccount } = await supabaseAdmin
-            .from("offers")
-            .select("token, status")
-            .eq("account_id", params.account_id)
-            .not("status", "in", '("expired","completed")')
-            .limit(1)
-          if (existingByAccount?.length) {
-            return { content: [{ type: "text" as const, text: `❌ Active offer already exists for this account: ${existingByAccount[0].token} (status: ${existingByAccount[0].status}). Use offer_update to modify it, or set its status to 'expired' first.` }] }
-          }
-        }
-
-        // Auto-lookup referrer from lead if lead_id provided and no referrer_name set
-        let refName = params.referrer_name || null
-        const refEmail = params.referrer_email || null
-        let refType = params.referrer_type || null
-        let refAccountId = params.referrer_account_id || null
-        let refCommissionType = params.referrer_commission_type || null
-        let refCommissionPct = params.referrer_commission_pct ?? null
-        const refAgreedPrice = params.referrer_agreed_price ?? null
-        const refNotes = params.referrer_notes || null
-        let referralAutoFilled = false
-
-        if (params.lead_id && !params.referrer_name) {
-          const { data: lead } = await supabaseAdmin
-            .from("leads")
-            .select("referrer_name, referrer_partner_id, source")
-            .eq("id", params.lead_id)
-            .maybeSingle()
-
-          if (lead?.referrer_name) {
-            refName = lead.referrer_name
-            referralAutoFilled = true
-            if (lead.referrer_partner_id) {
-              refType = "partner"
-              refAccountId = lead.referrer_partner_id
-            } else {
-              refType = "client"
-              refCommissionType = "credit_note"
-              refCommissionPct = 10
-            }
-          }
-        }
-
-        const { data, error } = await supabaseAdmin
-          .from("offers")
-          .insert({
-            token: params.token,
-            client_name: params.client_name,
-            client_email: params.client_email,
-            language: params.language,
-            offer_date: params.offer_date || new Date().toISOString().split("T")[0],
-            status: "draft",
-            payment_type: params.payment_type,
-            services: params.services,
-            cost_summary: params.cost_summary,
-            recurring_costs: params.recurring_costs,
-            additional_services: params.additional_services,
-            issues: params.issues,
-            immediate_actions: params.immediate_actions,
-            strategy: params.strategy,
-            next_steps: params.next_steps,
-            future_developments: params.future_developments,
-            intro_en: params.intro_en,
-            intro_it: params.intro_it,
-            payment_links: params.payment_links,
-            bank_details: params.bank_details || (() => {
-              // Auto-select bank based on bank_preference or currency
-              const costArr = Array.isArray(params.cost_summary) ? params.cost_summary : []
-              const firstTotal = (costArr[0] as Record<string, unknown>)?.total as string || ""
-              const servicesStr = JSON.stringify(params.services || [])
-              const isEUR = firstTotal.includes("\u20ac") || firstTotal.toUpperCase().includes("EUR")
-                || servicesStr.includes("\u20ac") || servicesStr.toUpperCase().includes("EUR")
-
-              return getBankDetailsByPreference(
-                (params.bank_preference || "auto") as BankPreference,
-                isEUR ? "EUR" : "USD"
-              )
-            })(),
-            effective_date: params.effective_date,
-            expires_at: params.expires_at,
-            contract_type: params.contract_type || "formation",
-            bundled_pipelines: params.bundled_pipelines || [],
-            lead_id: params.lead_id,
-            account_id: params.account_id,
-            deal_id: params.deal_id,
-            referrer_name: refName,
-            referrer_email: refEmail,
-            referrer_type: refType,
-            referrer_account_id: refAccountId,
-            referrer_commission_type: refCommissionType,
-            referrer_commission_pct: refCommissionPct,
-            referrer_agreed_price: refAgreedPrice,
-            referrer_notes: refNotes,
-            view_count: 0,
-          })
-          .select("token, access_code, status, client_name, language")
-          .single()
-
-        if (error) throw error
-
-        const accessCode = data.access_code || ""
-
-        // Stripe/Whop checkout is now DEFERRED — created at sign time via /api/offers/create-checkout
-        // This ensures the amount matches the client's selected optional services
-        const autoCheckoutLine = params.payment_type === "checkout"
-          ? "\n💳 Stripe checkout will be created at sign time (deferred — amount adjusts to selected services)"
-          : ""
-
-        logAction({
-          action_type: "create",
-          table_name: "offers",
-          record_id: params.token,
-          summary: `Created offer: ${params.client_name} (${params.token})${refName ? ` — referral: ${refName}` : ""}`,
-          details: { language: params.language, payment_type: params.payment_type, lead_id: params.lead_id, account_id: params.account_id, referrer: refName },
-        })
-
-        // If lead_id provided, update lead's offer status
-        if (params.lead_id) {
-          const offerUrl = `${APP_BASE_URL}/offer/${params.token}/${accessCode}`
-          await supabaseAdmin
-            .from("leads")
-            .update({ offer_link: offerUrl, offer_status: "Draft" })
-            .eq("id", params.lead_id)
-        }
-
-        const referralLine = referralAutoFilled
-          ? `\n📎 Referral auto-filled from lead: ${refName} (${refType}, ${refCommissionType || "no commission type"}${refCommissionPct ? ` ${refCommissionPct}%` : ""})`
-          : ""
-
+      if (result.outcome === "duplicate_blocked" && result.duplicate) {
         return {
           content: [{
             type: "text" as const,
-            text: `✅ Offer created as DRAFT: ${params.token}\nURL: ${APP_BASE_URL}/offer/${params.token}/${accessCode}${referralLine}${autoCheckoutLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
+            text: `❌ Active offer already exists: ${result.duplicate.token} (status: ${result.duplicate.status}). Use offer_update to modify it, or set its status to 'expired' first.`,
           }],
         }
-      } catch (err: unknown) {
-        const msg = err instanceof Error
-          ? err.message
-          : (typeof err === "object" && err !== null ? JSON.stringify(err) : String(err))
-        return { content: [{ type: "text" as const, text: `❌ offer_create error: ${msg}` }] }
+      }
+      if (!result.success) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `❌ ${result.outcome === "validation_error" ? "Validation error" : "offer_create error"}: ${result.error || "unknown"}`,
+          }],
+        }
+      }
+
+      const autoCheckoutLine = params.payment_type === "checkout"
+        ? "\n💳 Stripe checkout will be created at sign time (deferred — amount adjusts to selected services)"
+        : ""
+      const referralLine = result.referrer_auto_filled
+        ? "\n📎 Referral auto-filled from lead"
+        : ""
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: `✅ Offer created as DRAFT: ${result.token}\nURL: ${result.offer_url}${referralLine}${autoCheckoutLine}\n\nReview with offer_get, then use offer_send to approve and send.`,
+        }],
       }
     }
   )
