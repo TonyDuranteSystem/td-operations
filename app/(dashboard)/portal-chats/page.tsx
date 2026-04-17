@@ -731,10 +731,20 @@ export default function PortalChatsPage() {
       if (!res.ok) throw new Error('Failed to send')
       return res.json()
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       setReplyText('')
       setReplyToMsg(null)
       setPendingAdminFile(null)
+      const readBody = selectedAccountId
+        ? { account_id: selectedAccountId }
+        : { contact_id: selectedContactId }
+      try {
+        await fetch('/api/portal/chat/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(readBody),
+        })
+      } catch { /* non-fatal */ }
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
