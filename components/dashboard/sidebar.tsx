@@ -34,6 +34,7 @@ import {
   Package,
   HeartPulse,
   PhoneIncoming,
+  Activity,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -100,6 +101,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
   { id: 'client-health', name: 'Client Health', href: '/client-health', icon: HeartPulse, tooltip: 'Stuck activations, orphan records, wrong account types, and data integrity issues.' },
   { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true, tooltip: 'Developer utilities — database queries, system status, and debugging tools.' },
+  { id: 'system-health', name: 'System Health', href: '/system-health', icon: Activity, adminOnly: true, tooltip: 'Live system visibility — crons, audit findings, deploys, work locks, stuck clients.' },
 ]
 
 function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
