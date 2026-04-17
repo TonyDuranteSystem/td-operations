@@ -21,7 +21,7 @@ export default async function PortalChatPage() {
   const locale = getLocale(user)
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto h-[calc(100dvh-3.5rem)] lg:h-[calc(100dvh-6rem)] flex flex-col">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto h-[calc(100dvh-3.5rem)] lg:h-[calc(100dvh-6rem)] flex flex-col overflow-hidden">
       <div className="mb-3 sm:mb-4">
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('chat.title', locale)}</h1>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('chat.team', locale)}</p>

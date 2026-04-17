@@ -223,7 +223,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
 
   return (
     <div
-      className="flex-1 flex flex-col bg-white rounded-xl border shadow-sm overflow-hidden relative"
+      className="flex-1 min-h-0 flex flex-col bg-white rounded-xl border shadow-sm overflow-hidden relative"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -236,7 +236,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
         </div>
       )}
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-1">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
