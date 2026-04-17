@@ -104,6 +104,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
   { id: 'client-health', name: 'Client Health', href: '/client-health', icon: HeartPulse, tooltip: 'Stuck activations, orphan records, wrong account types, and data integrity issues.' },
   { id: 'exceptions', name: 'Exceptions', href: '/exceptions', icon: AlertTriangle, adminOnly: true, tooltip: 'What is broken right now — partial activations, audit findings, failed jobs and emails, webhook events awaiting review. Each row has a retry action.' },
+  { id: 'config', name: 'Config', href: '/config', icon: Settings, adminOnly: true, tooltip: 'Edit SOPs, pipeline stages, and dev tasks. Replaces raw SQL editing with a guarded CRM surface logged to action_log.' },
   { id: 'dev-tools', name: 'Dev Tools', href: '/dev-tools', icon: Wrench, adminOnly: true, tooltip: 'Developer utilities — database queries, system status, and debugging tools.' },
   { id: 'system-health', name: 'System Health', href: '/system-health', icon: Activity, adminOnly: true, tooltip: 'Live system visibility — crons, audit findings, deploys, work locks, stuck clients.' },
 ]
