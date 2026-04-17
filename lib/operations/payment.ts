@@ -20,8 +20,11 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite } from "@/lib/db"
 import {
   createTDInvoice,
+  syncTDInvoiceStatus,
+  reconcileTDInvoiceMirror,
   type TDInvoiceInput,
   type TDInvoiceResult,
+  type ReconcileTDMirrorResult,
 } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import {
@@ -143,6 +146,19 @@ export async function confirmPayment(
       supabaseAdmin.from("payments").update(updates).eq("id", payment.id),
       "payments.update",
     )
+
+    // Mirror the status transition to client_expenses (task 918fe55e —
+    // prior behavior silently left client_expenses on 'Overdue' when a
+    // wire/ad-hoc payment was confirmed via this path, causing 6
+    // client-visible invoices to stay "overdue" in the portal after
+    // payment. Backfilling + calling sync here so new confirmations
+    // don't recreate the drift.
+    await syncTDInvoiceStatus(
+      payment.id,
+      "Paid",
+      paid_date,
+      params.amount_paid,
+    )
   }
 
   let installment_handler: ConfirmPaymentResult["installment_handler"] | undefined
@@ -183,6 +199,20 @@ export async function confirmPayment(
     outcome: "paid",
     installment_handler,
   }
+}
+
+// ─── reconcileInvoiceMirror (task 918fe55e) ───────────
+
+/**
+ * Force the client-visible `client_expenses` row to match the current
+ * `payments` row for a given payment. Thin re-export over
+ * `reconcileTDInvoiceMirror` so lib/operations/ stays the single
+ * import surface for payment-related writes.
+ */
+export async function reconcileInvoiceMirror(
+  paymentId: string,
+): Promise<ReconcileTDMirrorResult> {
+  return reconcileTDInvoiceMirror(paymentId)
 }
 
 // ─── onInstallmentPaid ─────────────────────────────────

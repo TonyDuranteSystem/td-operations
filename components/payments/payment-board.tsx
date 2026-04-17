@@ -16,6 +16,7 @@ import {
   Send,
   Download,
   Bell,
+  RefreshCw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO, format } from 'date-fns'
@@ -204,6 +205,25 @@ function InvoiceActions({ payment }: { payment: PaymentItem }) {
     window.open(`/api/invoices/${payment.id}/pdf`, '_blank')
   }
 
+  const handleSyncMirror = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    startTransition(async () => {
+      try {
+        const res = await fetch('/api/crm/admin-actions/reconcile-invoice-mirror', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payment_id: payment.id, reason: 'Sync Mirror button from invoice row' }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error ?? 'Sync failed')
+        toast.success(data.message)
+        if (data.changed) window.location.reload()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Sync failed')
+      }
+    })
+  }
+
   return (
     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
       <button onClick={handleDownload} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600" title="Download PDF">
@@ -219,6 +239,14 @@ function InvoiceActions({ payment }: { payment: PaymentItem }) {
           {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
         </button>
       )}
+      <button
+        onClick={handleSyncMirror}
+        disabled={isPending}
+        className="p-1 rounded hover:bg-indigo-50 text-zinc-400 hover:text-indigo-700 disabled:opacity-40"
+        title="Sync client-portal mirror — force client_expenses to match the current payment state (task 918fe55e)"
+      >
+        {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+      </button>
     </div>
   )
 }

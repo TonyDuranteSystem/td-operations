@@ -101,6 +101,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
 
   // 3. Create payments record (PRIMARY — CRM + QB source of truth)
   const payment = await dbWrite(
+    // eslint-disable-next-line no-restricted-syntax -- createTDInvoice IS the single-entry helper for new TD invoices; lives in lib/portal/ rather than lib/operations/ for historical reasons. Future move tracked by dev_task 98484283.
     supabaseAdmin
       .from('payments')
       .insert({
@@ -271,4 +272,80 @@ export async function syncTDInvoiceStatus(
       .eq('td_payment_id', paymentId),
     'client_expenses.update'
   )
+}
+
+// ─── Reconcile TD Invoice Mirror (task 918fe55e) ─────
+
+export interface ReconcileTDMirrorResult {
+  success: boolean
+  payment_id: string
+  changed: boolean
+  before?: { ce_status: string | null; ce_paid_date: string | null }
+  after?: { ce_status: string | null; ce_paid_date: string | null }
+  error?: string
+}
+
+/**
+ * Force the `client_expenses` mirror row to match the current `payments`
+ * row for a given payment. Source of truth is `payments`. Used by:
+ *   - the CRM "Sync Mirror" admin button (manual repair for one invoice)
+ *   - the one-time backfill for the 6 Pattern A stuck invoices
+ *   - future reconciliation cron (not yet built)
+ *
+ * Idempotent — re-running is safe if state already matches.
+ */
+export async function reconcileTDInvoiceMirror(
+  paymentId: string,
+): Promise<ReconcileTDMirrorResult> {
+  const { data: payment, error: payErr } = await supabaseAdmin
+    .from('payments')
+    .select('id, status, paid_date, amount_paid')
+    .eq('id', paymentId)
+    .single()
+
+  if (payErr || !payment) {
+    return {
+      success: false,
+      payment_id: paymentId,
+      changed: false,
+      error: `Payment not found: ${payErr?.message || 'unknown'}`,
+    }
+  }
+
+  const { data: beforeExpense } = await supabaseAdmin
+    .from('client_expenses')
+    .select('status, paid_date')
+    .eq('td_payment_id', paymentId)
+    .maybeSingle()
+
+  await syncTDInvoiceStatus(
+    paymentId,
+    (payment.status as string | null) ?? 'Pending',
+    payment.paid_date as string | undefined,
+    payment.amount_paid as number | undefined,
+  )
+
+  const { data: afterExpense } = await supabaseAdmin
+    .from('client_expenses')
+    .select('status, paid_date')
+    .eq('td_payment_id', paymentId)
+    .maybeSingle()
+
+  const changed =
+    (beforeExpense?.status ?? null) !== (afterExpense?.status ?? null) ||
+    (beforeExpense?.paid_date ?? null) !== (afterExpense?.paid_date ?? null)
+
+  return {
+    success: true,
+    payment_id: paymentId,
+    changed,
+    before: {
+      ce_status: beforeExpense?.status ?? null,
+      ce_paid_date: beforeExpense?.paid_date ?? null,
+    },
+    after: {
+      ce_status: afterExpense?.status ?? null,
+      ce_paid_date: afterExpense?.paid_date ?? null,
+    },
+  }
 }

@@ -93,6 +93,14 @@ vi.mock("@/lib/portal/td-invoice", () => ({
       status: "Paid",
     }),
   ),
+  syncTDInvoiceStatus: vi.fn(() => Promise.resolve()),
+  reconcileTDInvoiceMirror: vi.fn(() =>
+    Promise.resolve({
+      success: true,
+      payment_id: "pay-1",
+      changed: false,
+    }),
+  ),
 }))
 
 const syncCalls: Array<{
