@@ -6,7 +6,7 @@ import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
   MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2, Search,
   RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet, Globe,
-  FolderPlus, Link2, ShieldCheck,
+  FolderPlus, Link2, ShieldCheck, Upload,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { cn } from '@/lib/utils'
@@ -548,12 +548,50 @@ function FolderSection({
 
 // ─── Main FileManager Component ───────────────────────────
 
+// Hard-coded base types for the account-side upload. These always appear in
+// the dropdown; any additional custom types ever uploaded (anywhere) are
+// merged in at runtime from /api/crm/admin-actions/document-types so that a
+// user typing a new name via the "Custom" option sees it permanently the
+// next time they upload.
+const ACCOUNT_UPLOAD_BASE_TYPES = [
+  'Articles of Organization',
+  'Operating Agreement',
+  'EIN Letter',
+  'Bank Statement',
+  'Tax Return',
+  'IRS Notice',
+  'Invoice',
+  'Contract',
+] as const
+
+const ACCOUNT_UPLOAD_CATEGORIES = ['Company', 'Tax', 'Banking', 'Correspondence'] as const
+
 export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
+  const [showUpload, setShowUpload] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadType, setUploadType] = useState<string>(ACCOUNT_UPLOAD_BASE_TYPES[0])
+  const [customType, setCustomType] = useState('')
+  const [uploadCategory, setUploadCategory] = useState<string>(ACCOUNT_UPLOAD_CATEGORIES[0])
+  const [displayName, setDisplayName] = useState('')
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
+
+  const { data: typesData } = useQuery<{ types: string[] }>({
+    queryKey: ['document-types'],
+    queryFn: () => fetch('/api/crm/admin-actions/document-types').then(r => r.json()),
+    staleTime: 60_000,
+    enabled: showUpload,
+  })
+
+  const availableTypes = (() => {
+    const base = new Set<string>(ACCOUNT_UPLOAD_BASE_TYPES)
+    for (const t of typesData?.types ?? []) base.add(t)
+    return Array.from(base).sort((a, b) => a.localeCompare(b))
+  })()
 
   const { data, isLoading, error } = useQuery<FilesResponse>({
     queryKey: ['account-files', accountId],
@@ -565,6 +603,82 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['account-files', accountId] })
   }, [queryClient, accountId])
+
+  const resetUploadForm = useCallback(() => {
+    setShowUpload(false)
+    setCustomType('')
+    setDisplayName('')
+    if (uploadInputRef.current) uploadInputRef.current.value = ''
+  }, [])
+
+  const handleFileUpload = useCallback(async (file: File) => {
+    const isCustom = uploadType === 'Custom'
+    const resolvedType = isCustom ? customType.trim() : uploadType
+    if (!resolvedType) {
+      toast.error('Enter a name for the custom document type')
+      return
+    }
+
+    setUploading(true)
+    try {
+      // 1. Signed URL for Supabase Storage (bypass Vercel 4.5MB body limit)
+      const storagePath = `crm-account-uploads/${accountId}/${Date.now()}_${file.name}`
+      const sigRes = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'onboarding-uploads',
+          path: storagePath,
+          contentType: file.type,
+        }),
+      })
+      const { signedUrl } = await sigRes.json()
+      if (!signedUrl) {
+        toast.error('Failed to get upload URL')
+        return
+      }
+
+      // 2. PUT file to Storage via signed URL
+      const putRes = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      })
+      if (!putRes.ok) {
+        toast.error('File upload failed')
+        return
+      }
+
+      // 3. Register in CRM (Drive upload + documents row)
+      const apiRes = await fetch('/api/crm/admin-actions/upload-account-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId,
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type,
+          document_type: resolvedType,
+          category: uploadCategory,
+          display_name: displayName.trim() || undefined,
+        }),
+      })
+      const data = await apiRes.json()
+      if (data.success) {
+        toast.success(data.detail)
+        if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
+        resetUploadForm()
+        queryClient.invalidateQueries({ queryKey: ['document-types'] })
+        handleRefresh()
+      } else {
+        toast.error(data.detail || 'Upload failed')
+      }
+    } catch {
+      toast.error('Upload error — check file size (max 50MB)')
+    } finally {
+      setUploading(false)
+    }
+  }, [accountId, uploadType, customType, uploadCategory, displayName, resetUploadForm, queryClient, handleRefresh])
 
   const handleDragEnd = useCallback(async (result: DropResult) => {
     const { draggableId, destination } = result
@@ -723,6 +837,12 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
         <p className="text-sm text-zinc-500">{totalFiles} files</p>
         <div className="flex items-center gap-1">
           <button
+            onClick={() => setShowUpload(v => !v)}
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
+          >
+            <Upload className="h-3.5 w-3.5" /> Upload Document
+          </button>
+          <button
             onClick={async () => {
               setFolderAction('validating')
               try {
@@ -754,6 +874,86 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
           </button>
         </div>
       </div>
+
+      {/* Upload panel */}
+      {showUpload && (
+        <div className="rounded-lg border bg-white p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+              Type
+              <select
+                value={uploadType}
+                onChange={e => setUploadType(e.target.value)}
+                className="min-w-[180px] text-sm border rounded-lg px-3 py-1.5 bg-white"
+                disabled={uploading}
+              >
+                {availableTypes.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+                <option value="Custom">Custom…</option>
+              </select>
+            </label>
+            {uploadType === 'Custom' && (
+              <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+                Custom type name
+                <input
+                  type="text"
+                  value={customType}
+                  onChange={e => setCustomType(e.target.value)}
+                  placeholder="e.g. DBA, Certificate of Incumbency"
+                  className="min-w-[220px] text-sm border rounded-lg px-3 py-1.5 bg-white"
+                  disabled={uploading}
+                />
+              </label>
+            )}
+            <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
+              Category
+              <select
+                value={uploadCategory}
+                onChange={e => setUploadCategory(e.target.value)}
+                className="min-w-[160px] text-sm border rounded-lg px-3 py-1.5 bg-white"
+                disabled={uploading}
+              >
+                {ACCOUNT_UPLOAD_CATEGORIES.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600 flex-1 min-w-[220px]">
+              Display name <span className="text-zinc-400 font-normal">(optional)</span>
+              <input
+                type="text"
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                placeholder="Leave blank to use the original filename"
+                className="text-sm border rounded-lg px-3 py-1.5 bg-white"
+                disabled={uploading}
+              />
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              ref={uploadInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+              onChange={e => {
+                const f = e.target.files?.[0]
+                if (f) handleFileUpload(f)
+              }}
+              disabled={uploading}
+              className="flex-1 text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
+            />
+            {uploading && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+            <button
+              onClick={resetUploadForm}
+              disabled={uploading}
+              className="text-xs text-zinc-500 hover:text-zinc-700 px-2 py-1 rounded hover:bg-zinc-100"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Folder tree with drag-drop */}
       <DragDropContext onDragEnd={handleDragEnd}>
