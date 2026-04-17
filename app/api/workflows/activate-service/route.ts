@@ -217,6 +217,7 @@ export async function POST(req: NextRequest) {
             steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact exists: ${contactId}` })
           } else {
             const { data: newContact, error: cErr } = await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
               supabase
                 .from("contacts")
                 .insert({
@@ -274,6 +275,7 @@ export async function POST(req: NextRequest) {
             contactId = existingContact[0].id
           } else {
             const { data: newContact } = await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
               supabase
                 .from("contacts")
                 .insert({
@@ -310,7 +312,11 @@ export async function POST(req: NextRequest) {
     let autoAccountId: string | null = offer?.account_id || null
     let isStandaloneBusinessTR = false
 
-    if (!autoAccountId && contactId && (contractType === "formation" || contractType === "onboarding")) {
+    // Onboarding excluded per SOP v7.2 Phase 0: "NO CRM Account exists yet.
+    // Only Lead (Converted) + Contact. The wizard creates the CRM Account
+    // automatically when the Contact submits." Account is created by
+    // lib/jobs/handlers/onboarding-setup.ts (createAccountFromWizard) instead.
+    if (!autoAccountId && contactId && contractType === "formation") {
       const accountResult = await ensureMinimalAccount({
         contactId,
         clientName: activation.client_name,
@@ -390,7 +396,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── STEP 1.6: Auto-upgrade account_type if offer has annual services ──
-    if (autoAccountId && (contractType === "formation" || contractType === "onboarding")) {
+    // Onboarding excluded per SOP v7.2 — no account exists at payment; wizard
+    // submit creates it with the correct account_type already derived from
+    // contract rates (Client if annual, One-Time if no installments).
+    if (autoAccountId && contractType === "formation") {
       const { data: currentAcct } = await supabase
         .from("accounts")
         .select("account_type")
@@ -399,6 +408,7 @@ export async function POST(req: NextRequest) {
 
       if (currentAcct && currentAcct.account_type !== "Client") {
         await dbWrite(
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/ per dev_task fda76fd3
           supabase
             .from("accounts")
             .update({ account_type: "Client", updated_at: new Date().toISOString() })
@@ -417,7 +427,20 @@ export async function POST(req: NextRequest) {
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
     const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
-    if (pipelines.length > 0) {
+    // Onboarding skips all SD creation at payment per SOP v7.2:
+    // - Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD
+    // - Phase 1 Auto-Chain step 11: wizard creates Tax Return SD when tax answer is "No"
+    // - Phase 3 steps 30-31: closing creates RA Renewal + Annual Report SDs
+    // Add-on services with a different contract_type (e.g., ITIN on an
+    // onboarding offer) render as separate standalone agreements — their
+    // activation path is separate, not via bundled_pipelines here.
+    if (contractType === "onboarding") {
+      steps.push({
+        step: "service_deliveries",
+        status: "skipped",
+        detail: "onboarding — SDs created by wizard submit / closing per SOP v7.2",
+      })
+    } else if (pipelines.length > 0) {
       // Get first pipeline stage for each type (including auto_tasks for task creation)
       const { data: allStages } = await supabase
         .from("pipeline_stages")
@@ -524,6 +547,7 @@ export async function POST(req: NextRequest) {
             const serviceName = `${pipeline} - ${activation.client_name}`
             for (const taskDef of stageData.auto_tasks) {
               await dbWriteSafe(
+                // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
                 supabase.from("tasks").insert({
                   task_title: `[${serviceName}] ${taskDef.title}`,
                   assigned_to: taskDef.assigned_to || "Luca",
@@ -618,6 +642,7 @@ export async function POST(req: NextRequest) {
         if (newIdx > currentIdx) {
           // 1. Update contacts.portal_tier
           await dbWrite(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task fda76fd3
             supabase
               .from("contacts")
               .update({ portal_tier: "onboarding" })
@@ -725,6 +750,7 @@ export async function POST(req: NextRequest) {
             .maybeSingle()
           if (linkedPay) {
             await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.update; extract to lib/operations/ per dev_task fda76fd3
               supabase
                 .from("payments")
                 .update({ account_id: autoAccountId, updated_at: new Date().toISOString() })
@@ -849,6 +875,7 @@ export async function POST(req: NextRequest) {
         } else {
           // Create minimal contact for the referrer
           const { data: newReferrer } = await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
             supabase
               .from("contacts")
               .insert({
@@ -919,6 +946,7 @@ export async function POST(req: NextRequest) {
           } else {
             // e. Create follow-up task
             await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
               supabase.from("tasks").insert({
                 task_title: `Process referral commission — ${offer.referrer_name} → ${activation.client_name} (${commissionAmount ? `${commissionAmount} ${commissionCurrency}` : "TBD"})`,
                 assigned_to: "Antonio",

@@ -201,3 +201,50 @@ describe("activate-service dedup — existing SD precedence", () => {
     expect(true).toBe(true)
   })
 })
+
+// ─── onboarding skip — SOP v7.2 compliance (Commit B, 2026-04-17) ─────
+
+describe("activate-service — onboarding contract_type skips all SD creation", () => {
+  it("route source narrows ensureMinimalAccount + account_type upgrade to formation only", async () => {
+    // SOP v7.2 Phase 0 rule: "NO CRM Account exists yet. Only Lead
+    // (Converted) + Contact. The wizard creates the CRM Account
+    // automatically when the Contact submits."
+    //
+    // Regression guard: if either gate is broadened back to include
+    // "onboarding", this test fires before the change reaches main.
+    const { readFileSync } = await import("node:fs")
+    const { resolve } = await import("node:path")
+    const source = readFileSync(
+      resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
+      "utf-8",
+    )
+    expect(source).not.toMatch(
+      /contractType === "formation" \|\| contractType === "onboarding"/,
+    )
+    expect(source).toMatch(/contractType === "formation"\)/)
+  })
+
+  it("route source skips SD-creation block when contractType === 'onboarding'", async () => {
+    // SOP v7.2 verbatim rows:
+    //   Formation vs Onboarding — "SD created": formation=At payment,
+    //   onboarding=By wizard submit.
+    //   Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD.
+    //   Phase 1 Auto-Chain step 11: wizard creates Tax Return SD when
+    //     the tax answer is "No".
+    //   Phase 3 steps 30-31: RA Renewal + Annual Report at closing.
+    // ITIN on an onboarding offer is an add-on with its own standalone
+    // contract (Multi-Contract Offers section), not auto-activated via
+    // bundled_pipelines at payment.
+    const { readFileSync } = await import("node:fs")
+    const { resolve } = await import("node:path")
+    const source = readFileSync(
+      resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
+      "utf-8",
+    )
+    // The SD block must check for onboarding BEFORE the pipelines.length
+    // branch, and emit a "skipped" step for observability.
+    const onboardingSkipPattern =
+      /if \(contractType === "onboarding"\)\s*\{[\s\S]{0,400}?step:\s*"service_deliveries",[\s\S]{0,100}?status:\s*"skipped"/
+    expect(source).toMatch(onboardingSkipPattern)
+  })
+})
