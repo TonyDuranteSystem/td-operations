@@ -159,6 +159,7 @@ export async function POST(req: NextRequest) {
           contactId = existingContact.id
           // Backfill name from lead if contact has no name (e.g., created by autoCreatePortalUser with email only)
           if (!existingContact.full_name && offer.client_name) {
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task 98484283
             await supabase
               .from("contacts")
               .update({ full_name: offer.client_name, updated_at: new Date().toISOString() })
@@ -177,6 +178,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (lead && lead.email) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task 98484283
           const { data: newContact, error: contactErr } = await supabase
             .from("contacts")
             .insert({
@@ -198,17 +200,22 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Mark lead as Converted (regardless of whether contact was found or created)
+      // Link lead → contact at sign time, but DO NOT flip leads.status to
+      // "Converted" yet. That flip is deferred to confirm-payment (admin) /
+      // the Whop/Stripe webhooks (card) so it only fires after payment is
+      // confirmed and the activation chain is triggered. dev_task d715e5e5:
+      // the premature flip here used to block the CRM "Confirm Payment"
+      // button with HTTP 409 because confirm-payment checked
+      // `lead.status === "Converted"` and refused before its real work.
       if (contactId && offer.lead_id) {
         await supabase
           .from("leads")
           .update({
             converted_to_contact_id: contactId,
-            status: "Converted",
             updated_at: new Date().toISOString(),
           })
           .eq("id", offer.lead_id)
-        console.warn(`[offer-signed] Lead ${offer.lead_id} marked Converted → contact ${contactId}`)
+        console.warn(`[offer-signed] Lead ${offer.lead_id} → contact ${contactId} (status unchanged; flips to Converted only after payment)`)
       }
     } catch (contactConvErr) {
       console.error("[offer-signed] Lead→Contact conversion failed:", contactConvErr instanceof Error ? contactConvErr.message : String(contactConvErr))

@@ -83,9 +83,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 })
     }
 
-    if (lead.status === "Converted") {
-      return NextResponse.json({ error: "Lead is already converted" }, { status: 409 })
-    }
+    // d715e5e5: no "already Converted" pre-gate. offer-signed no longer flips
+    // lead.status to "Converted" on sign, so the only authoritative "already
+    // done" signal is pending_activations.status === "activated", handled at
+    // step 3 below (line ~143).
 
     // 2. Get offer (may not exist for legacy leads)
     const { data: offer } = await supabaseAdmin
@@ -268,6 +269,7 @@ export async function POST(request: Request) {
       }
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.insert; extract to lib/operations/payment.ts per dev_task 98484283
     const { error: paymentErr } = await supabaseAdmin
       .from("payments")
       .insert({
