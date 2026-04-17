@@ -131,6 +131,9 @@ export type Database = {
           registered_agent_address: string | null
           registered_agent_provider: string | null
           services_bundle: string[] | null
+          setup_fee_amount: number | null
+          setup_fee_currency: Database["public"]["Enums"]["currency"] | null
+          setup_fee_paid_date: string | null
           state_of_formation: string | null
           status: Database["public"]["Enums"]["account_status"] | null
           updated_at: string | null
@@ -193,6 +196,9 @@ export type Database = {
           registered_agent_address?: string | null
           registered_agent_provider?: string | null
           services_bundle?: string[] | null
+          setup_fee_amount?: number | null
+          setup_fee_currency?: Database["public"]["Enums"]["currency"] | null
+          setup_fee_paid_date?: string | null
           state_of_formation?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
@@ -255,6 +261,9 @@ export type Database = {
           registered_agent_address?: string | null
           registered_agent_provider?: string | null
           services_bundle?: string[] | null
+          setup_fee_amount?: number | null
+          setup_fee_currency?: Database["public"]["Enums"]["currency"] | null
+          setup_fee_paid_date?: string | null
           state_of_formation?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
