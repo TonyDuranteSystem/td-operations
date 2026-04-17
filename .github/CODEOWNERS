@@ -1,0 +1,30 @@
+# P2.12 — CODEOWNERS (Decision D5 = α, GitHub branch protection).
+#
+# Plan §4 line 594: ".github/CODEOWNERS marking critical files as requiring
+# review. Paired with GitHub branch protection on main for those files
+# specifically."
+#
+# Any PR touching a listed path requires review from the listed owner(s)
+# before it can be merged into `main` — enforced by the branch protection
+# rule "Require review from Code Owners" (verified 2026-04-17 via
+# `gh api repos/TonyDuranteSystem/td-operations/branches/main/protection`).
+#
+# The file lists itself so future changes to the review policy also go
+# through review. Admin bypass is preserved on `main` so routine direct
+# push keeps working for single-operator sessions.
+#
+# Paths below are the "shared infrastructure" set from
+# CLAUDE.md lines 405-409 plus plan §9.4 line 944:
+#   - CLAUDE.md            — project rules
+#   - middleware.ts        — auth middleware
+#   - .husky/pre-push      — build / test / lint / schema-drift gate
+#   - scripts/git-auto-pull.sh — auto-pull + npm ci detection
+#   - .claude/settings.json — Claude Code hooks configuration
+# Plus self-protection of this file.
+
+/CLAUDE.md                @TonyDuranteSystem
+/middleware.ts            @TonyDuranteSystem
+/.husky/pre-push          @TonyDuranteSystem
+/scripts/git-auto-pull.sh @TonyDuranteSystem
+/.claude/settings.json    @TonyDuranteSystem
+/.github/CODEOWNERS       @TonyDuranteSystem
