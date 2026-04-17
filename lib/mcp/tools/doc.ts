@@ -870,15 +870,15 @@ export function registerDocTools(server: McpServer) {
 
         // 4. Update documents if not dry_run
         if (!dry_run && matches.length > 0) {
+          const { updateDocument } = await import("@/lib/operations/document")
           for (const m of matches) {
-            await supabaseAdmin
-              .from("documents")
-              .update({
-                account_id: m.accountId,
-                account_name: m.accountName,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", m.docId)
+            await updateDocument({
+              id: m.docId,
+              patch: { account_id: m.accountId, account_name: m.accountName },
+              actor: "claude.ai",
+              summary: `Orphan mapped to ${m.accountName}`,
+              details: { matched_account_id: m.accountId },
+            })
           }
 
           logAction({
@@ -1672,6 +1672,7 @@ export function registerDocTools(server: McpServer) {
           for (let i = 0; i < changes.length; i += 10) {
             const chunk = changes.slice(i, i + 10)
             for (const c of chunk) {
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               await supabaseAdmin
                 .from("accounts")
                 .update({ client_health: c.newHealth, updated_at: new Date().toISOString() })

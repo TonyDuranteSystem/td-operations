@@ -139,8 +139,25 @@ export function registerPortalTools(server: McpServer) {
       }
     }
 
-    if (allowedIds.length > 0) await supabaseAdmin.from("documents").update({ portal_visible: true }).in("id", allowedIds)
-    if (hiddenIds.length > 0) await supabaseAdmin.from("documents").update({ portal_visible: false }).in("id", hiddenIds)
+    const { updateDocumentsBulk } = await import("@/lib/operations/document")
+    if (allowedIds.length > 0) {
+      await updateDocumentsBulk({
+        ids: allowedIds,
+        patch: { portal_visible: true },
+        actor: "claude.ai",
+        summary: `Portal transition — ${allowedIds.length} docs set visible`,
+        account_id: account.id,
+      })
+    }
+    if (hiddenIds.length > 0) {
+      await updateDocumentsBulk({
+        ids: hiddenIds,
+        patch: { portal_visible: false },
+        actor: "claude.ai",
+        summary: `Portal transition — ${hiddenIds.length} docs hidden`,
+        account_id: account.id,
+      })
+    }
 
     const visibleDocs = allDocs.filter(d => allowedIds.includes(d.id))
     lines.push(`Documents: ${visibleDocs.length} visible, ${hiddenIds.length} hidden`)

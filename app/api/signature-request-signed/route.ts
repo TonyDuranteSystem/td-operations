@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
+import { updateDocument } from "@/lib/operations/document"
 
 export async function POST(req: NextRequest) {
   try {
@@ -90,10 +91,14 @@ export async function POST(req: NextRequest) {
               .eq("id", sigReq.id)
 
             // Make visible in portal
-            await supabaseAdmin
-              .from("documents")
-              .update({ portal_visible: true })
-              .eq("drive_file_id", driveFileId)
+            await updateDocument({
+              drive_file_id: driveFileId,
+              account_id: sigReq.account_id,
+              patch: { portal_visible: true },
+              actor: "system:signature-webhook",
+              summary: `Signed document made visible in portal: ${sigReq.document_name}`,
+              details: { signature_request_id: sigReq.id, document_name: sigReq.document_name },
+            })
 
             results.push("drive_upload: ok")
           }
@@ -132,6 +137,7 @@ export async function POST(req: NextRequest) {
 
     // 3. Create task
     try {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from("tasks").insert({
         task_title: `Document signed: ${sigReq.document_name} — ${account?.company_name || "Unknown"}`,
         assigned_to: "Luca",

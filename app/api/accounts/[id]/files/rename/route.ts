@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { renameFile } from '@/lib/google-drive'
+import { updateDocument } from '@/lib/operations/document'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -31,11 +31,14 @@ export async function POST(
     const result = await renameFile(fileId, newName.trim())
 
     // Update documents table if this file is tracked
-    await supabaseAdmin
-      .from('documents')
-      .update({ file_name: newName.trim() })
-      .eq('drive_file_id', fileId)
-      .eq('account_id', accountId)
+    await updateDocument({
+      drive_file_id: fileId,
+      account_id: accountId,
+      patch: { file_name: newName.trim() },
+      actor: `dashboard:${user.email ?? 'staff'}`,
+      summary: 'File renamed',
+      details: { newName: newName.trim() },
+    })
 
     return NextResponse.json({ success: true, file: result })
   } catch (err) {

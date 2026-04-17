@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { processFile } from '@/lib/mcp/tools/doc'
 import { createPortalNotification } from '@/lib/portal/notifications'
+import { updateDocument } from '@/lib/operations/document'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -60,10 +61,12 @@ export async function POST(
       return NextResponse.json({ error: 'Document record not found after processing' }, { status: 500 })
     }
 
-    await supabaseAdmin
-      .from('documents')
-      .update({ portal_visible: true })
-      .eq('id', doc.id)
+    await updateDocument({
+      id: doc.id,
+      patch: { portal_visible: true },
+      actor: `dashboard:${user.email ?? 'staff'}`,
+      summary: 'Portal visibility enabled (process-and-share)',
+    })
 
     // Step 3: Send portal notification
     await createPortalNotification({

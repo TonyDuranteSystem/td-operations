@@ -136,6 +136,7 @@ export async function createAccount(
   return safeAction(async () => {
     const supabase = createClient()
     const now = new Date().toISOString()
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { data, error } = await supabase
       .from('accounts')
       .insert({ ...parsed.data, created_at: now, updated_at: now })
@@ -191,21 +192,30 @@ export async function toggleDocumentPortalVisibility(
   visible: boolean
 ): Promise<ActionResult> {
   return safeAction(async () => {
-    // Use supabaseAdmin for both read and write — the documents table has no
-    // UPDATE RLS policy for staff users (only SELECT + service_role ALL).
+    // Read current doc for portal-notification context. Write goes through
+    // updateDocument() which owns the action_log entry (same contract as
+    // MCP sites) — so safeAction is called without its `audit` config to
+    // avoid a duplicate log row.
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { createClient } = await import('@/lib/supabase/server')
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    const actor = `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
+
     const { data: doc } = await supabaseAdmin
       .from('documents')
       .select('id, file_name, account_id, contact_id')
       .eq('id', documentId)
       .single()
 
-    const { error } = await supabaseAdmin
-      .from('documents')
-      .update({ portal_visible: visible })
-      .eq('id', documentId)
-
-    if (error) throw new Error(error.message)
+    const { updateDocument } = await import('@/lib/operations/document')
+    const result = await updateDocument({
+      id: documentId,
+      patch: { portal_visible: visible },
+      actor,
+      summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
+    })
+    if (!result.success) throw new Error(result.error || 'Failed to update document visibility')
 
     // Notify client when document is shared (not when hidden)
     if (visible && doc) {
@@ -232,9 +242,6 @@ export async function toggleDocumentPortalVisibility(
         })
       }
     }
-  }, {
-    action_type: 'update', table_name: 'documents', record_id: documentId,
-    summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
   })
 }
 
@@ -314,6 +321,7 @@ export async function createAndLinkContact(
   const lastName = parts.slice(1).join(' ') || ''
 
   // Create the contact
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data: contact, error: createErr } = await supabase
     .from('contacts')
     .insert({
@@ -480,6 +488,7 @@ export async function changeAccountStatus(
   // 3. Run cascades based on options
   if (options.cancelDeliveries) {
     await runCascade('cancel_deliveries', async () => {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin
         .from('service_deliveries')
         .update({ status: 'cancelled' })
@@ -504,6 +513,7 @@ export async function changeAccountStatus(
     await runCascade('create_ra_cancel_task', async () => {
       const dueDate = new Date()
       dueDate.setDate(dueDate.getDate() + 7)
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin.from('tasks').insert({
         account_id: accountId,
         task_title: `Cancel Harbor Compliance RA — ${account.company_name}`,
@@ -520,6 +530,7 @@ export async function changeAccountStatus(
 
   if (options.closeOpenTasks) {
     await runCascade('close_open_tasks', async () => {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin
         .from('tasks')
         .update({ status: 'Cancelled' })
@@ -531,6 +542,7 @@ export async function changeAccountStatus(
 
   if (options.voidPendingPayments) {
     await runCascade('void_pending_payments', async () => {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin
         .from('payments')
         .update({ status: 'Cancelled' })
@@ -542,6 +554,7 @@ export async function changeAccountStatus(
 
   if (options.revokePortalAccess) {
     await runCascade('revoke_portal_access', async () => {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin
         .from('accounts')
         .update({ portal_tier: 'inactive', portal_account: false })
@@ -552,6 +565,7 @@ export async function changeAccountStatus(
 
   if (options.suspendPortal) {
     await runCascade('suspend_portal', async () => {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin
         .from('accounts')
         .update({ portal_tier: 'suspended' })
@@ -572,6 +586,7 @@ export async function changeAccountStatus(
     await runCascade('request_closure_docs', async () => {
       const dueDate = new Date()
       dueDate.setDate(dueDate.getDate() + 3)
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin.from('tasks').insert({
         account_id: accountId,
         task_title: `Generate closure documents — ${account.company_name}`,
@@ -595,6 +610,7 @@ export async function changeAccountStatus(
         .eq('id', accountId)
         .single()
       if (current?.portal_tier === 'suspended') {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error } = await supabaseAdmin
           .from('accounts')
           .update({ portal_tier: 'active' })

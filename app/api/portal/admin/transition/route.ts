@@ -170,8 +170,25 @@ export async function POST(request: NextRequest) {
         hiddenIds.push(doc.id)
       }
     }
-    if (allowedIds.length > 0) await supabaseAdmin.from('documents').update({ portal_visible: true }).in('id', allowedIds)
-    if (hiddenIds.length > 0) await supabaseAdmin.from('documents').update({ portal_visible: false }).in('id', hiddenIds)
+    const { updateDocumentsBulk } = await import('@/lib/operations/document')
+    if (allowedIds.length > 0) {
+      await updateDocumentsBulk({
+        ids: allowedIds,
+        patch: { portal_visible: true },
+        actor: 'crm-admin:transition',
+        summary: `Portal transition — ${allowedIds.length} docs set visible`,
+        account_id: acct.id,
+      })
+    }
+    if (hiddenIds.length > 0) {
+      await updateDocumentsBulk({
+        ids: hiddenIds,
+        patch: { portal_visible: false },
+        actor: 'crm-admin:transition',
+        summary: `Portal transition — ${hiddenIds.length} docs hidden`,
+        account_id: acct.id,
+      })
+    }
     acctLines.push(`Docs: ${allowedIds.length} visible, ${hiddenIds.length} hidden`)
 
     // ── AUTO-CREATE OA, LEASE, MSA (Client accounts only) ──

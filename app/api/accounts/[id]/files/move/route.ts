@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { moveFile } from '@/lib/google-drive'
+import { updateDocument } from '@/lib/operations/document'
 import { NextRequest, NextResponse } from 'next/server'
 
 // Map folder names to document categories
@@ -47,11 +47,14 @@ export async function POST(
         const categoryNames: Record<number, string> = {
           1: 'Company', 2: 'Contacts', 3: 'Tax', 4: 'Banking', 5: 'Correspondence',
         }
-        await supabaseAdmin
-          .from('documents')
-          .update({ category: newCategory, category_name: categoryNames[newCategory] })
-          .eq('drive_file_id', fileId)
-          .eq('account_id', accountId)
+        await updateDocument({
+          drive_file_id: fileId,
+          account_id: accountId,
+          patch: { category: newCategory, category_name: categoryNames[newCategory] },
+          actor: `dashboard:${user.email ?? 'staff'}`,
+          summary: `File moved to ${targetFolderName}`,
+          details: { targetFolderName, newCategory },
+        })
       }
     }
 
