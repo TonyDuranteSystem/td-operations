@@ -334,8 +334,14 @@ export async function POST(req: NextRequest) {
       } else {
         steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
       }
-    } else if (!autoAccountId && contactId) {
-      // For other contract types: check if any pipeline is business-context
+    } else if (!autoAccountId && contactId && contractType !== "onboarding") {
+      // For other contract types (tax_return / itin / etc.): check if any
+      // pipeline is business-context. Onboarding is excluded here too per
+      // SOP v7.2 — its Client Onboarding pipeline is unknown to
+      // BUSINESS_SERVICE_TYPES/INDIVIDUAL_SERVICE_TYPES and would otherwise
+      // default-to-business via hasBusinessContextPipeline, creating a
+      // One-Time account at payment. Per SOP, the onboarding wizard submit
+      // creates the account (lib/jobs/handlers/onboarding-setup.ts:180).
       const offerPipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
       const offerServices = Array.isArray(offer?.services) ? offer.services as unknown as Record<string, unknown>[] : null
       const businessContextResult = hasBusinessContextPipeline(offerPipelines, offerServices, activation.offer_token)

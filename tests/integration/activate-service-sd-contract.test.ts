@@ -224,6 +224,26 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
     expect(source).toMatch(/contractType === "formation"\)/)
   })
 
+  it("route source also excludes onboarding from the fallback else-if that could create a One-Time account", async () => {
+    // Commit B1 (post-QA hotfix): the bare `else if (!autoAccountId && contactId)`
+    // fallback fires for onboarding because the Client Onboarding pipeline
+    // is unknown to BUSINESS_SERVICE_TYPES and hasBusinessContextPipeline
+    // defaults unknown pipelines to business — which triggers
+    // ensureMinimalAccount(isStandaloneBusiness:true), creating a One-Time
+    // account at payment. SOP v7.2 forbids ANY account creation at
+    // onboarding payment. This regression guard ensures the fallback
+    // explicitly excludes onboarding.
+    const { readFileSync } = await import("node:fs")
+    const { resolve } = await import("node:path")
+    const source = readFileSync(
+      resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
+      "utf-8",
+    )
+    expect(source).toMatch(
+      /else if \(!autoAccountId && contactId && contractType !== "onboarding"\)/,
+    )
+  })
+
   it("route source skips SD-creation block when contractType === 'onboarding'", async () => {
     // SOP v7.2 verbatim rows:
     //   Formation vs Onboarding — "SD created": formation=At payment,
