@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount } from '@/lib/portal/queries'
-import { supabaseAdmin } from '@/lib/supabase-admin'
+import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { LocaleProvider } from '@/components/portal/locale-provider'
@@ -88,30 +88,14 @@ export default async function PortalLayout({
       ])
     : [[] as string[], getContactOnlyNavVisibility(), contactId ? await getUnreadChatCount(null, contactId) : 0]
 
-  // Check if there are pending wizard-eligible service deliveries (Banking, ITIN, Tax, Formation, Closure)
-  const WIZARD_SERVICE_TYPES = ['Company Formation', 'Banking Fintech', 'Company Closure', 'ITIN', 'ITIN Renewal', 'Tax Return']
-  let hasWizardPending = false
-  if (selectedAccountId) {
-    const { data: wizardSds } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('service_type')
-      .eq('account_id', selectedAccountId)
-      .in('status', ['active'])
-      .in('service_type', WIZARD_SERVICE_TYPES)
-      .limit(1)
-    hasWizardPending = (wizardSds?.length ?? 0) > 0
-  } else if (contactId) {
-    // Contact-only fallback: check SDs by contact_id for individual-context services
-    const { data: wizardSds } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('service_type')
-      .eq('contact_id', contactId)
-      .is('account_id', null)
-      .in('status', ['active'])
-      .in('service_type', WIZARD_SERVICE_TYPES)
-      .limit(1)
-    hasWizardPending = (wizardSds?.length ?? 0) > 0
-  }
+  // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
+  // for the three branches (SD-by-account, SD-by-contact, tier-based
+  // onboarding fallback per SOP v7.2 Phase 0).
+  const hasWizardPending = await computeHasWizardPending({
+    contactId: contactId || null,
+    selectedAccountId,
+    portalTier,
+  })
 
   return (
     <Providers>
