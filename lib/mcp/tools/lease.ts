@@ -55,129 +55,44 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
     },
     async (params) => {
       try {
-        // ─── 1. FETCH ACCOUNT ───
-        const { data: account, error: accErr } = await supabaseAdmin
-          .from("accounts")
-          .select("id, company_name, ein_number, state_of_formation")
-          .eq("id", params.account_id)
-          .single()
-
-        if (accErr || !account) {
-          return { content: [{ type: "text" as const, text: `❌ Account not found: ${accErr?.message || "no data"}` }] }
-        }
-
-        // ─── 2. FETCH PRIMARY CONTACT ───
-        const { data: contactLinks } = await supabaseAdmin
-          .from("account_contacts")
-          .select("contact_id")
-          .eq("account_id", params.account_id)
-          .limit(1)
-
-        if (!contactLinks?.length) {
-          return { content: [{ type: "text" as const, text: `❌ No contacts linked to account "${account.company_name}". Link a contact first.` }] }
-        }
-
-        const { data: contact, error: contactErr } = await supabaseAdmin
-          .from("contacts")
-          .select("id, full_name, email, language")
-          .eq("id", contactLinks[0].contact_id)
-          .single()
-
-        if (contactErr || !contact) {
-          return { content: [{ type: "text" as const, text: `❌ Contact not found: ${contactErr?.message || "no data"}` }] }
-        }
-
-        // ─── 3. CHECK DUPLICATE ───
-        const year = params.contract_year ?? new Date().getFullYear()
-        const { data: existing } = await supabaseAdmin
-          .from("lease_agreements")
-          .select("id, token, status")
-          .eq("account_id", params.account_id)
-          .eq("contract_year", year)
-          .limit(1)
-
-        if (existing?.length) {
-          return { content: [{ type: "text" as const, text: `⚠️ Lease already exists for ${account.company_name} year ${year} (token: ${existing[0].token}, status: ${existing[0].status}). Use lease_get to view it.` }] }
-        }
-
-        // ─── 4. BUILD TOKEN ───
-        const companySlug = account.company_name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-        const token = `${companySlug}-${year}`
-
-        // ─── 5. BUILD DATES ───
-        const today = new Date().toISOString().slice(0, 10)
-        const effectiveDate = params.effective_date || today
-        const termStartDate = params.term_start_date || today
-        const termEndDate = params.term_end_date || `${year}-12-31`
-        const monthlyRent = params.monthly_rent ?? 100
-        const yearlyRent = params.yearly_rent ?? (monthlyRent * 12)
-
-        // ─── 6. AUTO-ASSIGN SUITE IF NOT PROVIDED ───
-        let suiteNumber = params.suite_number
-        if (!suiteNumber) {
-          const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
-            .select("suite_number").order("suite_number", { ascending: false }).limit(1)
-          suiteNumber = "3D-101"
-          if (lastLeases?.length) {
-            const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
-            if (!isNaN(lastNum)) suiteNumber = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
-          }
-        }
-
-        // ─── 7. INSERT ───
-        const { data: lease, error: insertErr } = await supabaseAdmin
-          .from("lease_agreements")
-          .insert({
-            token,
-            account_id: params.account_id,
-            contact_id: contact.id,
-            tenant_company: account.company_name,
-            tenant_ein: account.ein_number || null,
-            tenant_state: account.state_of_formation || null,
-            tenant_contact_name: contact.full_name,
-            tenant_email: contact.email || null,
-            premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-            suite_number: suiteNumber,
-            square_feet: params.square_feet ?? 120,
-            effective_date: effectiveDate,
-            term_start_date: termStartDate,
-            term_end_date: termEndDate,
-            term_months: params.term_months ?? 12,
-            contract_year: year,
-            monthly_rent: monthlyRent,
-            yearly_rent: yearlyRent,
-            security_deposit: params.security_deposit ?? 150,
-            language: params.language || (contact.language?.toLowerCase()?.startsWith('it') ? 'it' : 'en'),
-            status: "draft",
-          })
-          .select("id, token, access_code")
-          .single()
-
-        if (insertErr || !lease) {
-          return { content: [{ type: "text" as const, text: `❌ Insert failed: ${insertErr?.message || "no data"}` }] }
-        }
-
-        const leaseUrl = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
-
-        logAction({
-          action_type: "create",
-          table_name: "lease_agreements",
-          record_id: lease.id,
+        const { createLease } = await import("@/lib/operations/lease")
+        const result = await createLease({
           account_id: params.account_id,
-          summary: `Created lease agreement for ${account.company_name} (${year}), Suite ${suiteNumber}`,
-          details: { token: lease.token, suite_number: suiteNumber, year },
+          suite_number: params.suite_number,
+          contract_year: params.contract_year,
+          effective_date: params.effective_date,
+          term_start_date: params.term_start_date,
+          term_end_date: params.term_end_date,
+          term_months: params.term_months,
+          monthly_rent: params.monthly_rent,
+          yearly_rent: params.yearly_rent,
+          security_deposit: params.security_deposit,
+          square_feet: params.square_feet,
+          language: params.language as "en" | "it" | undefined,
+          actor: "claude.ai",
         })
 
+        if (result.outcome === "duplicate" && result.existing) {
+          return { content: [{ type: "text" as const, text: `⚠️ Lease already exists (token: ${result.existing.token}, status: ${result.existing.status}). Use lease_get to view it.` }] }
+        }
+        if (!result.success || !result.lease) {
+          return { content: [{ type: "text" as const, text: `❌ ${result.error || "Lease creation failed"}` }] }
+        }
+
+        const lease = result.lease
+        const leaseUrl = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
         const adminPreviewUrl = `${LEASE_BASE_URL}/${lease.token}?preview=td`
+        const year = lease.contract_year
+        const termStartDate = params.term_start_date || new Date().toISOString().slice(0, 10)
+        const termEndDate = params.term_end_date || `${year}-12-31`
+        const monthlyRent = params.monthly_rent ?? 100
+        const yearlyRent = params.yearly_rent ?? monthlyRent * 12
 
         const lines = [
-          `✅ Lease Agreement created for **${account.company_name}**`,
+          `✅ Lease Agreement created for **${lease.token.split("-").slice(0, -1).join("-")}**`,
           ``,
           `Token: ${lease.token}`,
-          `Suite: ${suiteNumber}`,
+          `Suite: ${lease.suite_number}`,
           `Term: ${fmtDate(termStartDate)} → ${fmtDate(termEndDate)}`,
           `Rent: $${monthlyRent}/month ($${yearlyRent}/year)`,
           `Deposit: $${params.security_deposit ?? 150}`,

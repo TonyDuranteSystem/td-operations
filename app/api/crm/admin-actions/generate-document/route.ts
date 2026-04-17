@@ -187,82 +187,32 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
 // ─── Generate Lease ───
 
 async function generateLease(accountId: string, params: Record<string, unknown>) {
-  const result = await fetchAccountAndContact(accountId)
-  if ("error" in result) return { error: result.error }
-  const { account, contact } = result
+  const accResult = await fetchAccountAndContact(accountId)
+  if ("error" in accResult) return { error: accResult.error }
+  const { account } = accResult
 
-  // Auto-assign suite number if not provided
-  let suiteNumber = params.suite_number as string | undefined
-  if (!suiteNumber) {
-    const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
-      .select("suite_number").order("suite_number", { ascending: false }).limit(1)
-    suiteNumber = "3D-101"
-    if (lastLeases?.length) {
-      const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
-      if (!isNaN(lastNum)) suiteNumber = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
-    }
-  }
-
-  const year = (params.contract_year as number) ?? new Date().getFullYear()
-
-  // Check duplicate
-  const { data: existing } = await supabaseAdmin
-    .from("lease_agreements")
-    .select("id, token, status")
-    .eq("account_id", accountId)
-    .eq("contract_year", year)
-    .limit(1)
-
-  if (existing?.length) {
-    return { exists: true, token: existing[0].token, status: existing[0].status }
-  }
-
-  const token = `${slugify(account.company_name)}-${year}`
-  const today = new Date().toISOString().slice(0, 10)
-  const monthlyRent = (params.monthly_rent as number) ?? 100
-  const yearlyRent = (params.yearly_rent as number) ?? (monthlyRent * 12)
-
-  const { data: lease, error: insertErr } = await supabaseAdmin
-    .from("lease_agreements")
-    .insert({
-      token,
-      account_id: accountId,
-      contact_id: contact.id,
-      tenant_company: account.company_name,
-      tenant_ein: account.ein_number || null,
-      tenant_state: account.state_of_formation || null,
-      tenant_contact_name: contact.full_name,
-      tenant_email: contact.email || null,
-      premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-      suite_number: suiteNumber,
-      square_feet: (params.square_feet as number) ?? 120,
-      effective_date: (params.effective_date as string) || today,
-      term_start_date: today,
-      term_end_date: `${year}-12-31`,
-      term_months: 12,
-      contract_year: year,
-      monthly_rent: monthlyRent,
-      yearly_rent: yearlyRent,
-      security_deposit: (params.security_deposit as number) ?? 150,
-      language: contact.language?.toLowerCase()?.startsWith("it") ? "it" : "en",
-      status: "draft",
-    })
-    .select("id, token, access_code")
-    .single()
-
-  if (insertErr || !lease) {
-    return { error: `Insert failed: ${insertErr?.message || "no data"}` }
-  }
-
-  logAction({
-    actor: "crm-admin",
-    action_type: "create",
-    table_name: "lease_agreements",
-    record_id: lease.id,
+  const { createLease } = await import("@/lib/operations/lease")
+  const result = await createLease({
     account_id: accountId,
-    summary: `Created lease agreement for ${account.company_name} (${year}), Suite ${suiteNumber}`,
-    details: { token: lease.token, suite_number: suiteNumber, year, source: "crm-button" },
+    suite_number: params.suite_number as string | undefined,
+    contract_year: params.contract_year as number | undefined,
+    effective_date: params.effective_date as string | undefined,
+    monthly_rent: params.monthly_rent as number | undefined,
+    yearly_rent: params.yearly_rent as number | undefined,
+    security_deposit: params.security_deposit as number | undefined,
+    square_feet: params.square_feet as number | undefined,
+    actor: "crm-admin",
+    summary: `Created lease via CRM Generate Document button for ${account.company_name}`,
+    details: { source: "crm-button" },
   })
+
+  if (result.outcome === "duplicate" && result.existing) {
+    return { exists: true, token: result.existing.token, status: result.existing.status }
+  }
+  if (!result.success || !result.lease) {
+    return { error: result.error || "Insert failed" }
+  }
+  const lease = result.lease
 
   return {
     success: true,
@@ -270,7 +220,7 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
     access_code: lease.access_code,
     admin_preview: `${LEASE_BASE_URL}/${lease.token}?preview=td`,
     client_url: `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`,
-    suite_number: suiteNumber,
+    suite_number: lease.suite_number,
     company_name: account.company_name,
   }
 }

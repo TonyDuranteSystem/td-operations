@@ -67,6 +67,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     // Create task for staff to review the invalid data
     if (contact_id) {
       try {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         await supabaseAdmin.from("tasks").insert({
           task_title: `Wizard validation failed — ${company_name || token}`,
           description: [
@@ -116,6 +117,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
       const fieldCount = Object.keys(contactUpdates).filter(k => k !== "updated_at").length
       if (fieldCount > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error: upErr } = await supabaseAdmin
           .from("contacts")
           .update(contactUpdates)
@@ -146,6 +148,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step("ocr_crosscheck", "error", `BLOCKED: ${mismatchDetail}`))
 
       // Create review task
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from("tasks").insert({
         task_title: `OCR mismatch — ${company_name || token}`,
         description: [
@@ -233,6 +236,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
       const fieldCount = Object.keys(accountUpdates).filter(k => k !== "updated_at").length
       if (fieldCount > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         await supabaseAdmin.from("accounts").update(accountUpdates).eq("id", account_id)
         result.steps.push(step("account_update", "ok", `${fieldCount} fields updated`))
       } else {
@@ -341,84 +345,22 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // ─── 2. AUTO-CREATE LEASE AGREEMENT ───
   if (account_id && company_name && contact_id) {
     try {
-      const year = new Date().getFullYear()
-      const { data: existingLease } = await supabaseAdmin
-        .from("lease_agreements")
-        .select("id, token, status")
-        .eq("account_id", account_id)
-        .eq("contract_year", year)
-        .limit(1)
+      const { createLease } = await import("@/lib/operations/lease")
+      const leaseResult = await createLease({
+        account_id,
+        contact_id,
+        effective_date: today,
+        term_start_date: today,
+        actor: "system:onboarding-setup",
+        summary: `Auto-created lease during onboarding setup for ${company_name}`,
+      })
 
-      if (existingLease?.length) {
-        result.steps.push(step("lease", "skipped", `Already exists: ${existingLease[0].token}`))
+      if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+        result.steps.push(step("lease", "skipped", `Already exists: ${leaseResult.existing.token}`))
+      } else if (leaseResult.success && leaseResult.lease) {
+        result.steps.push(step("lease", "ok", `${leaseResult.lease.token} (Suite ${leaseResult.lease.suite_number})`))
       } else {
-        // Auto-assign next suite number
-        const { data: lastSuite } = await supabaseAdmin
-          .from("lease_agreements")
-          .select("suite_number")
-          .like("suite_number", "3D-%")
-          .order("suite_number", { ascending: false })
-          .limit(1)
-
-        let nextNum = 101
-        if (lastSuite?.length) {
-          const match = lastSuite[0].suite_number.match(/3D-(\d+)/)
-          if (match) nextNum = parseInt(match[1], 10) + 1
-        }
-        const suiteNumber = `3D-${nextNum}`
-
-        const { data: leaseContact } = await supabaseAdmin
-          .from("contacts")
-          .select("id, full_name, email, language")
-          .eq("id", contact_id)
-          .single()
-
-        const { data: leaseAccount } = await supabaseAdmin
-          .from("accounts")
-          .select("id, company_name, ein_number, state_of_formation")
-          .eq("id", account_id)
-          .single()
-
-        if (leaseContact && leaseAccount) {
-          const companySlug = company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-          const leaseToken = `${companySlug}-${year}`
-
-          const { data: newLease, error: leaseErr } = await supabaseAdmin
-            .from("lease_agreements")
-            .insert({
-              token: leaseToken,
-              account_id,
-              contact_id,
-              tenant_company: leaseAccount.company_name,
-              tenant_ein: leaseAccount.ein_number || null,
-              tenant_state: leaseAccount.state_of_formation || null,
-              tenant_contact_name: leaseContact.full_name,
-              tenant_email: leaseContact.email || null,
-              premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-              suite_number: suiteNumber,
-              square_feet: 120,
-              effective_date: today,
-              term_start_date: today,
-              term_end_date: `${year}-12-31`,
-              term_months: 12,
-              contract_year: year,
-              monthly_rent: 100,
-              yearly_rent: 1200,
-              security_deposit: 150,
-              language: leaseContact.language?.toLowerCase()?.startsWith("it") ? "it" : "en",
-              status: "draft",
-            })
-            .select("id, token, access_code")
-            .single()
-
-          if (leaseErr || !newLease) {
-            result.steps.push(step("lease", "error", leaseErr?.message || "unknown"))
-          } else {
-            result.steps.push(step("lease", "ok", `${newLease.token} (Suite ${suiteNumber})`))
-          }
-        } else {
-          result.steps.push(step("lease", "error", "Could not fetch contact/account details"))
-        }
+        result.steps.push(step("lease", "error", leaseResult.error || "unknown"))
       }
       await updateJobProgress(job.id, result)
     } catch (e) {
@@ -596,6 +538,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           }
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { data: newSD, error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
           .insert({
@@ -649,6 +592,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           continue
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error: taskErr } = await supabaseAdmin
           .from("tasks")
           .insert({
@@ -762,6 +706,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // ─── 5. SET PORTAL FIELDS ───
   if (account_id) {
     try {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error: portalErr } = await supabaseAdmin
         .from("accounts")
         .update({ portal_account: true, portal_created_date: today })
@@ -806,6 +751,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
       renewalUpdates.updated_at = new Date().toISOString()
 
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin
         .from("accounts")
         .update(renewalUpdates)
@@ -869,6 +815,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // Advance portal_tier from "onboarding" to "active" now that setup is complete
   if (contact_id) {
     try {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { data: updatedContact } = await supabaseAdmin
         .from("contacts")
         .update({ portal_tier: "active", updated_at: now })
@@ -884,6 +831,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
       // Also update account tier (secondary)
       if (account_id) {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         await supabaseAdmin
           .from("accounts")
           .update({ portal_tier: "active" })
@@ -961,6 +909,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       .maybeSingle()
 
     if (!existingTask) {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from("tasks").insert({
         task_title: existingTaskTitle,
         description: [

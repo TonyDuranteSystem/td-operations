@@ -225,32 +225,20 @@ export function registerPortalTools(server: McpServer) {
       } else if (hasLeaseDriveDoc) {
         leaseStatus = "Signed (detected from Drive)"
       } else {
-        const { data: lastLeases } = await supabaseAdmin.from("lease_agreements")
-          .select("suite_number").order("suite_number", { ascending: false }).limit(1)
-        let assignedSuite = "3D-101"
-        if (lastLeases?.length) {
-          const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
-          assignedSuite = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
-        }
-        const year = new Date().getFullYear()
-        const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-        const today = new Date().toISOString().slice(0, 10)
-        const { data: newLease } = await supabaseAdmin.from("lease_agreements").insert({
-          token: `${companySlug}-${year}`, account_id: account.id, contact_id: contact.id,
-          tenant_company: account.company_name, tenant_contact_name: contact.full_name,
-          tenant_email: contact.email, suite_number: assignedSuite,
-          premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-          effective_date: today, term_start_date: today, term_end_date: `${year}-12-31`,
-          contract_year: year, term_months: 12, monthly_rent: 100, yearly_rent: 1200,
-          security_deposit: 150, square_feet: 120, status: "draft", language: "en",
-        }).select("id, suite_number").single()
-        if (newLease) {
-          leaseStatus = `AUTO-CREATED (draft, Suite ${newLease.suite_number})`
+        const { createLease } = await import("@/lib/operations/lease")
+        const leaseResult = await createLease({
+          account_id: account.id,
+          contact_id: contact.id,
+          actor: "claude.ai:portal-transition",
+          summary: `Auto-created lease for ${account.company_name} (legacy onboard)`,
+          language: "en",
+        })
+        if (leaseResult.success && leaseResult.lease) {
+          leaseStatus = `AUTO-CREATED (draft, Suite ${leaseResult.lease.suite_number})`
           pendingDocs.push("Lease Agreement")
-          logAction({ action_type: "create", table_name: "lease_agreements", record_id: newLease.id, account_id: account.id, summary: `Auto-created lease for ${account.company_name} Suite ${newLease.suite_number} (legacy onboard)` })
         } else {
           leaseStatus = "FAILED to create"
-          flags.push("ERROR: Lease creation failed")
+          flags.push(`ERROR: Lease creation failed — ${leaseResult.error || "unknown"}`)
         }
       }
       lines.push(`Lease: ${leaseStatus}`)

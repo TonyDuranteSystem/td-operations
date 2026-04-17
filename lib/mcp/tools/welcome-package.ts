@@ -200,56 +200,24 @@ Prerequisites:
           leaseAdminUrl = `${BASE_URL}/lease/${existingLease[0].token}/${existingLease[0].access_code}?preview=td`
           steps.push({ step: "Lease", status: "existing", detail: `${existingLease[0].token} (suite ${existingLease[0].suite_number}, ${existingLease[0].status})` })
         } else {
-          // Auto-assign suite if not provided
-          let assignedSuite = suite_number
-          if (!assignedSuite) {
-            const { data: leases } = await supabaseAdmin
-              .from("lease_agreements")
-              .select("suite_number")
-              .order("suite_number", { ascending: false })
-              .limit(1)
-            if (leases?.length) {
-              const lastNum = parseInt(leases[0].suite_number.replace("3D-", ""), 10)
-              assignedSuite = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
-            } else {
-              assignedSuite = "3D-101"
-            }
-          }
+          const { createLease } = await import("@/lib/operations/lease")
+          const leaseResult = await createLease({
+            account_id,
+            contact_id: contact.id,
+            suite_number,
+            effective_date: today,
+            term_start_date: today,
+            language: lang as "en" | "it",
+            actor: "claude.ai:welcome-package-prepare",
+            summary: `Auto-created lease during welcome package for ${account.company_name}`,
+          })
 
-          const leaseToken = `${companySlug}-${year}`
-          const termEnd = `${year}-12-31`
-          const { data: lease, error: leaseErr } = await supabaseAdmin
-            .from("lease_agreements")
-            .insert({
-              token: leaseToken,
-              account_id,
-              contact_id: contact.id,
-              tenant_company: account.company_name,
-              tenant_contact_name: contact.full_name,
-              tenant_email: contact.email,
-              suite_number: assignedSuite,
-              premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-              effective_date: today,
-              term_start_date: today,
-              term_end_date: termEnd,
-              contract_year: year,
-              term_months: 12,
-              monthly_rent: 100,
-              yearly_rent: 1200,
-              security_deposit: 150,
-              square_feet: 120,
-              status: "draft",
-              language: lang,
-            })
-            .select("id, token, access_code, suite_number")
-            .single()
-
-          if (leaseErr || !lease) {
-            steps.push({ step: "Lease", status: "error", detail: leaseErr?.message || "insert failed" })
+          if (leaseResult.success && leaseResult.lease) {
+            leaseUrl = `${BASE_URL}/lease/${leaseResult.lease.token}/${leaseResult.lease.access_code}`
+            leaseAdminUrl = `${BASE_URL}/lease/${leaseResult.lease.token}/${leaseResult.lease.access_code}?preview=td`
+            steps.push({ step: "Lease", status: "created", detail: `${leaseResult.lease.token} (suite ${leaseResult.lease.suite_number})` })
           } else {
-            leaseUrl = `${BASE_URL}/lease/${lease.token}/${lease.access_code}`
-            leaseAdminUrl = `${BASE_URL}/lease/${lease.token}/${lease.access_code}?preview=td`
-            steps.push({ step: "Lease", status: "created", detail: `${lease.token} (suite ${lease.suite_number})` })
+            steps.push({ step: "Lease", status: "error", detail: leaseResult.error || "insert failed" })
           }
         }
 
@@ -402,6 +370,7 @@ Prerequisites:
         // ─── 9. UPDATE WELCOME PACKAGE STATUS ON ACCOUNT ───
         const hasErrors = steps.some(s => s.status === "error")
         const wpStatus = hasErrors ? "prepared_with_errors" : "prepared"
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         await supabaseAdmin
           .from("accounts")
           .update({ welcome_package_status: wpStatus })

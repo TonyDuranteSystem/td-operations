@@ -179,62 +179,25 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   await updateJobProgress(job.id, result)
 
   // ─── 4. LEASE AGREEMENT ───
-  const { data: existingLease } = await supabaseAdmin
-    .from("lease_agreements")
-    .select("id, token, status")
-    .eq("account_id", p.account_id)
-    .limit(1)
+  {
+    const { createLease } = await import("@/lib/operations/lease")
+    const leaseResult = await createLease({
+      account_id: p.account_id,
+      contact_id: contact.id,
+      suite_number: p.suite_number,
+      effective_date: today,
+      term_start_date: today,
+      language: lang as "en" | "it",
+      actor: "system:welcome-package-setup",
+      summary: `Auto-created lease during welcome package setup for ${account.company_name}`,
+    })
 
-  if (existingLease?.length) {
-    result.steps.push(step("lease", "skipped", `Already exists: ${existingLease[0].token}`))
-  } else {
-    let assignedSuite = p.suite_number
-    if (!assignedSuite) {
-      const { data: leases } = await supabaseAdmin
-        .from("lease_agreements")
-        .select("suite_number")
-        .like("suite_number", "3D-%")
-        .order("suite_number", { ascending: false })
-        .limit(1)
-      if (leases?.length) {
-        const lastNum = parseInt(leases[0].suite_number.replace("3D-", ""), 10)
-        assignedSuite = `3D-${(lastNum + 1).toString().padStart(3, "0")}`
-      } else {
-        assignedSuite = "3D-101"
-      }
-    }
-
-    const leaseToken = `${companySlug}-${year}`
-    const { data: lease, error: leaseErr } = await supabaseAdmin
-      .from("lease_agreements")
-      .insert({
-        token: leaseToken,
-        account_id: p.account_id,
-        contact_id: contact.id,
-        tenant_company: account.company_name,
-        tenant_contact_name: contact.full_name,
-        tenant_email: contact.email,
-        suite_number: assignedSuite,
-        premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-        effective_date: today,
-        term_start_date: today,
-        term_end_date: `${year}-12-31`,
-        contract_year: year,
-        term_months: 12,
-        monthly_rent: 100,
-        yearly_rent: 1200,
-        security_deposit: 150,
-        square_feet: 120,
-        status: "draft",
-        language: lang,
-      })
-      .select("id, token, suite_number")
-      .single()
-
-    if (leaseErr || !lease) {
-      result.steps.push(step("lease", "error", leaseErr?.message || "insert failed"))
+    if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+      result.steps.push(step("lease", "skipped", `Already exists: ${leaseResult.existing.token}`))
+    } else if (leaseResult.success && leaseResult.lease) {
+      result.steps.push(step("lease", "ok", `${leaseResult.lease.token} (suite ${leaseResult.lease.suite_number})`))
     } else {
-      result.steps.push(step("lease", "ok", `${lease.token} (suite ${lease.suite_number})`))
+      result.steps.push(step("lease", "error", leaseResult.error || "insert failed"))
     }
   }
 
@@ -353,6 +316,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   // ─── 8. UPDATE ACCOUNT STATUS ───
   const hasErrors = result.steps.some(s => s.status === "error")
   const wpStatus = hasErrors ? "prepared_with_errors" : "prepared"
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   await supabaseAdmin
     .from("accounts")
     .update({ welcome_package_status: wpStatus })
@@ -370,6 +334,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       .maybeSingle()
 
     if (!existingTask) {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from("tasks").insert({
         task_title: `Review & send welcome email — ${account.company_name}`,
         description: [

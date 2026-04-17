@@ -174,6 +174,7 @@ async function createServiceDelivery(
     const serviceName = `${serviceType} - ${companyName}`
     const today = new Date().toISOString().slice(0, 10)
 
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from("service_deliveries")
       .insert({
@@ -211,6 +212,7 @@ async function createServiceDelivery(
         const taskDef = rawTask as Record<string, unknown>
         const title = (taskDef.title as string) || (taskDef.task as string)
         if (!title) continue
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         await supabaseAdmin.from("tasks").insert({
           task_title: title,
           assigned_to: (taskDef.assigned_to as string) || "Luca",
@@ -299,69 +301,27 @@ async function createOA(
   }
 }
 
-async function createLease(
+async function createLeaseForPlacement(
   accountId: string,
-  companyName: string,
-  einNumber: string | null,
-  state: string | null,
   contact: { id: string; full_name: string; email: string | null; language: string | null },
   suiteNumber: string,
 ): Promise<StepResult> {
-  const year = new Date().getFullYear()
+  const { createLease } = await import("@/lib/operations/lease")
+  const result = await createLease({
+    account_id: accountId,
+    contact_id: contact.id,
+    suite_number: suiteNumber,
+    actor: "crm-admin:place-client",
+    summary: `Created lease during Place Client flow (Suite ${suiteNumber})`,
+  })
 
-  // Check if lease exists for this year
-  const { data: existing } = await supabaseAdmin
-    .from("lease_agreements")
-    .select("id, token, status")
-    .eq("account_id", accountId)
-    .eq("contract_year", year)
-    .limit(1)
-
-  if (existing?.length) {
-    return { name: "lease", status: "skipped", detail: `Lease already exists (${existing[0].token}, status: ${existing[0].status})` }
+  if (result.outcome === "duplicate" && result.existing) {
+    return { name: "lease", status: "skipped", detail: `Lease already exists (${result.existing.token}, status: ${result.existing.status})` }
   }
-
-  try {
-    const token = `${slugify(companyName)}-${year}`
-    const today = new Date().toISOString().slice(0, 10)
-    const lang = contact.language?.toLowerCase()?.startsWith("it") ? "it" : "en"
-
-    const { data: lease, error: insertErr } = await supabaseAdmin
-      .from("lease_agreements")
-      .insert({
-        token,
-        account_id: accountId,
-        contact_id: contact.id,
-        tenant_company: companyName,
-        tenant_ein: einNumber || null,
-        tenant_state: state || null,
-        tenant_contact_name: contact.full_name,
-        tenant_email: contact.email || null,
-        premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
-        suite_number: suiteNumber,
-        square_feet: 120,
-        effective_date: today,
-        term_start_date: today,
-        term_end_date: `${year}-12-31`,
-        term_months: 12,
-        contract_year: year,
-        monthly_rent: 100,
-        yearly_rent: 1200,
-        security_deposit: 150,
-        language: lang,
-        status: "draft",
-      })
-      .select("id, token")
-      .single()
-
-    if (insertErr || !lease) {
-      return { name: "lease", status: "error", detail: insertErr?.message || "Insert failed" }
-    }
-
-    return { name: "lease", status: "ok", detail: `Created lease draft (${lease.token}), Suite ${suiteNumber}` }
-  } catch (err) {
-    return { name: "lease", status: "error", detail: err instanceof Error ? err.message : "Unknown error" }
+  if (!result.success || !result.lease) {
+    return { name: "lease", status: "error", detail: result.error || "Insert failed" }
   }
+  return { name: "lease", status: "ok", detail: `Created lease draft (${result.lease.token}), Suite ${result.lease.suite_number}` }
 }
 
 async function createBankingForm(
@@ -633,14 +593,7 @@ export async function POST(request: Request) {
 
     // 4. Lease
     if (actions.lease && suite_number) {
-      const r = await createLease(
-        account_id,
-        account.company_name,
-        account.ein_number,
-        account.state_of_formation,
-        contact,
-        suite_number,
-      )
+      const r = await createLeaseForPlacement(account_id, contact, suite_number)
       results.push(r)
     }
 
@@ -671,6 +624,7 @@ export async function POST(request: Request) {
     // 9. Account status — set to Active if LLC is formed (stage 3+) or onboarding
     const activeStages = ["llc_formed", "ein_received", "everything_done", "onboarding_data_collection", "onboarding_review", "onboarding_complete"]
     if (activeStages.includes(stage) && account.status !== "Active") {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin
         .from("accounts")
         .update({ status: "Active", updated_at: new Date().toISOString() })
