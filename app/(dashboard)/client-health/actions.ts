@@ -1,59 +1,36 @@
 'use server'
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { revalidatePath } from 'next/cache'
-import { INTERNAL_BASE_URL } from '@/lib/config'
+import { activateService } from '@/lib/operations/activation'
+import { repairContactId } from '@/lib/operations/service-delivery'
+import { reconcileTier } from '@/lib/operations/portal'
 
 // ─── Retry Stuck Activation ────────────────────────────────
 
 export async function retryActivation(
   offerToken: string
 ): Promise<{ success: boolean; error?: string }> {
-  try {
-    // Verify the activation exists and is stuck
-    const { data: pa } = await supabaseAdmin
-      .from('pending_activations')
-      .select('id, status, activated_at, offer_token')
-      .eq('offer_token', offerToken)
-      .single()
+  // P3.3 — delegate to lib/operations/activation.ts so both the manual Retry
+  // Activation button and any future MCP tool / CRM button route through the
+  // same shared backend per plan §4 P3.3 L625.
+  const result = await activateService({ offer_token: offerToken })
 
-    if (!pa) {
-      return { success: false, error: 'Activation not found' }
-    }
+  if (result.outcome === 'already_activated') {
+    // Preserve prior behavior: already-activated shows as error toast so the
+    // button's stale-state render is visibly dismissed on the next refresh.
+    return { success: false, error: 'Already activated' }
+  }
 
-    if (pa.activated_at) {
-      return { success: false, error: 'Already activated' }
-    }
-
-    if (pa.status !== 'payment_confirmed') {
-      return { success: false, error: `Status is "${pa.status}" — must be payment_confirmed` }
-    }
-
-    // Call the activate-service endpoint
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL}/api/workflows/activate-service`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
-        },
-        body: JSON.stringify({ pending_activation_id: pa.id }),
-      }
-    )
-
-    const data = await res.json()
-
-    if (!res.ok) {
-      return { success: false, error: data.error || `Activation failed (${res.status})` }
-    }
-
+  if (result.success && result.outcome === 'activated') {
     revalidatePath('/client-health')
     revalidatePath('/leads')
     return { success: true }
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+
+  return {
+    success: false,
+    error: result.error || 'Activation failed',
   }
 }
 
@@ -62,47 +39,15 @@ export async function retryActivation(
 export async function repairSdContactId(
   accountId: string
 ): Promise<{ success: boolean; fixed?: number; error?: string }> {
-  try {
-    // Get the primary contact for this account
-    const { data: links } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contact_id')
-      .eq('account_id', accountId)
-      .limit(1)
+  // P3.3 — delegate to lib/operations/service-delivery.repairContactId.
+  const result = await repairContactId({ account_id: accountId })
 
-    if (!links || links.length === 0) {
-      return { success: false, error: 'No contact linked to this account' }
-    }
-
-    const primaryContactId = links[0].contact_id
-
-    // Find SDs with missing or wrong contact_id
-    const { data: brokenSDs } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('id, contact_id')
-      .eq('account_id', accountId)
-      .or(`contact_id.is.null,contact_id.neq.${primaryContactId}`)
-
-    if (!brokenSDs || brokenSDs.length === 0) {
-      return { success: true, fixed: 0 }
-    }
-
-    // Fix them
-    const { error } = await supabaseAdmin
-      .from('service_deliveries')
-      .update({ contact_id: primaryContactId, updated_at: new Date().toISOString() })
-      .eq('account_id', accountId)
-      .or(`contact_id.is.null,contact_id.neq.${primaryContactId}`)
-
-    if (error) {
-      return { success: false, error: error.message }
-    }
-
-    revalidatePath('/client-health')
-    return { success: true, fixed: brokenSDs.length }
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  if (!result.success) {
+    return { success: false, error: result.error }
   }
+
+  revalidatePath('/client-health')
+  return { success: true, fixed: result.fixed }
 }
 
 // ─── Batch Repair All SD Contact Links ────────────────────
@@ -115,7 +60,8 @@ export interface BatchRepairResult {
 }
 
 export async function repairAllSdContactIds(): Promise<BatchRepairResult> {
-  // 1. Find all accounts with broken SDs
+  // 1. Find all accounts with broken active SDs (raw SELECT — not a write,
+  // does not trip P2.4 rule 1).
   const { data: brokenAccounts } = await supabaseAdmin
     .from('service_deliveries')
     .select('account_id')
@@ -131,7 +77,8 @@ export async function repairAllSdContactIds(): Promise<BatchRepairResult> {
   // Deduplicate account IDs
   const uniqueAccountIds = Array.from(new Set(brokenAccounts.map(sd => sd.account_id as string)))
 
-  // 2. Fetch primary contacts for all accounts in one query
+  // 2. Pre-fetch primary contacts in one query so repairContactId skips its
+  // per-account lookup (avoids N+1).
   const { data: allLinks } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id, contact_id')
@@ -139,13 +86,12 @@ export async function repairAllSdContactIds(): Promise<BatchRepairResult> {
 
   const contactMap = new Map<string, string>()
   for (const link of allLinks ?? []) {
-    // First contact per account wins (same as per-account repair)
     if (!contactMap.has(link.account_id)) {
       contactMap.set(link.account_id, link.contact_id)
     }
   }
 
-  // 3. Process in batches of 10
+  // 3. Process in batches of 10 via repairContactId.
   let totalFixed = 0
   let accountsProcessed = 0
   let accountsSkipped = 0
@@ -160,42 +106,32 @@ export async function repairAllSdContactIds(): Promise<BatchRepairResult> {
         const contactId = contactMap.get(accountId)
         if (!contactId) {
           accountsSkipped++
-          return 0
+          return { accountId, fixed: 0, skipped: true }
         }
-
-        const { data: broken } = await supabaseAdmin
-          .from('service_deliveries')
-          .select('id')
-          .eq('account_id', accountId)
-          .is('contact_id', null)
-          .eq('status', 'active')
-
-        if (!broken || broken.length === 0) return 0
-
-        const { error } = await supabaseAdmin
-          .from('service_deliveries')
-          .update({ contact_id: contactId, updated_at: new Date().toISOString() })
-          .eq('account_id', accountId)
-          .is('contact_id', null)
-          .eq('status', 'active')
-
-        if (error) throw new Error(error.message)
-        return broken.length
+        const r = await repairContactId({
+          account_id: accountId,
+          target_contact_id: contactId,
+          active_only: true,
+        })
+        if (!r.success) {
+          throw new Error(r.error || 'repairContactId failed')
+        }
+        return { accountId, fixed: r.fixed, skipped: false }
       })
     )
 
     for (let j = 0; j < results.length; j++) {
       const r = results[j]
       if (r.status === 'fulfilled') {
-        totalFixed += r.value
-        if (contactMap.has(batch[j])) accountsProcessed++
+        totalFixed += r.value.fixed
+        if (!r.value.skipped) accountsProcessed++
       } else {
         errors.push({ accountId: batch[j], error: r.reason?.message || 'Unknown error' })
       }
     }
   }
 
-  // 4. Log to action_log
+  // 4. Log to action_log (NOT a P2.4-protected table — raw .insert is OK).
   await supabaseAdmin.from('action_log').insert({
     action_type: 'batch_repair',
     table_name: 'service_deliveries',
@@ -213,52 +149,20 @@ export async function repairAllSdContactIds(): Promise<BatchRepairResult> {
 export async function syncPortalTier(
   contactId: string
 ): Promise<{ success: boolean; error?: string; synced?: string }> {
-  try {
-    // Get contact's portal_tier (source of truth)
-    const { data: contact } = await supabaseAdmin
-      .from('contacts')
-      .select('id, portal_tier, email')
-      .eq('id', contactId)
-      .single()
+  // P3.3 — delegate to lib/operations/portal.reconcileTier, which is the
+  // canonical 3-way reconciler (contacts, accounts, auth.users.app_metadata)
+  // using contacts.portal_tier as source of truth. Previous direct-write
+  // implementation tripped P2.4 rule 1 on the `.from("accounts").update()`
+  // call.
+  const result = await reconcileTier({ contact_id: contactId })
 
-    if (!contact) {
-      return { success: false, error: 'Contact not found' }
-    }
+  if (!result.success) {
+    return { success: false, error: result.error }
+  }
 
-    const tier = contact.portal_tier || 'lead'
-
-    // Sync to accounts
-    const { data: accountLinks } = await supabaseAdmin
-      .from('account_contacts')
-      .select('account_id')
-      .eq('contact_id', contactId)
-
-    if (accountLinks) {
-      for (const link of accountLinks) {
-        await supabaseAdmin
-          .from('accounts')
-          .update({ portal_tier: tier })
-          .eq('id', link.account_id)
-      }
-    }
-
-    // Sync to auth.users metadata (paginated — P1.9)
-    if (contact.email) {
-      const authUser = await findAuthUserByEmail(contact.email)
-
-      if (authUser) {
-        const currentTier = authUser.app_metadata?.portal_tier
-        if (currentTier !== tier) {
-          await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
-            app_metadata: { ...authUser.app_metadata, portal_tier: tier },
-          })
-        }
-      }
-    }
-
-    revalidatePath('/client-health')
-    return { success: true, synced: tier }
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  revalidatePath('/client-health')
+  return {
+    success: true,
+    synced: result.resolved_tier ?? undefined,
   }
 }

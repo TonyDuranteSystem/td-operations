@@ -349,3 +349,115 @@ export async function completeSD(
     notes: params.notes,
   })
 }
+
+// ─── repairContactId (P3.3) ───────────────────────────
+
+export interface RepairContactIdParams {
+  /** Account whose SDs need contact_id repair. */
+  account_id: string
+  /**
+   * Authoritative contact to write. If omitted, the first contact linked via
+   * `account_contacts` for this account is used.
+   */
+  target_contact_id?: string
+  /** If true, only repair SDs with status='active'. Defaults to false. */
+  active_only?: boolean
+}
+
+export interface RepairContactIdResult {
+  success: boolean
+  account_id: string
+  contact_id: string | null
+  fixed: number
+  error?: string
+}
+
+/**
+ * Fix SDs on an account whose `contact_id` is null or mismatched.
+ *
+ * Selection predicate: every SD for `account_id` where
+ * `contact_id IS NULL OR contact_id != target_contact_id`. If `active_only`
+ * is true, restricted to `status='active'`.
+ *
+ * Why this helper exists in P3.3:
+ * Previously, `client-health/actions.ts` ran raw `.update()` calls on
+ * `service_deliveries` directly — tripping P2.4 rule 1 after the rule went
+ * live. This helper gives the repair path a single import surface matching
+ * other write helpers in this module.
+ */
+export async function repairContactId(
+  params: RepairContactIdParams,
+): Promise<RepairContactIdResult> {
+  let contactId = params.target_contact_id
+
+  if (!contactId) {
+    const { data: link } = await supabaseAdmin
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", params.account_id)
+      .limit(1)
+      .maybeSingle()
+    contactId = link?.contact_id ?? undefined
+  }
+
+  if (!contactId) {
+    return {
+      success: false,
+      account_id: params.account_id,
+      contact_id: null,
+      fixed: 0,
+      error: "No contact linked to this account and no target_contact_id provided",
+    }
+  }
+
+  let brokenQuery = supabaseAdmin
+    .from("service_deliveries")
+    .select("id")
+    .eq("account_id", params.account_id)
+    .or(`contact_id.is.null,contact_id.neq.${contactId}`)
+  if (params.active_only) {
+    brokenQuery = brokenQuery.eq("status", "active")
+  }
+  const { data: broken } = await brokenQuery
+
+  if (!broken || broken.length === 0) {
+    return {
+      success: true,
+      account_id: params.account_id,
+      contact_id: contactId,
+      fixed: 0,
+    }
+  }
+
+  try {
+    let updateQuery = supabaseAdmin
+      .from("service_deliveries")
+      .update({ contact_id: contactId, updated_at: new Date().toISOString() })
+      .eq("account_id", params.account_id)
+      .or(`contact_id.is.null,contact_id.neq.${contactId}`)
+    if (params.active_only) {
+      updateQuery = updateQuery.eq("status", "active")
+    }
+    await dbWrite(
+      updateQuery,
+      params.active_only
+        ? "service_deliveries.update.repairContactId.active"
+        : "service_deliveries.update.repairContactId",
+    )
+  } catch (err) {
+    return {
+      success: false,
+      account_id: params.account_id,
+      contact_id: contactId,
+      fixed: 0,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  return {
+    success: true,
+    account_id: params.account_id,
+    contact_id: contactId,
+    fixed: broken.length,
+  }
+}
