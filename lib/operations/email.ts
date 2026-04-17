@@ -63,6 +63,13 @@ export interface SendEmailParams {
   drive_file_ids?: string[]
   attachments?: SendEmailAttachment[]
   skip_duplicate_check?: boolean
+  /**
+   * When true, body_html is wrapped with the TD-branded shell (logo, font,
+   * footer). If body_html is plain text, newlines are converted to
+   * paragraphs/breaks first. Default false — preserves existing behavior for
+   * dedicated send tools that build their own HTML shells.
+   */
+  wrap_with_brand?: boolean
 }
 
 export interface SendEmailResult {
@@ -84,6 +91,60 @@ export interface RenderTemplateResult {
   body_html: string
   language: string | null
   template_name: string
+}
+
+// ─── Plain-text -> HTML + branded shell ─────────────────────
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+function looksLikeHtml(input: string): boolean {
+  return /<\s*[a-z][a-z0-9]*\b[^>]*>/i.test(input)
+}
+
+/**
+ * Convert a plain-text string (with blank lines as paragraph separators and
+ * single newlines as line breaks) to HTML paragraphs. Always escapes HTML
+ * entities — assume input is plain text. Callers who already have HTML
+ * should branch on looksLikeHtml() and skip this function.
+ */
+export function plainTextToParagraphs(input: string): string {
+  const paragraphs = input
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return paragraphs
+    .map((p) => {
+      const escaped = escapeHtml(p).replace(/\n/g, "<br />")
+      return `<p>${escaped}</p>`
+    })
+    .join("\n")
+}
+
+/**
+ * Wrap a body fragment with the TD-branded shell: logo header, Arial font
+ * stack, readable color, and TD contact footer. Matches the typographic
+ * style already used by welcome-package and other dedicated send tools.
+ */
+export function wrapEmailWithBrandShell(bodyHtml: string): string {
+  const logoUrl = `${APP_BASE_URL}/images/logo.jpg`
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
+<div style="text-align:center;padding:8px 0 20px 0;border-bottom:1px solid #e5e7eb;margin-bottom:24px">
+<img src="${logoUrl}" alt="Tony Durante LLC" style="max-width:180px;height:auto;display:inline-block" />
+</div>
+${bodyHtml}
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px">
+<p style="margin:4px 0"><strong style="color:#1a1a1a">Tony Durante LLC</strong></p>
+<p style="margin:4px 0"><a href="mailto:support@tonydurante.us" style="color:#2563eb;text-decoration:none">support@tonydurante.us</a></p>
+</div>
+</div>`
 }
 
 // ─── Template rendering ─────────────────────────────────────
@@ -131,8 +192,17 @@ export async function sendEmail(
 ): Promise<SendEmailResult> {
   try {
     const subject = sanitizeToAscii(params.subject)
-    const body_html = sanitizeToAscii(params.body_html)
+    let body_html = sanitizeToAscii(params.body_html)
     const body_text = params.body_text ? sanitizeToAscii(params.body_text) : undefined
+
+    // Brand-shell wrapping: convert plain text to paragraphs (if applicable)
+    // and wrap with the TD logo + footer shell. Opt-in via wrap_with_brand.
+    if (params.wrap_with_brand) {
+      const contentHtml = looksLikeHtml(body_html)
+        ? body_html
+        : plainTextToParagraphs(body_html)
+      body_html = wrapEmailWithBrandShell(contentHtml)
+    }
 
     const fromEmail = params.as_user || DEFAULT_EMAIL()
     const track_opens = params.track_opens !== false

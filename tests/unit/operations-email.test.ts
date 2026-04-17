@@ -403,3 +403,80 @@ describe("sendEmail — reply threading", () => {
     expect((gmailPostCalls[0].body as { threadId?: string }).threadId).toBe("thr_original")
   })
 })
+
+describe("plainTextToParagraphs", () => {
+  it("splits on blank lines into paragraphs and converts single newlines to <br />", async () => {
+    const { plainTextToParagraphs } = await import("@/lib/operations/email")
+    const out = plainTextToParagraphs("Hello Antonio,\n\nFirst paragraph.\nSecond line.\n\nLast paragraph.")
+    expect(out).toBe("<p>Hello Antonio,</p>\n<p>First paragraph.<br />Second line.</p>\n<p>Last paragraph.</p>")
+  })
+
+  it("escapes HTML entities in plain text", async () => {
+    const { plainTextToParagraphs } = await import("@/lib/operations/email")
+    const out = plainTextToParagraphs("Tags like <b>bold</b> & 'quotes' should be escaped")
+    expect(out).toBe('<p>Tags like &lt;b&gt;bold&lt;/b&gt; &amp; &#39;quotes&#39; should be escaped</p>')
+  })
+
+  it("escapes all HTML input (plain-text function, callers branch on looksLikeHtml first)", async () => {
+    const { plainTextToParagraphs } = await import("@/lib/operations/email")
+    const input = "<p>Already formatted</p>"
+    expect(plainTextToParagraphs(input)).toBe("<p>&lt;p&gt;Already formatted&lt;/p&gt;</p>")
+  })
+
+  it("collapses empty paragraphs", async () => {
+    const { plainTextToParagraphs } = await import("@/lib/operations/email")
+    const out = plainTextToParagraphs("\n\n\n\none\n\n\n\ntwo\n\n\n")
+    expect(out).toBe("<p>one</p>\n<p>two</p>")
+  })
+})
+
+describe("wrapEmailWithBrandShell", () => {
+  it("wraps body with logo + footer + Arial font stack", async () => {
+    const { wrapEmailWithBrandShell } = await import("@/lib/operations/email")
+    const out = wrapEmailWithBrandShell("<p>Hi</p>")
+    expect(out).toContain("https://app.tonydurante.us/images/logo.jpg")
+    expect(out).toContain("Tony Durante LLC")
+    expect(out).toContain("support@tonydurante.us")
+    expect(out).toContain("font-family:Arial,Helvetica,sans-serif")
+    expect(out).toContain("<p>Hi</p>")
+  })
+})
+
+describe("sendEmail — wrap_with_brand", () => {
+  it("converts plain text to paragraphs and wraps with brand shell", async () => {
+    const { sendEmail } = await import("@/lib/operations/email")
+    await sendEmail({
+      to: "client@example.com",
+      subject: "Brand test",
+      body_html: "Hello Antonio,\n\nFirst paragraph.\n\nSecond paragraph.",
+      wrap_with_brand: true,
+    })
+    const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
+    const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
+    // HTML body part is base64 — decode and check
+    const htmlPart = mime.split("Content-Type: text/html")[1]
+    const htmlBase64 = htmlPart.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
+    const decoded = Buffer.from(htmlBase64, "base64").toString("utf-8")
+    expect(decoded).toContain("logo.jpg")
+    expect(decoded).toContain("<p>Hello Antonio,</p>")
+    expect(decoded).toContain("<p>First paragraph.</p>")
+    expect(decoded).toContain("<p>Second paragraph.</p>")
+    expect(decoded).toContain("support@tonydurante.us")
+  })
+
+  it("leaves body untouched when wrap_with_brand is not set", async () => {
+    const { sendEmail } = await import("@/lib/operations/email")
+    await sendEmail({
+      to: "client@example.com",
+      subject: "No wrap",
+      body_html: "<p>Raw HTML body</p>",
+    })
+    const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
+    const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
+    const htmlPart = mime.split("Content-Type: text/html")[1]
+    const htmlBase64 = htmlPart.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
+    const decoded = Buffer.from(htmlBase64, "base64").toString("utf-8")
+    expect(decoded).not.toContain("logo.jpg")
+    expect(decoded).toContain("<p>Raw HTML body</p>")
+  })
+})

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { X, Send, Loader2, Sparkles, Paperclip, Link2, Eye, EyeOff } from 'lucide-react'
+import Link from 'next/link'
+import { X, Send, Loader2, Sparkles, Paperclip, Link2, Eye, EyeOff, Settings } from 'lucide-react'
 
 interface EmailTemplate {
   id: string
@@ -123,6 +124,7 @@ export function ComposeDialog({
           ...(prefillTag && { tag: prefillTag }),
           ...(parsedDriveIds.length > 0 && { drive_file_ids: parsedDriveIds }),
           track_opens: trackOpens,
+          wrap_with_brand: true,
         }),
       })
       if (!res.ok) {
@@ -270,6 +272,15 @@ export function ComposeDialog({
                 </optgroup>
               ))}
             </select>
+            <Link
+              href="/email-templates"
+              target="_blank"
+              className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-blue-600 shrink-0 ml-2"
+              title="Manage templates in a new tab"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Manage
+            </Link>
           </div>
 
           {/* To */}

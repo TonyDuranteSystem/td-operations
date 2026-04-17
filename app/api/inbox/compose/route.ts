@@ -25,6 +25,11 @@ interface ComposeRequest {
   template_id?: string
   template_vars?: Record<string, unknown>
   skip_duplicate_check?: boolean
+  /**
+   * When true (default from the compose UI), the body is wrapped with the
+   * TD-branded shell (logo + footer). Plain-text bodies are auto-paragraphed.
+   */
+  wrap_with_brand?: boolean
 }
 
 function plainToHtml(text: string): string {
@@ -47,8 +52,14 @@ export async function POST(req: NextRequest) {
     }
 
     let subject = payload.subject || ""
+    // When wrap_with_brand is on (UI default), pass the raw text through —
+    // sendEmail's paragraph converter + shell handles it. When off, fall back
+    // to the legacy plainToHtml wrapper for callers that send a message field.
+    const wrap = payload.wrap_with_brand !== false
     let body_html = payload.body_html
-      ?? (payload.message ? plainToHtml(payload.message) : undefined)
+      ?? (payload.message
+        ? (wrap ? payload.message : plainToHtml(payload.message))
+        : undefined)
 
     // If a template is referenced, render it (variables come from payload)
     if (payload.template_id) {
@@ -87,6 +98,7 @@ export async function POST(req: NextRequest) {
       tag: payload.tag,
       drive_file_ids: payload.drive_file_ids,
       skip_duplicate_check: payload.skip_duplicate_check,
+      wrap_with_brand: wrap,
     })
 
     if (result.outcome === "duplicate_blocked") {

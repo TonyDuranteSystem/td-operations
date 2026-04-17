@@ -35,6 +35,7 @@ import {
   HeartPulse,
   PhoneIncoming,
   Activity,
+  Mail,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -97,6 +98,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'tasks', name: 'Task Board', href: '/tasks', icon: ClipboardList, tooltip: 'Kanban board for manual and auto-generated tasks. Use message tags for daily work instead.' },
   { id: 'service-catalog', name: 'Service Catalog', href: '/service-catalog', icon: Package, tooltip: 'Manage services available for offers and invoices — add, edit, and configure service types.' },
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
+  { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
   { id: 'portal-launch', name: 'Portal Launch', href: '/portal-launch', icon: Rocket, tooltip: 'Client portal management — create portal users, send invitations.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
   { id: 'client-health', name: 'Client Health', href: '/client-health', icon: HeartPulse, tooltip: 'Stuck activations, orphan records, wrong account types, and data integrity issues.' },
