@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -847,6 +847,18 @@ export default function PortalChatsPage() {
     queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
   }
 
+  const markAsRead = async (thread: { account_id: string | null; contact_id: string | null }) => {
+    const body = thread.account_id
+      ? { account_id: thread.account_id }
+      : { contact_id: thread.contact_id }
+    await fetch('/api/portal/chat/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+  }
+
   // Close emoji picker on click outside
   useEffect(() => {
     if (!showEmojiPicker && !showInternalEmojiPicker) return
@@ -1001,7 +1013,12 @@ export default function PortalChatsPage() {
               <p className="text-sm text-zinc-400">No portal conversations yet</p>
             </div>
           ) : (
-            threads.filter(t => {
+            [...threads].sort((a, b) => {
+              const aUnread = a.unread_count > 0 ? 1 : 0
+              const bUnread = b.unread_count > 0 ? 1 : 0
+              if (aUnread !== bUnread) return bUnread - aUnread
+              return (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
+            }).filter(t => {
               if (!chatSearch.trim()) return true
               const q = chatSearch.toLowerCase()
               return t.company_name.toLowerCase().includes(q) || (t.contact_name?.toLowerCase().includes(q) ?? false)
@@ -1073,12 +1090,23 @@ export default function PortalChatsPage() {
                 </div>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-xs text-zinc-500 truncate flex-1">{thread.last_message}</p>
-                  {thread.unread_count === 0 && (
+                  {thread.unread_count > 0 ? (
                     <span
                       role="button"
                       tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); markAsUnread(thread.account_id) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread.account_id) } }}
+                      onClick={(e) => { e.stopPropagation(); markAsRead(thread) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsRead(thread) } }}
+                      className="p-1 rounded text-zinc-400 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
+                      title="Mark as read"
+                    >
+                      <MailCheck className="h-3 w-3" />
+                    </span>
+                  ) : thread.account_id && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); markAsUnread(thread.account_id!) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread.account_id!) } }}
                       className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
                       title="Mark as unread"
                     >
