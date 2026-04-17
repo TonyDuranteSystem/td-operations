@@ -30,6 +30,19 @@ export function PullToRefresh() {
 
     const onTouchStart = (e: TouchEvent) => {
       if (scrollEl.scrollTop > 0) return
+      // If the touch started inside a nested scrollable element (e.g. the chat
+      // messages div), don't intercept — let that element own the gesture.
+      // Without this, the passive:false touchmove handler below calls
+      // e.preventDefault() on every downward drag when main.scrollTop===0,
+      // which cancels the inner element's scroll entirely.
+      let el = e.target as HTMLElement | null
+      while (el && el !== scrollEl) {
+        const oy = window.getComputedStyle(el).overflowY
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
+          return
+        }
+        el = el.parentElement
+      }
       startYRef.current = e.touches[0].clientY
       pullingRef.current = false
     }
