@@ -10095,7 +10095,9 @@ export type Database = {
       get_client_contact_id: { Args: never; Returns: string }
       get_document_type_names: {
         Args: never
-        Returns: { document_type_name: string }[]
+        Returns: {
+          document_type_name: string
+        }[]
       }
       get_portal_chat_threads: {
         Args: never
