@@ -1,8 +1,10 @@
 'use client'
 
-import { Clock, User, ClipboardList, CheckCircle, ChevronRight } from 'lucide-react'
+import { useState } from 'react'
+import { Clock, User, ClipboardList, CheckCircle, History } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ServiceDelivery } from '@/lib/types'
+import { StageHistoryDialog } from './stage-history-dialog'
 
 interface TrackerCardProps {
   delivery: ServiceDelivery
@@ -23,6 +25,7 @@ function timeAgo(dateStr: string | null): string {
 export function TrackerCard({ delivery, isDragging, isLastStage, onComplete }: TrackerCardProps) {
   const stageTime = timeAgo(delivery.stage_entered_at)
   const hasOpenTasks = (delivery.open_task_count ?? 0) > 0
+  const [showHistory, setShowHistory] = useState(false)
 
   return (
     <div className={cn(
@@ -68,16 +71,34 @@ export function TrackerCard({ delivery, isDragging, isLastStage, onComplete }: T
         <p className="mt-2 text-xs text-zinc-400 truncate">{delivery.notes}</p>
       )}
 
-      {/* Complete button (only on last stage) */}
-      {isLastStage && (
+      {/* Action row */}
+      <div className="mt-2 flex items-center gap-3">
+        {isLastStage && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onComplete() }}
+            className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 transition-colors"
+          >
+            <CheckCircle className="h-3.5 w-3.5" />
+            Mark Complete
+          </button>
+        )}
         <button
-          onClick={(e) => { e.stopPropagation(); onComplete() }}
-          className="mt-2 flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 transition-colors"
+          onClick={(e) => { e.stopPropagation(); setShowHistory(true) }}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="flex items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
+          title="View stage transition history"
         >
-          <CheckCircle className="h-3.5 w-3.5" />
-          Mark Complete
+          <History className="h-3.5 w-3.5" />
+          History
         </button>
-      )}
+      </div>
+
+      <StageHistoryDialog
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+        deliveryId={delivery.id}
+        deliveryLabel={delivery.company_name ?? delivery.service_name ?? 'Service delivery'}
+      />
     </div>
   )
 }
