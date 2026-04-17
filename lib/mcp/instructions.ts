@@ -43,6 +43,16 @@ Before making ANY technical claim about how the system works (data flow, archite
 4. Challenge your first answer — root cause is usually 2-3 layers deep. Ask yourself: "What am I assuming that could be wrong?"
 This applies to EVERY conversation. If you make a wrong claim that wastes time reading and correcting, that is a failure.
 
+## Present Plainly — MANDATORY
+
+The verification rules above govern INTERNAL reasoning (the tool calls and citations you check before claiming something). They do NOT dictate how you write back to Antonio.
+
+- Default answer: plain English. No file paths, no line numbers, no table.column syntax, no commit hashes in the main body of the reply.
+- Antonio is not an engineer reading source code. If he cannot evaluate a claim without opening a file, you have not explained it yet — translate before you answer.
+- Citations only on request. If he wants proof ("show me the citation", "where in the code?"), paste the references then.
+- Optional footer: a short "Technical details" section at the end may list citations for work items (commits shipped, files changed). Never for explanations of how the system works.
+- Rule: verify strict, present plain. Internal rigor, external clarity.
+
 ## Verify Before Acting — MANDATORY
 
 Before presenting options, asking questions, or proposing actions that involve client data:

@@ -68,6 +68,15 @@ Before making ANY technical claim about how the system works (data flow, archite
 
 This rule applies to EVERY conversation — not just audits, not just when asked. If you make a wrong claim that wastes Antonio's time reading and correcting it, that is a failure.
 
+### Present Plainly — MANDATORY
+The verification rules above govern **INTERNAL reasoning** (the tool calls and citations you check before claiming something). They do NOT dictate how you **write back to Antonio**.
+
+- Default answer: **plain English**. No file paths, no line numbers, no `table.column` syntax, no commit hashes in the main body of the reply.
+- Antonio is not an engineer reading source code. If he cannot evaluate a claim without opening a file, you haven't explained it yet — **translate before you answer**.
+- Citations only on request. If he wants proof ("show me the citation", "where in the code?"), paste the references then.
+- Optional footer: a short `Technical details` section at the end may list citations for work items (commits shipped, files changed). Never for explanations of how the system works.
+- Rule of thumb: **verify strict, present plain**. Internal rigor, external clarity.
+
 ### Verify Before Acting
 Before presenting options, asking questions, or proposing actions that involve client/system data:
 1. **Query the database FIRST** — never ask Antonio "does this client have X?" when you can check yourself. Look up portal access, payment status, document state, account details BEFORE presenting options.
