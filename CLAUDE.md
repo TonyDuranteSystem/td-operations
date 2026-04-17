@@ -41,6 +41,24 @@ What to save:
 
 ## Verification Protocol — MANDATORY
 
+### ⛔ R093 — NO ASSUMPTIONS. EVER. (TOP RULE)
+
+**Verbatim from Antonio — 2026-04-17:** *"YOU DON'T HAVE TO ASSUME ANYTHING. DO YOU UNDERSTAND? WITH YOUR ASSUMPTIONS WE RISK TO RUIN THE SYSTEM."*
+
+Do NOT assume ANYTHING. Not column names, not table schemas, not enum values, not file paths, not function signatures, not API behaviors, not workflow semantics, not client state, not past actions, not environment variables, not what something is "probably called," not what a flow "probably does." Not what a column "usually" is. Not what a commit "should" contain. Not what a function "seems to" do.
+
+**Every fact used in a claim, query, or action must be verified by a fresh tool call in the current session.** Examples:
+- Before using a column name in SQL → `SELECT column_name FROM information_schema.columns WHERE table_name = 'X'`.
+- Before describing what a route does → `Read` the actual file at the actual line range.
+- Before citing a commit → `git show <sha>`.
+- Before claiming a CI/smoke status → `gh run view <id>`.
+- Before referencing a KB/SOP/sysdoc → `kb_search` / `sop_search` / `sysdoc_read` fresh (memory rots).
+- Before acting on a client → query portal_tier, auth user, wizard_progress, tasks, gmail sent — ALL of them — then read the workflow sysdoc for the actual flow.
+
+**Why this rule is absolute:** an assumed column name returns wrong data. An assumed workflow triggers the wrong action on a real client. Assumptions are indistinguishable from facts in their output — the only defense is citation. Wrong claims waste Antonio's time; wrong actions can ruin production state, send incorrect emails to clients, corrupt pipelines, duplicate records, or misstate money.
+
+When in doubt: **STOP. Verify. Quote the source.** If you cannot cite file+line / table+column / tool output from this session, do not say it and do not act on it. "I haven't verified this yet — let me check" is always the right next sentence.
+
 ### Verify Before Claiming
 Before making ANY technical claim about how the system works (data flow, architecture, what a feature does, why something is broken), you MUST:
 1. **Read the source first** — `sysdoc_read('session-context')`, `kb_search`, relevant sysdocs, dev_task_list, and the actual code (file + line number)
@@ -127,6 +145,7 @@ Before saying "it works" or "done", run `npm run test:unit`. If you didn't run t
 - **R090** — Never commit `.env.local` or credentials.
 - **R091** — Never create README.md or documentation files unless asked.
 - **R092** — Client invoice emails MUST direct clients to the portal to pay (`portal.tonydurante.us` → Fatture/Invoices → Expenses). NEVER embed Stripe checkout links, wire transfer details, or any payment credentials directly in the email body. The portal's Pay button (dev task `b08fb88a`, `components/portal/td-pay-modal.tsx`) is the canonical payment entry point.
+- **R093** — NO ASSUMPTIONS. EVER. Every column name, table schema, enum value, file path, function signature, API behavior, workflow semantic, client state, or past action must be verified by a FRESH tool call in the CURRENT session before use. Assumed column in SQL → wrong data. Assumed workflow → wrong action on real client. See the "R093 — NO ASSUMPTIONS. EVER." banner at the top of the Verification Protocol for the full rule. Antonio's words: *"YOU DON'T HAVE TO ASSUME ANYTHING. DO YOU UNDERSTAND? WITH YOUR ASSUMPTIONS WE RISK TO RUIN THE SYSTEM."*
 
 <!-- TIER2:END -->
 
