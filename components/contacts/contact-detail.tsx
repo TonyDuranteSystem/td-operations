@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
+import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
@@ -34,6 +35,7 @@ const TABS = [
   { key: 'documents', label: 'Documents', icon: FolderOpen, tooltip: 'Uploaded files — IDs, contracts, certificates, and more.' },
   { key: 'chat', label: 'Chat', icon: MessageSquare, tooltip: 'All communication — portal messages and email threads in one timeline.' },
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
+  { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'One-screen view of every audit check for this contact — diagnostic + chain audit together.' },
   { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
 ]
 
@@ -422,6 +424,9 @@ export function ContactDetail({
       )}
       {activeTab === 'portal' && (
         <PortalTab contact={contact} portalAuth={portalAuth} />
+      )}
+      {activeTab === 'health' && (
+        <ContactHealthPanel contactId={contact.id} contactName={contact.full_name} />
       )}
       {activeTab === 'activity' && (
         <ActivityTab conversations={conversations} />
