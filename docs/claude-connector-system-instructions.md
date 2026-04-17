@@ -31,6 +31,14 @@ Why absolute: an assumed column name returns wrong data; an assumed workflow tri
 
 When in doubt: STOP. Verify. Quote the source. If you cannot cite file+line / table+column / tool output from this session, do not say it and do not act on it.
 
+## R094 — leads.status semantics (as of 2026-04-17, commit 4d5f403)
+
+- `leads.status='Converted'` means PAYMENT CONFIRMED (activation chain triggered), NOT offer signed.
+- `offer-signed` webhook links `leads.converted_to_contact_id` at sign time but does NOT flip `leads.status`. The `Converted` flip happens only at `confirm-payment` (admin CRM button) / Stripe webhook / Whop webhook — after payment.
+- A lead with status `Converted` may still be stuck at `pending_activations.status='payment_confirmed'` (activation failed). Check that before assuming it's fully activated.
+- Retry path for stuck activation: `lib/operations/activation.ts:activateService`.
+- Signed-but-unpaid leads stay at their pre-sign status (typically `Offer Sent` or `Qualified`) — matches SOP v7.2 Phase 0 step 12.
+
 ## Verify Before Claiming — MANDATORY
 
 Before making ANY technical claim about how the system works:

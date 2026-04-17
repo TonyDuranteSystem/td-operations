@@ -60,6 +60,13 @@ ACCOUNT = a company (LLC/Corp). Belongs to a Contact via account_contacts juncti
 LEAD = first touch with a person. When a Lead converts (signs + pays), they become a Contact (leads.converted_to_contact_id). No Account exists yet at conversion.
 Lifecycle: Lead -> Contact -> Account(s). Never skip this order.
 
+R094 — leads.status semantics (as of 2026-04-17, commit 4d5f403):
+- "Converted" means PAYMENT CONFIRMED (activation chain triggered), NOT offer signed.
+- offer-signed webhook links leads.converted_to_contact_id at sign time but does NOT flip leads.status. Flip happens at confirm-payment (admin CRM button) / Stripe webhook / Whop webhook — after payment.
+- A lead with status "Converted" may still be stuck at pending_activations.status='payment_confirmed' (activation failed). Check that before assuming it's fully activated.
+- Retry path for stuck activation: lib/operations/activation.ts:activateService.
+- Signed-but-unpaid leads stay at their pre-sign status (typically "Offer Sent" or "Qualified") — matches SOP v7.2 Phase 0 step 12.
+
 RULE: When looking up a client by name, ALWAYS start with crm_search_contacts -- the person may own multiple companies with completely different names. 37 contacts own 2+ companies. Never assume one person = one company.
 RULE: Individual services (ITIN, Banking Physical) can exist on a Contact WITHOUT any Account via service_deliveries.contact_id.
 
