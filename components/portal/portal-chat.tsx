@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -40,7 +40,7 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { accountId?: string; contactId: string; userId: string; locale?: string }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore } = usePortalChat(accountId || null, contactId)
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh } = usePortalChat(accountId || null, contactId)
   const draftKey = `chat_draft_${accountId || contactId}`
   const [input, setInput] = useState(() => {
     if (typeof window === 'undefined') return ''
@@ -49,6 +49,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
     return ''
   })
   const [uploading, setUploading] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
@@ -118,6 +119,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages])
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    await refresh()
+    setIsRefreshing(false)
+  }
 
   const handleSend = async () => {
     if ((!input.trim() && !pendingFile) || sending || uploading) return
@@ -228,6 +235,15 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Refresh button — replaces pull-to-refresh gesture on chat page */}
+      <button
+        onClick={handleRefresh}
+        disabled={isRefreshing || loading}
+        className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+        title={locale === 'it' ? 'Aggiorna messaggi' : 'Refresh messages'}
+      >
+        <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+      </button>
       {/* Drag overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
