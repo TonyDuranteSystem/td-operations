@@ -382,16 +382,18 @@ const AUDIT_SQL = `WITH audit_results AS (
   UNION ALL
 
   -- CHECK 7: deadlines.status
+  -- The DB CHECK constraint accepts 6 values including 'Cancelled'.
+  -- Keep this list aligned with the constraint (pg_constraint source of truth).
   SELECT
     'invalid_deadline_status',
     'deadlines',
     'P0',
     COUNT(*)::int,
     LEFT(STRING_AGG(id::text, ', ' ORDER BY created_at DESC), 200),
-    'status values not in (Pending, Completed, Filed, Not Started, Overdue): found ' ||
+    'status values not in (Pending, Completed, Filed, Not Started, Overdue, Cancelled): found ' ||
       COALESCE(STRING_AGG(DISTINCT status, ', '), 'N/A')
   FROM deadlines
-  WHERE status NOT IN ('Pending', 'Completed', 'Filed', 'Not Started', 'Overdue')
+  WHERE status NOT IN ('Pending', 'Completed', 'Filed', 'Not Started', 'Overdue', 'Cancelled')
 
   UNION ALL
 
