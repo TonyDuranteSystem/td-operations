@@ -10093,6 +10093,10 @@ export type Database = {
       exec_sql: { Args: { sql_query: string }; Returns: Json }
       get_client_account_ids: { Args: never; Returns: string[] }
       get_client_contact_id: { Args: never; Returns: string }
+      get_document_type_names: {
+        Args: never
+        Returns: { document_type_name: string }[]
+      }
       get_portal_chat_threads: {
         Args: never
         Returns: {
