@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { retryActivation } from '@/app/(dashboard)/client-health/actions'
+import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
@@ -276,6 +277,11 @@ export function LeadActions({
         <h2 className="text-sm font-semibold text-zinc-900 mb-4">Actions</h2>
 
         <div className="flex flex-wrap gap-2">
+          <ComposeEmailButton
+            leadId={leadId}
+            to={leadEmail || undefined}
+            linkLabel={leadName}
+          />
           {/* Step 1: Create Offer */}
           {canCreateOffer && (
             <button

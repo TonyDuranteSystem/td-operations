@@ -12,6 +12,7 @@ import {
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
@@ -321,6 +322,11 @@ export function ContactDetail({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <ComposeEmailButton
+            contactId={contact.id}
+            to={contact.email || undefined}
+            linkLabel={contact.full_name || contact.email || undefined}
+          />
           <button
             onClick={() => setShowChainAudit(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors"

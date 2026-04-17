@@ -1,8 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Send, Loader2, Sparkles } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { X, Send, Loader2, Sparkles, Paperclip, Link2, Eye, EyeOff } from 'lucide-react'
+
+interface EmailTemplate {
+  id: string
+  template_name: string
+  subject_template: string
+  body_template: string
+  language: string | null
+  category: string | null
+  service_type: string | null
+  placeholders: string[] | null
+}
 
 interface ComposeDialogProps {
   open: boolean
@@ -10,6 +21,11 @@ interface ComposeDialogProps {
   prefillTo?: string
   prefillSubject?: string
   prefillBody?: string
+  prefillAccountId?: string
+  prefillContactId?: string
+  prefillLeadId?: string
+  prefillLinkLabel?: string
+  prefillTag?: string
 }
 
 export function ComposeDialog({
@@ -18,6 +34,11 @@ export function ComposeDialog({
   prefillTo = '',
   prefillSubject = '',
   prefillBody = '',
+  prefillAccountId = '',
+  prefillContactId = '',
+  prefillLeadId = '',
+  prefillLinkLabel = '',
+  prefillTag = '',
 }: ComposeDialogProps) {
   const [to, setTo] = useState(prefillTo)
   const [cc, setCc] = useState('')
@@ -27,11 +48,64 @@ export function ComposeDialog({
   const [aiInstruction, setAiInstruction] = useState('')
   const [showAi, setShowAi] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
+  const [templateId, setTemplateId] = useState<string>('')
+  const [driveFileIds, setDriveFileIds] = useState('')
+  const [trackOpens, setTrackOpens] = useState(true)
+  const [accountId, setAccountId] = useState(prefillAccountId)
+  const [contactId, setContactId] = useState(prefillContactId)
+  const [leadId, setLeadId] = useState(prefillLeadId)
+  const [linkLabel, setLinkLabel] = useState(prefillLinkLabel)
   const queryClient = useQueryClient()
 
   useEffect(() => { setTo(prefillTo) }, [prefillTo])
   useEffect(() => { setSubject(prefillSubject) }, [prefillSubject])
   useEffect(() => { setBody(prefillBody) }, [prefillBody])
+  useEffect(() => { setAccountId(prefillAccountId) }, [prefillAccountId])
+  useEffect(() => { setContactId(prefillContactId) }, [prefillContactId])
+  useEffect(() => { setLeadId(prefillLeadId) }, [prefillLeadId])
+  useEffect(() => { setLinkLabel(prefillLinkLabel) }, [prefillLinkLabel])
+
+  const templatesQuery = useQuery({
+    queryKey: ['email-templates'],
+    queryFn: async () => {
+      const res = await fetch('/api/inbox/templates')
+      if (!res.ok) return { templates: [] as EmailTemplate[] }
+      return res.json() as Promise<{ templates: EmailTemplate[] }>
+    },
+    enabled: open,
+    staleTime: 60_000,
+  })
+
+  const templatesByCategory = useMemo(() => {
+    const list = templatesQuery.data?.templates || []
+    const grouped: Record<string, EmailTemplate[]> = {}
+    for (const t of list) {
+      const key = t.category || 'Other'
+      if (!grouped[key]) grouped[key] = []
+      grouped[key].push(t)
+    }
+    return grouped
+  }, [templatesQuery.data])
+
+  const handleTemplateChange = (id: string) => {
+    setTemplateId(id)
+    if (!id) return
+    const t = templatesQuery.data?.templates.find((x) => x.id === id)
+    if (!t) return
+    // Render the template locally for preview — actual render happens
+    // server-side on send. This gives the admin an editable starting point.
+    setSubject(t.subject_template)
+    setBody(t.body_template)
+  }
+
+  const parsedDriveIds = useMemo(
+    () =>
+      driveFileIds
+        .split(/[,\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [driveFileIds]
+  )
 
   const sendMutation = useMutation({
     mutationFn: async () => {
@@ -43,6 +117,12 @@ export function ComposeDialog({
           subject,
           message: body,
           ...(cc && { cc }),
+          ...(accountId && { account_id: accountId }),
+          ...(contactId && { contact_id: contactId }),
+          ...(leadId && { lead_id: leadId }),
+          ...(prefillTag && { tag: prefillTag }),
+          ...(parsedDriveIds.length > 0 && { drive_file_ids: parsedDriveIds }),
+          track_opens: trackOpens,
         }),
       })
       if (!res.ok) {
@@ -58,6 +138,9 @@ export function ComposeDialog({
       setBody('')
       setAiInstruction('')
       setShowAi(false)
+      setTemplateId('')
+      setDriveFileIds('')
+      setTrackOpens(true)
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       onClose()
     },
@@ -95,6 +178,8 @@ export function ComposeDialog({
 
   if (!open) return null
 
+  const hasCrmLink = accountId || contactId || leadId
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[85vh]">
@@ -121,6 +206,15 @@ export function ComposeDialog({
             </button>
           </div>
         </div>
+
+        {/* CRM link badge */}
+        {hasCrmLink && (
+          <div className="flex items-center gap-2 px-5 py-2 bg-blue-50 border-b text-xs text-blue-700">
+            <Link2 className="h-3.5 w-3.5" />
+            <span>Linked to:</span>
+            <span className="font-medium">{linkLabel || accountId || contactId || leadId}</span>
+          </div>
+        )}
 
         {/* AI Instruction Panel */}
         {showAi && (
@@ -156,9 +250,31 @@ export function ComposeDialog({
 
         {/* Form */}
         <div className="flex-1 overflow-y-auto">
+          {/* Template picker */}
+          <div className="flex items-center border-b px-5 py-2">
+            <label className="text-sm text-zinc-400 w-20 shrink-0">Template</label>
+            <select
+              value={templateId}
+              onChange={(e) => handleTemplateChange(e.target.value)}
+              className="flex-1 text-sm outline-none bg-transparent"
+            >
+              <option value="">-- no template --</option>
+              {Object.entries(templatesByCategory).map(([cat, list]) => (
+                <optgroup key={cat} label={cat}>
+                  {list.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.template_name}
+                      {t.language ? ` (${t.language})` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
           {/* To */}
           <div className="flex items-center border-b px-5 py-2">
-            <label className="text-sm text-zinc-400 w-10 shrink-0">To</label>
+            <label className="text-sm text-zinc-400 w-20 shrink-0">To</label>
             <input
               type="email"
               value={to}
@@ -180,7 +296,7 @@ export function ComposeDialog({
           {/* Cc */}
           {showCc && (
             <div className="flex items-center border-b px-5 py-2">
-              <label className="text-sm text-zinc-400 w-10 shrink-0">Cc</label>
+              <label className="text-sm text-zinc-400 w-20 shrink-0">Cc</label>
               <input
                 type="email"
                 value={cc}
@@ -193,7 +309,7 @@ export function ComposeDialog({
 
           {/* Subject */}
           <div className="flex items-center border-b px-5 py-2">
-            <label className="text-sm text-zinc-400 w-10 shrink-0">Sub</label>
+            <label className="text-sm text-zinc-400 w-20 shrink-0">Subject</label>
             <input
               type="text"
               value={subject}
@@ -201,6 +317,21 @@ export function ComposeDialog({
               placeholder="Subject"
               className="flex-1 text-sm outline-none bg-transparent"
               required
+            />
+          </div>
+
+          {/* Attachments (Drive file IDs) */}
+          <div className="flex items-start border-b px-5 py-2">
+            <label className="text-sm text-zinc-400 w-20 shrink-0 pt-1 flex items-center gap-1">
+              <Paperclip className="h-3.5 w-3.5" />
+              Files
+            </label>
+            <input
+              type="text"
+              value={driveFileIds}
+              onChange={(e) => setDriveFileIds(e.target.value)}
+              placeholder="Drive file IDs, comma-separated (optional)"
+              className="flex-1 text-sm outline-none bg-transparent"
             />
           </div>
 
@@ -214,27 +345,42 @@ export function ComposeDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-3 border-t">
-          {sendMutation.isError && (
-            <p className="text-xs text-red-500">
-              {sendMutation.error.message}
-            </p>
-          )}
-          <div className="ml-auto">
+        <div className="flex items-center justify-between px-5 py-3 border-t gap-3">
+          <div className="flex items-center gap-4">
             <button
-              onClick={() => sendMutation.mutate()}
-              disabled={!to.trim() || !subject.trim() || !body.trim() || sendMutation.isPending}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium
-                hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              onClick={() => setTrackOpens(!trackOpens)}
+              className={`flex items-center gap-1.5 text-xs ${
+                trackOpens ? 'text-blue-600' : 'text-zinc-400'
+              } hover:text-blue-700 transition-colors`}
+              title={trackOpens ? 'Open tracking ON' : 'Open tracking OFF'}
             >
-              {sendMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-              Send
+              {trackOpens ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {trackOpens ? 'Track' : 'No track'}
             </button>
+            {parsedDriveIds.length > 0 && (
+              <span className="text-xs text-zinc-500">
+                {parsedDriveIds.length} file{parsedDriveIds.length === 1 ? '' : 's'}
+              </span>
+            )}
+            {sendMutation.isError && (
+              <p className="text-xs text-red-500 max-w-xs truncate">
+                {sendMutation.error.message}
+              </p>
+            )}
           </div>
+          <button
+            onClick={() => sendMutation.mutate()}
+            disabled={!to.trim() || !subject.trim() || !body.trim() || sendMutation.isPending}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium
+              hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {sendMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+            Send
+          </button>
         </div>
       </div>
     </div>

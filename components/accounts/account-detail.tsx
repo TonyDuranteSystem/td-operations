@@ -13,6 +13,7 @@ import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
 import { PortalUserButton } from './portal-user-button'
 import { PortalTransitionButton } from './portal-transition-button'
+import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/documents-panel'
 import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/generate-oa-dialog'
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
@@ -435,6 +436,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             </span>
             <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <PortalTransitionButton accountId={account.id} portalAccount={account.portal_account ?? false} />
+            <ComposeEmailButton
+              accountId={account.id}
+              contactId={primaryContact?.id}
+              to={
+                (account as unknown as { communication_email?: string }).communication_email
+                || primaryContact?.email
+                || undefined
+              }
+              linkLabel={account.company_name}
+            />
             <button
               onClick={() => setShowDiagnostic(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"

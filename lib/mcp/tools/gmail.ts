@@ -10,7 +10,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { SignJWT, importPKCS8 } from "jose"
 import { logAction } from "@/lib/mcp/action-log"
-import { APP_BASE_URL } from "@/lib/config"
 
 // ─── Configuration ──────────────────────────────────────────
 
@@ -673,290 +672,71 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
       })).optional().describe("File attachments (base64-encoded). For Drive files, use drive_file_id instead."),
     },
     async ({ to, subject, body_html, body_text, cc, bcc, reply_to, reply_to_message_id, as_user, track_opens, account_id, contact_id, lead_id, tag, drive_file_id, drive_file_id_2, drive_file_id_3, drive_file_ids, attachments }) => {
-      try {
-        // Sanitize all text content to ASCII before processing
-        subject = sanitizeToAscii(subject)
-        body_html = sanitizeToAscii(body_html)
-        if (body_text) body_text = sanitizeToAscii(body_text)
+      const { sendEmail } = await import("@/lib/operations/email")
 
-        const fromEmail = as_user || DEFAULT_EMAIL()
+      const allDriveIds = [...(drive_file_ids || [])]
+      if (drive_file_id) allDriveIds.push(drive_file_id)
+      if (drive_file_id_2) allDriveIds.push(drive_file_id_2)
+      if (drive_file_id_3) allDriveIds.push(drive_file_id_3)
 
-        // Merge all drive_file_id* params into a single array
-        const allDriveIds = [...(drive_file_ids || [])]
-        if (drive_file_id) allDriveIds.push(drive_file_id)
-        if (drive_file_id_2) allDriveIds.push(drive_file_id_2)
-        if (drive_file_id_3) allDriveIds.push(drive_file_id_3)
+      const result = await sendEmail({
+        to,
+        subject,
+        body_html,
+        body_text,
+        cc,
+        bcc,
+        reply_to,
+        reply_to_message_id,
+        as_user,
+        track_opens,
+        account_id,
+        contact_id,
+        lead_id,
+        tag,
+        drive_file_ids: allDriveIds.length > 0 ? allDriveIds : undefined,
+        attachments,
+      })
 
-        // Download Drive files and merge with manual attachments
-        const allAttachments = [...(attachments || [])]
-        if (allDriveIds.length > 0) {
-          const { downloadFileBinary } = await import("@/lib/google-drive")
-          for (const fileId of allDriveIds) {
-            try {
-              const { buffer, mimeType, fileName } = await downloadFileBinary(fileId)
-              allAttachments.push({
-                filename: fileName,
-                content: buffer.toString("base64"),
-                content_type: mimeType || "application/octet-stream",
-              })
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `❌ Failed to download Drive file ${fileId}: ${err instanceof Error ? err.message : String(err)}` }],
-              }
-            }
-          }
-        }
-
-        // Generate tracking ID
-        const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-        // Inject tracking pixel if enabled
-        let htmlBody = body_html
-        if (track_opens !== false) {
-          const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
-          // Insert pixel before closing </body> or at end
-          if (htmlBody.includes("</body>")) {
-            htmlBody = htmlBody.replace("</body>", `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" /></body>`)
-          } else {
-            htmlBody += `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
-          }
-        }
-
-        // Generate plain text from HTML if not provided
-        const plainText = body_text || htmlBody
-          .replace(/<br\s*\/?>/gi, "\n")
-          .replace(/<\/p>/gi, "\n\n")
-          .replace(/<\/div>/gi, "\n")
-          .replace(/<\/li>/gi, "\n")
-          .replace(/<li>/gi, "• ")
-          .replace(/<[^>]+>/g, "")
-          .replace(/&nbsp;/g, " ")
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&#39;/g, "'")
-          .replace(/&quot;/g, '"')
-          .replace(/\n{3,}/g, "\n\n")
-          .trim()
-
-        // Build MIME message
-        const hasAttachments = allAttachments.length > 0
-        const outerBoundary = `boundary_${Date.now()}`
-        const altBoundary = `alt_boundary_${Date.now()}`
-
-        // RFC 2047: encode subject as base64 if it contains non-ASCII chars
-        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
-        const encodedSubject = hasNonAscii
-          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
-          : subject
-        const mimeHeaders = [
-          `From: Tony Durante LLC <${fromEmail}>`,
-          `To: ${to}`,
-          `Subject: ${encodedSubject}`,
-        ]
-        if (cc) mimeHeaders.push(`Cc: ${cc}`)
-        if (bcc) mimeHeaders.push(`Bcc: ${bcc}`)
-        if (reply_to) mimeHeaders.push(`Reply-To: ${reply_to}`)
-        mimeHeaders.push("MIME-Version: 1.0")
-
-        // If attachments: multipart/mixed wrapping multipart/alternative + attachments
-        // If no attachments: multipart/alternative (text + html)
-        if (hasAttachments) {
-          mimeHeaders.push(`Content-Type: multipart/mixed; boundary="${outerBoundary}"`)
-        } else {
-          mimeHeaders.push(`Content-Type: multipart/alternative; boundary="${outerBoundary}"`)
-        }
-
-        // Threading headers
-        let threadId: string | undefined
-        if (reply_to_message_id) {
-          const original = await gmailGet(`/messages/${reply_to_message_id}`, {
-            format: "metadata",
-            metadataHeaders: "Message-ID,References",
-          }, as_user) as GmailMessage
-
-          const originalMsgId = getHeader(original.payload.headers, "Message-ID")
-          const references = getHeader(original.payload.headers, "References")
-
-          if (originalMsgId) {
-            mimeHeaders.push(`In-Reply-To: ${originalMsgId}`)
-            mimeHeaders.push(`References: ${references ? references + " " : ""}${originalMsgId}`)
-          }
-          threadId = original.threadId
-        }
-
-        if (tag) {
-          mimeHeaders.push(`X-Tag: ${tag}`)
-        }
-
-        const mimeParts: string[] = [mimeHeaders.join("\r\n"), ""]
-
-        if (hasAttachments) {
-          // multipart/mixed → first part is multipart/alternative (body)
-          mimeParts.push(`--${outerBoundary}`)
-          mimeParts.push(`Content-Type: multipart/alternative; boundary="${altBoundary}"`)
-          mimeParts.push("")
-          mimeParts.push(`--${altBoundary}`)
-          mimeParts.push("Content-Type: text/plain; charset=utf-8")
-          mimeParts.push("Content-Transfer-Encoding: base64")
-          mimeParts.push("")
-          mimeParts.push(Buffer.from(plainText).toString("base64"))
-          mimeParts.push("")
-          mimeParts.push(`--${altBoundary}`)
-          mimeParts.push("Content-Type: text/html; charset=utf-8")
-          mimeParts.push("Content-Transfer-Encoding: base64")
-          mimeParts.push("")
-          mimeParts.push(Buffer.from(htmlBody).toString("base64"))
-          mimeParts.push("")
-          mimeParts.push(`--${altBoundary}--`)
-
-          // Append each attachment
-          for (const att of allAttachments) {
-            const ct = att.content_type || "application/pdf"
-            mimeParts.push("")
-            mimeParts.push(`--${outerBoundary}`)
-            mimeParts.push(`Content-Type: ${ct}; name="${att.filename}"`)
-            mimeParts.push("Content-Transfer-Encoding: base64")
-            mimeParts.push(`Content-Disposition: attachment; filename="${att.filename}"`)
-            mimeParts.push("")
-            mimeParts.push(att.content)
-          }
-          mimeParts.push("")
-          mimeParts.push(`--${outerBoundary}--`)
-        } else {
-          // No attachments — simple multipart/alternative
-          mimeParts.push(`--${outerBoundary}`)
-          mimeParts.push("Content-Type: text/plain; charset=utf-8")
-          mimeParts.push("Content-Transfer-Encoding: base64")
-          mimeParts.push("")
-          mimeParts.push(Buffer.from(plainText).toString("base64"))
-          mimeParts.push("")
-          mimeParts.push(`--${outerBoundary}`)
-          mimeParts.push("Content-Type: text/html; charset=utf-8")
-          mimeParts.push("Content-Transfer-Encoding: base64")
-          mimeParts.push("")
-          mimeParts.push(Buffer.from(htmlBody).toString("base64"))
-          mimeParts.push("")
-          mimeParts.push(`--${outerBoundary}--`)
-        }
-
-        const mimeBody = mimeParts.join("\r\n")
-
-        const encodedRaw = Buffer.from(mimeBody).toString("base64url")
-
-        const sendPayload: Record<string, unknown> = {
-          raw: encodedRaw,
-        }
-        if (threadId) {
-          sendPayload.threadId = threadId
-        }
-
-        // ── DUPLICATE DETECTION ──
-        // Check if a similar email was already sent to the same recipient in the last 7 days.
-        // Prevents accidental duplicate sends across multiple sessions/machines.
-        if (!reply_to_message_id) {
-          // Only check for new emails, not replies (replies to the same thread are expected)
-          const { createClient } = await import("@supabase/supabase-js")
-          const dupCheck = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-          )
-          const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-          const { data: existing } = await dupCheck
-            .from("email_tracking")
-            .select("id, created_at, gmail_message_id")
-            .eq("recipient", to)
-            .eq("subject", subject)
-            .gte("created_at", cutoff)
-            .limit(1)
-
-          if (existing && existing.length > 0) {
-            const sentAt = new Date(existing[0].created_at).toLocaleString()
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `⛔ DUPLICATE BLOCKED — An email with the same subject was already sent to ${to} on ${sentAt} (message ID: ${existing[0].gmail_message_id}).\n\nIf you need to send it again, change the subject line slightly.`,
-                },
-              ],
-            }
-          }
-        }
-
-        // Send via Gmail API
-        const result = await gmailPost("/messages/send", sendPayload, as_user) as {
-          id: string
-          threadId: string
-          labelIds: string[]
-        }
-
-        // Save tracking record
-        if (track_opens !== false) {
-          const { createClient } = await import("@supabase/supabase-js")
-          const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-          )
-          await supabase.from("email_tracking").insert({
-            tracking_id: trackingId,
-            gmail_message_id: result.id,
-            gmail_thread_id: result.threadId,
-            recipient: to,
-            subject,
-            from_email: fromEmail,
-            account_id: account_id || null,
-            contact_id: contact_id || null,
-            lead_id: lead_id || null,
-          })
-        }
-
-        logAction({
-          action_type: "send",
-          table_name: "gmail",
-          record_id: result.id,
-          account_id: account_id || undefined,
-          summary: `Email sent → ${to}: ${subject}`,
-          details: { to, subject, cc: cc || null, tag: tag || null, has_attachments: hasAttachments, attachment_count: allAttachments.length },
-        })
-
-        // Auto-update lead status when sending offer emails
-        let leadAutoUpdate = ""
-        if (lead_id && tag === "offer") {
-          try {
-            const { createClient: createSB } = await import("@supabase/supabase-js")
-            const sbAdmin = createSB(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-            const { error: leadErr } = await sbAdmin
-              .from("leads")
-              .update({ status: "Offer Sent", offer_status: "Sent", updated_at: new Date().toISOString() })
-              .eq("id", lead_id)
-            if (!leadErr) leadAutoUpdate = "\n📋 Lead auto-updated → Offer Sent"
-          } catch { /* non-blocking */ }
-        }
-
+      if (result.outcome === "duplicate_blocked" && result.duplicate) {
+        const sentAt = new Date(result.duplicate.sent_at).toLocaleString()
         return {
           content: [{
             type: "text" as const,
-            text: [
-              "✅ Email sent via Gmail",
-              "",
-              `📧 To: ${to}`,
-              `📋 Subject: ${subject}`,
-              cc ? `📋 CC: ${cc}` : null,
-              `🆔 Message ID: ${result.id}`,
-              `📨 Thread ID: ${result.threadId}`,
-              track_opens !== false ? `👁️ Open tracking: enabled (${trackingId})` : null,
-              tag ? `🏷️ Tag: ${tag}` : null,
-              hasAttachments ? `📎 Attachments: ${allAttachments.map(a => a.filename).join(", ")}` : null,
-              "",
-              "Email appears in Gmail Sent folder. Client replies will thread automatically.",
-              leadAutoUpdate || null,
-            ].filter(Boolean).join("\n"),
+            text: `⛔ DUPLICATE BLOCKED — An email with the same subject was already sent to ${to} on ${sentAt} (message ID: ${result.duplicate.gmail_message_id}).\n\nIf you need to send it again, change the subject line slightly.`,
           }],
         }
-      } catch (error) {
+      }
+
+      if (!result.success) {
         return {
-          content: [{ type: "text" as const, text: `❌ Gmail send failed: ${error instanceof Error ? error.message : String(error)}` }],
+          content: [{ type: "text" as const, text: `❌ Gmail send failed: ${result.error || "unknown error"}` }],
         }
+      }
+
+      const attachmentLine = result.has_attachments
+        ? `📎 Attachments: ${(result.attachment_filenames || []).join(", ") || result.attachment_count}`
+        : null
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: [
+            "✅ Email sent via Gmail",
+            "",
+            `📧 To: ${to}`,
+            `📋 Subject: ${subject}`,
+            cc ? `📋 CC: ${cc}` : null,
+            `🆔 Message ID: ${result.gmail_message_id}`,
+            `📨 Thread ID: ${result.gmail_thread_id}`,
+            result.tracking_id ? `👁️ Open tracking: enabled (${result.tracking_id})` : null,
+            tag ? `🏷️ Tag: ${tag}` : null,
+            attachmentLine,
+            "",
+            "Email appears in Gmail Sent folder. Client replies will thread automatically.",
+            result.lead_auto_updated ? "\n📋 Lead auto-updated → Offer Sent" : null,
+          ].filter(Boolean).join("\n"),
+        }],
       }
     }
   )
