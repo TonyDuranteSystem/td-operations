@@ -51,6 +51,17 @@ export async function advanceToEinSubmitted(
     return { advanced: false, detail: 'Stage "EIN Submitted" not found in pipeline' }
   }
 
+  // [diag] temporary — faxage Oh My Creatives duplicate-task investigation 2026-04-17
+  console.warn('[diag:advanceToEinSubmitted:guard55]', {
+    sd_id: delivery.id,
+    delivery_stage: delivery.stage,
+    delivery_stage_order: delivery.stage_order,
+    stage_history_length: Array.isArray(delivery.stage_history) ? (delivery.stage_history as unknown[]).length : null,
+    target_stage: targetStage.stage_name,
+    target_order: targetStage.stage_order,
+    actor,
+  })
+
   // Don't advance backwards
   if ((delivery.stage_order || 0) >= targetStage.stage_order) {
     return {
@@ -71,6 +82,7 @@ export async function advanceToEinSubmitted(
     ? [...delivery.stage_history, historyEntry]
     : [historyEntry]
 
+  // eslint-disable-next-line no-restricted-syntax
   await supabaseAdmin
     .from('service_deliveries')
     .update({
@@ -91,6 +103,7 @@ export async function advanceToEinSubmitted(
       priority?: string
       description?: string
     }>) {
+      // eslint-disable-next-line no-restricted-syntax
       await supabaseAdmin.from('tasks').insert({
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || 'Luca',
@@ -143,6 +156,14 @@ export async function markFaxAsSent(
   if (!ss4) {
     return { success: false, detail: 'SS-4 not found', side_effects }
   }
+  // [diag] temporary — faxage Oh My Creatives duplicate-task investigation 2026-04-17
+  console.warn('[diag:markFaxAsSent:guard146]', {
+    ss4_id: ss4.id,
+    ss4_status: ss4.status,
+    ss4_company: ss4.company_name,
+    actor,
+    notes,
+  })
   if (ss4.status === 'submitted') {
     return { success: false, detail: 'SS-4 already marked as submitted', side_effects }
   }
@@ -177,6 +198,7 @@ export async function markFaxAsSent(
     }
 
     // 3. Close open fax tasks
+    // eslint-disable-next-line no-restricted-syntax
     const { data: closedTasks } = await supabaseAdmin
       .from('tasks')
       .update({ status: 'Done', updated_at: new Date().toISOString() })
@@ -262,6 +284,7 @@ export async function advanceFormationToStage(
     ? [...delivery.stage_history, historyEntry]
     : [historyEntry]
 
+  // eslint-disable-next-line no-restricted-syntax
   await supabaseAdmin
     .from('service_deliveries')
     .update({
@@ -281,6 +304,7 @@ export async function advanceFormationToStage(
     for (const taskDef of targetStage.auto_tasks as Array<{
       title: string; assigned_to?: string; category?: string; priority?: string; description?: string
     }>) {
+      // eslint-disable-next-line no-restricted-syntax
       const { error: tErr } = await supabaseAdmin.from('tasks').insert({
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || 'Luca',
