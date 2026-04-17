@@ -75,6 +75,33 @@ function summarize(checks: ChainCheck[]): { ok: number; warning: number; error: 
   return s
 }
 
+/**
+ * Map a pending_activation payment_method value to a display label used on
+ * the payments row. pending_activations stores lowercase tokens
+ * (whop / stripe / wire / bank_transfer / unknown); payments.payment_method
+ * is a free-text display string. Prior code was a binary whop-vs-wire
+ * ternary that mislabeled Stripe card payments as "Wire Transfer".
+ */
+function labelPaymentMethod(method: string | null | undefined): string {
+  const v = (method || "").trim().toLowerCase()
+  switch (v) {
+    case "whop": return "Whop"
+    case "stripe": return "Stripe"
+    case "wire": return "Wire Transfer"
+    case "bank_transfer": return "Bank Transfer"
+    case "card": return "Card"
+    case "ach": return "ACH"
+    case "cash": return "Cash"
+    case "crypto": return "Crypto"
+    case "":
+    case "unknown": return "Unknown"
+    default:
+      // Unknown value — pass through capitalized so it's visible rather
+      // than silently mislabeled.
+      return v.charAt(0).toUpperCase() + v.slice(1)
+  }
+}
+
 // ─── GET: Run Chain Audit ───
 
 export async function GET(req: NextRequest) {
@@ -531,7 +558,7 @@ export async function GET(req: NextRequest) {
             account_id: accountIds[0] ?? null,
             amount: pa.amount,
             currency: pa.currency ?? "EUR",
-            payment_method: pa.payment_method === "whop" ? "Whop" : "Wire Transfer",
+            payment_method: labelPaymentMethod(pa.payment_method),
             description: `Setup fee — ${pa.offer_token}`,
             paid_date: pa.payment_confirmed_at?.split("T")[0],
           },
@@ -1201,6 +1228,7 @@ export async function POST(req: NextRequest) {
 
       case "set_account_type": {
         const { account_id, account_type } = params as { account_id: string; account_type: string }
+        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
         const { error } = await supabaseAdmin
           .from("accounts")
           .update({ account_type, updated_at: new Date().toISOString() })
@@ -1219,6 +1247,7 @@ export async function POST(req: NextRequest) {
           amount: number; currency: string; payment_method: string
           description: string; paid_date?: string
         }
+        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/payment.ts
         const { error } = await supabaseAdmin.from("payments").insert({
           contact_id,
           account_id: params.account_id ?? null,
@@ -1253,6 +1282,7 @@ export async function POST(req: NextRequest) {
 
       case "sync_portal_tier": {
         const { account_id, tier } = params as { account_id: string; tier: string }
+        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/portal.ts
         const { error } = await supabaseAdmin
           .from("accounts")
           .update({ portal_tier: tier, updated_at: new Date().toISOString() })
@@ -1307,6 +1337,7 @@ export async function POST(req: NextRequest) {
         // If no formation date → still in formation → Pending Formation
         const accountStatus = formationDate ? "Active" : "Pending Formation"
 
+        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
         const { data: newAccount, error: acctErr } = await supabaseAdmin
           .from("accounts")
           .insert({
@@ -1389,6 +1420,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Update SD to target stage
+        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/service-delivery.ts
         const { error: updateErr } = await supabaseAdmin
           .from("service_deliveries")
           .update({
