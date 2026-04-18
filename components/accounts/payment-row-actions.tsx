@@ -16,7 +16,8 @@
  *   • Delete       — any non-paid row (P3.7 preview dialog; paid rows blocked)
  */
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useTransition } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -65,15 +66,79 @@ export function PaymentRowActions({ payment }: Props) {
   const [voidOpen, setVoidOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
 
+  // Close on outside click (clicks inside the menu itself do not count as outside).
   useEffect(() => {
     if (!menuOpen) return
     const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+      const target = e.target as Node
+      if (buttonRef.current?.contains(target)) return
+      if (menuRef.current?.contains(target)) return
+      setMenuOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
+  }, [menuOpen])
+
+  // Menu positioner: one function, used by useLayoutEffect (first paint) and
+  // the scroll / resize listeners. Uses a conservative menuHeight estimate so
+  // the flip decision is correct even before the portal is measured.
+  const positionMenu = () => {
+    if (!buttonRef.current) return
+    const btn = buttonRef.current.getBoundingClientRect()
+    const menuWidth = 208 // matches w-52
+    const measured = menuRef.current?.offsetHeight ?? 0
+    // Conservative: assume at least 200px so we flip above when the button is
+    // near the bottom of the viewport, even on the first layout pass when the
+    // portal has not yet been measured.
+    const menuHeight = Math.max(measured, 200)
+    const gap = 4
+    const margin = 8
+
+    let top = btn.bottom + gap
+    let left = btn.right - menuWidth
+
+    // Flip above the button when there is not enough room below.
+    if (top + menuHeight + margin > window.innerHeight) {
+      const flippedTop = btn.top - menuHeight - gap
+      if (flippedTop >= margin) {
+        top = flippedTop
+      } else {
+        // Rare: viewport too short for either placement — clamp to stay visible.
+        top = Math.max(margin, window.innerHeight - menuHeight - margin)
+      }
+    }
+
+    // Clamp horizontally to the viewport.
+    if (left + menuWidth + margin > window.innerWidth) {
+      left = window.innerWidth - menuWidth - margin
+    }
+    if (left < margin) left = margin
+
+    setMenuPos({ top, left })
+  }
+
+  // First paint: position before the menu becomes visible.
+  useLayoutEffect(() => {
+    if (!menuOpen) return
+    positionMenu()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- positionMenu reads refs, not deps
+  }, [menuOpen])
+
+  // Follow the row on scroll / resize while the menu is open.
+  useEffect(() => {
+    if (!menuOpen) return
+    const handler = () => positionMenu()
+    window.addEventListener('scroll', handler, true)
+    window.addEventListener('resize', handler)
+    return () => {
+      window.removeEventListener('scroll', handler, true)
+      window.removeEventListener('resize', handler)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- positionMenu is stable enough for this
   }, [menuOpen])
 
   const statusValue = (payment.invoice_status ?? payment.status ?? '').toString()
@@ -139,64 +204,73 @@ export function PaymentRowActions({ payment }: Props) {
     return r.preview
   }
 
+  const menuPortal = menuOpen && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          ref={menuRef}
+          style={menuPos ? { position: 'fixed', top: menuPos.top, left: menuPos.left, visibility: 'visible' } : { position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' }}
+          className="z-[100] w-52 bg-white border rounded-lg shadow-lg overflow-hidden"
+          role="menu"
+        >
+          {!isPaid && !isCancelled && (
+            <button
+              type="button"
+              onClick={handleMarkPaid}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 text-left"
+            >
+              <CheckCircle className="h-4 w-4" /> Mark as Paid
+            </button>
+          )}
+          {isInvoiced && !isPaid && !isCancelled && (
+            <button
+              type="button"
+              onClick={handleSendReminder}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 text-left"
+            >
+              <Send className="h-4 w-4" /> Send reminder
+            </button>
+          )}
+          {isInvoiced && !isPaid && !isCancelled && (
+            <button
+              type="button"
+              onClick={() => { setMenuOpen(false); setVoidOpen(true) }}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
+            >
+              <Ban className="h-4 w-4" /> Void
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => { setMenuOpen(false); setEditOpen(true) }}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left border-t"
+          >
+            <Pencil className="h-4 w-4" /> Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMenuOpen(false); setDeleteOpen(true) }}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-700 hover:bg-red-50 text-left"
+          >
+            <Trash2 className="h-4 w-4" /> Delete
+          </button>
+        </div>,
+        document.body,
+      )
+    : null
+
   return (
     <>
-      <div className="relative" ref={menuRef}>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
-          disabled={isPending}
-          className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
-          title="Row actions"
-        >
-          {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
-        </button>
-        {menuOpen && (
-          <div className="absolute right-0 top-full mt-1 z-50 w-52 bg-white border rounded-lg shadow-lg overflow-hidden">
-            {!isPaid && !isCancelled && (
-              <button
-                type="button"
-                onClick={handleMarkPaid}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 text-left"
-              >
-                <CheckCircle className="h-4 w-4" /> Mark as Paid
-              </button>
-            )}
-            {isInvoiced && !isPaid && !isCancelled && (
-              <button
-                type="button"
-                onClick={handleSendReminder}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 text-left"
-              >
-                <Send className="h-4 w-4" /> Send reminder
-              </button>
-            )}
-            {isInvoiced && !isPaid && !isCancelled && (
-              <button
-                type="button"
-                onClick={() => { setMenuOpen(false); setVoidOpen(true) }}
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
-              >
-                <Ban className="h-4 w-4" /> Void
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => { setMenuOpen(false); setEditOpen(true) }}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 text-left border-t"
-            >
-              <Pencil className="h-4 w-4" /> Edit
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMenuOpen(false); setDeleteOpen(true) }}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-700 hover:bg-red-50 text-left"
-            >
-              <Trash2 className="h-4 w-4" /> Delete
-            </button>
-          </div>
-        )}
-      </div>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setMenuOpen(o => !o) }}
+        disabled={isPending}
+        className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 disabled:opacity-50"
+        title="Row actions"
+      >
+        {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+      </button>
+      {menuPortal}
 
       <ConfirmDestructiveDialog
         open={voidOpen}
