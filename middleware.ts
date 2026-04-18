@@ -79,6 +79,12 @@ function isDashboardPath(pathname: string): boolean {
 }
 
 export async function middleware(request: NextRequest) {
+  // Sandbox guard: block inbound webhooks to prevent external traffic from
+  // mutating sandbox data when SANDBOX_MODE=1
+  if (process.env.SANDBOX_MODE === '1' && request.nextUrl.pathname.startsWith('/api/webhooks')) {
+    return new NextResponse('Service Unavailable (sandbox mode)', { status: 503 })
+  }
+
   // Legacy rewrite: /?t=TOKEN → /offer/TOKEN (must happen before auth check)
   if (request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('t')) {
     const token = request.nextUrl.searchParams.get('t')
