@@ -18,6 +18,23 @@ export interface JobResult {
     timestamp: string
   }>
   summary?: string
+  /**
+   * Handler-reported outcome. `false` means this run reached a failure
+   * path the handler chose NOT to throw on (validation refused, OCR
+   * mismatch blocked the chain, a critical dependency was missing).
+   *
+   * The cron treats `ok === false` as a signal to move the job into
+   * `status='failed'` instead of `'completed'` — so the Exception
+   * Center's Failed Jobs section sees it, the Silent-Failed Jobs
+   * safety net stays empty, and monitoring doesn't have to parse the
+   * summary string.
+   *
+   * Omitted (undefined) or `true` → treated as success. Handlers that
+   * partially succeed (e.g. "23 ok, 1 error, 2 skipped") leave it
+   * undefined on purpose: some non-blocking step errors shouldn't
+   * flip the whole job to failed.
+   */
+  ok?: boolean
 }
 
 export interface Job {

@@ -58,11 +58,13 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
   if (!contact_id) {
     result.steps.push(step("validation", "error", "Missing contact_id"))
     result.summary = "Validation failed: no contact_id"
+    result.ok = false
     return result
   }
   if (!companyName) {
     result.steps.push(step("validation", "error", "Missing company_name in submitted data"))
     result.summary = "Validation failed: no company_name"
+    result.ok = false
     return result
   }
   result.steps.push(step("validation", "ok", `${companyName} — contact ${contact_id}`))
@@ -90,6 +92,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
 
     const fieldCount = Object.keys(contactUpdates).filter(k => k !== "updated_at").length
     if (fieldCount > 0) {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from("contacts").update(contactUpdates).eq("id", contact_id)
       result.steps.push(step("contact_update", "ok", `Updated ${fieldCount} fields`))
     } else {
@@ -117,6 +120,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
       result.steps.push(step("account_create", "error", acctResult.error || "No account_id returned"))
       await createFailureTask(contact_id, companyName, token, "Account creation failed", acctResult.error)
       result.summary = `CRITICAL: Account creation failed — ${acctResult.error}`
+      result.ok = false
       return result
     }
 
@@ -137,6 +141,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     result.steps.push(step("account_create", "error", msg))
     await createFailureTask(contact_id, companyName, token, "Account creation threw", msg)
     result.summary = `CRITICAL: Account creation threw — ${msg}`
+    result.ok = false
     return result
   }
   await updateJobProgress(job.id, result)
@@ -171,10 +176,12 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
       result.steps.push(step("sd_backfill", "error", "No Tax Return SD at 'Company Data Pending' with null account_id"))
       await createFailureTask(contact_id, companyName, token, "SD backfill failed", "No matching SD found")
       result.summary = "CRITICAL: No Tax Return SD found for backfill"
+      result.ok = false
       return result
     }
 
     taxReturnSdId = sd.id
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     await supabaseAdmin
       .from("service_deliveries")
       .update({ account_id: accountId, updated_at: new Date().toISOString() })
@@ -186,6 +193,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     result.steps.push(step("sd_backfill", "error", msg))
     await createFailureTask(contact_id, companyName, token, "SD backfill threw", msg)
     result.summary = `CRITICAL: SD backfill threw — ${msg}`
+    result.ok = false
     return result
   }
   await updateJobProgress(job.id, result)
@@ -221,6 +229,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
         result.steps.push(step("tax_returns_create", "error", trErr?.message || "Insert failed"))
         await createFailureTask(contact_id, companyName, token, "tax_returns creation failed", trErr?.message)
         result.summary = `CRITICAL: tax_returns creation failed — ${trErr?.message}`
+        result.ok = false
         return result
       }
       result.steps.push(step("tax_returns_create", "ok", `tax_returns ${newTR.id.slice(0, 8)} for ${currentYear}`))
@@ -230,6 +239,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     result.steps.push(step("tax_returns_create", "error", msg))
     await createFailureTask(contact_id, companyName, token, "tax_returns creation threw", msg)
     result.summary = `CRITICAL: tax_returns creation threw — ${msg}`
+    result.ok = false
     return result
   }
   await updateJobProgress(job.id, result)
@@ -248,6 +258,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
       result.steps.push(step("sd_advance", "error", advResult.error || "Advancement failed"))
       await createFailureTask(contact_id, companyName, token, "SD advance failed", advResult.error)
       result.summary = `CRITICAL: SD advance failed — ${advResult.error}`
+      result.ok = false
       return result
     }
     result.steps.push(step("sd_advance", "ok", `${advResult.from_stage} → ${advResult.to_stage}`))
@@ -256,6 +267,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     result.steps.push(step("sd_advance", "error", msg))
     await createFailureTask(contact_id, companyName, token, "SD advance threw", msg)
     result.summary = `CRITICAL: SD advance threw — ${msg}`
+    result.ok = false
     return result
   }
   await updateJobProgress(job.id, result)
@@ -297,6 +309,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
 
   // ─── 10. PORTAL TIER UPGRADE (NON-CRITICAL) ───
   try {
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     await supabaseAdmin
       .from("accounts")
       .update({ portal_tier: "active", updated_at: new Date().toISOString() })
@@ -335,6 +348,7 @@ async function createFailureTask(
   detail?: string | null,
 ) {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     await supabaseAdmin.from("tasks").insert({
       task_title: `Tax Return intake failed — ${companyName || token}`,
       description: [

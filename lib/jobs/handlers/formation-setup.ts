@@ -54,6 +54,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     const errDetail = validation.errors.map(e => `${e.field}: ${e.message}`).join("; ")
     result.steps.push(step("validation", "error", errDetail))
     result.summary = `Validation failed: ${validation.errors.length} error(s)`
+    result.ok = false
     return result
   }
   result.steps.push(step("validation", "ok", "All checks passed"))
@@ -93,6 +94,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
 
       const fieldCount = Object.keys(contactUpdates).filter(k => k !== "updated_at").length
       if (fieldCount > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error: upErr } = await supabaseAdmin
           .from("contacts")
           .update(contactUpdates)
@@ -146,6 +148,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         accountId = existingAcct[0].id
         result.steps.push(step("account_create", "skipped", `Already exists: ${accountId}`))
       } else {
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { data: newAcct, error: acctErr } = await supabaseAdmin
           .from("accounts")
           .insert({
@@ -197,6 +200,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             .eq("contact_id", p.contact_id)
             .is("account_id", null)
 
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           const { count: backfilledPay } = await supabaseAdmin
             .from("payments")
             .update({ account_id: accountId, updated_at: new Date().toISOString() })
@@ -273,6 +277,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
                     if (passportData.dateOfBirth && !submitted.owner_dob) passportUpdates.date_of_birth = passportData.dateOfBirth
 
                     if (Object.keys(passportUpdates).length > 0) {
+                      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
                       await supabaseAdmin
                         .from("contacts")
                         .update({ ...passportUpdates, updated_at: now })
@@ -288,6 +293,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               } else {
                 // HEIC or unsupported format — create manual task
                 result.steps.push(step("passport_ocr", "skipped", `Unsupported format for OCR: ${mimeType}. Manual data entry needed.`))
+                // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
                 await supabaseAdmin.from("tasks").insert({
                   task_title: `Manual passport data entry: ${submitted.owner_first_name || ""} ${submitted.owner_last_name || ""}`,
                   description: `Passport uploaded as ${mimeType} (not supported by OCR). Manually enter passport_number and passport_expiry_date on the contact record.`,
@@ -347,6 +353,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSd[0].id}`))
       } else {
         const sdName = companyName ? `Company Formation - ${companyName}` : "Company Formation"
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { data: sd, error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
           .insert({
@@ -451,6 +458,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       ? `${submitted.owner_first_name} ${submitted.owner_last_name || ""}`
       : p.token
 
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: taskErr } = await supabaseAdmin.from("tasks").insert({
       task_title: `WhatsApp follow-up: ${clientName} (formation form completed)`,
       description: [

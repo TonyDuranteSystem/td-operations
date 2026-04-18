@@ -54,13 +54,26 @@ export async function GET(req: NextRequest) {
 
     try {
       const result = await handler(job)
-      await completeJob(job.id, result)
-      results.push({
-        job_id: job.id,
-        job_type: job.job_type,
-        status: result.steps.some(s => s.status === 'error') ? 'completed_with_errors' : 'completed',
-        summary: result.summary,
-      })
+      if (result.ok === false) {
+        // Handler reached a failure path but chose not to throw. Move the
+        // job to status='failed' so it shows up in the Exception Center's
+        // Failed Jobs section instead of hiding inside a completed row.
+        await failJob(job.id, result.summary || 'Handler reported failure', result)
+        results.push({
+          job_id: job.id,
+          job_type: job.job_type,
+          status: 'failed',
+          summary: result.summary,
+        })
+      } else {
+        await completeJob(job.id, result)
+        results.push({
+          job_id: job.id,
+          job_type: job.job_type,
+          status: result.steps.some(s => s.status === 'error') ? 'completed_with_errors' : 'completed',
+          summary: result.summary,
+        })
+      }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e)
       await failJob(job.id, errMsg)

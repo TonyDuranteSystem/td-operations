@@ -89,6 +89,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     }
 
     result.summary = `Validation failed: ${validation.errors.length} error(s)`
+    result.ok = false
     return result
   }
 
@@ -168,6 +169,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       }).then(() => {}, () => {}) // non-blocking
 
       result.summary = `OCR cross-check blocked: ${mismatchDetail}`
+      result.ok = false
       return result
     } else {
       const detail = ocrResult.checks.map(c => `${c.field}:${c.status}(${c.similarity}%)`).join(", ")

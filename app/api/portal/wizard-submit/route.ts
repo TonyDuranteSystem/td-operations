@@ -429,8 +429,16 @@ export async function POST(req: NextRequest) {
         try {
           const { handleTaxFormSetup } = await import('@/lib/jobs/handlers/tax-form-setup')
           const result = await handleTaxFormSetup(claimedJob as unknown as Job)
-          await completeJob(jobId, result)
-          console.warn(`[wizard-submit] Job ${jobId} completed inline: ${result.summary}`)
+          if (result.ok === false) {
+            // Handler reached a failure path but didn't throw — mark the
+            // job failed so the Exception Center picks it up. Same rule as
+            // the /api/cron/process-jobs branch.
+            await failJob(jobId, result.summary || 'Handler reported failure', result)
+            console.warn(`[wizard-submit] Job ${jobId} inline-completed as failed: ${result.summary}`)
+          } else {
+            await completeJob(jobId, result)
+            console.warn(`[wizard-submit] Job ${jobId} completed inline: ${result.summary}`)
+          }
         } catch (handlerErr) {
           const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr)
           await failJob(jobId, errMsg)

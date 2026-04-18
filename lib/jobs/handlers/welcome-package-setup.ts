@@ -47,6 +47,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   if (accErr || !account) {
     result.steps.push(step("fetch_account", "error", accErr?.message || "Account not found"))
     result.summary = "Failed: account not found"
+    result.ok = false
     return result
   }
 
@@ -73,6 +74,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   if (!contactLinks?.length) {
     result.steps.push(step("fetch_contact", "error", "No contacts linked"))
     result.summary = "Failed: no contacts"
+    result.ok = false
     return result
   }
 
@@ -85,6 +87,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   if (!contact) {
     result.steps.push(step("fetch_contact", "error", "Contact not found"))
     result.summary = "Failed: contact not found"
+    result.ok = false
     return result
   }
 
