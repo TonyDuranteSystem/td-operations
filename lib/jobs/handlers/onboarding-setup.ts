@@ -109,12 +109,22 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       if (submitted.owner_last_name) contactUpdates.last_name = submitted.owner_last_name
       if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
       if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
-      if (submitted.owner_street) contactUpdates.address_line1 = submitted.owner_street
-      if (submitted.owner_city) contactUpdates.address_city = submitted.owner_city
-      if (submitted.owner_state_province) contactUpdates.address_state = submitted.owner_state_province
-      if (submitted.owner_zip) contactUpdates.address_zip = submitted.owner_zip
-      if (submitted.owner_country) contactUpdates.address_country = submitted.owner_country
-      if (submitted.owner_itin) contactUpdates.itin = submitted.owner_itin
+      // Address lives on contacts.residency as a single formatted string
+      // (Antonio's CRM model: residency = full residential address).
+      // Concatenates street / city / state / zip / country with commas.
+      if (submitted.owner_street || submitted.owner_city || submitted.owner_country) {
+        const addressParts = [
+          submitted.owner_street,
+          submitted.owner_city,
+          submitted.owner_state_province,
+          submitted.owner_zip,
+          submitted.owner_country,
+        ].filter(Boolean).map(String).map(s => s.trim())
+        if (addressParts.length > 0) {
+          contactUpdates.residency = addressParts.join(", ")
+        }
+      }
+      if (submitted.owner_itin) contactUpdates.itin_number = submitted.owner_itin
 
       const fieldCount = Object.keys(contactUpdates).filter(k => k !== "updated_at").length
       if (fieldCount > 0) {
