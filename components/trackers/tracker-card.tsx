@@ -5,6 +5,7 @@ import { Clock, User, ClipboardList, CheckCircle, History } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ServiceDelivery } from '@/lib/types'
 import { StageHistoryDialog } from './stage-history-dialog'
+import { DeliveryRowActions } from './delivery-row-actions'
 
 interface TrackerCardProps {
   delivery: ServiceDelivery
@@ -32,10 +33,24 @@ export function TrackerCard({ delivery, isDragging, isLastStage, onComplete }: T
       'bg-white rounded-lg border p-3 transition-shadow cursor-grab',
       isDragging ? 'shadow-lg border-blue-300 rotate-1' : 'hover:shadow-sm',
     )}>
-      {/* Company name */}
-      <p className="text-sm font-medium text-zinc-900 truncate">
-        {delivery.company_name ?? delivery.service_name}
-      </p>
+      {/* Company name + row actions */}
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium text-zinc-900 truncate flex-1">
+          {delivery.company_name ?? delivery.service_name}
+        </p>
+        <div className="-mr-1 -mt-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <DeliveryRowActions delivery={{
+            id: delivery.id,
+            service_name: delivery.service_name ?? null,
+            service_type: delivery.service_type ?? null,
+            status: delivery.status ?? null,
+            stage: delivery.stage ?? null,
+            assigned_to: delivery.assigned_to ?? null,
+            notes: delivery.notes ?? null,
+            updated_at: delivery.updated_at,
+          }} />
+        </div>
+      </div>
 
       {/* Meta row */}
       <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500">

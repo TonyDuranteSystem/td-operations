@@ -15,6 +15,7 @@ import {
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
+import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
@@ -1944,41 +1945,13 @@ function ChatTab({
 function ServicesTab({
   serviceDeliveries,
   accounts,
-  contactId,
+  contactId: _contactId,
 }: {
   serviceDeliveries: ServiceDelivery[]
   accounts: LinkedAccount[]
   contactId: string
 }) {
-  const [cancelling, setCancelling] = useState<string | null>(null)
-  const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string; serviceType: string | null; accountId: string | null } | null>(null)
   const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
-
-  const handleCancel = (sdId: string, sdName: string, serviceType: string | null, accountId: string | null) => {
-    setCancelTarget({ id: sdId, name: sdName, serviceType, accountId })
-  }
-
-  const handleCancelConfirm = async () => {
-    if (!cancelTarget) return { success: false, error: 'No service selected' }
-    setCancelling(cancelTarget.id)
-    try {
-      const res = await fetch('/api/crm/admin-actions/contact-actions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact_id: contactId, action: 'cancel_service', params: { delivery_id: cancelTarget.id } }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        setTimeout(() => window.location.reload(), 250)
-        return { success: true, message: data.detail }
-      }
-      return { success: false, error: data.detail || 'Failed' }
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Network error' }
-    } finally {
-      setCancelling(null)
-    }
-  }
 
   if (serviceDeliveries.length === 0) {
     return (
@@ -2026,45 +1999,19 @@ function ServicesTab({
             )}
           </div>
           <div className="flex justify-center">
-            {sd.status === 'active' && (
-              <button
-                onClick={() => handleCancel(sd.id, sd.service_name ?? sd.service_type ?? 'Service', sd.service_type ?? null, sd.account_id ?? null)}
-                disabled={cancelling === sd.id}
-                className="p-1 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 transition-colors disabled:opacity-50"
-                title="Cancel service"
-              >
-                {cancelling === sd.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-              </button>
-            )}
+            <DeliveryRowActions delivery={{
+              id: sd.id,
+              service_name: sd.service_name ?? null,
+              service_type: sd.service_type ?? null,
+              status: sd.status ?? null,
+              stage: sd.stage ?? null,
+              assigned_to: sd.assigned_to ?? null,
+              notes: sd.notes ?? null,
+              updated_at: sd.updated_at,
+            }} />
           </div>
         </div>
       ))}
-      <ConfirmDestructiveDialog
-        open={!!cancelTarget}
-        onClose={() => setCancelTarget(null)}
-        title="Cancel Service Delivery"
-        description={cancelTarget ? `Cancel "${cancelTarget.name}"?` : undefined}
-        severity="red"
-        staticPreview={cancelTarget ? {
-          affected: { service_delivery: 1 },
-          items: [
-            {
-              label: cancelTarget.name,
-              details: [
-                cancelTarget.serviceType ?? '',
-                cancelTarget.accountId ? (accountMap.get(cancelTarget.accountId) ?? '') : '',
-              ].filter(Boolean),
-            },
-          ],
-          warnings: [
-            'Sets the service delivery status to cancelled.',
-            'Closes all linked open tasks (To Do / In Progress / Waiting).',
-            'Does not refund payment — issue a credit note separately.',
-          ],
-        } : undefined}
-        confirmLabel="Cancel Service"
-        onConfirm={handleCancelConfirm}
-      />
     </div>
   )
 }
