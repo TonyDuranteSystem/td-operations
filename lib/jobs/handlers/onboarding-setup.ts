@@ -25,7 +25,7 @@ import { uploadBinaryToDrive } from "@/lib/google-drive"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
-import { validateOnboardingData } from "../validation"
+import { validateOnboardingData, normalizeEIN } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
 import type { Json } from "@/lib/database.types"
 
@@ -241,7 +241,11 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     try {
       const accountUpdates: Record<string, unknown> = { updated_at: now }
       if (submitted.company_name) accountUpdates.company_name = submitted.company_name
-      if (submitted.ein) accountUpdates.ein_number = submitted.ein
+      if (submitted.ein) {
+        // Canonical XX-XXXXXXX storage format. See Bug 2 / dev_task 3d6800c8.
+        const canonical = normalizeEIN(submitted.ein as string)
+        if (canonical) accountUpdates.ein_number = canonical
+      }
       if (submitted.formation_date) accountUpdates.formation_date = submitted.formation_date
       if (submitted.state_of_formation) accountUpdates.state_of_formation = submitted.state_of_formation
       if (submitted.registered_agent) accountUpdates.registered_agent_provider = submitted.registered_agent

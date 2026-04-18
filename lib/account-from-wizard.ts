@@ -7,6 +7,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { normalizeEIN } from "@/lib/jobs/validation"
 
 interface AccountFromWizardParams {
   contactId: string
@@ -62,6 +63,7 @@ export async function createAccountFromWizard(
   // 2. Create account
   const entityDisplay = entityType === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
 
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data: newAcct, error: acctErr } = await supabaseAdmin
     .from("accounts")
     .insert({
@@ -70,7 +72,12 @@ export async function createAccountFromWizard(
       state_of_formation: stateOfFormation || null,
       account_type: accountType,
       status: "Active",
-      ein_number: ein ? String(ein) : null,
+      // Persist EIN in canonical XX-XXXXXXX format. normalizeEIN() accepts
+      // bare 9-digit input (e.g. the 334119609 Luca Gallacci typed) and
+      // returns the dashed form. Returns null for anything not exactly 9
+      // digits — in which case we keep null so downstream forms
+      // (1120 / 5472 / SS-4) don't inherit garbage.
+      ein_number: normalizeEIN(ein),
       formation_date: formationDate ? String(formationDate) : null,
     })
     .select("id")
@@ -101,6 +108,7 @@ export async function createAccountFromWizard(
     .eq("contact_id", contactId)
     .is("account_id", null)
 
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { count: backfilledPay } = await supabaseAdmin
     .from("payments")
     .update({ account_id: newAcct.id, updated_at: new Date().toISOString() })
