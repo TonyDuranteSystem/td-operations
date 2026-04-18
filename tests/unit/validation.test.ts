@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   validateEIN,
+  normalizeEIN,
   validateState,
   validateFormationDate,
   validateRequiredFields,
@@ -8,17 +9,53 @@ import {
   validateFormationData,
 } from '../../lib/jobs/validation'
 
+describe('normalizeEIN', () => {
+  it('formats 9-digit input with canonical dash', () => {
+    expect(normalizeEIN('334119609')).toBe('33-4119609')
+    expect(normalizeEIN('301482516')).toBe('30-1482516')
+  })
+
+  it('preserves already-canonical input', () => {
+    expect(normalizeEIN('30-1482516')).toBe('30-1482516')
+  })
+
+  it('strips any non-digit separators', () => {
+    expect(normalizeEIN('30 1482516')).toBe('30-1482516')
+    expect(normalizeEIN('30.1482516')).toBe('30-1482516')
+    expect(normalizeEIN('3-01-48-2516')).toBe('30-1482516')
+  })
+
+  it('returns null when digit count is not 9', () => {
+    expect(normalizeEIN('12345678')).toBeNull()
+    expect(normalizeEIN('1234567890')).toBeNull()
+    expect(normalizeEIN('abc-defghij')).toBeNull()
+    expect(normalizeEIN('')).toBeNull()
+    expect(normalizeEIN(null)).toBeNull()
+    expect(normalizeEIN(undefined)).toBeNull()
+  })
+})
+
 describe('validateEIN', () => {
-  it('accepts valid EIN format', () => {
+  it('accepts canonical XX-XXXXXXX format', () => {
     expect(validateEIN('30-1482516')).toBeNull()
     expect(validateEIN('12-3456789')).toBeNull()
   })
 
-  it('rejects invalid EIN formats', () => {
-    expect(validateEIN('301482516')).not.toBeNull()
-    expect(validateEIN('30-148251')).not.toBeNull()
-    expect(validateEIN('abc-defghij')).not.toBeNull()
-    expect(validateEIN('3-01482516')).not.toBeNull()
+  it('accepts 9-digit unformatted input (real-world client entry)', () => {
+    expect(validateEIN('334119609')).toBeNull() // Luca Gallacci 2026-04-18
+    expect(validateEIN('301482516')).toBeNull()
+  })
+
+  it('accepts 9 digits with any separator', () => {
+    expect(validateEIN('30 1482516')).toBeNull()
+    expect(validateEIN('3-01482516')).toBeNull()
+  })
+
+  it('rejects wrong digit count', () => {
+    expect(validateEIN('30-148251')).not.toBeNull()     // 8 digits
+    expect(validateEIN('12345678')).not.toBeNull()      // 8 digits
+    expect(validateEIN('1234567890')).not.toBeNull()    // 10 digits
+    expect(validateEIN('abc-defghij')).not.toBeNull()   // no digits
   })
 
   it('returns null for missing EIN (optional)', () => {
@@ -29,6 +66,7 @@ describe('validateEIN', () => {
 
   it('trims whitespace', () => {
     expect(validateEIN(' 30-1482516 ')).toBeNull()
+    expect(validateEIN(' 334119609 ')).toBeNull()
   })
 })
 

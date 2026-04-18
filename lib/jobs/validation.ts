@@ -15,14 +15,26 @@ export interface ValidationResult {
   warnings: ValidationError[]
 }
 
-/** Validate EIN format: XX-XXXXXXX (2 digits, dash, 7 digits) */
+/** Normalize any 9-digit EIN-like string to canonical XX-XXXXXXX.
+ *  Returns null if the input does not contain exactly 9 digits.
+ *  Accepts "30-1482516", "301482516", "30 1482516", "30.1482516", etc. */
+export function normalizeEIN(ein: string | undefined | null): string | null {
+  if (!ein) return null
+  const digits = String(ein).replace(/\D/g, "")
+  if (digits.length !== 9) return null
+  return `${digits.slice(0, 2)}-${digits.slice(2)}`
+}
+
+/** Validate EIN format. Accepts canonical XX-XXXXXXX or any 9-digit variant
+ *  (dashes, spaces, or no separators). Callers should persist the normalized
+ *  value from `normalizeEIN()`. */
 export function validateEIN(ein: string | undefined | null): ValidationError | null {
   if (!ein) return null // EIN is optional for some wizard types
-  const cleaned = String(ein).trim()
-  if (!/^\d{2}-\d{7}$/.test(cleaned)) {
+  const normalized = normalizeEIN(ein)
+  if (!normalized) {
     return {
       field: "ein",
-      message: `Invalid EIN format: "${cleaned}". Expected XX-XXXXXXX (e.g., 30-1482516)`,
+      message: `Invalid EIN: "${String(ein).trim()}". Expected 9 digits (e.g., 30-1482516 or 301482516).`,
       severity: "error",
     }
   }
