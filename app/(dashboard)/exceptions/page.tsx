@@ -18,8 +18,12 @@ import {
   retryFailedJob,
   retryFailedEmail,
   markWebhookReviewed,
+  reconcileTierFromException,
+  retrySilentFailedJob,
+  closeOrphanTask,
 } from "./actions"
 import { RetryButton } from "./retry-button"
+import type { PortalTier } from "@/lib/portal/tier-config"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -358,13 +362,55 @@ export default async function ExceptionsPage() {
                   <span>Age {formatAge(row.age_hours)}</span>
                 </div>
               </div>
-              <Link
-                href={`/contacts/${row.contact_id}`}
-                className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
-              >
-                Open contact
-                <ExternalLink className="h-3 w-3" />
-              </Link>
+              <div className="flex items-center gap-2 shrink-0">
+                <RetryButton
+                  label={`Use "${row.contact_tier}"`}
+                  successToast={`Synced to ${row.contact_tier}`}
+                  variant="secondary"
+                  action={async () => {
+                    "use server"
+                    return reconcileTierFromException(row.contact_id, row.contact_tier as PortalTier)
+                  }}
+                  confirm={{
+                    title: `Promote account + auth to "${row.contact_tier}"`,
+                    description: `Force accounts.portal_tier AND auth.users.app_metadata.portal_tier to "${row.contact_tier}" so they match the contact. ${row.account_name ?? "Account"} will move from "${row.account_tier}" to "${row.contact_tier}".`,
+                    severity: "amber",
+                    confirmLabel: "Sync",
+                    preview: {
+                      affected: { account: 1, auth_user: 1 },
+                      items: [{ label: row.account_name ?? row.account_id, details: [`${row.account_tier} → ${row.contact_tier}`] }],
+                      warnings: ["Client-facing portal may switch dashboards on next login."],
+                    },
+                  }}
+                />
+                <RetryButton
+                  label={`Use "${row.account_tier}"`}
+                  successToast={`Synced to ${row.account_tier}`}
+                  variant="secondary"
+                  action={async () => {
+                    "use server"
+                    return reconcileTierFromException(row.contact_id, row.account_tier as PortalTier)
+                  }}
+                  confirm={{
+                    title: `Demote contact + auth to "${row.account_tier}"`,
+                    description: `Force contacts.portal_tier AND auth.users.app_metadata.portal_tier to "${row.account_tier}". ${row.contact_name ?? "Contact"} will move from "${row.contact_tier}" to "${row.account_tier}".`,
+                    severity: "amber",
+                    confirmLabel: "Sync",
+                    preview: {
+                      affected: { contact: 1, auth_user: 1 },
+                      items: [{ label: row.contact_name ?? row.contact_id, details: [`${row.contact_tier} → ${row.account_tier}`] }],
+                      warnings: ["Client-facing portal may switch dashboards on next login."],
+                    },
+                  }}
+                />
+                <Link
+                  href={`/contacts/${row.contact_id}`}
+                  className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                >
+                  Open
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
           ))
         )}
@@ -394,13 +440,24 @@ export default async function ExceptionsPage() {
                 )}
                 <div className="mt-1 text-xs text-zinc-400">Age {formatAge(row.age_hours)}</div>
               </div>
-              <Link
-                href={`/dev-tools?tab=jobs&id=${row.id}`}
-                className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
-              >
-                Inspect
-                <ExternalLink className="h-3 w-3" />
-              </Link>
+              <div className="flex items-center gap-2 shrink-0">
+                <RetryButton
+                  label="Retry"
+                  successToast="Requeued as new job"
+                  variant="primary"
+                  action={async () => {
+                    "use server"
+                    return retrySilentFailedJob(row.id)
+                  }}
+                />
+                <Link
+                  href={`/dev-tools?tab=jobs&id=${row.id}`}
+                  className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                >
+                  Inspect
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
           ))
         )}
@@ -433,13 +490,34 @@ export default async function ExceptionsPage() {
                   <span>Age {formatAge(row.age_hours)}</span>
                 </div>
               </div>
-              <Link
-                href={`/contacts/${row.contact_id}`}
-                className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
-              >
-                Open contact
-                <ExternalLink className="h-3 w-3" />
-              </Link>
+              <div className="flex items-center gap-2 shrink-0">
+                <RetryButton
+                  label="Close"
+                  successToast="Task cancelled"
+                  variant="secondary"
+                  action={async () => {
+                    "use server"
+                    return closeOrphanTask(row.id)
+                  }}
+                  confirm={{
+                    title: "Cancel orphan task",
+                    description: `Set this task's status to "Cancelled" so it stops appearing here. Reversible from the Task board.`,
+                    severity: "amber",
+                    confirmLabel: "Cancel task",
+                    preview: {
+                      affected: { task: 1 },
+                      items: [{ label: row.task_title, details: [row.assigned_to ?? "unassigned", `Age ${formatAge(row.age_hours)}`] }],
+                    },
+                  }}
+                />
+                <Link
+                  href={`/contacts/${row.contact_id}`}
+                  className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                >
+                  Open
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
           ))
         )}

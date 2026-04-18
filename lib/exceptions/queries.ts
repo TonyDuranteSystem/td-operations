@@ -283,7 +283,7 @@ export async function getTierDrift(): Promise<TierDriftRow[]> {
       contact_id,
       account_id,
       contacts:contacts!account_contacts_contact_id_fkey(id, full_name, email, portal_tier, updated_at),
-      accounts:accounts!account_contacts_account_id_fkey(id, company_name, portal_tier, updated_at)
+      accounts:accounts!account_contacts_account_id_fkey(id, company_name, portal_tier, status, updated_at)
     `)
     .limit(1000)
   if (error) throw new Error(error.message)
@@ -292,15 +292,22 @@ export async function getTierDrift(): Promise<TierDriftRow[]> {
     contact_id: string
     account_id: string
     contacts: { id: string; full_name: string | null; email: string | null; portal_tier: string | null; updated_at: string | null } | null
-    accounts: { id: string; company_name: string | null; portal_tier: string | null; updated_at: string | null } | null
+    accounts: { id: string; company_name: string | null; portal_tier: string | null; status: string | null; updated_at: string | null } | null
   }
   const rows = (data ?? []) as unknown as LinkRow[]
+
+  // Accounts in these statuses are INTENTIONALLY inactive — the tier mismatch
+  // with an active owner is expected and not drift. A closed LLC shouldn't
+  // carry an "active" tier just because the owner still owns other companies.
+  const INTENDED_INACTIVE_STATUSES = new Set(["Cancelled", "Closed", "Suspended", "Offboarding"])
 
   return rows
     .filter(r => {
       const ct = r.contacts?.portal_tier
       const at = r.accounts?.portal_tier
-      return !!ct && !!at && ct !== at
+      if (!ct || !at || ct === at) return false
+      if (r.accounts?.status && INTENDED_INACTIVE_STATUSES.has(r.accounts.status)) return false
+      return true
     })
     .map(r => {
       const contactUpdated = r.contacts?.updated_at ?? null
