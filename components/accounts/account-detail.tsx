@@ -1153,8 +1153,8 @@ function PaymentSection({
         </span>
       </button>
       {open && (
-        <div className="bg-white rounded-lg border overflow-hidden">
-          <div className="hidden md:grid md:grid-cols-[120px,1fr,100px,100px,90px,100px,40px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
+        <div className="bg-white rounded-lg border">
+          <div className="hidden md:grid md:grid-cols-[120px,1fr,100px,100px,90px,100px,40px] gap-3 px-4 py-2 border-b bg-zinc-50 rounded-t-lg text-xs font-medium text-muted-foreground uppercase">
             <span>Invoice</span>
             <span>Description</span>
             <span className="text-right">Amount</span>

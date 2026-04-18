@@ -152,7 +152,7 @@ export function PaymentRowActions({ payment }: Props) {
           {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
         </button>
         {menuOpen && (
-          <div className="absolute right-0 top-full mt-1 z-20 w-52 bg-white border rounded-lg shadow-lg overflow-hidden">
+          <div className="absolute right-0 top-full mt-1 z-50 w-52 bg-white border rounded-lg shadow-lg overflow-hidden">
             {!isPaid && !isCancelled && (
               <button
                 type="button"
