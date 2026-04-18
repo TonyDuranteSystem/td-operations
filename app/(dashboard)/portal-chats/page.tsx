@@ -1539,16 +1539,26 @@ export default function PortalChatsPage() {
                         )
                       )}
                     </div>
-                    <button
-                      onClick={() => setAiPanelOpen(v => !v)}
-                      className={cn(
-                        'p-2 rounded-lg transition-colors',
-                        aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
-                      )}
-                      title="AI Assistant"
-                    >
-                      <Sparkles className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={handleRefresh}
+                        disabled={isRefreshing}
+                        className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+                        title="Refresh messages"
+                      >
+                        <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+                      </button>
+                      <button
+                        onClick={() => setAiPanelOpen(v => !v)}
+                        className={cn(
+                          'p-2 rounded-lg transition-colors',
+                          aiPanelOpen ? 'bg-violet-100 text-violet-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'
+                        )}
+                        title="AI Assistant"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 )
               })()}
