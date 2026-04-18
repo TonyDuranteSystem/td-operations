@@ -5,6 +5,7 @@ import { Check, RotateCw, ChevronUp, ChevronDown, Clock, Paperclip, ExternalLink
 import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
+import { TaskRowActions } from '@/components/tasks/task-row-actions'
 import type { Task } from '@/lib/types'
 import { differenceInDays, parseISO } from 'date-fns'
 import { toast } from 'sonner'
@@ -187,6 +188,7 @@ export function TaskCard({ task, today, onEdit }: { task: Task; today: string; o
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
+          <TaskRowActions task={task} />
         </div>
       </div>
     </div>

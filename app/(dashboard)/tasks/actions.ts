@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 import { updateTask as updateTaskOp } from '@/lib/operations/task'
 import { createTaskSchema, updateTaskSchema, type CreateTaskInput, type UpdateTaskInput } from '@/lib/schemas/task'
+import type { DryRunResult } from '@/lib/operations/destructive'
 
 async function currentActor(): Promise<string> {
   const supabase = createClient()
@@ -110,6 +111,76 @@ export async function updateTask(input: UpdateTaskInput): Promise<ActionResult> 
       details: updates,
     })
     if (!result.success) throw new Error(result.error || 'Failed to update task')
+    revalidatePath('/tasks')
+  })
+}
+
+// ─── P3.9 — delete task ────────────────────────────────
+
+export async function deleteTaskPreview(
+  taskId: string,
+): Promise<{ success: boolean; preview?: DryRunResult; error?: string }> {
+  try {
+    const supabase = createClient()
+    const { data: task } = await supabase
+      .from('tasks')
+      .select('id, task_title, status, priority, assigned_to, account_id, contact_id, delivery_id, category')
+      .eq('id', taskId)
+      .maybeSingle()
+    if (!task) return { success: false, error: 'Task not found' }
+
+    return {
+      success: true,
+      preview: {
+        affected: { task: 1 },
+        items: [
+          {
+            label: task.task_title ?? 'Untitled task',
+            details: [
+              task.status ?? 'no status',
+              task.priority ?? 'no priority',
+              task.assigned_to ? `assigned ${task.assigned_to}` : '',
+              task.category ?? '',
+            ].filter(Boolean),
+          },
+        ],
+        warnings: [
+          'The task is permanently removed. If it was created by a pipeline stage, it will NOT be auto-recreated.',
+        ],
+        record_label: task.task_title ?? taskId,
+      },
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Preview failed' }
+  }
+}
+
+export async function deleteTask(taskId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+    const { error } = await supabase.from('tasks').delete().eq('id', taskId)
+    if (error) throw new Error(error.message)
+    revalidatePath('/tasks')
+  }, {
+    action_type: 'delete',
+    table_name: 'tasks',
+    record_id: taskId,
+    summary: 'Task deleted',
+  })
+}
+
+export async function appendTaskNoteAction(taskId: string, note: string, updatedAt: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const actor = await currentActor()
+    const { appendTaskNote } = await import('@/lib/operations/task')
+    const result = await appendTaskNote({
+      id: taskId,
+      note,
+      expected_updated_at: updatedAt,
+      actor,
+    })
+    if (!result.success) throw new Error(result.error || 'Failed to append note')
     revalidatePath('/tasks')
   })
 }
