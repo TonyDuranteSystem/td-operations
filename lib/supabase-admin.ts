@@ -15,8 +15,16 @@ let _supabaseAdmin: SupabaseClient<Database> | null = null
 export const supabaseAdmin = new Proxy({} as SupabaseClient<Database>, {
   get(_target, prop) {
     if (!_supabaseAdmin) {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+      const expectedRef = process.env.EXPECTED_SUPABASE_REF
+      if (expectedRef) {
+        const actualRef = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
+        if (actualRef !== expectedRef) {
+          throw new Error(`Supabase project ref mismatch: expected "${expectedRef}", got "${actualRef}". Refusing to start — wrong DB target.`)
+        }
+      }
       _supabaseAdmin = createClient<Database>(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        supabaseUrl,
         process.env.SUPABASE_SERVICE_ROLE_KEY!
       )
     }

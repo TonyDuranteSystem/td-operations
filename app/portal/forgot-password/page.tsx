@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@supabase/supabase-js'
 import Link from 'next/link'
+import { PORTAL_BASE_URL } from '@/lib/config'
 
 // Use a plain Supabase client (implicit flow) for password reset.
 // The default @supabase/ssr client uses PKCE which stores a code_verifier
@@ -37,7 +38,7 @@ export default function ForgotPasswordPage() {
     // Implicit flow: Supabase will redirect with #access_token=...&type=recovery
     // in the hash fragment — no code_verifier cookie needed
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://portal.tonydurante.us/portal/reset-password',
+      redirectTo: `${PORTAL_BASE_URL}/portal/reset-password`,
     })
 
     setLoading(false)
