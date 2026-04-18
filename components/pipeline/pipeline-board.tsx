@@ -15,6 +15,7 @@ import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-p
 import { updateDealStage } from '@/app/(dashboard)/pipeline/actions'
 import { EditDealDialog } from './edit-deal-dialog'
 import { CreateDealDialog } from './create-deal-dialog'
+import { DealRowActions } from './deal-row-actions'
 
 interface DealItem {
   id: string
@@ -170,7 +171,12 @@ function DealCard({ deal, onEdit }: { deal: DealItem; onEdit?: (deal: DealItem) 
         onEdit && 'cursor-pointer hover:shadow-md'
       )}
     >
-      <p className="font-medium leading-snug line-clamp-2">{deal.deal_name}</p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-medium leading-snug line-clamp-2 flex-1">{deal.deal_name}</p>
+        <div onClick={(e) => e.stopPropagation()} className="shrink-0 -mr-1 -mt-1">
+          <DealRowActions deal={{ id: deal.id, deal_name: deal.deal_name, stage: deal.stage, updated_at: deal.updated_at }} />
+        </div>
+      </div>
       {deal.company_name && (
         <Link
           href={`/accounts/${deal.account_id}`}
