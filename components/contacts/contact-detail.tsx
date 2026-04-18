@@ -10,9 +10,11 @@ import {
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
+  Activity,
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
@@ -39,6 +41,7 @@ const TABS = [
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
   { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'One-screen view of every audit check for this contact — diagnostic + chain audit together.' },
   { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
+  { key: 'backend', label: 'Backend', icon: Activity, tooltip: 'Read-only view of CRM actions, background jobs, webhook events, and session checkpoints that touched this contact.' },
 ]
 
 const TIER_COLORS: Record<string, string> = {
@@ -437,6 +440,9 @@ export function ContactDetail({
       )}
       {activeTab === 'activity' && (
         <ActivityTab conversations={conversations} />
+      )}
+      {activeTab === 'backend' && (
+        <BackendActivityPanel kind="contact" contactId={contact.id} email={contact.email} />
       )}
 
       <ChainAuditDialog

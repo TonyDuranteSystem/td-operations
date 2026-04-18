@@ -7,7 +7,7 @@ import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Pencil, Plus, Search, Loader2, Stethoscope, X,
+  Pencil, Plus, Search, Loader2, Stethoscope, X, Activity,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -29,6 +29,7 @@ import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -40,6 +41,7 @@ const TABS = [
   { key: 'documenti', label: 'Documents', icon: FileText, adminOnly: false },
   { key: 'corrispondenza', label: 'Correspondence', icon: Inbox, adminOnly: false },
   { key: 'comunicazioni', label: 'Communications', icon: MessageSquare, adminOnly: false },
+  { key: 'backend', label: 'Backend', icon: Activity, adminOnly: true },
 ]
 
 const SERVICE_STATUS_COLORS: Record<string, string> = {
@@ -648,6 +650,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       )}
       {activeTab === 'comunicazioni' && (
         <AccountCommunications accountId={account.id} />
+      )}
+      {activeTab === 'backend' && (
+        <BackendActivityPanel kind="account" accountId={account.id} />
       )}
     </div>
   )
