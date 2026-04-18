@@ -119,7 +119,7 @@ export const ONBOARDING_FIELDS: Record<string, FieldConfig[]> = {
       { value: 'Wisconsin', label: 'Wisconsin' }, { value: 'Wyoming', label: 'Wyoming' },
     ]},
     { name: 'formation_date', label: 'Formation Date', labelIt: 'Data Costituzione', type: 'date', required: true },
-    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, hint: 'e.g. 30-1482516' },
+    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein', hint: 'e.g. 30-1482516' },
     { name: 'filing_id', label: 'State Filing ID', labelIt: 'Filing ID Statale', type: 'text', required: false },
     { name: 'business_purpose', label: 'Business Activities', labelIt: 'Attività Aziendali', type: 'textarea', required: true },
     { name: 'registered_agent', label: 'Current Registered Agent', labelIt: 'Agente Registrato Attuale', type: 'text', required: false },
@@ -164,7 +164,7 @@ const TAX_OWNER_BASE: FieldConfig[] = [
 // Shared company fields
 const TAX_COMPANY_BASE: FieldConfig[] = [
   { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
-  { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true },
+  { name: 'ein_number', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein' },
   { name: 'date_of_incorporation', label: 'Date of Incorporation', labelIt: 'Data Costituzione', type: 'date', required: true },
   { name: 'state_of_incorporation', label: 'State of Incorporation', labelIt: 'Stato Costituzione', type: 'text', required: true },
   { name: 'principal_product_service', label: 'Principal Product/Service', labelIt: 'Prodotto/Servizio Principale', type: 'textarea', required: true },
@@ -487,7 +487,7 @@ export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'business_name', label: 'Business Name (LLC)', labelIt: 'Nome Azienda (LLC)', type: 'text', required: true },
     { name: 'phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
     { name: 'email', label: 'Email', type: 'email', required: true },
-    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true },
+    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein' },
     { name: 'business_description', label: 'Business Description', labelIt: 'Descrizione Attività', type: 'textarea', required: true, hint: 'Be as detailed as possible — the bank evaluates your business here', hintIt: 'Sii il più dettagliato possibile — la banca valuta la tua attività qui' },
     { name: 'avg_monthly_revenue', label: 'Average Monthly Revenue (USD)', labelIt: 'Fatturato Mensile Medio (USD)', type: 'number', required: true },
     { name: 'other_us_bank', label: 'Other US Bank Account (optional)', labelIt: 'Altro Conto USA (opzionale)', type: 'text', required: false },
@@ -540,7 +540,7 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
   ],
   company: [
     { name: 'llc_name', label: 'LLC Legal Name', labelIt: 'Nome Legale LLC', type: 'text', required: true },
-    { name: 'llc_ein', label: 'EIN Number (optional)', labelIt: 'Numero EIN (opzionale)', type: 'text', required: false },
+    { name: 'llc_ein', label: 'EIN Number (optional)', labelIt: 'Numero EIN (opzionale)', type: 'text', required: false, format: 'ein' },
     { name: 'llc_state', label: 'State of Formation', labelIt: 'Stato di Costituzione', type: 'select', required: true, options: [
       { value: 'Wyoming', label: 'Wyoming' }, { value: 'Delaware', label: 'Delaware' },
       { value: 'Florida', label: 'Florida' }, { value: 'New Mexico', label: 'New Mexico' },
@@ -602,7 +602,7 @@ export const COMPANY_INFO_FIELDS: Record<string, FieldConfig[]> = {
       { value: 'Wisconsin', label: 'Wisconsin' }, { value: 'Wyoming', label: 'Wyoming' },
     ]},
     { name: 'formation_date', label: 'Formation Date', labelIt: 'Data Costituzione', type: 'date', required: true },
-    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, hint: 'e.g. 30-1482516' },
+    { name: 'ein', label: 'EIN Number', labelIt: 'Numero EIN', type: 'text', required: true, format: 'ein', hint: 'e.g. 30-1482516' },
     { name: 'business_purpose', label: 'Business Activities', labelIt: 'Attività Aziendali', type: 'textarea', required: true },
   ],
   documents: [

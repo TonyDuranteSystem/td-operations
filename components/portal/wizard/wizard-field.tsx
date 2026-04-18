@@ -21,6 +21,20 @@ export interface FieldConfig {
   repeaterFields?: FieldConfig[]   // sub-fields for repeater type
   repeaterAddLabel?: string
   repeaterAddLabelIt?: string
+  /** Live-format the input as the user types. `ein` strips non-digits and
+   *  auto-inserts the dash after the second digit, capped at 9 digits.
+   *  Display always ends up in canonical XX-XXXXXXX regardless of what the
+   *  user pastes. Phase E2. */
+  format?: 'ein'
+}
+
+/** Live-normalize an EIN-like input. Accepts any input, returns at most 9
+ *  digits formatted as XX-XXXXXXX. Silent on non-digits. Matches the
+ *  server-side normalizeEIN() so client + server agree on shape. */
+function formatEINInput(raw: string): string {
+  const digits = raw.replace(/\D/g, '').slice(0, 9)
+  if (digits.length <= 2) return digits
+  return `${digits.slice(0, 2)}-${digits.slice(2)}`
 }
 
 interface WizardFieldProps {
@@ -194,7 +208,16 @@ export function WizardField({ field, value, onChange, onFileUpload, locale, erro
         <input
           type={field.type}
           value={String(value ?? '')}
-          onChange={e => onChange(field.name, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
+          inputMode={field.format === 'ein' ? 'numeric' : undefined}
+          maxLength={field.format === 'ein' ? 10 : undefined}
+          onChange={e => {
+            const raw = e.target.value
+            if (field.format === 'ein') {
+              onChange(field.name, formatEINInput(raw))
+              return
+            }
+            onChange(field.name, field.type === 'number' ? (raw === '' ? '' : Number(raw)) : raw)
+          }}
           placeholder={placeholder}
           className={inputClass}
         />
