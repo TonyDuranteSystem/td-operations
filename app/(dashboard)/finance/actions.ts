@@ -124,6 +124,121 @@ export async function markInvoicePaid(
 }
 
 /**
+ * P3.9 — delete a payment row (works on both invoiced payments and
+ * pre-invoice placeholders). Soft-guarded: paid rows are blocked to
+ * protect the ledger; any matched bank feeds are unlinked first.
+ */
+export async function deletePaymentPreview(
+  paymentId: string,
+): Promise<{ success: boolean; preview?: DryRunResult; error?: string }> {
+  try {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, description, amount, total, amount_currency, status, invoice_status, qb_invoice_id, installment')
+      .eq('id', paymentId)
+      .maybeSingle()
+
+    if (!payment) return { success: false, error: 'Payment not found' }
+
+    const { count: feedCount } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id', { count: 'exact', head: true })
+      .eq('matched_payment_id', paymentId)
+
+    const affected: Record<string, number> = {
+      payment: 1,
+      client_expense_mirror: payment.invoice_number ? 1 : 0,
+      matched_bank_feeds: feedCount ?? 0,
+    }
+
+    const items: DryRunResult['items'] = [
+      {
+        label: payment.invoice_number
+          ? `Invoice ${payment.invoice_number}`
+          : `Pre-invoice placeholder${payment.installment ? ` (${payment.installment})` : ''}`,
+        details: [
+          `${payment.amount ?? payment.total ?? 0} ${payment.amount_currency ?? ''}`.trim(),
+          payment.status ?? 'no status',
+          payment.description ?? '',
+        ].filter(Boolean),
+      },
+    ]
+    if ((feedCount ?? 0) > 0) {
+      items.push({ label: `Unlink ${feedCount} matched bank feed${feedCount === 1 ? '' : 's'}` })
+    }
+    if (payment.invoice_number) {
+      items.push({ label: 'Remove the client_expenses mirror row' })
+    }
+
+    const isPaid = payment.status === 'Paid' || payment.invoice_status === 'Paid'
+
+    return {
+      success: true,
+      preview: {
+        affected,
+        items,
+        warnings: [
+          'Delete removes the row — not the same as "void". Use Void on an invoiced row if the client should still see the cancellation.',
+        ],
+        blocker: isPaid
+          ? 'This payment is marked Paid. Deleting a paid ledger entry corrupts history — void it or reverse the payment instead.'
+          : undefined,
+        record_label: payment.invoice_number ?? 'pre-invoice placeholder',
+      },
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Preview failed' }
+  }
+}
+
+export async function deletePayment(paymentId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, status, invoice_status, account_id')
+      .eq('id', paymentId)
+      .maybeSingle()
+    if (!payment) throw new Error('Payment not found')
+    if (payment.status === 'Paid' || payment.invoice_status === 'Paid') {
+      throw new Error('Paid payments cannot be deleted — void the invoice instead.')
+    }
+
+    // Unlink any matched bank feeds
+    // eslint-disable-next-line no-restricted-syntax -- bank_feeds is not a PROTECTED table
+    await supabaseAdmin
+      .from('td_bank_feeds')
+      .update({ matched_payment_id: null, match_confidence: null, status: 'unmatched', updated_at: new Date().toISOString() })
+      .eq('matched_payment_id', paymentId)
+
+    // Remove client_expenses mirror if invoiced
+    if (payment.invoice_number) {
+      await supabaseAdmin
+        .from('client_expenses')
+        .delete()
+        .eq('td_payment_id', paymentId)
+    }
+
+    // Delete the payment row itself
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+    const { error } = await supabaseAdmin.from('payments').delete().eq('id', paymentId)
+    if (error) throw new Error(`Failed to delete payment: ${error.message}`)
+
+    revalidatePath('/finance')
+    revalidatePath('/payments')
+    if (payment.account_id) revalidatePath(`/accounts/${payment.account_id}`)
+  }, {
+    action_type: 'delete',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: 'Payment deleted',
+  })
+}
+
+/**
  * P3.7: dry-run preview for {@link voidInvoice}. Surfaces what cascades
  * (QB void, bank feed unlink, client_expenses mirror) before the operator
  * confirms the destructive action.

@@ -30,6 +30,7 @@ import { updateAccountField, updateContactField, addAccountNote } from '@/app/(d
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
+import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -1153,20 +1154,21 @@ function PaymentSection({
       </button>
       {open && (
         <div className="bg-white rounded-lg border overflow-hidden">
-          <div className="hidden md:grid md:grid-cols-[120px,1fr,100px,100px,90px,100px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
+          <div className="hidden md:grid md:grid-cols-[120px,1fr,100px,100px,90px,100px,40px] gap-3 px-4 py-2 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase">
             <span>Invoice</span>
             <span>Description</span>
             <span className="text-right">Amount</span>
             <span>Date</span>
             <span>Status</span>
             <span>Method</span>
+            <span></span>
           </div>
           {payments.map(p => {
             const status = p.invoice_status ?? p.status ?? '—'
             const isOverdue = p.due_date && p.due_date < today && status !== 'Paid' && status !== 'Cancelled' && status !== 'Waived'
             return (
               <div key={p.id} className={cn(
-                'grid grid-cols-1 md:grid-cols-[120px,1fr,100px,100px,90px,100px] gap-1 md:gap-3 px-4 py-2.5 border-b last:border-b-0 text-sm items-center',
+                'grid grid-cols-1 md:grid-cols-[120px,1fr,100px,100px,90px,100px,40px] gap-1 md:gap-3 px-4 py-2.5 border-b last:border-b-0 text-sm items-center',
                 isOverdue && 'bg-red-50/50'
               )}>
                 <span className="font-mono text-xs text-blue-600">{p.invoice_number ?? '—'}</span>
@@ -1182,6 +1184,21 @@ function PaymentSection({
                   </span>
                 </div>
                 <p className="hidden md:block text-xs text-muted-foreground truncate">{p.payment_method ?? '—'}</p>
+                <div className="hidden md:flex justify-end">
+                  <PaymentRowActions payment={{
+                    id: p.id,
+                    invoice_number: p.invoice_number ?? null,
+                    description: p.description ?? null,
+                    amount: p.amount ?? null,
+                    total: p.total ?? null,
+                    amount_currency: p.amount_currency ?? null,
+                    status: p.status ?? null,
+                    invoice_status: p.invoice_status ?? null,
+                    due_date: p.due_date ?? null,
+                    notes: p.notes ?? null,
+                    message: (p as unknown as { message?: string | null }).message ?? null,
+                  }} />
+                </div>
               </div>
             )
           })}
