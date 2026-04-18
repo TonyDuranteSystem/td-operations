@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText, CreditCard, CheckCircle, PenSquare, ArrowRight, Package, MessageCircle } from 'lucide-react'
+import { FileText, CreditCard, CheckCircle, Clock, PenSquare, ArrowRight, Package, MessageCircle } from 'lucide-react'
 import Link from 'next/link'
 
 interface OfferService {
@@ -33,9 +33,13 @@ interface WelcomeDashboardProps {
     payment_type: string | null
   } | null
   locale: 'en' | 'it'
+  /** True when an onboarding wizard_progress row exists with status='submitted'.
+   *  Flips step 4 ("Complete Setup") from an active link into a passive
+   *  "Data submitted — under review" state (Tier Model B, SOP v7.2). */
+  wizardSubmitted?: boolean
 }
 
-export function WelcomeDashboard({ tier, firstName, offerData, locale }: WelcomeDashboardProps) {
+export function WelcomeDashboard({ tier, firstName, offerData, locale, wizardSubmitted = false }: WelcomeDashboardProps) {
   const isLead = tier === 'lead'
   const isOnboarding = tier === 'onboarding'
   const isViewed = offerData?.status === 'viewed' || offerData?.status === 'signed' || offerData?.status === 'completed'
@@ -44,7 +48,6 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
 
   // Parse services from offer
   const services: OfferService[] = Array.isArray(offerData?.services) ? offerData.services : []
-  const pipelines: string[] = Array.isArray(offerData?.bundled_pipelines) ? offerData.bundled_pipelines : []
 
   const t = locale === 'it' ? IT : EN
 
@@ -89,15 +92,32 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
             href={isSigned && !isPaid ? '/portal/offer' : undefined}
           />
           <ProgressStep
-            icon={PenSquare}
-            label={t.step4}
-            description={t.step4Desc}
-            completed={false}
-            active={isOnboarding}
-            href={isOnboarding ? '/portal/wizard' : undefined}
+            icon={wizardSubmitted ? Clock : PenSquare}
+            label={wizardSubmitted ? t.step4Review : t.step4}
+            description={wizardSubmitted ? t.step4ReviewDesc : t.step4Desc}
+            completed={wizardSubmitted}
+            active={isOnboarding && !wizardSubmitted}
+            href={isOnboarding && !wizardSubmitted ? '/portal/wizard' : undefined}
           />
         </div>
       </div>
+
+      {/* Under-review banner — shown when wizard is submitted but tier hasn't been
+          promoted to active yet. Tells the client their data is in Antonio's
+          review queue instead of a misleading "Complete Setup" link. */}
+      {wizardSubmitted && isOnboarding && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 flex items-start gap-3">
+          <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-blue-900">
+              {t.underReviewTitle}
+            </p>
+            <p className="text-sm text-blue-700 mt-0.5">
+              {t.underReviewBody}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Payment section — shows when contract is signed but not paid, and payment methods exist */}
       {isSigned && !isPaid && (offerData?.payment_links?.length || offerData?.bank_details) && (
@@ -200,7 +220,7 @@ export function WelcomeDashboard({ tier, firstName, offerData, locale }: Welcome
             <ArrowRight className="h-4 w-4 text-zinc-400 group-hover:text-blue-500 transition-colors" />
           </Link>
         )}
-        {isOnboarding && (
+        {isOnboarding && !wizardSubmitted && (
           <Link
             href="/portal/wizard"
             className="flex items-center gap-3 p-4 bg-white rounded-xl border hover:border-blue-300 hover:shadow-sm transition-all group"
@@ -305,6 +325,10 @@ const EN = {
   step3Desc: 'Complete your payment to activate services',
   step4: 'Complete Setup',
   step4Desc: 'Provide your information so we can get started',
+  step4Review: 'Data Submitted — Under Review',
+  step4ReviewDesc: 'Our team is reviewing your information (1–2 business days)',
+  underReviewTitle: "We've received your onboarding data",
+  underReviewBody: "Our team is reviewing your submission and the documents you uploaded. We'll activate your services shortly — typically within 1–2 business days. You'll see them appear right here when we're done.",
   servicesPurchased: 'Services Included',
   viewProposal: 'View Your Proposal',
   viewProposalDesc: 'Review services, pricing, and sign the contract',
@@ -340,6 +364,10 @@ const IT = {
   step3Desc: 'Completa il pagamento per attivare i servizi',
   step4: 'Completa la Registrazione',
   step4Desc: 'Fornisci le tue informazioni per iniziare',
+  step4Review: 'Dati Inviati — In Revisione',
+  step4ReviewDesc: 'Il nostro team sta esaminando le tue informazioni (1–2 giorni lavorativi)',
+  underReviewTitle: 'Abbiamo ricevuto i tuoi dati di onboarding',
+  underReviewBody: 'Il nostro team sta esaminando la tua compilazione e i documenti caricati. Attiveremo i tuoi servizi a breve — di solito entro 1–2 giorni lavorativi. Li vedrai apparire proprio qui quando avremo finito.',
   servicesPurchased: 'Servizi Inclusi',
   viewProposal: 'Visualizza la Proposta',
   viewProposalDesc: 'Rivedi servizi, prezzi e firma il contratto',

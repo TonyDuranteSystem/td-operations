@@ -115,12 +115,29 @@ export default async function PortalDashboardPage() {
       }
     }
 
+    // Check if an onboarding wizard submission is already in for this contact —
+    // used by the welcome dashboard to flip step 4 from "Complete Setup" link
+    // into a passive "Data submitted — we're reviewing" state (Tier Model B).
+    let wizardSubmitted = false
+    if (contactId) {
+      const { data: wp } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('id')
+        .eq('contact_id', contactId)
+        .eq('wizard_type', 'onboarding')
+        .eq('status', 'submitted')
+        .limit(1)
+        .maybeSingle()
+      wizardSubmitted = !!wp
+    }
+
     return (
       <WelcomeDashboard
         tier={authTier}
         firstName={firstName}
         offerData={offerData}
         locale={locale}
+        wizardSubmitted={wizardSubmitted}
       />
     )
   }
@@ -179,12 +196,32 @@ export default async function PortalDashboardPage() {
 
     const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
 
+    // Check if an onboarding wizard submission is already in for this
+    // contact — used by the welcome dashboard to flip step 4 from "Complete
+    // Setup" link into a passive "Data submitted — we're reviewing" state
+    // (Tier Model B). We key off contact_id because the wizard belongs to
+    // the person: pre-account wizards have account_id=NULL (e.g. Luca
+    // Gallacci 2026-04-18 case) and post-promote rows still keep contact_id.
+    let wizardSubmitted = false
+    if (contactId) {
+      const { data: wp } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('id')
+        .eq('contact_id', contactId)
+        .eq('wizard_type', 'onboarding')
+        .eq('status', 'submitted')
+        .limit(1)
+        .maybeSingle()
+      wizardSubmitted = !!wp
+    }
+
     return (
       <WelcomeDashboard
         tier={portalTier}
         firstName={firstName}
         offerData={offerData}
         locale={locale}
+        wizardSubmitted={wizardSubmitted}
       />
     )
   }

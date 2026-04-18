@@ -811,38 +811,14 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     }
   }
 
-  // ─── 9. PORTAL TIER UPGRADE ───
-  // Advance portal_tier from "onboarding" to "active" now that setup is complete
-  if (contact_id) {
-    try {
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      const { data: updatedContact } = await supabaseAdmin
-        .from("contacts")
-        .update({ portal_tier: "active", updated_at: now })
-        .eq("id", contact_id)
-        .eq("portal_tier", "onboarding")
-        .select("id")
-
-      if (updatedContact?.length) {
-        result.steps.push(step("tier_upgrade", "ok", "Contact portal_tier → active"))
-      } else {
-        result.steps.push(step("tier_upgrade", "skipped", "Contact tier not 'onboarding' or already active"))
-      }
-
-      // Also update account tier (secondary)
-      if (account_id) {
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        await supabaseAdmin
-          .from("accounts")
-          .update({ portal_tier: "active" })
-          .eq("id", account_id)
-          .eq("portal_tier", "onboarding")
-      }
-    } catch (e) {
-      result.steps.push(step("tier_upgrade", "error", e instanceof Error ? e.message : String(e)))
-    }
-    await updateJobProgress(job.id, result)
-  }
+  // ─── 9. PORTAL TIER — NO AUTO-UPGRADE (Tier Model B, SOP v7.2) ───
+  // Tier remains at "onboarding" after the wizard is submitted. Antonio
+  // reviews the submission + documents in the CRM and explicitly promotes
+  // the client to "active" via the Reconcile Portal Tier button (P3.4 #2).
+  // This replaces the previous auto-upgrade here which conflicted with
+  // activate-service's reconciliation and caused the tier ping-pong bug
+  // documented in dev_task 3d6800c8 (Luca Gallacci live QA 2026-04-18).
+  result.steps.push(step("tier_upgrade", "skipped", "Stays at onboarding pending Antonio's review (Tier Model B)"))
 
   // ─── 10. PORTAL NOTIFICATION TO CONTACT ───
   if (contact_id) {
@@ -852,11 +828,11 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         contact_id,
         account_id: account_id || undefined,
         type: "service",
-        title: "Your account is ready!",
+        title: "We received your onboarding data",
         body: company_name
-          ? `${company_name} has been set up. Review your documents and complete any pending signatures.`
-          : "Your account has been set up. Review your documents and complete any pending items.",
-        link: "/portal/services",
+          ? `Thanks — we've received everything for ${company_name}. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).`
+          : "Thanks — we've received your onboarding data. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).",
+        link: "/portal",
       })
       result.steps.push(step("portal_notification", "ok", "Contact notified in portal"))
     } catch (e) {
