@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect, useTransition } from 'react'
-import { X, Loader2, Trash2, AlertTriangle, RotateCcw, UserX } from 'lucide-react'
+import { X, Loader2, Trash2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import type { DryRunResult } from '@/lib/operations/destructive'
 
 // ---------- Types ----------
 
@@ -273,85 +275,41 @@ interface DeleteOfferDialogProps {
 
 export function DeleteOfferDialog({ open, onClose, offerToken, leadName }: DeleteOfferDialogProps) {
   const router = useRouter()
-  const [isPending, startTransition] = useTransition()
 
-  if (!open) return null
-
-  const handleDelete = () => {
-    startTransition(async () => {
-      try {
-        const res = await fetch('/api/crm/admin-actions/delete-offer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offer_token: offerToken }),
-        })
-
-        const data = await res.json()
-
-        if (!res.ok) {
-          toast.error(data.error || 'Failed to delete offer')
-          return
-        }
-
-        toast.success(data.message || 'Offer deleted')
-        onClose()
-        router.refresh()
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'An error occurred')
-      }
+  const loadPreview = async (): Promise<DryRunResult> => {
+    const res = await fetch('/api/crm/admin-actions/offer-delete-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offer_token: offerToken }),
     })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to load preview')
+    return data as DryRunResult
+  }
+
+  const handleConfirm = async () => {
+    const res = await fetch('/api/crm/admin-actions/delete-offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offer_token: offerToken }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { success: false, error: data.error || 'Failed to delete offer' }
+    router.refresh()
+    return { success: true, message: data.message || 'Offer deleted' }
   }
 
   return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/50" onClick={onClose} />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div
-          className="bg-white rounded-lg shadow-xl w-full max-w-md"
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between px-6 py-4 border-b">
-            <h2 className="text-lg font-semibold flex items-center gap-2 text-red-700">
-              <Trash2 className="h-5 w-5" />
-              Delete Offer
-            </h2>
-            <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="px-6 py-4 space-y-4">
-            <p className="text-sm text-zinc-600">
-              Delete offer <span className="font-semibold text-zinc-900">{offerToken}</span> for{' '}
-              <span className="font-semibold">{leadName}</span>?
-            </p>
-
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-              This will also delete all contracts and pending activations linked to this offer.
-              The lead record will be kept so you can create a new offer.
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={isPending}
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                Delete Offer
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+    <ConfirmDestructiveDialog
+      open={open}
+      onClose={onClose}
+      title="Delete Offer"
+      description={`Delete offer ${offerToken} for ${leadName}?`}
+      severity="red"
+      loadPreview={loadPreview}
+      confirmLabel="Delete Offer"
+      onConfirm={handleConfirm}
+    />
   )
 }
 
@@ -366,89 +324,41 @@ interface ResetOfferDialogProps {
 
 export function ResetOfferDialog({ open, onClose, offerToken, leadName }: ResetOfferDialogProps) {
   const router = useRouter()
-  const [isPending, startTransition] = useTransition()
 
-  if (!open) return null
-
-  const handleReset = () => {
-    startTransition(async () => {
-      try {
-        const res = await fetch('/api/crm/admin-actions/reset-offer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offer_token: offerToken }),
-        })
-
-        const data = await res.json()
-
-        if (!res.ok) {
-          toast.error(data.error || 'Failed to reset offer')
-          return
-        }
-
-        toast.success(data.message || 'Offer reset to draft')
-        onClose()
-        router.refresh()
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'An error occurred')
-      }
+  const loadPreview = async (): Promise<DryRunResult> => {
+    const res = await fetch('/api/crm/admin-actions/offer-reset-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offer_token: offerToken }),
     })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to load preview')
+    return data as DryRunResult
+  }
+
+  const handleConfirm = async () => {
+    const res = await fetch('/api/crm/admin-actions/reset-offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offer_token: offerToken }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { success: false, error: data.error || 'Failed to reset offer' }
+    router.refresh()
+    return { success: true, message: data.message || 'Offer reset to draft' }
   }
 
   return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/50" onClick={onClose} />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div
-          className="bg-white rounded-lg shadow-xl w-full max-w-md"
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between px-6 py-4 border-b">
-            <h2 className="text-lg font-semibold flex items-center gap-2 text-amber-700">
-              <RotateCcw className="h-5 w-5" />
-              Reset Offer
-            </h2>
-            <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="px-6 py-4 space-y-4">
-            <p className="text-sm text-zinc-600">
-              Reset offer <span className="font-semibold text-zinc-900">{offerToken}</span> for{' '}
-              <span className="font-semibold">{leadName}</span> to draft?
-            </p>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
-              <ul className="list-disc list-inside space-y-1">
-                <li>Offer status will be set back to <strong>draft</strong></li>
-                <li>Payment links will be cleared</li>
-                <li>All contracts and pending activations will be deleted</li>
-                <li>Client can re-sign the offer fresh</li>
-              </ul>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleReset}
-                disabled={isPending}
-                className="px-4 py-2 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                Reset to Draft
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+    <ConfirmDestructiveDialog
+      open={open}
+      onClose={onClose}
+      title="Reset Offer to Draft"
+      description={`Reset offer ${offerToken} for ${leadName} back to draft?`}
+      severity="amber"
+      loadPreview={loadPreview}
+      confirmLabel="Reset to Draft"
+      onConfirm={handleConfirm}
+    />
   )
 }
 
@@ -463,88 +373,40 @@ interface DeletePortalUserDialogProps {
 
 export function DeletePortalUserDialog({ open, onClose, email, leadName }: DeletePortalUserDialogProps) {
   const router = useRouter()
-  const [isPending, startTransition] = useTransition()
 
-  if (!open) return null
-
-  const handleDelete = () => {
-    startTransition(async () => {
-      try {
-        const res = await fetch('/api/crm/admin-actions/delete-portal-user', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email }),
-        })
-
-        const data = await res.json()
-
-        if (!res.ok) {
-          toast.error(data.error || 'Failed to delete portal user')
-          return
-        }
-
-        toast.success(data.message || 'Portal user deleted')
-        onClose()
-        router.refresh()
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'An error occurred')
-      }
+  const loadPreview = async (): Promise<DryRunResult> => {
+    const res = await fetch('/api/crm/admin-actions/portal-user-delete-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
     })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to load preview')
+    return data as DryRunResult
+  }
+
+  const handleConfirm = async () => {
+    const res = await fetch('/api/crm/admin-actions/delete-portal-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { success: false, error: data.error || 'Failed to delete portal user' }
+    router.refresh()
+    return { success: true, message: data.message || 'Portal user deleted' }
   }
 
   return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/50" onClick={onClose} />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div
-          className="bg-white rounded-lg shadow-xl w-full max-w-md"
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between px-6 py-4 border-b">
-            <h2 className="text-lg font-semibold flex items-center gap-2 text-red-700">
-              <UserX className="h-5 w-5" />
-              Delete Portal User
-            </h2>
-            <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="px-6 py-4 space-y-4">
-            <p className="text-sm text-zinc-600">
-              Delete the portal login for <span className="font-semibold">{leadName}</span>?
-            </p>
-
-            <div className="bg-zinc-50 border rounded-lg p-3 text-sm">
-              <span className="text-zinc-500">Email:</span>{' '}
-              <span className="font-medium">{email}</span>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-              The user will no longer be able to log in to the portal.
-              You can re-create the portal login later if needed.
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={isPending}
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserX className="h-4 w-4" />}
-                Delete Portal User
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+    <ConfirmDestructiveDialog
+      open={open}
+      onClose={onClose}
+      title="Delete Portal User"
+      description={`Delete the portal login for ${leadName}?`}
+      severity="red"
+      loadPreview={loadPreview}
+      confirmLabel="Delete Portal User"
+      onConfirm={handleConfirm}
+    />
   )
 }

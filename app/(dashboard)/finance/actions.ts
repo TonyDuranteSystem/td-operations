@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
+import type { DryRunResult } from '@/lib/operations/destructive'
 
 /**
  * Create a TD LLC invoice TO a client (writes to payments + client_expenses).
@@ -90,6 +91,7 @@ export async function markInvoicePaid(
     const today = new Date().toISOString().split('T')[0]
 
     // Update payment record
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: markPaidErr } = await supabaseAdmin.from('payments').update({
       status: 'Paid',
       invoice_status: 'Paid',
@@ -121,6 +123,77 @@ export async function markInvoicePaid(
   })
 }
 
+/**
+ * P3.7: dry-run preview for {@link voidInvoice}. Surfaces what cascades
+ * (QB void, bank feed unlink, client_expenses mirror) before the operator
+ * confirms the destructive action.
+ */
+export async function voidInvoicePreview(
+  paymentId: string,
+): Promise<{ success: boolean; preview?: DryRunResult; error?: string }> {
+  try {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, amount, amount_currency, status, qb_invoice_id, description, account_id')
+      .eq('id', paymentId)
+      .maybeSingle()
+
+    if (!payment) return { success: false, error: 'Invoice not found' }
+    if (payment.status === 'Cancelled') {
+      return {
+        success: true,
+        preview: {
+          affected: {},
+          items: [],
+          blocker: 'Invoice is already voided.',
+          record_label: payment.invoice_number ?? paymentId,
+        },
+      }
+    }
+
+    const { count: feedCount } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id', { count: 'exact', head: true })
+      .eq('matched_payment_id', paymentId)
+
+    const items: DryRunResult['items'] = [
+      {
+        label: `Mark ${payment.invoice_number ?? 'invoice'} as Cancelled`,
+        details: [
+          `${payment.amount ?? 0} ${payment.amount_currency ?? ''}`.trim(),
+          payment.status ?? 'no status',
+        ].filter(Boolean),
+      },
+    ]
+    if (payment.qb_invoice_id) {
+      items.push({ label: 'Void corresponding invoice in QuickBooks (best-effort)' })
+    }
+    items.push({ label: 'Mirror the void into client_expenses' })
+    if ((feedCount ?? 0) > 0) {
+      items.push({
+        label: `Unlink ${feedCount} matched bank feed${feedCount === 1 ? '' : 's'}`,
+      })
+    }
+
+    return {
+      success: true,
+      preview: {
+        affected: {
+          payment: 1,
+          qb_invoice: payment.qb_invoice_id ? 1 : 0,
+          matched_bank_feeds: feedCount ?? 0,
+        },
+        items,
+        warnings: ['Voiding does not refund the client. Issue a credit note for refunds.'],
+        record_label: payment.invoice_number ?? paymentId,
+      },
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Preview failed' }
+  }
+}
+
 export async function voidInvoice(paymentId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
@@ -135,6 +208,7 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
     if (!payment) throw new Error('Payment not found')
 
     // Update payment
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: voidErr } = await supabaseAdmin.from('payments').update({
       status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
     }).eq('id', paymentId)
@@ -309,6 +383,7 @@ export async function sendInvoiceReminder(paymentId: string): Promise<ActionResu
     await gmailPost('/messages/send', { raw })
 
     // Update reminder count
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: reminderErr } = await supabaseAdmin.from('payments').update({
       reminder_count: (payment.reminder_count ?? 0) + 1,
       last_reminder_at: new Date().toISOString(),
@@ -350,6 +425,7 @@ export async function updateInvoice(
       payUpdates.amount_due = updates.total
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: updatePayErr } = await supabaseAdmin.from('payments').update(payUpdates).eq('id', paymentId)
     if (updatePayErr) throw new Error(`Failed to update invoice: ${updatePayErr.message}`)
 

@@ -11,6 +11,7 @@ import {
   Search,
 } from 'lucide-react'
 import { matchBankFeedToInvoice, ignoreBankFeed } from './actions'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
 // ── Types ──
 
@@ -354,16 +355,13 @@ function UnmatchedRow({
     })
   }
 
-  const handleIgnore = () => {
-    startTransition(async () => {
-      try {
-        const result = await ignoreBankFeed(feed.id)
-        if (!result.success) throw new Error(result.error)
-        toast.success('Transaction ignored')
-      } catch {
-        toast.error('Failed to ignore')
-      }
-    })
+  const [ignoreOpen, setIgnoreOpen] = useState(false)
+  const handleIgnore = () => setIgnoreOpen(true)
+
+  const handleIgnoreConfirm = async () => {
+    const result = await ignoreBankFeed(feed.id)
+    if (!result.success) return { success: false, error: result.error || 'Failed to ignore' }
+    return { success: true, message: 'Transaction ignored' }
   }
 
   // Suggest matching invoices — smart ranking: name match first, then amount match
@@ -499,6 +497,27 @@ function UnmatchedRow({
           )}
         </div>
       )}
+      <ConfirmDestructiveDialog
+        open={ignoreOpen}
+        onClose={() => setIgnoreOpen(false)}
+        title="Ignore Transaction"
+        description="Mark this bank feed row as ignored?"
+        severity="amber"
+        staticPreview={{
+          affected: { bank_feed: 1 },
+          items: [
+            {
+              label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+              details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
+            },
+          ],
+          warnings: [
+            'Ignored feeds are hidden from reconciliation and will not match new invoices.',
+          ],
+        }}
+        confirmLabel="Ignore"
+        onConfirm={handleIgnoreConfirm}
+      />
     </div>
   )
 }

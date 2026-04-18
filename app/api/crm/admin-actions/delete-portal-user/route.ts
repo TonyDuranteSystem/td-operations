@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     }
 
     logAction({
-      actor: "crm-admin",
+      actor: `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
       action_type: "delete",
       table_name: "auth.users",
       record_id: match.id,
@@ -52,7 +52,6 @@ export async function POST(request: Request) {
       details: {
         auth_user_id: match.id,
         email,
-        admin_email: user?.email,
       },
     })
 

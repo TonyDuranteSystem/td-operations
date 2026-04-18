@@ -594,12 +594,23 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_delete",
-    "Move a file or folder to the trash on the Shared Drive. Uses soft-delete — the file can be restored from trash within 30 days. For permanent deletion, use the Google Drive web UI. Use drive_search or drive_list_folder to find the file ID first.",
+    "Move a file or folder to the trash on the Shared Drive. Uses soft-delete — the file can be restored from trash within 30 days. For permanent deletion, use the Google Drive web UI. Use drive_search or drive_list_folder to find the file ID first. Pass dry_run=true to preview the target before committing — P3.7 safety control.",
     {
       file_id: z.string().describe("File or folder ID to trash"),
+      dry_run: z.boolean().optional().describe("If true, returns target metadata without trashing. Default: false."),
     },
-    async ({ file_id }) => {
+    async ({ file_id, dry_run }) => {
       try {
+        if (dry_run) {
+          const meta = (await getFileMetadata(file_id)) as { name?: string; mimeType?: string; size?: string; modifiedTime?: string; parents?: string[] }
+          return {
+            content: [{
+              type: "text" as const,
+              text: `🔍 Dry run — drive_delete\n• File: ${meta.name ?? file_id}\n• Type: ${meta.mimeType ?? "unknown"}\n• Size: ${meta.size ?? "—"}\n• Modified: ${meta.modifiedTime ?? "—"}\n\nAction: move to Drive trash (recoverable 30 days). Pass dry_run=false to commit.`,
+            }],
+          }
+        }
+
         const result = await trashFile(file_id)
 
         logAction({

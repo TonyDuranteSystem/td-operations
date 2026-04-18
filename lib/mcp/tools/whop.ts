@@ -6,6 +6,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
+import { logAction } from "@/lib/mcp/action-log"
 
 const WHOP_API = "https://api.whop.com/api/v1"
 const WHOP_KEY = process.env.WHOP_API_KEY || ""
@@ -362,16 +363,59 @@ export function registerWhopTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "whop_delete_product",
-    "Delete a Whop product permanently. Only delete products with 0 members. Use whop_list_products first to verify.",
+    "Delete a Whop product permanently. Only delete products with 0 active members. P3.7 safety control: auto-fetches current product + membership count before delete, and blocks when members > 0 unless force=true. Use dry_run=true to preview.",
     {
       product_id: z.string().describe("Product ID to delete"),
+      dry_run: z.boolean().optional().describe("If true, returns current product + member count without deleting. Default: false."),
+      force: z.boolean().optional().describe("If true, allows delete even when active members exist. Default: false."),
     },
-    async ({ product_id }) => {
+    async ({ product_id, dry_run, force }) => {
       try {
+        const product = (await whopFetch(`/products/${product_id}`)) as { id?: string; name?: string; status?: string; price?: number; currency?: string }
+        const memberships = (await whopFetch(`/memberships?product_id=${product_id}&status=active&limit=50`)) as { data?: Array<{ id: string; status: string }> } | Array<{ id: string; status: string }>
+        const list = Array.isArray(memberships) ? memberships : (memberships.data ?? [])
+        const activeMembers = list.filter(m => m.status === "active").length
+
+        if (dry_run) {
+          const lines = [
+            "🔍 Dry run — whop_delete_product",
+            `• Product: ${product.name ?? product_id}`,
+            `• ID: ${product.id ?? product_id}`,
+            `• Status: ${product.status ?? "unknown"}`,
+            `• Price: ${product.price ?? "—"} ${product.currency ?? ""}`.trim(),
+            `• Active memberships: ${activeMembers}`,
+            "",
+            activeMembers > 0
+              ? `⚠️ ${activeMembers} active member${activeMembers === 1 ? "" : "s"} — delete is blocked unless force=true.`
+              : "No active members — safe to delete.",
+            "",
+            "Pass dry_run=false to commit.",
+          ]
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+        }
+
+        if (activeMembers > 0 && !force) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `❌ Refusing to delete — ${activeMembers} active member${activeMembers === 1 ? "" : "s"} on product ${product.name ?? product_id}. Cancel the memberships first, or pass force=true to override.`,
+            }],
+          }
+        }
+
         await whopDelete(`/products/${product_id}`)
-        return { content: [{ type: "text" as const, text: `✅ Product deleted: ${product_id}` }] }
-      } catch (e: any) {
-        return { content: [{ type: "text" as const, text: `❌ Whop error: ${e.message}` }] }
+
+        logAction({
+          action_type: "delete",
+          table_name: "whop.products",
+          record_id: product_id,
+          summary: `Deleted Whop product ${product.name ?? product_id}${force && activeMembers > 0 ? ` (force=true, ${activeMembers} active members)` : ""}`,
+          details: { product_name: product.name, active_memberships_at_delete: activeMembers, force: !!force },
+        })
+
+        return { content: [{ type: "text" as const, text: `✅ Product deleted: ${product.name ?? product_id}` }] }
+      } catch (e: unknown) {
+        return { content: [{ type: "text" as const, text: `❌ Whop error: ${e instanceof Error ? e.message : String(e)}` }] }
       }
     }
   )

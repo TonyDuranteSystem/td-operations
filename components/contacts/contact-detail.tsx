@@ -12,6 +12,7 @@ import {
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
 } from 'lucide-react'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
@@ -1944,26 +1945,30 @@ function ServicesTab({
   contactId: string
 }) {
   const [cancelling, setCancelling] = useState<string | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string; serviceType: string | null; accountId: string | null } | null>(null)
   const accountMap = new Map(accounts.map(a => [a.id, a.company_name]))
 
-  const handleCancel = async (sdId: string, sdName: string) => {
-    if (!confirm(`Cancel "${sdName}"? This will close all linked tasks.`)) return
-    setCancelling(sdId)
+  const handleCancel = (sdId: string, sdName: string, serviceType: string | null, accountId: string | null) => {
+    setCancelTarget({ id: sdId, name: sdName, serviceType, accountId })
+  }
+
+  const handleCancelConfirm = async () => {
+    if (!cancelTarget) return { success: false, error: 'No service selected' }
+    setCancelling(cancelTarget.id)
     try {
       const res = await fetch('/api/crm/admin-actions/contact-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact_id: contactId, action: 'cancel_service', params: { delivery_id: sdId } }),
+        body: JSON.stringify({ contact_id: contactId, action: 'cancel_service', params: { delivery_id: cancelTarget.id } }),
       })
       const data = await res.json()
       if (data.success) {
-        toast.success(data.detail)
-        window.location.reload()
-      } else {
-        toast.error(data.detail || 'Failed')
+        setTimeout(() => window.location.reload(), 250)
+        return { success: true, message: data.detail }
       }
-    } catch {
-      toast.error('Network error')
+      return { success: false, error: data.detail || 'Failed' }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Network error' }
     } finally {
       setCancelling(null)
     }
@@ -2017,7 +2022,7 @@ function ServicesTab({
           <div className="flex justify-center">
             {sd.status === 'active' && (
               <button
-                onClick={() => handleCancel(sd.id, sd.service_name ?? sd.service_type ?? 'Service')}
+                onClick={() => handleCancel(sd.id, sd.service_name ?? sd.service_type ?? 'Service', sd.service_type ?? null, sd.account_id ?? null)}
                 disabled={cancelling === sd.id}
                 className="p-1 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 transition-colors disabled:opacity-50"
                 title="Cancel service"
@@ -2028,6 +2033,32 @@ function ServicesTab({
           </div>
         </div>
       ))}
+      <ConfirmDestructiveDialog
+        open={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        title="Cancel Service Delivery"
+        description={cancelTarget ? `Cancel "${cancelTarget.name}"?` : undefined}
+        severity="red"
+        staticPreview={cancelTarget ? {
+          affected: { service_delivery: 1 },
+          items: [
+            {
+              label: cancelTarget.name,
+              details: [
+                cancelTarget.serviceType ?? '',
+                cancelTarget.accountId ? (accountMap.get(cancelTarget.accountId) ?? '') : '',
+              ].filter(Boolean),
+            },
+          ],
+          warnings: [
+            'Sets the service delivery status to cancelled.',
+            'Closes all linked open tasks (To Do / In Progress / Waiting).',
+            'Does not refund payment — issue a credit note separately.',
+          ],
+        } : undefined}
+        confirmLabel="Cancel Service"
+        onConfirm={handleCancelConfirm}
+      />
     </div>
   )
 }
@@ -2404,6 +2435,7 @@ function ContactDocumentsTab({
   const [uploadType, setUploadType] = useState('Passport')
   const [uploadCategory, setUploadCategory] = useState('Contacts')
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteDialog, setDeleteDialog] = useState<{ docId: string; fileName: string; documentType?: string | null } | null>(null)
   const [ocrRunning, setOcrRunning] = useState<string | null>(null)
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
@@ -2433,24 +2465,28 @@ function ContactDocumentsTab({
     }
   }
 
-  const handleDeleteDoc = async (docId: string, fileName: string) => {
-    if (!confirm(`Delete "${fileName}"? This will trash it on Drive and remove the record.`)) return
-    setDeleting(docId)
+  const handleDeleteDoc = (docId: string, fileName: string, documentType?: string | null) => {
+    setDeleteDialog({ docId, fileName, documentType })
+  }
+
+  const handleConfirmDeleteDoc = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
+    if (!deleteDialog) return { success: false, error: 'No document selected' }
+    setDeleting(deleteDialog.docId)
     try {
       const res = await fetch('/api/crm/admin-actions/delete-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document_id: docId }),
+        body: JSON.stringify({ document_id: deleteDialog.docId }),
       })
       const data = await res.json()
       if (data.success) {
-        toast.success(data.detail)
-        window.location.reload()
-      } else {
-        toast.error(data.detail || 'Delete failed')
+        // Reload after the toast shows via onSuccess so the dialog can close cleanly.
+        setTimeout(() => window.location.reload(), 250)
+        return { success: true, message: data.detail }
       }
-    } catch {
-      toast.error('Network error')
+      return { success: false, error: data.detail || 'Delete failed' }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Network error' }
     } finally {
       setDeleting(null)
     }
@@ -2840,8 +2876,8 @@ function ContactDocumentsTab({
                   <span
                     role="button"
                     tabIndex={0}
-                    onClick={(e) => { e.stopPropagation(); handleDeleteDoc(doc.id, doc.file_name) }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDeleteDoc(doc.id, doc.file_name) } }}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteDoc(doc.id, doc.file_name, doc.document_type_name) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleDeleteDoc(doc.id, doc.file_name, doc.document_type_name) } }}
                     className={cn(
                       'p-1 rounded hover:bg-red-50 text-zinc-400 hover:text-red-600 transition-colors',
                       deleting === doc.id && 'opacity-50 pointer-events-none'
@@ -2855,6 +2891,27 @@ function ContactDocumentsTab({
           </div>
         </div>
       ))}
+
+      {/* Delete confirmation */}
+      <ConfirmDestructiveDialog
+        open={!!deleteDialog}
+        onClose={() => setDeleteDialog(null)}
+        title="Delete Document"
+        description={deleteDialog ? `Delete "${deleteDialog.fileName}"? The file will be moved to Drive trash (recoverable 30 days). The database record will be permanently removed.` : undefined}
+        severity="red"
+        staticPreview={deleteDialog ? {
+          affected: { document: 1 },
+          items: [
+            {
+              label: deleteDialog.fileName,
+              details: deleteDialog.documentType ? [deleteDialog.documentType] : [],
+            },
+          ],
+          warnings: ['Drive file moved to trash (30-day recovery). Document record permanently deleted.'],
+        } : undefined}
+        confirmLabel="Delete Document"
+        onConfirm={handleConfirmDeleteDoc}
+      />
 
       {/* Preview modal */}
       {previewDoc && previewDoc.drive_file_id && (

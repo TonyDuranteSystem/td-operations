@@ -8,8 +8,9 @@ import {
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { markInvoicePaid, voidInvoice, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft } from './actions'
+import { markInvoicePaid, voidInvoice, voidInvoicePreview, sendInvoiceReminder, sendNewInvoice, updateInvoice, createUnifiedInvoiceDraft } from './actions'
 import { InvoiceDialog } from '@/components/payments/invoice-dialog'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -366,6 +367,7 @@ function ActionButton({ onClick, label, icon: Icon, color, hoverBg }: {
 function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
+  const [voidDialogOpen, setVoidDialogOpen] = useState(false)
   const router = useRouter()
   const { id: invoiceId, invoice_number: invoiceNumber, status } = invoice
 
@@ -387,13 +389,23 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
     })
   }
 
-  const handleVoid = () => {
-    if (!window.confirm(`Void invoice ${invoiceNumber}? This cannot be undone.`)) return
-    startTransition(async () => {
-      const result = await voidInvoice(invoiceId)
-      if (result.success) { toast.success(`${invoiceNumber} voided`); router.refresh() }
-      else toast.error(result.error ?? 'Failed')
-    })
+  const handleVoid = () => setVoidDialogOpen(true)
+
+  const handleVoidConfirm = async () => {
+    const result = await voidInvoice(invoiceId)
+    if (result.success) {
+      router.refresh()
+      return { success: true, message: `${invoiceNumber} voided` }
+    }
+    return { success: false, error: result.error ?? 'Failed' }
+  }
+
+  const loadVoidPreview = async () => {
+    const r = await voidInvoicePreview(invoiceId)
+    if (!r.success || !r.preview) {
+      throw new Error(r.error ?? 'Preview unavailable')
+    }
+    return r.preview
   }
 
   if (isPending) {
@@ -417,6 +429,16 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
       {editing && (
         <EditInvoiceDialog invoice={invoice} onClose={() => setEditing(false)} />
       )}
+      <ConfirmDestructiveDialog
+        open={voidDialogOpen}
+        onClose={() => setVoidDialogOpen(false)}
+        title="Void Invoice"
+        description={`Void invoice ${invoiceNumber}?`}
+        severity="red"
+        loadPreview={loadVoidPreview}
+        confirmLabel="Void Invoice"
+        onConfirm={handleVoidConfirm}
+      />
     </>
   )
 }

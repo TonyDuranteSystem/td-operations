@@ -188,6 +188,24 @@ export default async function ExceptionsPage() {
                   "use server"
                   return dismissAuditFinding(row.id)
                 }}
+                confirm={{
+                  title: "Dismiss Audit Finding",
+                  description: `Dismiss "${row.latest_action ?? row.title}"?`,
+                  severity: "amber",
+                  confirmLabel: "Dismiss",
+                  preview: {
+                    affected: { audit_finding: 1 },
+                    items: [
+                      {
+                        label: row.latest_action ?? row.title,
+                        details: [row.priority ?? "normal", `Age ${formatAge(row.age_hours)}`],
+                      },
+                    ],
+                    warnings: [
+                      "The finding will be cancelled in dev_tasks. If it recurs, the next audit run will re-raise it.",
+                    ],
+                  },
+                }}
               />
             </div>
           ))

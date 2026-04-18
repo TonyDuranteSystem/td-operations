@@ -122,7 +122,7 @@ export async function POST(request: Request) {
 
     // Audit log
     logAction({
-      actor: "crm-admin",
+      actor: `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
       action_type: "delete",
       table_name: "leads",
       record_id: lead_id,
@@ -132,7 +132,6 @@ export async function POST(request: Request) {
         lead_name: lead.full_name,
         lead_email: lead.email,
         deleted,
-        admin_email: user?.email,
       },
     })
 

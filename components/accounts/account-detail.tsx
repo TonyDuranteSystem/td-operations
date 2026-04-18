@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -165,6 +166,18 @@ function ContactsSection({
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newEmail, setNewEmail] = useState('')
   const [creating, setCreating] = useState(false)
+  const [unlinkTarget, setUnlinkTarget] = useState<{ id: string; name: string; role: string | null } | null>(null)
+
+  const handleUnlinkConfirm = async () => {
+    if (!unlinkTarget) return { success: false, error: 'No contact selected' }
+    const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
+    const result = await unlinkContactFromAccount(account.id, unlinkTarget.id)
+    if (result.success) {
+      setTimeout(() => window.location.reload(), 250)
+      return { success: true, message: `${unlinkTarget.name} unlinked` }
+    }
+    return { success: false, error: result.error ?? 'Failed to unlink contact' }
+  }
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query)
@@ -358,17 +371,7 @@ function ContactsSection({
                 </Link>
                 {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
                 <button
-                  onClick={async () => {
-                    if (!confirm(`Remove ${c.full_name} from this company?`)) return
-                    const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
-                    const result = await unlinkContactFromAccount(account.id, c.id)
-                    if (result.success) {
-                      toast.success(`${c.full_name} unlinked`)
-                      window.location.reload()
-                    } else {
-                      toast.error('Failed to unlink contact')
-                    }
-                  }}
+                  onClick={() => setUnlinkTarget({ id: c.id, name: c.full_name, role: c.role ?? null })}
                   className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
                   title={`Remove ${c.full_name} from this company`}
                 >
@@ -384,6 +387,28 @@ function ContactsSection({
           ))}
         </div>
       )}
+      <ConfirmDestructiveDialog
+        open={!!unlinkTarget}
+        onClose={() => setUnlinkTarget(null)}
+        title="Unlink Contact"
+        description={unlinkTarget ? `Remove ${unlinkTarget.name} from ${account.company_name}?` : undefined}
+        severity="amber"
+        staticPreview={unlinkTarget ? {
+          affected: { link: 1 },
+          items: [
+            {
+              label: unlinkTarget.name,
+              details: unlinkTarget.role ? [unlinkTarget.role] : [],
+            },
+          ],
+          warnings: [
+            'The contact record itself is not deleted — only the link to this company is removed.',
+            'Documents and services associated with this company are not affected.',
+          ],
+        } : undefined}
+        confirmLabel="Unlink"
+        onConfirm={handleUnlinkConfirm}
+      />
     </div>
   )
 }

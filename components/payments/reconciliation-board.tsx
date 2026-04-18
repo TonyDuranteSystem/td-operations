@@ -14,6 +14,7 @@ import {
   Ban,
 } from 'lucide-react'
 import { matchFeedToInvoice, ignoreFeed } from '@/app/(dashboard)/reconciliation/actions'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
 interface BankFeed {
   id: string
@@ -185,6 +186,7 @@ function UnmatchedRow({
   onCancelMatch: () => void
 }) {
   const [isPending, startTransition] = useTransition()
+  const [ignoreOpen, setIgnoreOpen] = useState(false)
   const amount = Number(feed.amount)
 
   const handleMatch = (paymentId: string) => {
@@ -200,15 +202,15 @@ function UnmatchedRow({
     })
   }
 
-  const handleIgnore = () => {
-    startTransition(async () => {
-      try {
-        await ignoreFeed(feed.id)
-        toast.success('Transaction ignored')
-      } catch {
-        toast.error('Failed to ignore')
-      }
-    })
+  const handleIgnore = () => setIgnoreOpen(true)
+
+  const handleIgnoreConfirm = async () => {
+    try {
+      await ignoreFeed(feed.id)
+      return { success: true, message: 'Transaction ignored' }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to ignore' }
+    }
   }
 
   // Suggest matching invoices (same currency, similar amount)
@@ -322,6 +324,27 @@ function UnmatchedRow({
           )}
         </div>
       )}
+      <ConfirmDestructiveDialog
+        open={ignoreOpen}
+        onClose={() => setIgnoreOpen(false)}
+        title="Ignore Transaction"
+        description="Mark this bank feed row as ignored?"
+        severity="amber"
+        staticPreview={{
+          affected: { bank_feed: 1 },
+          items: [
+            {
+              label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+              details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
+            },
+          ],
+          warnings: [
+            'Ignored feeds are hidden from reconciliation and will not match new invoices. You can un-ignore from the database if needed.',
+          ],
+        }}
+        confirmLabel="Ignore"
+        onConfirm={handleIgnoreConfirm}
+      />
     </div>
   )
 }

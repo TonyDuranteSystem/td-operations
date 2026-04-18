@@ -6,6 +6,7 @@ import { UserPlus, Link2, X, Phone, Loader2, Check, ExternalLink } from 'lucide-
 import { createLeadFromIntake, linkIntakeToExisting, dismissIntake } from '../actions'
 import type { IntakeEntry } from '../page'
 import { useRouter } from 'next/navigation'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
 const STATUS_BADGES: Record<string, { label: string; className: string }> = {
   pending_review: { label: 'Pending', className: 'bg-amber-100 text-amber-700' },
@@ -36,6 +37,7 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
   const [processed, setProcessed] = useState(false)
   const [linkMode, setLinkMode] = useState(false)
   const [linkLeadId, setLinkLeadId] = useState('')
+  const [dismissTarget, setDismissTarget] = useState<'lost' | 'dismissed' | null>(null)
   const router = useRouter()
 
   const { parsed, matches, circleback_match } = entry
@@ -80,17 +82,15 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
     })
   }
 
-  const handleDismiss = (status: 'lost' | 'dismissed') => {
-    startTransition(async () => {
-      const result = await dismissIntake(entry.id, status)
-      if (result.success) {
-        toast.success(status === 'lost' ? 'Marked as lost' : 'Dismissed')
-        setProcessed(true)
-        router.refresh()
-      } else {
-        toast.error(result.error || 'Failed')
-      }
-    })
+  const handleDismissConfirm = async () => {
+    if (!dismissTarget) return { success: false, error: 'No target selected' }
+    const result = await dismissIntake(entry.id, dismissTarget)
+    if (result.success) {
+      setProcessed(true)
+      router.refresh()
+      return { success: true, message: dismissTarget === 'lost' ? 'Marked as lost' : 'Dismissed' }
+    }
+    return { success: false, error: result.error || 'Failed' }
   }
 
   if (processed) {
@@ -181,9 +181,10 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
                   Link
                 </button>
                 <button
-                  onClick={() => handleDismiss('lost')}
+                  onClick={() => setDismissTarget('lost')}
                   disabled={isPending}
                   className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border text-zinc-400 hover:bg-zinc-50 hover:text-zinc-600 disabled:opacity-50"
+                  title="Mark as lost"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -215,6 +216,26 @@ function IntakeRow({ entry, readonly }: { entry: IntakeEntry; readonly: boolean 
           </div>
         )}
       </div>
+      <ConfirmDestructiveDialog
+        open={!!dismissTarget}
+        onClose={() => setDismissTarget(null)}
+        title={dismissTarget === 'lost' ? 'Mark as Lost' : 'Dismiss Intake'}
+        description={`${dismissTarget === 'lost' ? 'Mark lost' : 'Dismiss'}: ${parsed.name} (${parsed.email})?`}
+        severity="amber"
+        staticPreview={{
+          affected: { intake_entry: 1 },
+          items: [
+            { label: parsed.name, details: [parsed.email, `Booked ${formatDate(entry.created_at)}`] },
+          ],
+          warnings: [
+            dismissTarget === 'lost'
+              ? 'The entry will be marked lost — it stays in the system for reporting but no lead is created.'
+              : 'The entry will be dismissed — skipped without creating a lead.',
+          ],
+        }}
+        confirmLabel={dismissTarget === 'lost' ? 'Mark as Lost' : 'Dismiss'}
+        onConfirm={handleDismissConfirm}
+      />
     </div>
   )
 }
