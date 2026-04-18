@@ -7,6 +7,7 @@ import {
   validateRequiredFields,
   validateOnboardingData,
   validateFormationData,
+  validateWizardData,
 } from '../../lib/jobs/validation'
 
 describe('normalizeEIN', () => {
@@ -206,5 +207,69 @@ describe('validateFormationData', () => {
     }
     const result = validateFormationData(data)
     expect(result.valid).toBe(false)
+  })
+})
+
+describe('validateWizardData (dispatcher)', () => {
+  const validOnboarding = {
+    company_name: 'Test LLC',
+    owner_first_name: 'John',
+    owner_last_name: 'Doe',
+    ein: '30-1482516',
+  }
+
+  const validFormation = {
+    owner_first_name: 'John',
+    owner_last_name: 'Doe',
+    llc_name_1: 'My New LLC',
+  }
+
+  it('routes "onboarding" to validateOnboardingData', () => {
+    const direct = validateOnboardingData(validOnboarding)
+    const viaDispatcher = validateWizardData('onboarding', validOnboarding)
+    expect(viaDispatcher).toEqual(direct)
+  })
+
+  it('routes "formation" to validateFormationData', () => {
+    const direct = validateFormationData(validFormation)
+    const viaDispatcher = validateWizardData('formation', validFormation)
+    expect(viaDispatcher).toEqual(direct)
+  })
+
+  it('surfaces invalid EIN via onboarding dispatcher (Luca Gallacci regression)', () => {
+    const result = validateWizardData('onboarding', { ...validOnboarding, ein: 'bad' })
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => e.field === 'ein')).toBe(true)
+  })
+
+  it('accepts 9-digit EIN without dashes via dispatcher', () => {
+    const result = validateWizardData('onboarding', { ...validOnboarding, ein: '334119609' })
+    expect(result.valid).toBe(true)
+  })
+
+  it('passes through (valid) for wizard types without a dedicated validator', () => {
+    // Phase A ships dispatchers for onboarding + formation only. Others are
+    // expected to pass through unchanged so the route boundary never blocks
+    // a submission for a wizard type we haven't yet written a validator for.
+    const passThroughTypes = ['tax', 'itin', 'closure', 'banking', 'banking_payset', 'banking_relay', 'company_info']
+    for (const wt of passThroughTypes) {
+      const result = validateWizardData(wt, { some: 'data' })
+      expect(result.valid, `wizard type "${wt}" must passthrough`).toBe(true)
+      expect(result.errors).toHaveLength(0)
+    }
+  })
+
+  it('passes through for unknown wizard types', () => {
+    const result = validateWizardData('not-a-real-type', {})
+    expect(result.valid).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
+
+  it('catches missing required fields via dispatcher', () => {
+    const result = validateWizardData('onboarding', { company_name: 'Only This' })
+    expect(result.valid).toBe(false)
+    expect(result.errors.length).toBeGreaterThan(0)
+    expect(result.errors.some(e => e.field === 'owner_first_name')).toBe(true)
+    expect(result.errors.some(e => e.field === 'owner_last_name')).toBe(true)
   })
 })

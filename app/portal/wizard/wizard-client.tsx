@@ -5,7 +5,12 @@ import { toast } from 'sonner'
 import { WizardShell } from '@/components/portal/wizard/wizard-shell'
 import { WizardField } from '@/components/portal/wizard/wizard-field'
 import { getWizardConfig, MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
-import { CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
+
+interface FieldError {
+  field: string
+  message: string
+}
 
 interface WizardClientProps {
   wizardType: string
@@ -64,9 +69,12 @@ export function WizardClient({
   const [isSaving, setIsSaving] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [currentProgressId, setCurrentProgressId] = useState(progressId)
+  const [fieldErrors, setFieldErrors] = useState<FieldError[]>([])
 
   const handleFieldChange = useCallback((name: string, value: string | boolean | number) => {
     setFormData(prev => ({ ...prev, [name]: value }))
+    // Clear any server-side validation error for this field when the user edits it
+    setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
   }, [])
 
   // File upload handler — uploads to Supabase Storage, returns path
@@ -155,6 +163,7 @@ export function WizardClient({
     }
 
     setIsSubmitting(true)
+    setFieldErrors([])
     try {
       const res = await fetch('/api/portal/wizard-submit', {
         method: 'POST',
@@ -173,12 +182,20 @@ export function WizardClient({
       if (res.ok) {
         setIsSubmitted(true)
         toast.success(locale === 'it' ? 'Dati inviati con successo!' : 'Data submitted successfully!')
+        return
+      }
+
+      // Try to parse structured validation error: { error, fields: [{ field, message }] }
+      const err = await res.json().catch(() => ({} as { error?: string; fields?: FieldError[] }))
+      if (res.status === 400 && Array.isArray(err?.fields) && err.fields.length > 0) {
+        setFieldErrors(err.fields)
+        const first = err.fields[0]
+        toast.error(`${first.field}: ${first.message}`)
       } else {
-        const err = await res.json()
-        toast.error(err.error || 'Submission failed')
+        toast.error(err?.error || (locale === 'it' ? 'Invio fallito' : 'Submission failed'))
       }
     } catch {
-      toast.error('Submission failed')
+      toast.error(locale === 'it' ? 'Invio fallito' : 'Submission failed')
     } finally {
       setIsSubmitting(false)
     }
@@ -314,6 +331,25 @@ export function WizardClient({
                 ? 'I tuoi dati sono stati inviati ma non ancora esaminati. Puoi aggiornare le risposte fino all\'inizio della revisione.'
                 : "Your data has been submitted but not yet reviewed. You can update your answers until we begin the review."}
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Server-side validation error banner — populated from /api/portal/wizard-submit 400 response */}
+      {fieldErrors.length > 0 && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4 mb-4" data-testid="wizard-field-errors">
+          <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="text-sm w-full">
+            <p className="font-semibold text-red-900 mb-1">
+              {locale === 'it' ? 'Correggi i seguenti campi:' : 'Please correct the following:'}
+            </p>
+            <ul className="list-disc list-inside text-red-700 space-y-0.5">
+              {fieldErrors.map((fe, i) => (
+                <li key={`${fe.field}-${i}`}>
+                  <span className="font-medium">{fe.field}</span>: {fe.message}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}

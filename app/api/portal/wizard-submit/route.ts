@@ -19,6 +19,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
+import { validateWizardData } from '@/lib/jobs/validation'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{filename}
@@ -52,6 +53,24 @@ export async function POST(req: NextRequest) {
 
   if (!wizard_type || !data) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
+  }
+
+  // ─── 0. SYNCHRONOUS VALIDATION ───
+  // Structural fix: validate at the route boundary so the client sees field
+  // errors inline. Previously validation ran inside the background handler,
+  // where failures were invisible to the browser (the API had already
+  // returned 200 success). The client retried blindly, flooding the queue
+  // with duplicate jobs. See dev_task 3d6800c8 for the Luca Gallacci case
+  // that motivated this fix.
+  const validation = validateWizardData(wizard_type, data as Record<string, unknown>)
+  if (!validation.valid) {
+    return NextResponse.json(
+      {
+        error: 'Validation failed',
+        fields: validation.errors.map(e => ({ field: e.field, message: e.message })),
+      },
+      { status: 400 },
+    )
   }
 
   try {
@@ -233,6 +252,7 @@ export async function POST(req: NextRequest) {
       // CRM task for staff
       if (account_id) {
         try {
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           await supabaseAdmin.from('tasks').insert({
             task_title: `Review banking application (${provider}) — ${compName}`,
             assigned_to: 'Luca',
@@ -267,6 +287,7 @@ export async function POST(req: NextRequest) {
               at: new Date().toISOString(),
               note: `${provider} banking form submitted via portal wizard`,
             })
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             await supabaseAdmin
               .from('service_deliveries')
               .update({ stage: 'Application Submitted', stage_history: history, updated_at: new Date().toISOString() })

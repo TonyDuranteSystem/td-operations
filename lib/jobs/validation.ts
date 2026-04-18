@@ -152,3 +152,28 @@ export function validateFormationData(data: Record<string, unknown>): Validation
     warnings,
   }
 }
+
+/**
+ * Dispatcher: route wizard submissions to the right validator by wizard type.
+ *
+ * Used by /api/portal/wizard-submit to validate SYNCHRONOUSLY at the route
+ * boundary — so the client sees field errors inline instead of a generic
+ * "submission failed" toast. The background job handlers still re-run their
+ * own validation as defense-in-depth for direct API hits.
+ *
+ * Wizard types without a dedicated validator pass through (valid=true). Their
+ * validators land in Phase A.1 — tax, itin, closure, banking, company_info.
+ */
+export function validateWizardData(
+  wizardType: string,
+  data: Record<string, unknown>
+): ValidationResult {
+  switch (wizardType) {
+    case "onboarding":
+      return validateOnboardingData(data)
+    case "formation":
+      return validateFormationData(data)
+    default:
+      return { valid: true, errors: [], warnings: [] }
+  }
+}
