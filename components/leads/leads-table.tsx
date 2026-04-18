@@ -6,6 +6,7 @@ import { useState, useTransition } from 'react'
 import { Search, ChevronRight, ChevronLeft, Phone, Mail } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
+import { LeadRowActions } from '@/components/leads/lead-row-actions'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -204,8 +205,11 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
                   {item.call_date ?? '—'}
                 </div>
 
-                {/* Arrow */}
-                <div className="hidden md:flex justify-end">
+                {/* Row actions + Arrow */}
+                <div className="hidden md:flex justify-end items-center gap-0.5">
+                  <span onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
+                    <LeadRowActions lead={{ id: item.id, full_name: item.full_name, status: item.status }} />
+                  </span>
                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 </div>
               </Link>
