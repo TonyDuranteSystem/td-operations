@@ -39,6 +39,10 @@
       {
         "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name='rpc'][arguments.0.value='exec_sql'] Property[key.name='query']",
         "message": "P2.4 rule 6: the exec_sql RPC parameter is `sql_query`, not `query`. This bug silently caused the 2026-04-09→14 Phase 0 audit-cron zero-findings failure (plan §4 line 47). Rename the key to `sql_query`."
+      },
+      {
+        "selector": "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(insert|update|upsert)$/][callee.object.type='CallExpression'][callee.object.callee.property.name='from'][callee.object.arguments.0.value='contacts'] Property[key.name='portal_tier']",
+        "message": "Phase D1: direct writes to `contacts.portal_tier` must go through `reconcileTier()` in lib/operations/portal.ts so contacts + linked accounts + auth.users.app_metadata all land on the same tier atomically. This rule exists because tier drift across the three layers was the root of the Luca Gallacci 2026-04-18 incident. Exempted inside lib/operations/**."
       }
     ]
   },
