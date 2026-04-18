@@ -17,6 +17,8 @@ let devTasks: Array<Record<string, unknown>> = []
 let jobQueue: Array<Record<string, unknown>> = []
 let emailQueue: Array<Record<string, unknown>> = []
 let webhookEvents: Array<Record<string, unknown>> = []
+let accountContacts: Array<Record<string, unknown>> = []
+let tasks: Array<Record<string, unknown>> = []
 
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
@@ -28,6 +30,9 @@ vi.mock("@/lib/supabase-admin", () => ({
         in: vi.fn(() => chain),
         is: vi.fn(() => chain),
         ilike: vi.fn(() => chain),
+        gte: vi.fn(() => chain),
+        lt: vi.fn(() => chain),
+        not: vi.fn(() => chain),
         order: vi.fn(() => chain),
         limit: vi.fn(() => chain),
         then: (resolve: (v: unknown) => void) => {
@@ -37,6 +42,8 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (table === "job_queue") rows = jobQueue
           if (table === "email_queue") rows = emailQueue
           if (table === "webhook_events") rows = webhookEvents
+          if (table === "account_contacts") rows = accountContacts
+          if (table === "tasks") rows = tasks
           resolve({ data: rows, error: null })
         },
       })
@@ -51,6 +58,8 @@ beforeEach(() => {
   jobQueue = []
   emailQueue = []
   webhookEvents = []
+  accountContacts = []
+  tasks = []
 })
 
 // ─── Partial activations age filter ──────────────────────
@@ -209,5 +218,171 @@ describe("getExceptionsSnapshot — aggregate", () => {
     const { getExceptionsSnapshot } = await import("@/lib/exceptions/queries")
     const snap = await getExceptionsSnapshot()
     expect(snap.totalCount).toBe(0)
+  })
+})
+
+// ─── Phase C — Tier drift ────────────────────────────────
+
+describe("getTierDrift", () => {
+  it("flags rows where contact.portal_tier differs from account.portal_tier", async () => {
+    accountContacts = [
+      {
+        contact_id: "c-1",
+        account_id: "a-1",
+        contacts: {
+          id: "c-1",
+          full_name: "Luca Test",
+          email: "luca@x.com",
+          portal_tier: "onboarding",
+          updated_at: new Date().toISOString(),
+        },
+        accounts: {
+          id: "a-1",
+          company_name: "Luca Test LLC",
+          portal_tier: "active",
+          updated_at: new Date().toISOString(),
+        },
+      },
+    ]
+    const { getTierDrift } = await import("@/lib/exceptions/queries")
+    const rows = await getTierDrift()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].contact_tier).toBe("onboarding")
+    expect(rows[0].account_tier).toBe("active")
+    expect(rows[0].contact_name).toBe("Luca Test")
+  })
+
+  it("skips rows where tiers match", async () => {
+    accountContacts = [
+      {
+        contact_id: "c-2",
+        account_id: "a-2",
+        contacts: { id: "c-2", full_name: "Clean", email: "clean@x.com", portal_tier: "active", updated_at: new Date().toISOString() },
+        accounts: { id: "a-2", company_name: "Clean LLC", portal_tier: "active", updated_at: new Date().toISOString() },
+      },
+    ]
+    const { getTierDrift } = await import("@/lib/exceptions/queries")
+    expect(await getTierDrift()).toHaveLength(0)
+  })
+
+  it("skips when either tier is null (not yet set)", async () => {
+    accountContacts = [
+      {
+        contact_id: "c-3",
+        account_id: "a-3",
+        contacts: { id: "c-3", full_name: "None", email: "n@x.com", portal_tier: null, updated_at: new Date().toISOString() },
+        accounts: { id: "a-3", company_name: "None LLC", portal_tier: "active", updated_at: new Date().toISOString() },
+      },
+    ]
+    const { getTierDrift } = await import("@/lib/exceptions/queries")
+    expect(await getTierDrift()).toHaveLength(0)
+  })
+})
+
+// ─── Phase C — Silent-failed jobs ────────────────────────
+
+describe("getSilentFailedJobs", () => {
+  it("surfaces job_queue rows where status=completed but result.summary signals failure", async () => {
+    jobQueue = [
+      {
+        id: "job-bad",
+        job_type: "onboarding_setup",
+        status: "completed",
+        result: { summary: "Validation failed: 1 error(s)" },
+        payload: { contact_id: "c-1", account_id: null },
+        created_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+      },
+      {
+        id: "job-good",
+        job_type: "onboarding_setup",
+        status: "completed",
+        result: { summary: "23 ok, 0 errors, 2 skipped" },
+        payload: { contact_id: "c-2" },
+        created_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+      },
+      {
+        id: "job-blocked",
+        job_type: "onboarding_setup",
+        status: "completed",
+        result: { summary: "OCR cross-check blocked: EIN mismatch" },
+        payload: { account_id: "a-3" },
+        created_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+      },
+    ]
+    const { getSilentFailedJobs } = await import("@/lib/exceptions/queries")
+    const rows = await getSilentFailedJobs()
+    expect(rows.map(r => r.id).sort()).toEqual(["job-bad", "job-blocked"])
+    expect(rows.find(r => r.id === "job-bad")?.summary).toContain("Validation failed")
+  })
+
+  it("ignores jobs without a result summary string", async () => {
+    jobQueue = [
+      { id: "j-1", job_type: "x", status: "completed", result: null, payload: {}, created_at: new Date().toISOString(), completed_at: null },
+      { id: "j-2", job_type: "x", status: "completed", result: {}, payload: {}, created_at: new Date().toISOString(), completed_at: null },
+    ]
+    const { getSilentFailedJobs } = await import("@/lib/exceptions/queries")
+    expect(await getSilentFailedJobs()).toHaveLength(0)
+  })
+})
+
+// ─── Phase C — Orphan tasks ──────────────────────────────
+
+describe("getOrphanTasks", () => {
+  it("returns shape for tasks with contact but no account", async () => {
+    const old = new Date(Date.now() - 3 * 3600 * 1000).toISOString()
+    tasks = [
+      {
+        id: "t-1",
+        task_title: "Wizard validation failed — 2L Consulting LLC",
+        contact_id: "c-1",
+        assigned_to: "Luca",
+        priority: "High",
+        category: "Client Response",
+        status: "To Do",
+        created_at: old,
+      },
+    ]
+    const { getOrphanTasks } = await import("@/lib/exceptions/queries")
+    const rows = await getOrphanTasks()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].contact_id).toBe("c-1")
+    expect(rows[0].age_hours).toBeGreaterThanOrEqual(3)
+  })
+})
+
+// ─── Phase C — Snapshot aggregate extension ──────────────
+
+describe("getExceptionsSnapshot — Phase C sources roll into totalCount", () => {
+  it("counts tierDrift + silentFailedJobs + orphanTasks in the snapshot", async () => {
+    accountContacts = [
+      {
+        contact_id: "c-1",
+        account_id: "a-1",
+        contacts: { id: "c-1", full_name: "X", email: "x@x.com", portal_tier: "onboarding", updated_at: new Date().toISOString() },
+        accounts: { id: "a-1", company_name: "X LLC", portal_tier: "active", updated_at: new Date().toISOString() },
+      },
+    ]
+    jobQueue = [
+      { id: "j-1", job_type: "x", status: "completed", result: { summary: "Validation failed: 1 error(s)" }, payload: {}, created_at: new Date().toISOString(), completed_at: null },
+    ]
+    const old = new Date(Date.now() - 3 * 3600 * 1000).toISOString()
+    tasks = [
+      { id: "t-1", task_title: "orphan", contact_id: "c-9", assigned_to: null, priority: null, category: null, status: "To Do", created_at: old },
+    ]
+    const { getExceptionsSnapshot } = await import("@/lib/exceptions/queries")
+    const snap = await getExceptionsSnapshot()
+    // Assert each Phase C source populates and the aggregate includes them.
+    // totalCount can also include legacy sources (the mock doesn't honor
+    // DB filters, so a status=completed row can appear in getFailedJobs
+    // too — that over-counts but doesn't matter for the Phase C coverage
+    // assertion). We check ≥3 to capture the three new sources and allow
+    // for that mock-side noise.
+    expect(snap.tierDrift).toHaveLength(1)
+    expect(snap.silentFailedJobs).toHaveLength(1)
+    expect(snap.orphanTasks).toHaveLength(1)
+    expect(snap.totalCount).toBeGreaterThanOrEqual(3)
   })
 })

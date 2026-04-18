@@ -10,7 +10,7 @@
  */
 
 import Link from "next/link"
-import { AlertTriangle, ShieldAlert, Zap, Mail, Webhook, ExternalLink } from "lucide-react"
+import { AlertTriangle, ShieldAlert, Zap, Mail, Webhook, ExternalLink, Layers, EyeOff, UserX } from "lucide-react"
 import { getExceptionsSnapshot } from "@/lib/exceptions/queries"
 import {
   retryPartialActivation,
@@ -322,6 +322,124 @@ export default async function ExceptionsPage() {
                   return markWebhookReviewed(row.id)
                 }}
               />
+            </div>
+          ))
+        )}
+      </Section>
+
+      {/* ── Portal tier drift ── */}
+      <Section
+        title="Portal Tier Drift"
+        icon={Layers}
+        count={snapshot.tierDrift.length}
+        tone="amber"
+      >
+        {snapshot.tierDrift.length === 0 ? (
+          <EmptyRow message="All contacts + accounts in sync." />
+        ) : (
+          snapshot.tierDrift.map(row => (
+            <div key={`${row.contact_id}-${row.account_id}`} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-zinc-900">{row.contact_name ?? row.contact_email ?? row.contact_id}</span>
+                  {row.account_name && (
+                    <span className="text-xs text-zinc-500">at {row.account_name}</span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-zinc-500 flex gap-3">
+                  <span>
+                    Contact:&nbsp;
+                    <span className="font-semibold text-amber-700">{row.contact_tier}</span>
+                  </span>
+                  <span>
+                    Account:&nbsp;
+                    <span className="font-semibold text-amber-700">{row.account_tier}</span>
+                  </span>
+                  <span>Age {formatAge(row.age_hours)}</span>
+                </div>
+              </div>
+              <Link
+                href={`/contacts/${row.contact_id}`}
+                className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+              >
+                Open contact
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </div>
+          ))
+        )}
+      </Section>
+
+      {/* ── Silent-failed jobs ── */}
+      <Section
+        title="Silent-Failed Jobs"
+        icon={EyeOff}
+        count={snapshot.silentFailedJobs.length}
+        tone="red"
+      >
+        {snapshot.silentFailedJobs.length === 0 ? (
+          <EmptyRow message="No jobs with hidden failures." />
+        ) : (
+          snapshot.silentFailedJobs.map(row => (
+            <div key={row.id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-zinc-900">{row.job_type}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-100 text-red-700">
+                    {row.status}
+                  </span>
+                </div>
+                {row.summary && (
+                  <div className="mt-1 text-xs text-red-600 truncate">{row.summary}</div>
+                )}
+                <div className="mt-1 text-xs text-zinc-400">Age {formatAge(row.age_hours)}</div>
+              </div>
+              <Link
+                href={`/dev-tools?tab=jobs&id=${row.id}`}
+                className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+              >
+                Inspect
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </div>
+          ))
+        )}
+      </Section>
+
+      {/* ── Orphan tasks ── */}
+      <Section
+        title="Orphan Tasks (no account)"
+        icon={UserX}
+        count={snapshot.orphanTasks.length}
+        tone="amber"
+      >
+        {snapshot.orphanTasks.length === 0 ? (
+          <EmptyRow message="No orphan tasks." />
+        ) : (
+          snapshot.orphanTasks.map(row => (
+            <div key={row.id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-zinc-900 truncate">{row.task_title}</span>
+                  {row.priority && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+                      {row.priority}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-zinc-500 flex gap-3">
+                  {row.assigned_to && <span>Assigned to {row.assigned_to}</span>}
+                  {row.category && <span>{row.category}</span>}
+                  <span>Age {formatAge(row.age_hours)}</span>
+                </div>
+              </div>
+              <Link
+                href={`/contacts/${row.contact_id}`}
+                className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+              >
+                Open contact
+                <ExternalLink className="h-3 w-3" />
+              </Link>
             </div>
           ))
         )}
