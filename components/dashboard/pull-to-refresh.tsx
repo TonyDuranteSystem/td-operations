@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 
 const THRESHOLD = 80
@@ -13,6 +13,7 @@ const MAX_PULL = 120
  */
 export function DashboardPullToRefresh() {
   const router = useRouter()
+  const pathname = usePathname()
   const [pullDistance, setPullDistance] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -22,11 +23,26 @@ export function DashboardPullToRefresh() {
   const refreshingRef = useRef(false)
 
   useEffect(() => {
+    // Portal-chats has its own inner scrolls — PTR conflicts with them.
+    if (pathname === '/portal-chats') return
+
     const scrollEl = document.querySelector('main') as HTMLElement | null
     if (!scrollEl) return
 
     const onTouchStart = (e: TouchEvent) => {
       if (scrollEl.scrollTop > 0) return
+      // If the touch started inside a nested scrollable element (e.g. the
+      // messages list), don't intercept — let that element own the gesture.
+      // Without this, the passive:false touchmove handler calls e.preventDefault()
+      // on every downward drag when main.scrollTop===0, cancelling inner scrolls.
+      let el = e.target as HTMLElement | null
+      while (el && el !== scrollEl) {
+        const oy = window.getComputedStyle(el).overflowY
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
+          return
+        }
+        el = el.parentElement
+      }
       startYRef.current = e.touches[0].clientY
       pullingRef.current = false
     }
@@ -83,13 +99,13 @@ export function DashboardPullToRefresh() {
       scrollEl.removeEventListener('touchmove', onTouchMove)
       scrollEl.removeEventListener('touchend', onTouchEnd)
     }
-  }, [router])
+  }, [router, pathname])
 
   const visible = pullDistance > 0 || refreshing
   const progress = Math.min(pullDistance / THRESHOLD, 1)
   const triggered = pullDistance >= THRESHOLD || refreshing
 
-  if (!visible) return null
+  if (!visible || pathname === '/portal-chats') return null
 
   return (
     <div

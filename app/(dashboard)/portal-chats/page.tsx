@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -114,6 +114,7 @@ export default function PortalChatsPage() {
   const [internalReplyText, setInternalReplyText] = useState('')
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
   const [internalUploading, setInternalUploading] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   // AI assistant panel
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [aiPanelMessages, setAiPanelMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([])
@@ -135,6 +136,17 @@ export default function PortalChatsPage() {
   const lastSuggestedMsgRef = useRef<string | null>(null)
   const queryClient = useQueryClient()
   const { playSound } = useNotificationSound()
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true)
+    await queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+    await queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+    await queryClient.invalidateQueries({ queryKey: ['internal-threads'] })
+    if (selectedThreadId) {
+      await queryClient.invalidateQueries({ queryKey: ['internal-thread-messages', selectedThreadId] })
+    }
+    setIsRefreshing(false)
+  }, [queryClient, selectedAccountId, selectedContactId, selectedThreadId])
 
   // Voice input for client chat
   const handleTranscript = useCallback((text: string) => {
@@ -964,6 +976,14 @@ export default function PortalChatsPage() {
                 title={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}
               >
                 {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+              </button>
+              <button
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="p-2 rounded-lg text-zinc-400 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+                title="Refresh chats"
+              >
+                <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
               </button>
             </div>
           </div>
