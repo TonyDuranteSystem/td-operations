@@ -31,6 +31,7 @@ import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
+import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
@@ -1238,9 +1239,12 @@ function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string 
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                 )}
               </div>
-              <span className="text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-600">
-                {tr.status}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-600">
+                  {tr.status}
+                </span>
+                <TaxRowActions taxReturn={tr} />
+              </div>
             </div>
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">

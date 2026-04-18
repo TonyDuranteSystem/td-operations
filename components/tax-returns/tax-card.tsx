@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { differenceInDays, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import { toggleTaxReturnField } from '@/app/(dashboard)/tax-returns/actions'
+import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
 import type { TaxReturn } from '@/lib/types'
 
 const TYPE_COLORS: Record<string, string> = {
@@ -131,7 +132,7 @@ export function TaxCard({
         <p className="text-xs text-muted-foreground truncate">{tr.client_name}</p>
       )}
 
-      {/* Quick toggle chips */}
+      {/* Quick toggle chips + row actions */}
       <div className="flex items-center gap-1.5 mt-2">
         <ToggleChip
           label="Paid"
@@ -151,6 +152,9 @@ export function TaxCard({
           onToggle={() => handleToggle('sent_to_india', tr.sent_to_india)}
           disabled={isPending}
         />
+        <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
+          <TaxRowActions taxReturn={tr} />
+        </div>
       </div>
 
       {/* Bottom: deadline + status */}
