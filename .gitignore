@@ -14,6 +14,7 @@
 # env files
 .env*.local
 .env.sandbox.local
+.env.sandbox
 
 # credentials — NEVER commit
 platform-credentials.md

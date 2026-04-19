@@ -97,6 +97,17 @@ vi.mock("@/lib/supabase-admin", () => {
         if (table === "service_deliveries") {
           return buildSDChain()
         }
+        if (table === "accounts" || table === "contacts") {
+          // createSD reads is_test from the linked account (or contact when
+          // account_id is null) to propagate the test-record flag onto the SD.
+          // Tests don't exercise this branch; return null so no propagation.
+          const c = {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+          }
+          return c
+        }
         // Unused tables get a no-op chain
         return buildPipelineChain("__unused__")
       },

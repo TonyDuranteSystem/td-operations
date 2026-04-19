@@ -149,6 +149,9 @@ vi.mock("@/lib/supabase-admin", () => ({
           single: vi.fn(() =>
             Promise.resolve({ data: { portal_tier: "onboarding" }, error: null }),
           ),
+          maybeSingle: vi.fn(() =>
+            Promise.resolve({ data: { is_test: false }, error: null }),
+          ),
         }
       }
       return {

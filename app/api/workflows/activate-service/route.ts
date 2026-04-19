@@ -510,12 +510,17 @@ export async function POST(req: NextRequest) {
           // value instead of defaulting to stage_order=-1 "Company Data
           // Pending".
           let createParams: Parameters<typeof createSD>[0]
-          // During a tax season pause, park new Tax Return SDs at on_hold so
-          // the client sees the "extension filed" banner instead of the data-
-          // collection wizard. The flag only affects Tax Return — other
-          // pipelines (formation, onboarding, etc.) stay active.
-          const taxPaused = pipeline === "Tax Return" ? await isTaxSeasonPaused() : false
-          const taxPauseNote = taxPaused ? " [on_hold — tax_season_paused flag set]" : ""
+          // Tax season pause: only bundled (Installments-funded) Tax Return
+          // SDs get parked at on_hold. Standalone business Tax Return clients
+          // pay upfront as a One-Time Service and have no 2nd-installment
+          // gate to reactivate on — if parked, the reactivation cron would
+          // never flip them back. Per Tax Return SOP v7.0 Phase 3 Scenario 2
+          // ("SKIP this phase entirely" for one-time), they must stay active
+          // during a pause.
+          const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR
+            ? await isTaxSeasonPaused()
+            : false
+          const taxPauseNote = taxPausedBundled ? " [on_hold — tax_season_paused flag set]" : ""
           if (pipeline === "Tax Return") {
             if (isStandaloneBusinessTR) {
               createParams = {
@@ -525,8 +530,8 @@ export async function POST(req: NextRequest) {
                 contact_id: contactId,
                 target_stage: "Company Data Pending",
                 target_stage_order: -1,
-                status: taxPaused ? "on_hold" : "active",
-                notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
+                status: "active",
+                notes: `Auto-created from offer ${activation.offer_token}`,
               }
             } else {
               createParams = {
@@ -535,7 +540,7 @@ export async function POST(req: NextRequest) {
                 account_id: accountId,
                 contact_id: contactId,
                 target_stage: "1st Installment Paid",
-                status: taxPaused ? "on_hold" : "active",
+                status: taxPausedBundled ? "on_hold" : "active",
                 notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
               }
             }
