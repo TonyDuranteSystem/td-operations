@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
@@ -47,7 +48,7 @@ export default async function PortalLayout({
 
   // No user — render children without shell (login/forgot-password/change-password pages handle their own UI)
   if (!user) {
-    return <>{children}</>
+    return <><SandboxBanner />{children}</>
   }
 
   // Get contact_id and accounts
@@ -99,6 +100,7 @@ export default async function PortalLayout({
 
   return (
     <Providers>
+      <SandboxBanner />
       <PortalSwRegister locale={locale} />
       <LocaleProvider locale={locale}>
         <PasswordGate mustChangePassword={mustChangePassword} />

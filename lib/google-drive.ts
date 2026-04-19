@@ -225,6 +225,10 @@ export async function uploadFile(
   content: string,
   mimeType = "text/plain",
 ) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadFile', fileName })
+    return { id: 'sandbox-mock', name: fileName }
+  }
   return driveUpload(fileName, content, mimeType, parentFolderId)
 }
 
@@ -238,6 +242,10 @@ export async function updateFileContent(
   mimeType = "text/plain",
   newName?: string,
 ) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'updateFileContent', fileId })
+    return { id: fileId, name: newName ?? 'sandbox-mock' }
+  }
   const token = await getAccessToken()
 
   const boundary = "----DriveUpdateBoundary"
@@ -282,6 +290,10 @@ export async function updateFileContent(
  * Rename a file or folder on Drive (metadata-only update)
  */
 export async function renameFile(fileId: string, newName: string) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'renameFile', fileId })
+    return { id: fileId, name: newName }
+  }
   const token = await getAccessToken()
 
   const res = await fetch(
@@ -310,6 +322,10 @@ export async function renameFile(fileId: string, newName: string) {
  * Create a folder in Drive
  */
 export async function createFolder(parentFolderId: string, folderName: string) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'createFolder', folderName })
+    return { id: 'sandbox-mock', name: folderName }
+  }
   const token = await getAccessToken()
 
   const res = await fetch(
@@ -346,6 +362,10 @@ export async function moveFile(
   fileId: string,
   newParentId: string,
 ) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'moveFile', fileId, newParentId })
+    return { id: fileId }
+  }
   const token = await getAccessToken()
 
   // Get current parents
@@ -411,6 +431,10 @@ export async function listFolderAnyDrive(folderId: string, maxResults = 50) {
  * Used for TD Operations mirror structure.
  */
 export async function createFolderMyDrive(parentFolderId: string, folderName: string) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'createFolderMyDrive', folderName })
+    return { id: 'sandbox-mock', name: folderName }
+  }
   const token = await getAccessToken()
 
   const res = await fetch(
@@ -449,6 +473,10 @@ export async function uploadFileMyDrive(
   content: string,
   mimeType = "text/plain",
 ) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadFileMyDrive', fileName })
+    return { id: 'sandbox-mock', name: fileName }
+  }
   const token = await getAccessToken()
 
   const boundary = "----DriveUploadBoundary"
@@ -497,6 +525,10 @@ export async function uploadFileMyDrive(
  * Example: ensureDrivePath("rootId", ["SOP", "Templates"]) → creates SOP/ and SOP/Templates/ if needed
  */
 export async function ensureDrivePath(rootFolderId: string, pathSegments: string[]): Promise<string> {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'ensureDrivePath', pathSegments })
+    return 'sandbox-mock-folder-id'
+  }
   let currentParent = rootFolderId
 
   for (const segment of pathSegments) {
@@ -531,6 +563,10 @@ export async function uploadBinaryToDrive(
   mimeType: string,
   parentFolderId: string,
 ) {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadBinaryToDrive', fileName })
+    return { id: 'sandbox-mock', name: fileName }
+  }
   const token = await getAccessToken()
   const boundary = "----DriveUploadBinaryBoundary"
 
@@ -636,6 +672,10 @@ export async function downloadFileContent(fileId: string): Promise<string> {
  * Trash a file (soft-delete, recoverable for 30 days)
  */
 export async function trashFile(fileId: string): Promise<{ id: string; name: string }> {
+  if (process.env.SANDBOX_MODE === '1') {
+    console.warn('[SANDBOX] Drive write blocked:', { operation: 'trashFile', fileId })
+    return { id: fileId, name: 'sandbox-blocked' }
+  }
   const token = await getAccessToken()
 
   const res = await fetch(

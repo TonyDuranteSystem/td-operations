@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { Toaster } from 'sonner'
+import { SandboxBanner } from '@/components/sandbox-banner'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -38,6 +39,7 @@ export default function RootLayout({
   return (
     <html lang="it">
       <body className={inter.className}>
+        <SandboxBanner />
         {children}
         <Toaster position="bottom-right" richColors closeButton />
       </body>
