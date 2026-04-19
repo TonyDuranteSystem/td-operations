@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User } from 'lucide-react'
 import { PaymentHistory } from '@/components/portal/payment-history'
@@ -13,6 +13,10 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { WelcomeDashboard } from './welcome-dashboard'
 import { TaxBanner } from '@/components/portal/tax-banner'
+import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
+import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
+import { isTaxSeasonPaused } from '@/lib/settings'
+import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
 function formatEin(ein: string | null): string {
@@ -227,7 +231,7 @@ export default async function PortalDashboardPage() {
   }
 
   // Fetch all data in parallel
-  const [account, services, deadlines, payments, taxReturns, members, actionItems] = await Promise.all([
+  const [account, services, deadlines, payments, taxReturns, members, actionItems, taxSeasonPaused, profileBanner] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
@@ -235,6 +239,8 @@ export default async function PortalDashboardPage() {
     getPortalTaxReturns(selectedAccountId),
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
+    isTaxSeasonPaused(),
+    contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
   ])
 
   if (!account) {
@@ -259,17 +265,58 @@ export default async function PortalDashboardPage() {
         </p>
       </div>
 
-      {/* Tax Banner — shown for active tax returns (all states until filed) */}
-      {taxReturns.filter(tr => tr.status !== 'TR Filed').slice(0, 1).map(tr => (
-        <TaxBanner
-          key={tr.id}
-          taxYear={tr.tax_year}
-          returnType={tr.return_type}
+      {/* Profile completion banner — shown for standalone tax-return clients
+          with missing contact fields (phone, address, DOB, citizenship). The
+          component self-hides when dismissed for the session or when the
+          contact has no missing fields. */}
+      {profileBanner.shouldShow && contactId && (
+        <ProfileCompletionBanner
+          contactId={contactId}
+          missingFields={profileBanner.missingFields}
           locale={locale}
-          dataReceived={tr.data_received ?? false}
-          sentToIndia={tr.sent_to_india ?? false}
         />
-      ))}
+      )}
+
+      {/* Tax Banner — when the Tax Return SD is on_hold or the global
+          tax_season_paused flag is set we show the "extension filed" pause
+          banner instead of the data-collection banner. The global flag is
+          master: once flipped, every tax client sees the pause message even
+          if their SD hasn't been individually flipped yet. */}
+      {taxReturns.filter(tr => tr.status !== 'TR Filed').slice(0, 1).map(tr => {
+        const isPaused = taxSeasonPaused || tr.sd_status === 'on_hold'
+        if (isPaused) {
+          const firstName =
+            (user.user_metadata?.full_name as string | undefined)?.split(' ')[0] ??
+            null
+          const deadlineIso = resolveExtensionDeadline(
+            tr.extension_deadline,
+            tr.tax_year,
+            tr.return_type as Parameters<typeof resolveExtensionDeadline>[2],
+          )
+          const deadlineDisplay = deadlineIso
+            ? formatDeadlineForDisplay(deadlineIso, locale)
+            : null
+          return (
+            <TaxExtensionFiledBanner
+              key={tr.id}
+              firstName={firstName}
+              confirmationId={tr.extension_submission_id ?? null}
+              deadlineDisplay={deadlineDisplay}
+              locale={locale}
+            />
+          )
+        }
+        return (
+          <TaxBanner
+            key={tr.id}
+            taxYear={tr.tax_year}
+            returnType={tr.return_type}
+            locale={locale}
+            dataReceived={tr.data_received ?? false}
+            sentToIndia={tr.sent_to_india ?? false}
+          />
+        )
+      })}
 
       {/* Action Items Widget */}
       <ActionItems data={actionItems} locale={locale} />

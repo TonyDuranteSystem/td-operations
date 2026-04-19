@@ -22,6 +22,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
+import { isTaxSeasonPaused } from "@/lib/settings"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -88,6 +89,7 @@ export async function onFirstInstallmentPaid(
 
     // Update cmra_renewal_date
     await dbWriteSafe(
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       supabaseAdmin
         .from("accounts")
         .update({ cmra_renewal_date: `${year}-12-31`, updated_at: new Date().toISOString() })
@@ -167,17 +169,23 @@ export async function onFirstInstallmentPaid(
       // row. For an installment-paid flow where we know the 1st installment
       // IS paid, the correct entry point is stage_order=1 "1st Installment
       // Paid" — createSD defaults to the lowest stage_order, so we pass the
-      // explicit target_stage here.
+      // explicit target_stage here. When the global tax_season_paused flag is
+      // set we park the new SD at on_hold so the client sees the "extension
+      // filed" banner instead of the data-collection wizard; the 2nd-
+      // installment reactivation cron flips it back to active when season
+      // reopens.
+      const paused = await isTaxSeasonPaused()
       const newSd = await createSD({
         service_type: "Tax Return",
         service_name: `Tax Return ${taxYear} - ${account.company_name}`,
         account_id: accountId,
         contact_id: contactId,
         target_stage: "1st Installment Paid",
-        notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.`,
+        status: paused ? "on_hold" : "active",
+        notes: `Auto-created from 1st installment ${year}. Filing for tax year ${taxYear}.${paused ? " Parked on_hold — tax_season_paused flag set." : ""}`,
       })
 
-      steps.push({ step: "tax_sd", status: "ok", detail: `Created: ${newSd.id} (tax year ${taxYear})` })
+      steps.push({ step: "tax_sd", status: "ok", detail: `Created: ${newSd.id}${paused ? " (on_hold — tax season paused)" : ""} (tax year ${taxYear})` })
 
       // Also create/update tax_returns record
       const { data: existingTrRecord } = await supabaseAdmin
@@ -241,6 +249,7 @@ export async function onFirstInstallmentPaid(
   // ─── 6. Create task for lease ───
   try {
     await dbWriteSafe(
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       supabaseAdmin.from("tasks").insert({
         task_title: `Create lease ${year} -- ${account.company_name}`,
         description: `1st installment paid. Create and send new lease agreement for ${year}.\n\nUse: lease_create(account_id="${accountId}", suite_number="...")\nThen: lease_send(token)`,
@@ -341,6 +350,7 @@ export async function onSecondInstallmentPaid(
 
     if (taxSd && taxSd.stage === "Awaiting 2nd Payment") {
       await dbWrite(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         supabaseAdmin
           .from("service_deliveries")
           .update({
@@ -393,6 +403,7 @@ export async function onSecondInstallmentPaid(
 
     if (tr?.data_received) {
       await dbWriteSafe(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         supabaseAdmin.from("tasks").insert({
           task_title: `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`,
           description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to India for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,

@@ -24,6 +24,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
+import { isTaxSeasonPaused } from "@/lib/settings"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 
 interface TaxReturnIntakePayload {
@@ -284,6 +285,28 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     result.summary = `CRITICAL: SD advance threw — ${msg}`
     result.ok = false
     return result
+  }
+  await updateJobProgress(job.id, result)
+
+  // ─── 7b. TAX SEASON PAUSE GATE (NON-CRITICAL) ───
+  // When the global tax_season_paused flag is set, keep the SD at on_hold
+  // after the stage advance so the portal shows the "extension filed" banner
+  // instead of the tax questionnaire. The SD stage itself is still "Paid -
+  // Awaiting Data" so when season reopens the reactivation cron just flips
+  // status back to active and no stage re-transition is needed.
+  try {
+    if (await isTaxSeasonPaused()) {
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      await supabaseAdmin
+        .from("service_deliveries")
+        .update({ status: "on_hold", updated_at: new Date().toISOString() })
+        .eq("id", taxReturnSdId!)
+      result.steps.push(step("tax_pause_hold", "ok", "SD parked on_hold — tax_season_paused flag set"))
+    } else {
+      result.steps.push(step("tax_pause_hold", "skipped", "tax_season_paused flag is false"))
+    }
+  } catch (e) {
+    result.steps.push(step("tax_pause_hold", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
   }
   await updateJobProgress(job.id, result)
 

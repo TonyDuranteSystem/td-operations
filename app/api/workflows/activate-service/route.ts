@@ -36,6 +36,7 @@ import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
 import { findTaxReturnService } from "@/lib/tax-return-context"
+import { isTaxSeasonPaused } from "@/lib/settings"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -509,6 +510,12 @@ export async function POST(req: NextRequest) {
           // value instead of defaulting to stage_order=-1 "Company Data
           // Pending".
           let createParams: Parameters<typeof createSD>[0]
+          // During a tax season pause, park new Tax Return SDs at on_hold so
+          // the client sees the "extension filed" banner instead of the data-
+          // collection wizard. The flag only affects Tax Return — other
+          // pipelines (formation, onboarding, etc.) stay active.
+          const taxPaused = pipeline === "Tax Return" ? await isTaxSeasonPaused() : false
+          const taxPauseNote = taxPaused ? " [on_hold — tax_season_paused flag set]" : ""
           if (pipeline === "Tax Return") {
             if (isStandaloneBusinessTR) {
               createParams = {
@@ -518,7 +525,8 @@ export async function POST(req: NextRequest) {
                 contact_id: contactId,
                 target_stage: "Company Data Pending",
                 target_stage_order: -1,
-                notes: `Auto-created from offer ${activation.offer_token}`,
+                status: taxPaused ? "on_hold" : "active",
+                notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
               }
             } else {
               createParams = {
@@ -527,7 +535,8 @@ export async function POST(req: NextRequest) {
                 account_id: accountId,
                 contact_id: contactId,
                 target_stage: "1st Installment Paid",
-                notes: `Auto-created from offer ${activation.offer_token}`,
+                status: taxPaused ? "on_hold" : "active",
+                notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
               }
             }
           } else {
@@ -647,14 +656,15 @@ export async function POST(req: NextRequest) {
 
         if (newIdx > currentIdx) {
           // 1. Update contacts.portal_tier
+          /* eslint-disable no-restricted-syntax -- pre-P2.4 raw contacts.update + Phase D1 portal_tier; extract to lib/operations/portal.ts reconcileTier() per dev_task fda76fd3 */
           await dbWrite(
-            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task fda76fd3
             supabase
               .from("contacts")
               .update({ portal_tier: "onboarding" })
               .eq("id", contactId),
             "contacts.update"
           )
+          /* eslint-enable no-restricted-syntax */
 
           // 2. Update auth.users.app_metadata.portal_tier (paginated — P1.9)
           if (currentContact?.email) {

@@ -8,6 +8,7 @@
  * 4. Renders the appropriate wizard
  */
 
+import type { ReactNode } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -15,6 +16,9 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, type WizardType } from '@/lib/portal/wizard-map'
+import { isTaxSeasonPaused } from '@/lib/settings'
+import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
+import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 
 export default async function WizardPage({
   searchParams,
@@ -287,6 +291,74 @@ export default async function WizardPage({
     ...w,
     submitted: allSubmittedTypes.has(w.type),
   }))
+
+  // Tax season pause gate — when the global tax_season_paused flag is set OR
+  // this account's Tax Return SD is on_hold, we block access to the tax/
+  // company_info wizards and show the "extension filed" banner instead. The
+  // flag is the master switch (new 2026 season not open yet); the on_hold
+  // check is the per-client escape hatch for individual suspensions.
+  let taxPauseBanner: ReactNode = null
+  if (wizardType === 'tax' || wizardType === 'company_info') {
+    const paused = await isTaxSeasonPaused()
+    let sdOnHold = false
+    if (accountId) {
+      const { data: trSd } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('status')
+        .eq('account_id', accountId)
+        .eq('service_type', 'Tax Return')
+        .not('status', 'in', '(completed,cancelled)')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      sdOnHold = trSd?.status === 'on_hold'
+    }
+    if (paused || sdOnHold) {
+      // Look up the matching tax_returns row for banner props. We match on
+      // company_name the same way getPortalTaxReturns does — accountId here
+      // may be empty for pre-account tax leads, in which case we render with
+      // null fields and the banner's graceful fallbacks kick in.
+      const firstName = (user.user_metadata?.full_name as string | undefined)?.split(' ')[0] ?? (contact.first_name as string | undefined) ?? null
+      let confirmationId: string | null = null
+      let deadlineIso: string | null = null
+      let returnType: 'SMLLC' | 'MMLLC' | 'Corp' | 'S-Corp' | null = null
+      let taxYear: number | null = null
+      if (account.company_name) {
+        const { data: tr } = await supabaseAdmin
+          .from('tax_returns')
+          .select('extension_submission_id, extension_deadline, tax_year, return_type')
+          .eq('company_name', account.company_name)
+          .order('tax_year', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (tr) {
+          confirmationId = (tr.extension_submission_id as string | null) ?? null
+          deadlineIso = (tr.extension_deadline as string | null) ?? null
+          const rt = tr.return_type as string | null
+          returnType = rt === 'SMLLC' || rt === 'MMLLC' || rt === 'Corp' || rt === 'S-Corp' ? rt : null
+          taxYear = (tr.tax_year as number | null) ?? null
+        }
+      }
+      const resolved = resolveExtensionDeadline(deadlineIso, taxYear, returnType)
+      const deadlineDisplay = resolved ? formatDeadlineForDisplay(resolved, locale) : null
+      taxPauseBanner = (
+        <TaxExtensionFiledBanner
+          firstName={firstName}
+          confirmationId={confirmationId}
+          deadlineDisplay={deadlineDisplay}
+          locale={locale}
+        />
+      )
+    }
+  }
+
+  if (taxPauseBanner) {
+    return (
+      <div className="px-4 py-6 lg:px-8">
+        {taxPauseBanner}
+      </div>
+    )
+  }
 
   // Stage-based processing check: if company_info wizard was submitted but SD is still
   // at "Company Data Pending", the tax_return_intake handler is processing (or failed).

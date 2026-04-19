@@ -474,6 +474,12 @@ const translations: Record<Locale, Record<string, string>> = {
     'profile.saveFailed': 'Failed to save profile',
     'profile.edit': 'Edit',
     'profile.email': 'Email',
+    'profile.dateOfBirth': 'Date of Birth',
+    'profile.banner.title': 'Complete your profile',
+    'profile.banner.subtitle': 'We need a few more details to finalize your tax return.',
+    'profile.banner.save': 'Save',
+    'profile.banner.dismiss': 'Dismiss',
+    'profile.banner.saved': 'Thanks — your profile is up to date.',
 
     // Push notifications
     'push.on': 'Push notifications on',
@@ -968,6 +974,12 @@ const translations: Record<Locale, Record<string, string>> = {
     'profile.saveFailed': 'Errore nel salvataggio del profilo',
     'profile.edit': 'Modifica',
     'profile.email': 'Email',
+    'profile.dateOfBirth': 'Data di Nascita',
+    'profile.banner.title': 'Completa il tuo profilo',
+    'profile.banner.subtitle': 'Ci servono ancora alcuni dati per finalizzare la tua dichiarazione dei redditi.',
+    'profile.banner.save': 'Salva',
+    'profile.banner.dismiss': 'Ignora',
+    'profile.banner.saved': 'Grazie — il tuo profilo è aggiornato.',
 
     // Push notifications
     'push.on': 'Notifiche push attive',

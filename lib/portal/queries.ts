@@ -374,7 +374,11 @@ export async function getUnreadChatCount(accountId: string | null, contactId: st
 }
 
 export async function getPortalTaxReturns(accountId: string) {
-  // Tax returns are matched by company_name, not account_id
+  // Tax returns are matched by company_name, not account_id. We also fetch the
+  // matching Tax Return SD's status so the portal home can show the
+  // "extension filed" pause banner when the SD is on_hold (R093: status is the
+  // source of truth per-account — we attach it to every tr row for
+  // convenience, since there's at most one active Tax Return SD per account).
   const { data: account } = await supabaseAdmin
     .from('accounts')
     .select('company_name')
@@ -383,14 +387,27 @@ export async function getPortalTaxReturns(accountId: string) {
 
   if (!account?.company_name) return []
 
-  const { data } = await supabaseAdmin
-    .from('tax_returns')
-    .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, data_received, sent_to_india')
-    .eq('company_name', account.company_name)
-    .order('tax_year', { ascending: false })
-    .limit(5)
+  const [taxRes, sdRes] = await Promise.all([
+    supabaseAdmin
+      .from('tax_returns')
+      .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, extension_submission_id, data_received, sent_to_india')
+      .eq('company_name', account.company_name)
+      .order('tax_year', { ascending: false })
+      .limit(5),
+    supabaseAdmin
+      .from('service_deliveries')
+      .select('status, stage')
+      .eq('account_id', accountId)
+      .eq('service_type', 'Tax Return')
+      .not('status', 'in', '(completed,cancelled)')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
 
-  return data ?? []
+  const sdStatus = sdRes.data?.status ?? null
+  const sdStage = sdRes.data?.stage ?? null
+  return (taxRes.data ?? []).map(tr => ({ ...tr, sd_status: sdStatus, sd_stage: sdStage }))
 }
 
 // ─── Action Items ──────────────────────────────────────
