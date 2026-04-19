@@ -196,6 +196,28 @@ export async function createSD(
   const start_date =
     params.start_date || new Date().toISOString().split("T")[0]
 
+  // Phase 0.3 (dev_task tax-pause-refactor): propagate is_test from the
+  // account so test-account SDs are filterable by the standard
+  // excludeTestRecords helper. Without this, cron jobs and audits see test
+  // data mixed in with real client work. When account_id is null (standalone
+  // contact purchase), check contacts.is_test instead.
+  let is_test = false
+  if (params.account_id) {
+    const { data: acct } = await supabaseAdmin
+      .from("accounts")
+      .select("is_test")
+      .eq("id", params.account_id)
+      .maybeSingle()
+    if (acct?.is_test === true) is_test = true
+  } else if (params.contact_id) {
+    const { data: c } = await supabaseAdmin
+      .from("contacts")
+      .select("is_test")
+      .eq("id", params.contact_id)
+      .maybeSingle()
+    if (c?.is_test === true) is_test = true
+  }
+
   const row = await dbWrite(
     supabaseAdmin
       .from("service_deliveries")
@@ -212,6 +234,7 @@ export async function createSD(
         assigned_to: params.assigned_to || "Luca",
         notes: params.notes || null,
         stage_entered_at: new Date().toISOString(),
+        is_test,
       })
       .select("id, service_type, service_name, stage, stage_order, account_id, contact_id")
       .single(),
