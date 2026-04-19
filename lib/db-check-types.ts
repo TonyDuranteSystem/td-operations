@@ -227,7 +227,7 @@ export type ServiceCatalogCategory = "primary" | "standalone" | "addon"
 export type ServiceDeliveriesServiceType = "Company Formation" | "Client Onboarding" | "Tax Return" | "State RA Renewal" | "CMRA Mailing Address" | "Shipping" | "Public Notary" | "Banking Fintech" | "Banking Physical" | "ITIN" | "Company Closure" | "Client Offboarding" | "State Annual Report" | "EIN" | "EIN Application" | "Support" | "Annual Renewal" | "CMRA"
 
 /** service_deliveries.status — CHECK constraint */
-export type ServiceDeliveriesStatus = "active" | "blocked" | "completed" | "cancelled"
+export type ServiceDeliveriesStatus = "active" | "blocked" | "completed" | "cancelled" | "on_hold"
 
 /** session_checkpoints.session_type — CHECK constraint */
 export type SessionCheckpointsSessionType = "dev" | "ops"

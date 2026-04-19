@@ -721,3 +721,92 @@ export async function getCompanyEmail(accountId: string): Promise<string | null>
 
   return sorted[0].contacts!.email
 }
+
+/**
+ * Profile-completion banner eligibility for tax-return-standalone clients.
+ *
+ * Shows the banner when:
+ *   (1) at least one of the contact's linked accounts is a "tax-return-standalone"
+ *       — has a Tax Return SD and NO Formation/Onboarding/Closure SD, AND
+ *   (2) the contact itself is missing at least one of the targeted fields
+ *       (phone, 5 address fields, date_of_birth, citizenship).
+ *
+ * Fields the banner will ask the client to fill are returned in
+ * `missingFields` so the component can render just those inputs.
+ *
+ * Per-account detection (not per-contact) — a contact linked to both a
+ * bundled account and a standalone one still qualifies; the current 56-audit
+ * list Antonio asked for flagged ~62 accounts this way.
+ */
+export interface ProfileBannerStatus {
+  shouldShow: boolean
+  missingFields: string[]
+}
+
+const PROFILE_BANNER_FIELDS = [
+  'phone',
+  'address_line1',
+  'address_city',
+  'address_state',
+  'address_zip',
+  'address_country',
+  'date_of_birth',
+  'citizenship',
+] as const
+
+const TAX_STANDALONE_EXCLUDING_SERVICES = new Set([
+  'Company Formation',
+  'Client Onboarding',
+  'Company Closure',
+])
+
+export async function getProfileBannerStatus(contactId: string): Promise<ProfileBannerStatus> {
+  const { data: contact } = await supabaseAdmin
+    .from('contacts')
+    .select('phone, address_line1, address_city, address_state, address_zip, address_country, date_of_birth, citizenship')
+    .eq('id', contactId)
+    .maybeSingle()
+  if (!contact) return { shouldShow: false, missingFields: [] }
+
+  const missingFields: string[] = []
+  for (const f of PROFILE_BANNER_FIELDS) {
+    const v = (contact as unknown as Record<string, unknown>)[f]
+    if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) {
+      missingFields.push(f)
+    }
+  }
+  if (missingFields.length === 0) return { shouldShow: false, missingFields: [] }
+
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id')
+    .eq('contact_id', contactId)
+  const accountIds = (links ?? [])
+    .map(l => l.account_id)
+    .filter((id): id is string => typeof id === 'string')
+  if (accountIds.length === 0) return { shouldShow: false, missingFields: [] }
+
+  const { data: sds } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('account_id, service_type')
+    .in('account_id', accountIds)
+  const serviceTypesPerAccount = new Map<string, Set<string>>()
+  for (const sd of sds ?? []) {
+    if (!sd.account_id) continue
+    if (!serviceTypesPerAccount.has(sd.account_id)) serviceTypesPerAccount.set(sd.account_id, new Set())
+    serviceTypesPerAccount.get(sd.account_id)!.add(sd.service_type)
+  }
+
+  const perAccountLists = Array.from(serviceTypesPerAccount.values())
+  for (const serviceTypes of perAccountLists) {
+    const hasTaxReturn = serviceTypes.has('Tax Return')
+    if (!hasTaxReturn) continue
+    const types = Array.from(serviceTypes)
+    const hasExcluded = types.some(t => TAX_STANDALONE_EXCLUDING_SERVICES.has(t))
+    if (!hasExcluded) {
+      return { shouldShow: true, missingFields }
+    }
+  }
+
+  return { shouldShow: false, missingFields: [] }
+}
