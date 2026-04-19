@@ -82,6 +82,38 @@ export async function reassignDelivery(
   return { success: true }
 }
 
+/**
+ * Resume an on_hold service delivery — flips status from 'on_hold' back to
+ * 'active'. The primary use is the tax-season pause: the global
+ * tax_season_paused flag + the reactivation cron handle the common case,
+ * but staff sometimes need a manual override for a specific client (e.g.
+ * an urgent tax return that must be processed despite the pause). Safe
+ * no-op if the SD isn't on_hold.
+ */
+export async function resumeDelivery(deliveryId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { data: sd } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, status')
+      .eq('id', deliveryId)
+      .maybeSingle()
+    if (!sd) throw new Error('Service delivery not found')
+    if (sd.status !== 'on_hold') {
+      throw new Error(`Can only resume on_hold services. Current status: ${sd.status}`)
+    }
+
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+    const { error } = await supabaseAdmin
+      .from('service_deliveries')
+      .update({ status: 'active', updated_at: new Date().toISOString() })
+      .eq('id', deliveryId)
+      .eq('status', 'on_hold')
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/trackers')
+  })
+}
+
 export async function completeDelivery(deliveryId: string) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()

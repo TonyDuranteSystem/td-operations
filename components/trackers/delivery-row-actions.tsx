@@ -27,6 +27,7 @@ import {
   CheckCircle,
   Ban,
   UserCheck,
+  Play,
   X,
 } from 'lucide-react'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -37,6 +38,7 @@ import {
   cancelDelivery,
   deleteDelivery,
   deliveryDeletePreview,
+  resumeDelivery,
 } from '@/app/(dashboard)/trackers/[serviceType]/actions'
 
 export interface DeliveryRowData {
@@ -68,6 +70,7 @@ export function DeliveryRowActions({ delivery }: Props) {
 
   const isCompleted = delivery.status === 'completed'
   const isCancelled = delivery.status === 'cancelled'
+  const isOnHold = delivery.status === 'on_hold'
 
   useEffect(() => {
     if (!menuOpen) return
@@ -153,6 +156,19 @@ export function DeliveryRowActions({ delivery }: Props) {
     })
   }
 
+  const handleResume = () => {
+    setMenuOpen(false)
+    startTransition(async () => {
+      const result = await resumeDelivery(delivery.id)
+      if (result.success) {
+        toast.success('Service resumed')
+        router.refresh()
+      } else {
+        toast.error(result.error ?? 'Failed to resume')
+      }
+    })
+  }
+
   const handleCancelConfirm = async () => {
     const result = await cancelDelivery(delivery.id)
     if (result.success) {
@@ -203,6 +219,16 @@ export function DeliveryRowActions({ delivery }: Props) {
               <span className="ml-auto text-[10px] text-zinc-400">{delivery.assigned_to}</span>
             )}
           </button>
+          {isOnHold && (
+            <button
+              type="button"
+              onClick={handleResume}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 text-left border-t"
+              title="Force-process an on_hold service (e.g. override tax-season pause)"
+            >
+              <Play className="h-4 w-4" /> Resume (override hold)
+            </button>
+          )}
           {!isCompleted && !isCancelled && (
             <button
               type="button"
