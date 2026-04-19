@@ -108,6 +108,11 @@ interface ContactRecord {
   preferred_channel: string | null
   citizenship: string | null
   residency: string | null
+  address_line1: string | null
+  address_city: string | null
+  address_state: string | null
+  address_zip: string | null
+  address_country: string | null
   itin_number: string | null
   itin_issue_date: string | null
   itin_renewal_date: string | null
@@ -506,7 +511,11 @@ function OverviewTab({
         <EditableField icon={Phone} label="Phone 2" value={contact.phone_2 ?? ''} onSave={makeContactSaver('phone_2')} />
         <EditableField icon={Globe} label="Language" value={contact.language ?? ''} type="select" options={LANGUAGE_OPTIONS} onSave={makeContactSaver('language')} />
         <EditableField icon={Globe} label="Citizenship" value={contact.citizenship ?? ''} onSave={makeContactSaver('citizenship')} />
-        <EditableField icon={MapPin} label="Residency" value={contact.residency ?? ''} onSave={makeContactSaver('residency')} />
+        <EditableField icon={MapPin} label="Address" value={contact.address_line1 ?? ''} onSave={makeContactSaver('address_line1')} />
+        <EditableField icon={MapPin} label="City" value={contact.address_city ?? ''} onSave={makeContactSaver('address_city')} />
+        <EditableField icon={MapPin} label="State / Province" value={contact.address_state ?? ''} onSave={makeContactSaver('address_state')} />
+        <EditableField icon={MapPin} label="ZIP / Postal Code" value={contact.address_zip ?? ''} onSave={makeContactSaver('address_zip')} />
+        <EditableField icon={MapPin} label="Country" value={contact.address_country ?? ''} onSave={makeContactSaver('address_country')} />
         <EditableField icon={Calendar} label="Date of Birth" value={contact.date_of_birth ?? ''} type="date" onSave={makeContactSaver('date_of_birth')} />
       </div>
 

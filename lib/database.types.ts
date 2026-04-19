@@ -2756,6 +2756,11 @@ export type Database = {
       }
       contacts: {
         Row: {
+          address_city: string | null
+          address_country: string | null
+          address_line1: string | null
+          address_state: string | null
+          address_zip: string | null
           airtable_id: string | null
           citizenship: string | null
           created_at: string | null
@@ -2799,6 +2804,11 @@ export type Database = {
           zoho_contact_id: string | null
         }
         Insert: {
+          address_city?: string | null
+          address_country?: string | null
+          address_line1?: string | null
+          address_state?: string | null
+          address_zip?: string | null
           airtable_id?: string | null
           citizenship?: string | null
           created_at?: string | null
@@ -2842,6 +2852,11 @@ export type Database = {
           zoho_contact_id?: string | null
         }
         Update: {
+          address_city?: string | null
+          address_country?: string | null
+          address_line1?: string | null
+          address_state?: string | null
+          address_zip?: string | null
           airtable_id?: string | null
           citizenship?: string | null
           created_at?: string | null

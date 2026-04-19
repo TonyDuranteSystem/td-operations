@@ -385,13 +385,29 @@ export function registerOnboardingTools(server: McpServer) {
             if (submitted.owner_email) contactFields.email = submitted.owner_email
             if (submitted.owner_phone) contactFields.phone = submitted.owner_phone
             if (submitted.owner_nationality) contactFields.citizenship = submitted.owner_nationality
-            if (submitted.owner_country) contactFields.residency = submitted.owner_country
+            // Dual-write address: structured fields (primary) + residency
+            // concat (legacy readers). address_country stores the country
+            // only; residency gets the full concat for backward compat.
+            if (submitted.owner_street) contactFields.address_line1 = String(submitted.owner_street).trim()
+            if (submitted.owner_city) contactFields.address_city = String(submitted.owner_city).trim()
+            if (submitted.owner_state_province) contactFields.address_state = String(submitted.owner_state_province).trim()
+            if (submitted.owner_zip) contactFields.address_zip = String(submitted.owner_zip).trim()
+            if (submitted.owner_country) contactFields.address_country = String(submitted.owner_country).trim()
+            const addrPartsOb = [
+              submitted.owner_street,
+              submitted.owner_city,
+              submitted.owner_state_province,
+              submitted.owner_zip,
+              submitted.owner_country,
+            ].filter(Boolean).map(String).map(s => s.trim())
+            if (addrPartsOb.length > 0) contactFields.residency = addrPartsOb.join(", ")
             if (submitted.owner_dob) contactFields.date_of_birth = submitted.owner_dob
             if (submitted.owner_itin) contactFields.itin_number = submitted.owner_itin
             if (submitted.owner_itin_issue_date) contactFields.itin_issue_date = submitted.owner_itin_issue_date
             contactFields.updated_at = now
 
             if (contactId) {
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               const { error: upErr } = await supabaseAdmin
                 .from("contacts")
                 .update(contactFields)
@@ -403,6 +419,7 @@ export function registerOnboardingTools(server: McpServer) {
               }
             } else {
               if (!ownerFullName) throw new Error("Cannot create contact: owner name is empty")
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               const { data: newContact, error: createErr } = await supabaseAdmin
                 .from("contacts")
                 .insert({ ...contactFields, status: "Active" } as never)
@@ -552,6 +569,7 @@ export function registerOnboardingTools(server: McpServer) {
             acctFields.account_type = derivedAccountType
 
             if (accountId) {
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               const { error: acctErr } = await supabaseAdmin
                 .from("accounts")
                 .update(acctFields)
@@ -563,6 +581,7 @@ export function registerOnboardingTools(server: McpServer) {
               }
             } else {
               if (!companyName) throw new Error("Cannot create account: company name is empty")
+              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
               const { data: newAcct, error: acctCreateErr } = await supabaseAdmin
                 .from("accounts")
                 .insert({ ...acctFields, status: "Active" } as never)
@@ -650,6 +669,7 @@ export function registerOnboardingTools(server: McpServer) {
 
           // Upgrade portal tier: onboarding → active
           if (accountId) {
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             await supabaseAdmin
               .from("accounts")
               .update({ portal_tier: "active", updated_at: new Date().toISOString() })

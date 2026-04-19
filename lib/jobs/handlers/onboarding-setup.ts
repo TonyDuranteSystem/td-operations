@@ -109,20 +109,24 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       if (submitted.owner_last_name) contactUpdates.last_name = submitted.owner_last_name
       if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
       if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
-      // Address lives on contacts.residency as a single formatted string
-      // (Antonio's CRM model: residency = full residential address).
-      // Concatenates street / city / state / zip / country with commas.
-      if (submitted.owner_street || submitted.owner_city || submitted.owner_country) {
-        const addressParts = [
-          submitted.owner_street,
-          submitted.owner_city,
-          submitted.owner_state_province,
-          submitted.owner_zip,
-          submitted.owner_country,
-        ].filter(Boolean).map(String).map(s => s.trim())
-        if (addressParts.length > 0) {
-          contactUpdates.residency = addressParts.join(", ")
-        }
+      // Dual-write address: structured columns (primary, used by 1120 /
+      // 5472 / SS-4 forms that need parsed fields) + residency (legacy
+      // concat, kept for readers still pointed at the flat string — tax,
+      // OA, banking-form. Gets migrated off in a later pass).
+      if (submitted.owner_street) contactUpdates.address_line1 = String(submitted.owner_street).trim()
+      if (submitted.owner_city) contactUpdates.address_city = String(submitted.owner_city).trim()
+      if (submitted.owner_state_province) contactUpdates.address_state = String(submitted.owner_state_province).trim()
+      if (submitted.owner_zip) contactUpdates.address_zip = String(submitted.owner_zip).trim()
+      if (submitted.owner_country) contactUpdates.address_country = String(submitted.owner_country).trim()
+      const addressParts = [
+        submitted.owner_street,
+        submitted.owner_city,
+        submitted.owner_state_province,
+        submitted.owner_zip,
+        submitted.owner_country,
+      ].filter(Boolean).map(String).map(s => s.trim())
+      if (addressParts.length > 0) {
+        contactUpdates.residency = addressParts.join(", ")
       }
       if (submitted.owner_itin) contactUpdates.itin_number = submitted.owner_itin
 

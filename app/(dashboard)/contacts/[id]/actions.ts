@@ -7,6 +7,7 @@ import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-acti
 const ALLOWED_FIELDS = [
   'full_name', 'email', 'email_2', 'phone', 'phone_2',
   'language', 'citizenship', 'residency',
+  'address_line1', 'address_city', 'address_state', 'address_zip', 'address_country',
   'date_of_birth', 'passport_number', 'passport_expiry_date',
   'itin_number', 'itin_issue_date', 'passport_on_file',
   'notes', 'status',

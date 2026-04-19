@@ -73,18 +73,24 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
       if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
 
-      // Build full address for residency
+      // Dual-write address: structured fields (primary) + residency concat
+      // (legacy readers). Same pattern as onboarding-setup / tax-return-intake.
+      if (submitted.owner_street) contactUpdates.address_line1 = String(submitted.owner_street).trim()
+      if (submitted.owner_city) contactUpdates.address_city = String(submitted.owner_city).trim()
+      if (submitted.owner_state_province) contactUpdates.address_state = String(submitted.owner_state_province).trim()
+      if (submitted.owner_zip) contactUpdates.address_zip = String(submitted.owner_zip).trim()
+      if (submitted.owner_country) contactUpdates.address_country = String(submitted.owner_country).trim()
       const addrParts = [
         submitted.owner_street,
         submitted.owner_city,
         submitted.owner_state_province,
         submitted.owner_zip,
         submitted.owner_country,
-      ].filter(Boolean)
+      ].filter(Boolean).map(String).map(s => s.trim())
       if (addrParts.length > 1) {
         contactUpdates.residency = addrParts.join(', ')
       } else if (submitted.owner_country) {
-        contactUpdates.residency = submitted.owner_country
+        contactUpdates.residency = String(submitted.owner_country).trim()
       }
 
       // Mark passport as on file if uploaded

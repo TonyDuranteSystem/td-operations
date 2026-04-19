@@ -80,19 +80,22 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     }
     if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
     if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
-    // Address lives on contacts.residency as a single formatted string
-    // (Antonio's CRM model: residency = full residential address).
-    if (submitted.owner_street || submitted.owner_city || submitted.owner_country) {
-      const addressParts = [
-        submitted.owner_street,
-        submitted.owner_city,
-        submitted.owner_state_province,
-        submitted.owner_zip,
-        submitted.owner_country,
-      ].filter(Boolean).map(String).map(s => s.trim())
-      if (addressParts.length > 0) {
-        contactUpdates.residency = addressParts.join(", ")
-      }
+    // Dual-write address: structured fields (primary) + residency concat
+    // (legacy readers). Same pattern as onboarding-setup.
+    if (submitted.owner_street) contactUpdates.address_line1 = String(submitted.owner_street).trim()
+    if (submitted.owner_city) contactUpdates.address_city = String(submitted.owner_city).trim()
+    if (submitted.owner_state_province) contactUpdates.address_state = String(submitted.owner_state_province).trim()
+    if (submitted.owner_zip) contactUpdates.address_zip = String(submitted.owner_zip).trim()
+    if (submitted.owner_country) contactUpdates.address_country = String(submitted.owner_country).trim()
+    const addressParts = [
+      submitted.owner_street,
+      submitted.owner_city,
+      submitted.owner_state_province,
+      submitted.owner_zip,
+      submitted.owner_country,
+    ].filter(Boolean).map(String).map(s => s.trim())
+    if (addressParts.length > 0) {
+      contactUpdates.residency = addressParts.join(", ")
     }
     if (submitted.owner_itin) contactUpdates.itin_number = submitted.owner_itin
 
