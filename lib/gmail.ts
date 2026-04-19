@@ -128,6 +128,10 @@ export async function gmailPost(
   body: Record<string, unknown>,
   asUser?: string
 ) {
+  if (process.env.SANDBOX_MODE === '1' && endpoint.includes('/messages/send')) {
+    console.warn('[SANDBOX] Email blocked:', { endpoint, asUser: asUser ?? DEFAULT_EMAIL() })
+    return { success: true, sandbox: true }
+  }
   const { token, userEmail } = await getGmailToken(asUser)
 
   const hasBody = Object.keys(body).length > 0

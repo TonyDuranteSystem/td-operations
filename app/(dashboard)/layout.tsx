@@ -1,3 +1,4 @@
+import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
@@ -108,6 +109,7 @@ export default async function DashboardLayout({
 
   return (
     <Providers>
+      <SandboxBanner />
       <SwRegister />
       <RealtimeNotifications />
       <DashboardPullToRefresh />
