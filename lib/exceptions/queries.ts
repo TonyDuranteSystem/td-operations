@@ -112,6 +112,29 @@ export interface SilentFailedJobRow {
   age_hours: number | null
 }
 
+/**
+ * Tax Returns missing extension data — active/on_hold Tax Return SDs whose
+ * matching `tax_returns` row either doesn't exist, has `extension_filed !=
+ * true`, or has `extension_filed = true` but a null `extension_submission_id`.
+ *
+ * Exists because the 2026 tax-season pause banner claims "your extension has
+ * been filed, confirmation id X" — if X is missing or the extension was
+ * actually not filed, that copy would lie to the client. Antonio triages this
+ * list before flipping the global `tax_season_paused` flag so no client sees
+ * an incorrect banner.
+ */
+export interface TaxReturnExtensionGapRow {
+  sd_id: string
+  account_id: string
+  company_name: string | null
+  sd_stage: string | null
+  sd_status: string | null
+  tax_year: number | null
+  return_type: string | null
+  reason: "no_tax_returns_row" | "extension_not_filed" | "no_submission_id"
+  age_hours: number | null
+}
+
 /** Staff tasks with no account_id but a contact_id, older than 1h — these
  *  are invisible on account detail pages and easy to lose (the 7 "Wizard
  *  validation failed" tasks for Luca Gallacci 2026-04-18 sat here). Any
@@ -433,6 +456,87 @@ export async function getOrphanTasks(): Promise<OrphanTaskRow[]> {
   }))
 }
 
+/**
+ * Scan active/on_hold Tax Return SDs and return the ones whose extension data
+ * isn't ready for the pause banner. Run client-side-of-DB because the join
+ * between service_deliveries.account_id and tax_returns.account_id is a
+ * simple 1:N (multiple tax_years per account) — we keep the most recent row
+ * per account to mirror what the banner will display.
+ */
+export async function getTaxReturnExtensionGaps(): Promise<TaxReturnExtensionGapRow[]> {
+  const [sdRes, trRes, acctRes] = await Promise.all([
+    supabaseAdmin
+      .from("service_deliveries")
+      .select("id, account_id, stage, status, updated_at")
+      .eq("service_type", "Tax Return")
+      .in("status", ["active", "on_hold"])
+      .not("account_id", "is", null)
+      .limit(500),
+    supabaseAdmin
+      .from("tax_returns")
+      .select("id, account_id, tax_year, return_type, extension_filed, extension_submission_id")
+      .not("account_id", "is", null)
+      .limit(2000),
+    supabaseAdmin
+      .from("accounts")
+      .select("id, company_name")
+      .limit(2000),
+  ])
+  if (sdRes.error) throw new Error(sdRes.error.message)
+  if (trRes.error) throw new Error(trRes.error.message)
+  if (acctRes.error) throw new Error(acctRes.error.message)
+
+  const acctById = new Map<string, { company_name: string | null }>()
+  for (const a of acctRes.data ?? []) {
+    if (a.id) acctById.set(a.id, { company_name: a.company_name ?? null })
+  }
+
+  // For each account, keep the tax_returns row with the highest tax_year —
+  // matches what the banner shows (we pull the top row ordered by tax_year
+  // desc in getPortalTaxReturns).
+  type TrLite = { id: string; tax_year: number | null; return_type: string | null; extension_filed: boolean | null; extension_submission_id: string | null }
+  const trByAcct = new Map<string, TrLite>()
+  for (const tr of trRes.data ?? []) {
+    if (!tr.account_id) continue
+    const existing = trByAcct.get(tr.account_id)
+    if (!existing || (tr.tax_year ?? 0) > (existing.tax_year ?? 0)) {
+      trByAcct.set(tr.account_id, {
+        id: tr.id,
+        tax_year: tr.tax_year,
+        return_type: tr.return_type,
+        extension_filed: tr.extension_filed,
+        extension_submission_id: tr.extension_submission_id,
+      })
+    }
+  }
+
+  const rows: TaxReturnExtensionGapRow[] = []
+  for (const sd of sdRes.data ?? []) {
+    if (!sd.account_id) continue
+    const tr = trByAcct.get(sd.account_id)
+    const acct = acctById.get(sd.account_id)
+    let reason: TaxReturnExtensionGapRow["reason"] | null = null
+    if (!tr) reason = "no_tax_returns_row"
+    else if (tr.extension_filed !== true) reason = "extension_not_filed"
+    else if (!tr.extension_submission_id) reason = "no_submission_id"
+    if (!reason) continue
+    rows.push({
+      sd_id: sd.id,
+      account_id: sd.account_id,
+      company_name: acct?.company_name ?? null,
+      sd_stage: sd.stage ?? null,
+      sd_status: sd.status ?? null,
+      tax_year: tr?.tax_year ?? null,
+      return_type: tr?.return_type ?? null,
+      reason,
+      age_hours: hoursSince(sd.updated_at ?? null),
+    })
+  }
+  return rows
+    .sort((a, b) => (a.reason === b.reason ? 0 : a.reason < b.reason ? -1 : 1))
+    .slice(0, 100)
+}
+
 export interface ExceptionsSnapshot {
   partialActivations: PartialActivationRow[]
   auditFindings: AuditFindingRow[]
@@ -442,6 +546,7 @@ export interface ExceptionsSnapshot {
   tierDrift: TierDriftRow[]
   silentFailedJobs: SilentFailedJobRow[]
   orphanTasks: OrphanTaskRow[]
+  taxReturnExtensionGaps: TaxReturnExtensionGapRow[]
   totalCount: number
 }
 
@@ -460,6 +565,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
     tierDrift,
     silentFailedJobs,
     orphanTasks,
+    taxReturnExtensionGaps,
   ] = await Promise.all([
     getPartialActivations(),
     getAuditFindings(),
@@ -469,6 +575,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
     getTierDrift(),
     getSilentFailedJobs(),
     getOrphanTasks(),
+    getTaxReturnExtensionGaps(),
   ])
 
   return {
@@ -480,6 +587,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
     tierDrift,
     silentFailedJobs,
     orphanTasks,
+    taxReturnExtensionGaps,
     totalCount:
       partialActivations.length +
       auditFindings.length +
@@ -488,6 +596,7 @@ export async function getExceptionsSnapshot(): Promise<ExceptionsSnapshot> {
       webhookReviews.length +
       tierDrift.length +
       silentFailedJobs.length +
-      orphanTasks.length,
+      orphanTasks.length +
+      taxReturnExtensionGaps.length,
   }
 }

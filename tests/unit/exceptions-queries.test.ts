@@ -19,6 +19,9 @@ let emailQueue: Array<Record<string, unknown>> = []
 let webhookEvents: Array<Record<string, unknown>> = []
 let accountContacts: Array<Record<string, unknown>> = []
 let tasks: Array<Record<string, unknown>> = []
+let serviceDeliveries: Array<Record<string, unknown>> = []
+let taxReturns: Array<Record<string, unknown>> = []
+let accountsRows: Array<Record<string, unknown>> = []
 
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
@@ -44,6 +47,9 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (table === "webhook_events") rows = webhookEvents
           if (table === "account_contacts") rows = accountContacts
           if (table === "tasks") rows = tasks
+          if (table === "service_deliveries") rows = serviceDeliveries
+          if (table === "tax_returns") rows = taxReturns
+          if (table === "accounts") rows = accountsRows
           resolve({ data: rows, error: null })
         },
       })
@@ -60,6 +66,9 @@ beforeEach(() => {
   webhookEvents = []
   accountContacts = []
   tasks = []
+  serviceDeliveries = []
+  taxReturns = []
+  accountsRows = []
 })
 
 // ─── Partial activations age filter ──────────────────────
@@ -384,5 +393,120 @@ describe("getExceptionsSnapshot — Phase C sources roll into totalCount", () =>
     expect(snap.silentFailedJobs).toHaveLength(1)
     expect(snap.orphanTasks).toHaveLength(1)
     expect(snap.totalCount).toBeGreaterThanOrEqual(3)
+  })
+})
+
+// ─── Phase F — Tax Return extension gaps ────────────────
+
+describe("getTaxReturnExtensionGaps", () => {
+  it("flags SDs with no matching tax_returns row", async () => {
+    serviceDeliveries = [
+      {
+        id: "sd-1",
+        account_id: "acct-1",
+        service_type: "Tax Return",
+        stage: "1st Installment Paid",
+        status: "active",
+        updated_at: new Date().toISOString(),
+      },
+    ]
+    accountsRows = [{ id: "acct-1", company_name: "Marvin LLC" }]
+    // tax_returns intentionally empty
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].reason).toBe("no_tax_returns_row")
+    expect(rows[0].company_name).toBe("Marvin LLC")
+  })
+
+  it("flags tax_returns rows with extension_filed != true", async () => {
+    serviceDeliveries = [
+      { id: "sd-2", account_id: "acct-2", stage: "Data Received", status: "active", updated_at: new Date().toISOString() },
+    ]
+    accountsRows = [{ id: "acct-2", company_name: "Acme LLC" }]
+    taxReturns = [
+      {
+        id: "tr-2",
+        account_id: "acct-2",
+        tax_year: 2025,
+        return_type: "SMLLC",
+        extension_filed: false,
+        extension_submission_id: null,
+      },
+    ]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].reason).toBe("extension_not_filed")
+    expect(rows[0].tax_year).toBe(2025)
+    expect(rows[0].return_type).toBe("SMLLC")
+  })
+
+  it("flags extension_filed=true rows with null confirmation ID", async () => {
+    serviceDeliveries = [
+      { id: "sd-3", account_id: "acct-3", stage: "Extension Filed", status: "active", updated_at: new Date().toISOString() },
+    ]
+    accountsRows = [{ id: "acct-3", company_name: "Partner LLC" }]
+    taxReturns = [
+      {
+        id: "tr-3",
+        account_id: "acct-3",
+        tax_year: 2025,
+        return_type: "MMLLC",
+        extension_filed: true,
+        extension_submission_id: null,
+      },
+    ]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].reason).toBe("no_submission_id")
+  })
+
+  it("does not flag SDs whose tax_returns row has extension_filed=true + submission_id", async () => {
+    serviceDeliveries = [
+      { id: "sd-4", account_id: "acct-4", stage: "Extension Filed", status: "active", updated_at: new Date().toISOString() },
+    ]
+    accountsRows = [{ id: "acct-4", company_name: "Good LLC" }]
+    taxReturns = [
+      {
+        id: "tr-4",
+        account_id: "acct-4",
+        tax_year: 2025,
+        return_type: "SMLLC",
+        extension_filed: true,
+        extension_submission_id: "EXT-12345",
+      },
+    ]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(0)
+  })
+
+  it("keeps the most recent tax_year when multiple tax_returns rows exist per account", async () => {
+    serviceDeliveries = [
+      { id: "sd-5", account_id: "acct-5", stage: "Data Received", status: "active", updated_at: new Date().toISOString() },
+    ]
+    accountsRows = [{ id: "acct-5", company_name: "Multi Year LLC" }]
+    // 2024 is complete (filed + id). 2025 is missing extension. The scanner
+    // should pick 2025 (most recent) and report it as extension_not_filed.
+    taxReturns = [
+      { id: "tr-5a", account_id: "acct-5", tax_year: 2024, return_type: "Corp", extension_filed: true, extension_submission_id: "OK-2024" },
+      { id: "tr-5b", account_id: "acct-5", tax_year: 2025, return_type: "Corp", extension_filed: false, extension_submission_id: null },
+    ]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].tax_year).toBe(2025)
+    expect(rows[0].reason).toBe("extension_not_filed")
+  })
+
+  it("ignores SDs with null account_id", async () => {
+    serviceDeliveries = [
+      { id: "sd-6", account_id: null, stage: "Company Data Pending", status: "active", updated_at: new Date().toISOString() },
+    ]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(0)
   })
 })

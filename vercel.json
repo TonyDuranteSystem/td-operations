@@ -87,6 +87,10 @@
     {
       "path": "/api/cron/cron-coverage-audit",
       "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/tax-reactivation",
+      "schedule": "30 10 * * *"
     }
   ],
   "rewrites": [

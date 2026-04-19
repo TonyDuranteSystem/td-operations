@@ -23,6 +23,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
 import { isTaxSeasonPaused } from "@/lib/settings"
+import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -367,6 +368,23 @@ export async function onSecondInstallmentPaid(
     }
   } catch (e) {
     steps.push({ step: "tax_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+  }
+
+  // ─── 2b. Tax-season pause reactivation ───
+  // If this account has an on_hold Tax Return SD (tax_season_paused parked
+  // it here), flip it back to active now that the 2nd installment is
+  // confirmed. Safe no-op when the SD isn't on_hold.
+  try {
+    const reactivation = await reactivateOnHoldTaxReturns(accountId)
+    if (reactivation.reactivated > 0) {
+      steps.push({ step: "tax_reactivation", status: "ok", detail: `Flipped ${reactivation.reactivated} SD${reactivation.reactivated === 1 ? "" : "s"} on_hold -> active` })
+    } else if (reactivation.scanned > 0) {
+      steps.push({ step: "tax_reactivation", status: "skipped", detail: `${reactivation.scanned} on_hold SD(s) but 2nd installment not matched` })
+    } else {
+      steps.push({ step: "tax_reactivation", status: "skipped", detail: "no on_hold Tax Return SD for this account" })
+    }
+  } catch (e) {
+    steps.push({ step: "tax_reactivation", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   // ─── 3. Email team ───

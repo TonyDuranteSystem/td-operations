@@ -10,7 +10,7 @@
  */
 
 import Link from "next/link"
-import { AlertTriangle, ShieldAlert, Zap, Mail, Webhook, ExternalLink, Layers, EyeOff, UserX } from "lucide-react"
+import { AlertTriangle, ShieldAlert, Zap, Mail, Webhook, ExternalLink, Layers, EyeOff, UserX, FileText } from "lucide-react"
 import { getExceptionsSnapshot } from "@/lib/exceptions/queries"
 import {
   retryPartialActivation,
@@ -460,6 +460,60 @@ export default async function ExceptionsPage() {
               </div>
             </div>
           ))
+        )}
+      </Section>
+
+      {/* ── Tax Return extension gaps ── */}
+      <Section
+        title="Tax Returns Missing Extension"
+        icon={FileText}
+        count={snapshot.taxReturnExtensionGaps.length}
+        tone="amber"
+      >
+        {snapshot.taxReturnExtensionGaps.length === 0 ? (
+          <EmptyRow message="All active Tax Return SDs have extension data on file." />
+        ) : (
+          snapshot.taxReturnExtensionGaps.map(row => {
+            const reasonLabel = row.reason === "no_tax_returns_row"
+              ? "No tax_returns row"
+              : row.reason === "extension_not_filed"
+                ? "extension_filed ≠ true"
+                : "Missing confirmation ID"
+            return (
+              <div key={row.sd_id} className="flex items-center justify-between gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-zinc-900">
+                      {row.company_name ?? row.account_id}
+                    </span>
+                    {row.return_type && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
+                        {row.return_type}
+                      </span>
+                    )}
+                    {row.tax_year && (
+                      <span className="text-xs text-zinc-500">{row.tax_year}</span>
+                    )}
+                    <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+                      {reasonLabel}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500 flex gap-3">
+                    {row.sd_stage && <span>Stage: {row.sd_stage}</span>}
+                    {row.sd_status && <span>SD: {row.sd_status}</span>}
+                    <span>Age {formatAge(row.age_hours)}</span>
+                  </div>
+                </div>
+                <Link
+                  href={`/accounts/${row.account_id}`}
+                  className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 shrink-0"
+                >
+                  Open
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
+            )
+          })
         )}
       </Section>
 

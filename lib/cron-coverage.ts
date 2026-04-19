@@ -41,6 +41,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/portal-recurring-invoices": "0 8 * * *",
   "/api/cron/audit-health-check": "0 7 * * *",
   "/api/cron/raw-sql-weekly-report": "0 12 * * 1",
+  "/api/cron/tax-reactivation": "30 10 * * *",
 }
 
 /**
