@@ -246,7 +246,7 @@ docs/
 Two completely separate environments exist. NEVER confuse them.
 
 **Production:** Supabase ref `ydzipybqeebtpcvsbtvs` | Vercel Production | Custom domains (app/portal/crm.tonydurante.us)
-**Sandbox:** Supabase ref `xjcxlmlpeywtwkhstjlw` | Vercel Preview (sandbox branch) | URL: td-operations-git-sandbox-tony-durantes-projects.vercel.app
+**Sandbox:** Supabase ref `xjcxlmlpeywtwkhstjlw` | Separate Vercel project: td-operations-sandbox | URL: td-operations-sandbox.vercel.app
 
 **Safety rules:**
 - NEVER set SANDBOX_MODE=1 in production
@@ -256,6 +256,7 @@ Two completely separate environments exist. NEVER confuse them.
 - Full configuration: `sysdoc_read('sandbox-environment')`
 - Emergency restore: `sysdoc_read('production-env-snapshot')`
 - Sandbox env template: `.env.sandbox.example` in repo root
+- Code sessions: `vercel env pull --project td-operations-sandbox`
 
 **Code protections:**
 - `EXPECTED_SUPABASE_REF` assertion in `lib/supabase-admin.ts` — fatal error on mismatch
