@@ -14,7 +14,11 @@ interface ProfileEditorProps {
     phone: string
     language: string
     citizenship: string
-    residency: string
+    address_line1: string
+    address_city: string
+    address_state: string
+    address_zip: string
+    address_country: string
   }
 }
 
@@ -53,7 +57,13 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
           <Field label={t('profile.phone')} value={data.phone} />
           <Field label={t('profile.language')} value={data.language} />
           <Field label={t('profile.citizenship')} value={data.citizenship} />
-          <Field label={t('profile.residency')} value={data.residency} />
+          <Field label={t('profile.country')} value={data.address_country} />
+          <div className="sm:col-span-2">
+            <Field label={t('profile.address')} value={data.address_line1} />
+          </div>
+          <Field label={t('profile.city')} value={data.address_city} />
+          <Field label={t('profile.stateProvince')} value={data.address_state} />
+          <Field label={t('profile.zip')} value={data.address_zip} />
         </div>
         <button
           onClick={() => setEditing(true)}
@@ -74,7 +84,13 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
         <EditField label={t('profile.phone')} value={data.phone} onChange={v => setData(d => ({ ...d, phone: v }))} placeholder="+1 555 123 4567" />
         <EditField label={t('profile.language')} value={data.language} onChange={v => setData(d => ({ ...d, language: v }))} placeholder="English, Italian" />
         <EditField label={t('profile.citizenship')} value={data.citizenship} onChange={v => setData(d => ({ ...d, citizenship: v }))} />
-        <EditField label={t('profile.residency')} value={data.residency} onChange={v => setData(d => ({ ...d, residency: v }))} />
+        <EditField label={t('profile.country')} value={data.address_country} onChange={v => setData(d => ({ ...d, address_country: v }))} />
+        <div className="sm:col-span-2">
+          <EditField label={t('profile.address')} value={data.address_line1} onChange={v => setData(d => ({ ...d, address_line1: v }))} placeholder="123 Main St, Suite 4B" />
+        </div>
+        <EditField label={t('profile.city')} value={data.address_city} onChange={v => setData(d => ({ ...d, address_city: v }))} />
+        <EditField label={t('profile.stateProvince')} value={data.address_state} onChange={v => setData(d => ({ ...d, address_state: v }))} />
+        <EditField label={t('profile.zip')} value={data.address_zip} onChange={v => setData(d => ({ ...d, address_zip: v }))} />
       </div>
       <div className="flex gap-2">
         <button

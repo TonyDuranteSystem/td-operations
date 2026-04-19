@@ -54,7 +54,11 @@ export default async function PortalProfilePage() {
             phone: contact?.phone ?? '',
             language: contact?.language ?? '',
             citizenship: contact?.citizenship ?? '',
-            residency: contact?.residency ?? '',
+            address_line1: contact?.address_line1 ?? '',
+            address_city: contact?.address_city ?? '',
+            address_state: contact?.address_state ?? '',
+            address_zip: contact?.address_zip ?? '',
+            address_country: contact?.address_country ?? '',
           }}
         />
       </div>

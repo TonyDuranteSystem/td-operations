@@ -256,6 +256,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'profile.companyName': 'Company Name',
     'profile.filingId': 'Filing ID',
     'profile.address': 'Address',
+    'profile.city': 'City',
+    'profile.stateProvince': 'State / Province',
+    'profile.zip': 'ZIP / Postal Code',
+    'profile.country': 'Country',
 
     // Settings
     'settings.title': 'Settings',
@@ -746,6 +750,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'profile.companyName': 'Nome Azienda',
     'profile.filingId': 'ID Registrazione',
     'profile.address': 'Indirizzo',
+    'profile.city': 'Città',
+    'profile.stateProvince': 'Stato / Provincia',
+    'profile.zip': 'CAP',
+    'profile.country': 'Paese',
 
     // Settings
     'settings.title': 'Impostazioni',
