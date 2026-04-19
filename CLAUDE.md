@@ -241,6 +241,27 @@ docs/
   claude-connector-system-instructions.md <- Mirror of instructions.ts
 ```
 
+### Sandbox Environment
+
+Two completely separate environments exist. NEVER confuse them.
+
+**Production:** Supabase ref `ydzipybqeebtpcvsbtvs` | Vercel Production | Custom domains (app/portal/crm.tonydurante.us)
+**Sandbox:** Supabase ref `xjcxlmlpeywtwkhstjlw` | Vercel Preview (sandbox branch) | URL: td-operations-git-sandbox-tony-durantes-projects.vercel.app
+
+**Safety rules:**
+- NEVER set SANDBOX_MODE=1 in production
+- NEVER use production Supabase URL in sandbox env vars or vice versa
+- NEVER register sandbox URL as webhook destination with any provider
+- After ANY Vercel env var change, run `vercel env ls production` to verify production vars are intact
+- Full configuration: `sysdoc_read('sandbox-environment')`
+- Emergency restore: `sysdoc_read('production-env-snapshot')`
+- Sandbox env template: `.env.sandbox.example` in repo root
+
+**Code protections:**
+- `EXPECTED_SUPABASE_REF` assertion in `lib/supabase-admin.ts` — fatal error on mismatch
+- Middleware startup guards — fatal error if NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY missing
+- `SANDBOX_MODE=1` middleware blocks all `/api/webhooks/*` with 503
+
 ### DEV reference
 
 **MCP Tool guidelines:**
