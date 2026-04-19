@@ -79,6 +79,15 @@ function isDashboardPath(pathname: string): boolean {
 }
 
 export async function middleware(request: NextRequest) {
+  // Startup guards: fail fast with a clear 500 rather than a cryptic
+  // MIDDLEWARE_INVOCATION_FAILED when Supabase env vars are missing.
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    return new NextResponse('FATAL: NEXT_PUBLIC_SUPABASE_URL is not configured', { status: 500 })
+  }
+  if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return new NextResponse('FATAL: NEXT_PUBLIC_SUPABASE_ANON_KEY is not configured', { status: 500 })
+  }
+
   // Sandbox guard: block inbound webhooks to prevent external traffic from
   // mutating sandbox data when SANDBOX_MODE=1
   if (process.env.SANDBOX_MODE === '1' && request.nextUrl.pathname.startsWith('/api/webhooks')) {
