@@ -45,54 +45,92 @@ export function parsePassportFromOcr(ocrText: string): PassportData {
     fullName: null,
   }
 
-  // Try MRZ parsing first
-  const mrzResult = parseMRZ(ocrText)
-  if (mrzResult) return mrzResult
+  // MRZ data line first — gives us passport number, nationality, DOB, expiry
+  // from a single 44-char line. OCR sometimes splits the name line across
+  // breaks (Luca Gallacci 2026-04-18: line 1 came out as two chunks), so we
+  // don't require both MRZ lines — just the data line.
+  const mrzData = parseMRZDataLine(ocrText)
+  if (mrzData) Object.assign(result, mrzData)
 
-  // Fallback: try visual text patterns
-  return parseVisualText(ocrText) || result
+  // MRZ name line — optional; gives us full name.
+  const mrzName = parseMRZNameLine(ocrText)
+  if (mrzName?.fullName) result.fullName = mrzName.fullName
+
+  // Fill anything MRZ didn't give us from visual text patterns.
+  const visual = parseVisualText(ocrText)
+  if (visual) {
+    if (!result.passportNumber && visual.passportNumber) result.passportNumber = visual.passportNumber
+    if (!result.expiryDate && visual.expiryDate) result.expiryDate = visual.expiryDate
+    if (!result.dateOfBirth && visual.dateOfBirth) result.dateOfBirth = visual.dateOfBirth
+    if (!result.nationality && visual.nationality) result.nationality = visual.nationality
+    if (!result.fullName && visual.fullName) result.fullName = visual.fullName
+  }
+
+  return result
 }
 
-function parseMRZ(text: string): PassportData | null {
-  // Clean text: remove spaces between MRZ characters, normalize
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-
-  // Find MRZ lines: look for lines with mostly uppercase + < characters, ~44 chars
-  const mrzCandidates = lines.filter(l => {
-    const cleaned = l.replace(/\s/g, '')
-    return cleaned.length >= 40 && cleaned.length <= 48
-      && /^[A-Z0-9<]{40,48}$/.test(cleaned)
-  })
-
-  if (mrzCandidates.length < 2) return null
-
-  // Take last 2 matching lines (MRZ is at bottom of passport)
-  const line1 = mrzCandidates[mrzCandidates.length - 2].replace(/\s/g, '')
-  const line2 = mrzCandidates[mrzCandidates.length - 1].replace(/\s/g, '')
-
-  // Validate line 1 starts with P
-  if (!line1.startsWith('P')) return null
-
-  // Parse line 1: name
-  const nameSection = line1.slice(5) // skip P<XXX
-  const nameParts = nameSection.split('<<').filter(Boolean)
-  const surname = (nameParts[0] || '').replace(/</g, ' ').trim()
-  const givenNames = (nameParts[1] || '').replace(/</g, ' ').trim()
-  const fullName = givenNames ? `${givenNames} ${surname}` : surname
-
-  // Parse line 2
-  const passportNumber = line2.slice(0, 9).replace(/</g, '').trim()
-  const nationalityCode = line2.slice(10, 13).replace(/</g, '')
-  const dobRaw = line2.slice(13, 19)
-  const expiryRaw = line2.slice(21, 27)
-
-  return {
-    passportNumber: passportNumber || null,
-    expiryDate: parseMrzDate(expiryRaw),
-    dateOfBirth: parseMrzDate(dobRaw),
-    nationality: nationalityCode || null,
-    fullName: fullName || null,
+/**
+ * Find the passport MRZ data line (line 2) anywhere in the text. The data
+ * line has a very specific shape:
+ *   9 chars [A-Z0-9<]  = passport number + padding
+ *   1 char  [0-9]      = passport check digit
+ *   3 chars [A-Z<]     = nationality
+ *   6 digits           = DOB YYMMDD
+ *   1 digit            = DOB check
+ *   1 char  [MF<]      = sex
+ *   6 digits           = expiry YYMMDD
+ *   1 digit            = expiry check
+ *   then < padding.
+ *
+ * We search every normalized line for this shape instead of requiring a
+ * separate line 1 match, because OCR sometimes breaks line 1 across
+ * multiple shorter chunks that never form a clean 44-char block.
+ */
+function parseMRZDataLine(text: string): Partial<PassportData> | null {
+  const lines = text.split('\n').map(l => l.replace(/\s/g, '')).filter(Boolean)
+  const dataLineRe = /^([A-Z0-9<]{9})(\d)([A-Z<]{3})(\d{6})(\d)([MF<])(\d{6})(\d)/
+  for (const line of lines) {
+    if (!/^[A-Z0-9<]{30,}$/.test(line)) continue
+    const m = line.match(dataLineRe)
+    if (!m) continue
+    const passportNumber = m[1].replace(/</g, '').trim()
+    const nationality = m[3].replace(/</g, '').trim()
+    return {
+      passportNumber: passportNumber || null,
+      nationality: nationality || null,
+      dateOfBirth: parseMrzDate(m[4]),
+      expiryDate: parseMrzDate(m[7]),
+    }
   }
+  return null
+}
+
+/**
+ * Find the passport MRZ name line (line 1). Starts with 'P<' + 3-letter
+ * country code, then `SURNAME<<GIVENNAMES<...<`. Tolerates split/short
+ * lines — we concatenate adjacent MRZ-char-only lines to reconstruct.
+ */
+function parseMRZNameLine(text: string): Pick<PassportData, "fullName"> | null {
+  const rawLines = text.split('\n').map(l => l.replace(/\s/g, '')).filter(Boolean)
+  // Start from any line beginning with 'P<' and append following lines that
+  // are pure MRZ chars, stopping once we hit a non-MRZ line or hit >= 44 chars.
+  for (let i = 0; i < rawLines.length; i++) {
+    if (!rawLines[i].startsWith('P<')) continue
+    let combined = rawLines[i]
+    for (let j = i + 1; j < rawLines.length && combined.length < 44; j++) {
+      if (!/^[A-Z0-9<]+$/.test(rawLines[j])) break
+      combined += rawLines[j]
+    }
+    if (combined.length < 10) continue
+    const nameSection = combined.slice(5)
+    const nameParts = nameSection.split('<<').filter(Boolean)
+    if (nameParts.length === 0) continue
+    const surname = (nameParts[0] || '').replace(/</g, ' ').trim()
+    const givenNames = (nameParts[1] || '').replace(/</g, ' ').trim()
+    const fullName = givenNames ? `${givenNames} ${surname}` : surname
+    if (fullName) return { fullName }
+  }
+  return null
 }
 
 function parseMrzDate(yymmdd: string): string | null {
@@ -103,6 +141,25 @@ function parseMrzDate(yymmdd: string): string | null {
   // Assume 20xx for years 00-40, 19xx for 41-99
   const century = yy <= 40 ? 2000 : 1900
   return `${century + yy}-${mm}-${dd}`
+}
+
+// Month abbreviations we see on passports — covers English + Italian. Used
+// by the visual-text fallback when the OCR output has a date like
+// "14 MAR/MAR 2031" (Italian abbrev / English abbrev / year) that the
+// numeric-date regex won't match.
+const MONTH_ABBREV: Record<string, number> = {
+  JAN: 1, GEN: 1,
+  FEB: 2,
+  MAR: 3,
+  APR: 4,
+  MAY: 5, MAG: 5,
+  JUN: 6, GIU: 6,
+  JUL: 7, LUG: 7,
+  AUG: 8, AGO: 8,
+  SEP: 9, SET: 9,
+  OCT: 10, OTT: 10,
+  NOV: 11,
+  DEC: 12, DIC: 12,
 }
 
 function parseVisualText(text: string): PassportData | null {
@@ -125,21 +182,53 @@ function parseVisualText(text: string): PassportData | null {
     found = true
   }
 
-  // Expiry date patterns
-  const expiryMatch = text.match(/(?:date\s*of\s*expiry|expiry\s*date|scadenza)[.:]*\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i)
-  if (expiryMatch) {
-    result.expiryDate = normalizeDate(expiryMatch[1])
+  const expiry = findDateNearKeyword(text, /(date\s*of\s*expiry|expiry\s*date|data\s*di\s*scadenza|scadenza)/i)
+  if (expiry) {
+    result.expiryDate = expiry
     found = true
   }
 
-  // DOB patterns
-  const dobMatch = text.match(/(?:date\s*of\s*birth|data\s*di\s*nascita|born)[.:]*\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i)
-  if (dobMatch) {
-    result.dateOfBirth = normalizeDate(dobMatch[1])
+  const dob = findDateNearKeyword(text, /(date\s*of\s*birth|data\s*di\s*nascita|born)/i)
+  if (dob) {
+    result.dateOfBirth = dob
     found = true
   }
 
   return found ? result : null
+}
+
+/** Locate a keyword, then scan the next ~200 chars for the first date-shaped
+ *  sequence — tries numeric dd/mm/yyyy first, then "DD MMM YYYY" abbrev
+ *  (English or Italian, optionally with a localized abbrev pair like
+ *  "MAR/MAR"). Handles OCR output that puts a step-index like "(8)" between
+ *  the keyword and the value. */
+function findDateNearKeyword(text: string, keyword: RegExp): string | null {
+  const m = keyword.exec(text)
+  if (!m) return null
+  const after = text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 200)
+
+  const numeric = after.match(/\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/)
+  if (numeric) {
+    const normalized = normalizeDate(numeric[1])
+    if (normalized) return normalized
+  }
+
+  const abbrev = after.match(/\b(\d{1,2})\s+([A-Z]{3})(?:\s*\/\s*[A-Z]{3})?\s+(\d{4})\b/i)
+  if (abbrev) {
+    const normalized = parseAbbrevDate(abbrev[1], abbrev[2], abbrev[3])
+    if (normalized) return normalized
+  }
+
+  return null
+}
+
+function parseAbbrevDate(day: string, monthAbbrev: string, year: string): string | null {
+  const d = parseInt(day)
+  const m = MONTH_ABBREV[monthAbbrev.toUpperCase()]
+  const y = parseInt(year)
+  if (!m || isNaN(d) || isNaN(y)) return null
+  if (d < 1 || d > 31) return null
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`
 }
 
 function normalizeDate(dateStr: string): string | null {

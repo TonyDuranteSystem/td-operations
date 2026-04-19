@@ -259,52 +259,19 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, contactsSubfolder) as { id: string; name: string }
               result.steps.push(step("passport_copy", "ok", `Uploaded to Drive: ${driveFile.id}`))
 
-              // OCR + MRZ extraction (skip HEIC — Document AI doesn't support it)
-              const ocrSupportedMimes = ["application/pdf", "image/jpeg", "image/png", "image/tiff", "image/gif", "image/bmp", "image/webp"]
-              if (ocrSupportedMimes.includes(mimeType)) {
-                try {
-                  const { ocrDriveFile } = await import("@/lib/docai")
-                  const { parsePassportFromOcr } = await import("@/lib/passport-processing")
-                  const ocrResult = await ocrDriveFile(driveFile.id)
-
-                  if (ocrResult.fullText) {
-                    const passportData = parsePassportFromOcr(ocrResult.fullText)
-
-                    // Update contact with extracted data
-                    const passportUpdates: Record<string, unknown> = {}
-                    if (passportData.passportNumber) passportUpdates.passport_number = passportData.passportNumber
-                    if (passportData.expiryDate) passportUpdates.passport_expiry_date = passportData.expiryDate
-                    if (passportData.dateOfBirth && !submitted.owner_dob) passportUpdates.date_of_birth = passportData.dateOfBirth
-
-                    if (Object.keys(passportUpdates).length > 0) {
-                      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-                      await supabaseAdmin
-                        .from("contacts")
-                        .update({ ...passportUpdates, updated_at: now })
-                        .eq("id", p.contact_id!)
-                      result.steps.push(step("passport_ocr", "ok", `Extracted: ${Object.keys(passportUpdates).join(", ")}`))
-                    } else {
-                      result.steps.push(step("passport_ocr", "ok", "OCR ran but no data extracted from MRZ"))
-                    }
-                  }
-                } catch (ocrErr) {
-                  result.steps.push(step("passport_ocr", "error", ocrErr instanceof Error ? ocrErr.message : String(ocrErr)))
-                }
-              } else {
-                // HEIC or unsupported format — create manual task
-                result.steps.push(step("passport_ocr", "skipped", `Unsupported format for OCR: ${mimeType}. Manual data entry needed.`))
-                // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-                await supabaseAdmin.from("tasks").insert({
-                  task_title: `Manual passport data entry: ${submitted.owner_first_name || ""} ${submitted.owner_last_name || ""}`,
-                  description: `Passport uploaded as ${mimeType} (not supported by OCR). Manually enter passport_number and passport_expiry_date on the contact record.`,
-                  assigned_to: "Luca",
-                  category: "Document",
-                  priority: "Normal",
-                  status: "To Do",
-                  ...(accountId ? { account_id: accountId } : {}),
-                  contact_id: p.contact_id,
-                })
-              }
+              // OCR + MRZ extraction — shared helper writes passport_number /
+              // passport_expiry_date / date_of_birth to the contact and creates
+              // a manual-entry task for unsupported formats (HEIC).
+              const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
+              const passportResult = await extractAndStorePassportData({
+                contact_id: p.contact_id!,
+                drive_file_id: driveFile.id,
+                mime_type: mimeType,
+                skip_dob: !!submitted.owner_dob,
+                contact_name: [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token,
+                account_id: accountId,
+              })
+              result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
 
               // Create document record
               await supabaseAdmin.from("documents").insert({

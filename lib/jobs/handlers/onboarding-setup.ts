@@ -290,8 +290,11 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
       await updateJobProgress(job.id, result)
 
-      // Copy uploaded documents
+      // Copy uploaded documents. Track the passport upload separately so
+      // we can OCR it into contact fields after the loop.
       const uploads = p.upload_paths
+      let passportDriveId: string | null = null
+      let passportMimeType: string | null = null
       if (uploads && uploads.length > 0 && driveFolderId) {
         let copied = 0
         let failed = 0
@@ -316,6 +319,15 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             const driveResult = await uploadBinaryToDrive(fileName, fileData, mimeType, driveFolderId) as { id: string; name: string }
             result.steps.push(step(`doc_copy:${fileName}`, "ok", driveResult.id))
             copied++
+
+            // Match the wizard's passport upload field (path starts with
+            // "onboarding/{contactId}/passport_owner_"). Capture the drive
+            // id + mime so the passport_ocr step below can write extracted
+            // data back onto the contact.
+            if (cleanPath.includes("passport_owner")) {
+              passportDriveId = driveResult.id
+              passportMimeType = mimeType
+            }
           } catch (e) {
             result.steps.push(step(`doc_copy:${filePath}`, "error", e instanceof Error ? e.message : String(e)))
             failed++
@@ -324,6 +336,24 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("doc_copy_summary", copied > 0 ? "ok" : "error", `${copied} copied, ${failed} failed`))
       } else {
         result.steps.push(step("doc_copy", "skipped", "No uploads"))
+      }
+
+      // Passport OCR writeback — pulls passport_number / passport_expiry_date /
+      // date_of_birth from the MRZ or visual text and stores them on the
+      // contact. Previously missing from onboarding-setup (only formation-
+      // setup had it), which left 96 contacts with passport_on_file=true but
+      // no extracted data (dev_task 3274fdf6).
+      if (passportDriveId && passportMimeType && contact_id) {
+        const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
+        const passportResult = await extractAndStorePassportData({
+          contact_id,
+          drive_file_id: passportDriveId,
+          mime_type: passportMimeType,
+          skip_dob: !!submitted.owner_dob,
+          contact_name: [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || undefined,
+          account_id: account_id ?? null,
+        })
+        result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
       }
 
       // Generate data summary PDF
