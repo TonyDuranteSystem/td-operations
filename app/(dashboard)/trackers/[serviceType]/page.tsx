@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { SERVICE_TRACKER_SLUGS } from '@/lib/constants'
 import { TrackerBoard } from '@/components/trackers/tracker-board'
+import { BankReferralsAdmin } from '@/components/banking/bank-referrals-admin'
 import type { PipelineStage, ServiceDelivery, TrackerColumn } from '@/lib/types'
 
 interface Props {
@@ -104,6 +105,8 @@ export default async function TrackerDetailPage({ params }: Props) {
         serviceType={dbServiceType}
         slug={slug}
       />
+
+      {dbServiceType === 'Banking Fintech' && <BankReferralsAdmin />}
     </div>
   )
 }

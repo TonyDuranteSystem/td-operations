@@ -150,6 +150,11 @@ interface AccountDetailProps {
     updated_at: string
     data: Record<string, unknown> | null
   }>
+  bankReferrals?: Array<{
+    slug: string
+    label: string
+    clicked_at: string | null
+  }>
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -418,7 +423,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [] }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [] }: AccountDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('panoramica')
   const [showOADialog, setShowOADialog] = useState(false)
@@ -521,6 +526,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         accountCreatedAt={account.created_at ?? null}
         hasSetupPayment={payments.some(p => p.status === 'Paid' && (p.description?.toLowerCase().includes('setup') || p.period === 'One-Time'))}
         allWizards={allWizards}
+        bankReferrals={bankReferrals}
       />
 
       {/* Offer Panel */}
