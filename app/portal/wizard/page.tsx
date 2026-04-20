@@ -16,7 +16,6 @@ import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, type WizardType } from '@/lib/portal/wizard-map'
-import { isTaxSeasonPaused } from '@/lib/settings'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 
@@ -292,14 +291,14 @@ export default async function WizardPage({
     submitted: allSubmittedTypes.has(w.type),
   }))
 
-  // Tax season pause gate — when the global tax_season_paused flag is set OR
-  // this account's Tax Return SD is on_hold, we block access to the tax/
-  // company_info wizards and show the "extension filed" banner instead. The
-  // flag is the master switch (new 2026 season not open yet); the on_hold
-  // check is the per-client escape hatch for individual suspensions.
+  // Tax season pause gate — only block the wizard when THIS account's Tax
+  // Return SD is actually on_hold. The global tax_season_paused flag drives
+  // parking policy at SD creation (activate-service + installment-handler),
+  // not UI gating — One-Time standalone Tax Return clients are exempt from
+  // parking and must retain access to their wizards even while the flag is
+  // set.
   let taxPauseBanner: ReactNode = null
   if (wizardType === 'tax' || wizardType === 'company_info') {
-    const paused = await isTaxSeasonPaused()
     let sdOnHold = false
     if (accountId) {
       const { data: trSd } = await supabaseAdmin
@@ -312,8 +311,22 @@ export default async function WizardPage({
         .limit(1)
         .maybeSingle()
       sdOnHold = trSd?.status === 'on_hold'
+    } else if (contactId) {
+      // Standalone business TR clients (Marvin-style): SD is attached to
+      // contact_id, account_id=null until they submit company_info wizard.
+      const { data: trSd } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('status')
+        .eq('contact_id', contactId)
+        .eq('service_type', 'Tax Return')
+        .is('account_id', null)
+        .not('status', 'in', '(completed,cancelled)')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      sdOnHold = trSd?.status === 'on_hold'
     }
-    if (paused || sdOnHold) {
+    if (sdOnHold) {
       // Look up the matching tax_returns row for banner props. We match on
       // company_name the same way getPortalTaxReturns does — accountId here
       // may be empty for pre-account tax leads, in which case we render with

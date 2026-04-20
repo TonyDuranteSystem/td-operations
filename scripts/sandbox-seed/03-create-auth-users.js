@@ -68,6 +68,7 @@ async function createAuthUser(email, fullName, contactId) {
       app_metadata: {
         contact_id: contactId,
         portal_tier: 'active',
+        role: 'client', // REQUIRED by /portal/login page check — without it login returns "This account does not have portal access"
       },
     }),
   })

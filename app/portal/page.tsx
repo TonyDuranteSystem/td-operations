@@ -15,7 +15,6 @@ import { WelcomeDashboard } from './welcome-dashboard'
 import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
-import { isTaxSeasonPaused } from '@/lib/settings'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
@@ -231,7 +230,7 @@ export default async function PortalDashboardPage() {
   }
 
   // Fetch all data in parallel
-  const [account, services, deadlines, payments, taxReturns, members, actionItems, taxSeasonPaused, profileBanner] = await Promise.all([
+  const [account, services, deadlines, payments, taxReturns, members, actionItems, profileBanner] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
@@ -239,7 +238,6 @@ export default async function PortalDashboardPage() {
     getPortalTaxReturns(selectedAccountId),
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
-    isTaxSeasonPaused(),
     contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
   ])
 
@@ -277,13 +275,14 @@ export default async function PortalDashboardPage() {
         />
       )}
 
-      {/* Tax Banner — when the Tax Return SD is on_hold or the global
-          tax_season_paused flag is set we show the "extension filed" pause
-          banner instead of the data-collection banner. The global flag is
-          master: once flipped, every tax client sees the pause message even
-          if their SD hasn't been individually flipped yet. */}
+      {/* Tax Banner — pause banner renders ONLY when this specific SD is
+          on_hold. The global tax_season_paused flag drives policy (new SDs
+          get parked at creation, bulk-park operations flip existing ones),
+          not UI rendering — otherwise One-Time standalone Tax Return
+          clients (who are exempt from parking) would see a pause banner
+          that doesn't apply to them, and their wizard would be unreachable. */}
       {taxReturns.filter(tr => tr.status !== 'TR Filed').slice(0, 1).map(tr => {
-        const isPaused = taxSeasonPaused || tr.sd_status === 'on_hold'
+        const isPaused = tr.sd_status === 'on_hold'
         if (isPaused) {
           const firstName =
             (user.user_metadata?.full_name as string | undefined)?.split(' ')[0] ??
@@ -468,9 +467,19 @@ export default async function PortalDashboardPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     <span className="text-xs text-zinc-500">{t('dashboard.deadline', locale)}: {formatDate(tr.deadline)}</span>
-                    {tr.extension_filed && (
-                      <span className="text-xs text-zinc-500">{t('dashboard.ext', locale)}: {formatDate(tr.extension_deadline)}</span>
-                    )}
+                    {tr.extension_filed && (() => {
+                      const resolvedIso = resolveExtensionDeadline(
+                        tr.extension_deadline,
+                        tr.tax_year,
+                        tr.return_type as Parameters<typeof resolveExtensionDeadline>[2],
+                      )
+                      const displayed = resolvedIso ? formatDeadlineForDisplay(resolvedIso, locale) : '\u2014'
+                      return (
+                        <span className="text-xs text-zinc-500">
+                          {t('dashboard.ext', locale)}: {displayed}
+                        </span>
+                      )
+                    })()}
                     <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[tr.status ?? ''] ?? 'bg-zinc-100')}>
                       {tr.status}
                     </span>

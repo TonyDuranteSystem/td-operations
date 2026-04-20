@@ -547,7 +547,24 @@ export async function getPortalActionItems(
   }
 
   // ── Pending tax returns (assigned but client hasn't submitted data yet) ──
+  // Skip this item entirely when the Tax Return SD is on_hold — the portal
+  // home already renders the "extension filed" pause banner which carries
+  // the "no action needed" message; showing a "Complete Tax Information"
+  // CTA alongside it contradicts that banner.
+  const { data: trSdForPause } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('status')
+    .eq('account_id', accountId)
+    .eq('service_type', 'Tax Return')
+    .not('status', 'in', '(completed,cancelled)')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const taxReturnSdOnHold = trSdForPause?.status === 'on_hold'
+
   for (const tr of (taxRes as { data: Array<{ id: string; tax_year: number; return_type: string; created_at: string }> | null }).data ?? []) {
+    // Skip when the SD is on_hold (pause banner covers the communication).
+    if (taxReturnSdOnHold) continue
     // Check if there's already a wizard_progress for tax (avoids duplicate with wizard item above)
     const alreadyHasWizard = (wizardRes.data ?? []).some(
       w => w.wizard_type === 'tax' || w.wizard_type === 'tax_return'
