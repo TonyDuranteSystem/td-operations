@@ -167,6 +167,29 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     updated_at: string
     data: Record<string, unknown> | null
   }>
+
+  // Synthesize a tax-wizard entry when tax_returns.data_received=true but no
+  // wizard_progress row exists for this account. This happens for accounts
+  // whose data was marked received pre-wizard (legacy flows, manual CRM
+  // flips, or cloned from systems that never wrote to wizard_progress).
+  // Without this, the Client Wizard Submissions card reads "Not Started"
+  // even though the client has already submitted the data — stale and
+  // misleading for Antonio/Luca.
+  const hasDataReceivedTR = taxReturns.some(tr => tr.data_received === true)
+  const hasTaxWizardEntry = allWizardEntries.some(w => w.wizard_type === 'tax' || w.wizard_type === 'tax_return')
+  if (hasDataReceivedTR && !hasTaxWizardEntry) {
+    const latest = [...taxReturns]
+      .filter(tr => tr.data_received)
+      .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))[0]
+    allWizardEntries.unshift({
+      status: 'submitted',
+      current_step: 0,
+      wizard_type: 'tax',
+      updated_at: latest?.updated_at ?? new Date().toISOString(),
+      data: null,
+    })
+  }
+
   // For backward compat: wizardProgress = the most recent submitted/in_progress wizard
   const wizardProgress = allWizardEntries.length > 0 ? allWizardEntries[0] : null
 
