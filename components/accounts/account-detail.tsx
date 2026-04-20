@@ -34,6 +34,7 @@ import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
 import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
+import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
 
 const TABS = [
   { key: 'panoramica', label: 'Overview', icon: Building2, adminOnly: false },
@@ -1219,7 +1220,16 @@ function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string 
   return (
     <div className="space-y-2">
       {taxReturns.map(tr => {
-        const due = parseISO(tr.deadline)
+        // When an extension is on file, the effective deadline is the resolved
+        // extension deadline (falls back to Oct 15 / Sept 15 rules when the
+        // extension_deadline column is null). Without this, rows like "2025
+        // SMLLC, original deadline Apr 15" render "5d overdue" even though
+        // the extension pushes the real deadline to Oct 15.
+        const extDeadline = tr.extension_filed
+          ? resolveExtensionDeadline(tr.extension_deadline, tr.tax_year, tr.return_type as TaxReturnType)
+          : null
+        const effectiveDeadline = extDeadline ?? tr.deadline
+        const due = parseISO(effectiveDeadline)
         const now = parseISO(today)
         const diff = differenceInDays(due, now)
         const isUrgent = diff <= 7 && tr.status !== 'TR Filed'
@@ -1249,7 +1259,7 @@ function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string 
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Calendar className="h-3 w-3" />
-                Deadline: {formatDate(tr.deadline)}
+                Deadline: {formatDate(effectiveDeadline)}
                 {tr.status !== 'TR Filed' && diff <= 30 && (
                   <span className={cn(
                     'ml-1 font-medium',
@@ -1259,8 +1269,11 @@ function TaxTab({ taxReturns, today }: { taxReturns: TaxReturn[]; today: string 
                   </span>
                 )}
               </span>
-              {tr.extension_filed && tr.extension_deadline && (
-                <span>Ext: {formatDate(tr.extension_deadline)}</span>
+              {tr.extension_filed && extDeadline && (
+                <span className="text-emerald-700">Extension filed — ext deadline: {formatDate(extDeadline)}</span>
+              )}
+              {tr.extension_filed && !extDeadline && tr.extension_deadline && (
+                <span className="text-emerald-700">Extension filed — ext deadline: {formatDate(tr.extension_deadline)}</span>
               )}
             </div>
           </div>

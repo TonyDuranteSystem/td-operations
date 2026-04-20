@@ -336,10 +336,11 @@ export default async function WizardPage({
       let deadlineIso: string | null = null
       let returnType: 'SMLLC' | 'MMLLC' | 'Corp' | 'S-Corp' | null = null
       let taxYear: number | null = null
+      let trStatus: string | null = null
       if (account.company_name) {
         const { data: tr } = await supabaseAdmin
           .from('tax_returns')
-          .select('extension_submission_id, extension_deadline, tax_year, return_type')
+          .select('extension_submission_id, extension_deadline, tax_year, return_type, status')
           .eq('company_name', account.company_name)
           .order('tax_year', { ascending: false })
           .limit(1)
@@ -350,18 +351,27 @@ export default async function WizardPage({
           const rt = tr.return_type as string | null
           returnType = rt === 'SMLLC' || rt === 'MMLLC' || rt === 'Corp' || rt === 'S-Corp' ? rt : null
           taxYear = (tr.tax_year as number | null) ?? null
+          trStatus = (tr.status as string | null) ?? null
         }
       }
-      const resolved = resolveExtensionDeadline(deadlineIso, taxYear, returnType)
-      const deadlineDisplay = resolved ? formatDeadlineForDisplay(resolved, locale) : null
-      taxPauseBanner = (
-        <TaxExtensionFiledBanner
-          firstName={firstName}
-          confirmationId={confirmationId}
-          deadlineDisplay={deadlineDisplay}
-          locale={locale}
-        />
-      )
+      // Defense in depth: if the tax_returns row is already past the data-
+      // receipt stage, don't render the pause banner — the wizard gate
+      // should unblock so the client can still reach their data. This
+      // mirrors the portal home check in app/portal/page.tsx.
+      const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Extension Filed'])
+      const pauseEligible = !trStatus || PAUSE_ELIGIBLE_TR_STATUS.has(trStatus)
+      if (pauseEligible) {
+        const resolved = resolveExtensionDeadline(deadlineIso, taxYear, returnType)
+        const deadlineDisplay = resolved ? formatDeadlineForDisplay(resolved, locale) : null
+        taxPauseBanner = (
+          <TaxExtensionFiledBanner
+            firstName={firstName}
+            confirmationId={confirmationId}
+            deadlineDisplay={deadlineDisplay}
+            locale={locale}
+          />
+        )
+      }
     }
   }
 
