@@ -282,7 +282,12 @@ export default async function PortalDashboardPage() {
           clients (who are exempt from parking) would see a pause banner
           that doesn't apply to them, and their wizard would be unreachable. */}
       {taxReturns.filter(tr => tr.status !== 'TR Filed').slice(0, 1).map(tr => {
-        const isPaused = tr.sd_status === 'on_hold'
+        // Pause banner fires only when the SD is on_hold AND the tax_return
+        // is at a pre-data-receipt status. Clients past "Data Received"
+        // already submitted their data and are naturally gated by the 2nd
+        // installment — pausing them is stale/misleading.
+        const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Extension Filed'])
+        const isPaused = tr.sd_status === 'on_hold' && PAUSE_ELIGIBLE_TR_STATUS.has(tr.status ?? '')
         if (isPaused) {
           const firstName =
             (user.user_metadata?.full_name as string | undefined)?.split(' ')[0] ??

@@ -508,13 +508,17 @@ export async function getPortalActionItems(
       .in('status', ['draft', 'sent', 'viewed'])
       .limit(5),
 
-    // 7. Pending tax returns (data not yet collected from client)
+    // 7. Pending tax returns (data not yet collected from client).
+    // Excludes rows already "Data Received" / past-data-receipt states and
+    // rows marked "TR Filed" — those are done from the client's POV so the
+    // "Complete Tax Information" CTA would be stale.
     acctForTax?.company_name
       ? supabaseAdmin
           .from('tax_returns')
-          .select('id, tax_year, return_type, created_at')
+          .select('id, tax_year, return_type, created_at, status')
           .eq('company_name', acctForTax.company_name)
           .eq('data_received', false)
+          .not('status', 'in', '("TR Filed","Data Received","Sent to India","Payment Pending")')
           .limit(5)
       : Promise.resolve({ data: [] }),
 
