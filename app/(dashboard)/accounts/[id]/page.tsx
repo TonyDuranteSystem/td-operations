@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { notFound } from 'next/navigation'
 import { AccountDetail } from '@/components/accounts/account-detail'
 import { isDashboardUser } from '@/lib/auth'
+import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 
 interface DocumentRecord {
@@ -275,6 +276,12 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     if (!existingSubmittedTypes.has(s.wizard_type)) allWizardEntries.unshift(s)
   }
 
+  // Partner-bank referrals (Model B): banks where clients apply directly via
+  // an external link. TD only sees click-through events. Centralised in
+  // lib/bank-referrals.ts because the generated Supabase types don't include
+  // these tables yet (TS "excessively deep" error otherwise).
+  const bankReferrals = await getBankReferralsForAccount(params.id)
+
   // For backward compat: wizardProgress = the most recent submitted/in_progress wizard
   const wizardProgress = allWizardEntries.length > 0 ? allWizardEntries[0] : null
 
@@ -304,6 +311,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         wizardProgress={wizardProgress}
         serviceDeliveriesRaw={serviceDeliveriesRaw}
         allWizards={allWizardEntries}
+        bankReferrals={bankReferrals}
       />
     </div>
   )

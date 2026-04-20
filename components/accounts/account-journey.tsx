@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react'
 import { CheckCircle2, Download, Clock, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { BankReferralsPanel, type BankReferralEntry } from './bank-referrals-panel'
 
 // --- Types ---
 
@@ -60,6 +61,8 @@ export interface AccountJourneyProps {
   accountCreatedAt?: string | null
   /** Whether setup payment has been made (derived from payments) */
   hasSetupPayment?: boolean
+  /** Partner-bank referrals (enabled banks + this account's click status) */
+  bankReferrals?: BankReferralEntry[]
 }
 
 // --- Constants ---
@@ -440,6 +443,11 @@ export function AccountJourney(props: AccountJourneyProps) {
 
       {/* Wizard Submissions */}
       <WizardCards wizards={props.allWizards ?? []} serviceDeliveries={props.serviceDeliveries} />
+
+      {/* Partner Bank Referrals — one card per enabled bank */}
+      {props.bankReferrals && props.bankReferrals.length > 0 && (
+        <BankReferralsPanel entries={props.bankReferrals} />
+      )}
     </div>
   )
 }
