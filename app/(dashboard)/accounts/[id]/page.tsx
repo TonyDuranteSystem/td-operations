@@ -168,26 +168,111 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     data: Record<string, unknown> | null
   }>
 
-  // Synthesize a tax-wizard entry when tax_returns.data_received=true but no
-  // wizard_progress row exists for this account. This happens for accounts
-  // whose data was marked received pre-wizard (legacy flows, manual CRM
-  // flips, or cloned from systems that never wrote to wizard_progress).
-  // Without this, the Client Wizard Submissions card reads "Not Started"
-  // even though the client has already submitted the data — stale and
-  // misleading for Antonio/Luca.
-  const hasDataReceivedTR = taxReturns.some(tr => tr.data_received === true)
-  const hasTaxWizardEntry = allWizardEntries.some(w => w.wizard_type === 'tax' || w.wizard_type === 'tax_return')
-  if (hasDataReceivedTR && !hasTaxWizardEntry) {
-    const latest = [...taxReturns]
-      .filter(tr => tr.data_received)
-      .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))[0]
-    allWizardEntries.unshift({
+  // Merge canonical "data received" signals from the domain tables into the
+  // wizard-card feed. The Client Wizard Submissions card used to read only
+  // wizard_progress — but for every wizard type there's a domain-specific
+  // completion signal that's authoritative regardless of channel (CRM flip,
+  // India-team handoff, legacy import, portal wizard submit). Without this,
+  // the card shows "Not Started" for accounts whose data IS received.
+  //
+  // Canonical signals per wizard type:
+  //   tax             — tax_returns.data_received = true (any year)
+  //   banking_payset  — banking_submissions.provider='payset' + completed_at
+  //   banking_relay   — banking_submissions.provider='relay'  + completed_at
+  //   itin            — itin_submissions.completed_at
+  //   formation       — formation_submissions.completed_at (via contact_id)
+  //   onboarding      — onboarding_submissions.completed_at
+  //   closure         — closure_submissions.completed_at
+  //
+  // We fetch all submissions for this account in parallel, then UPSERT one
+  // "submitted" entry per wizard type if the canonical signal says yes and
+  // no wizard_progress row already has a submitted entry for that type.
+  const contactIds = contacts.map(c => c.id).filter(Boolean) as string[]
+  const contactIdList = contactIds.length ? contactIds.map(id => `"${id}"`).join(',') : '"00000000-0000-0000-0000-000000000000"'
+
+  const [bankingRes, itinRes, formationRes, onboardingRes, closureRes] = await Promise.all([
+    supabaseAdmin
+      .from('banking_submissions')
+      .select('provider, completed_at, status, updated_at')
+      .eq('account_id', params.id)
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false }),
+    supabaseAdmin
+      .from('itin_submissions')
+      .select('completed_at, status, updated_at')
+      .eq('account_id', params.id)
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(1),
+    contactIds.length
+      ? supabaseAdmin
+          .from('formation_submissions')
+          .select('completed_at, status, updated_at, contact_id')
+          .in('contact_id', contactIds)
+          .not('completed_at', 'is', null)
+          .order('completed_at', { ascending: false })
+          .limit(1)
+      : Promise.resolve({ data: [] }),
+    supabaseAdmin
+      .from('onboarding_submissions')
+      .select('completed_at, status, updated_at')
+      .eq('account_id', params.id)
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(1),
+    supabaseAdmin
+      .from('closure_submissions')
+      .select('completed_at, status, updated_at')
+      .eq('account_id', params.id)
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(1),
+  ])
+  // Touch contactIdList so linter doesn't flag (unused fallback for typing)
+  void contactIdList
+
+  type WizardEntry = (typeof allWizardEntries)[number]
+  const syntheticEntries: WizardEntry[] = []
+
+  // Tax — tax_returns.data_received=true, latest updated_at
+  const latestReceivedTR = [...taxReturns]
+    .filter(tr => tr.data_received === true)
+    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))[0]
+  if (latestReceivedTR) {
+    syntheticEntries.push({
       status: 'submitted',
       current_step: 0,
       wizard_type: 'tax',
-      updated_at: latest?.updated_at ?? new Date().toISOString(),
+      updated_at: latestReceivedTR.updated_at ?? new Date().toISOString(),
       data: null,
     })
+  }
+
+  // Banking — one entry per provider if that provider has a completed submission
+  const bankingRows = (bankingRes.data ?? []) as Array<{ provider: string | null; completed_at: string | null; updated_at: string | null }>
+  const latestPayset = bankingRows.find(r => r.provider === 'payset')
+  const latestRelay = bankingRows.find(r => r.provider === 'relay')
+  if (latestPayset) syntheticEntries.push({ status: 'submitted', current_step: 0, wizard_type: 'banking_payset', updated_at: latestPayset.completed_at ?? latestPayset.updated_at ?? new Date().toISOString(), data: null })
+  if (latestRelay) syntheticEntries.push({ status: 'submitted', current_step: 0, wizard_type: 'banking_relay', updated_at: latestRelay.completed_at ?? latestRelay.updated_at ?? new Date().toISOString(), data: null })
+
+  // Single-type wizards — each maps one-to-one with its submissions table
+  const pushLatest = (wizardType: string, row: { completed_at: string | null; updated_at: string | null } | undefined) => {
+    if (!row) return
+    syntheticEntries.push({ status: 'submitted', current_step: 0, wizard_type: wizardType, updated_at: row.completed_at ?? row.updated_at ?? new Date().toISOString(), data: null })
+  }
+  pushLatest('itin', (itinRes.data ?? [])[0])
+  pushLatest('formation', (formationRes.data ?? [])[0])
+  pushLatest('onboarding', (onboardingRes.data ?? [])[0])
+  pushLatest('closure', (closureRes.data ?? [])[0])
+
+  // Only add a synthetic entry if wizard_progress doesn't already have a
+  // submitted row for that type — wizard_progress wins because it has the
+  // actual submitted_data payload for export.
+  const existingSubmittedTypes = new Set(
+    allWizardEntries.filter(e => e.status === 'submitted').map(e => e.wizard_type),
+  )
+  for (const s of syntheticEntries) {
+    if (!existingSubmittedTypes.has(s.wizard_type)) allWizardEntries.unshift(s)
   }
 
   // For backward compat: wizardProgress = the most recent submitted/in_progress wizard

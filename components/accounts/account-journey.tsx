@@ -450,18 +450,23 @@ const WIZARD_LABELS: Record<string, string> = {
   onboarding: 'Onboarding',
   formation: 'LLC Formation',
   banking: 'Banking',
+  banking_payset: 'Banking (Payset EUR)',
+  banking_relay: 'Banking (Relay USD)',
   itin: 'ITIN Application',
   tax: 'Tax Return',
   closure: 'Company Closure',
 }
 
-const WIZARD_EXPECTED: Record<string, string> = {
-  'Banking Fintech': 'banking',
-  'ITIN': 'itin',
-  'ITIN Renewal': 'itin',
-  'Tax Return': 'tax',
-  'Company Formation': 'formation',
-  'Company Closure': 'closure',
+// One active SD can expect MULTIPLE wizards — Banking Fintech sets up both
+// Payset (EUR) and Relay (USD), so each needs its own card with its own
+// status instead of collapsing them into a single "Banking" row.
+const WIZARD_EXPECTED: Record<string, string[]> = {
+  'Banking Fintech': ['banking_payset', 'banking_relay'],
+  'ITIN': ['itin'],
+  'ITIN Renewal': ['itin'],
+  'Tax Return': ['tax'],
+  'Company Formation': ['formation'],
+  'Company Closure': ['closure'],
 }
 
 interface WizardCardEntry {
@@ -496,8 +501,10 @@ function WizardCards({ wizards, serviceDeliveries }: {
   for (const sd of serviceDeliveries) {
     const serviceType = sd.service_name ?? ''
     // Match by exact key OR partial match (service_name includes company name, e.g. "Banking Fintech — ATCOACHING LLC")
-    const mappedType = WIZARD_EXPECTED[serviceType] ?? Object.entries(WIZARD_EXPECTED).find(([key]) => serviceType.startsWith(key))?.[1]
-    if (mappedType && !coveredTypes.has(mappedType) && sd.status === 'active') {
+    const mappedTypes = WIZARD_EXPECTED[serviceType] ?? Object.entries(WIZARD_EXPECTED).find(([key]) => serviceType.startsWith(key))?.[1]
+    if (!mappedTypes || sd.status !== 'active') continue
+    for (const mappedType of mappedTypes) {
+      if (coveredTypes.has(mappedType)) continue
       coveredTypes.add(mappedType)
       entries.push({
         wizard_type: mappedType,
