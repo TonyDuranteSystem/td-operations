@@ -109,6 +109,22 @@ export function usePortalChat(accountId: string | null, contactId: string) {
           })
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: `${filterColumn}=eq.${filterValue}`,
+        },
+        (payload) => {
+          const updated = payload.new as PortalMessage & { deleted_at?: string | null }
+          // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
+          if (updated.deleted_at) {
+            setMessages(prev => prev.filter(m => m.id !== updated.id))
+          }
+        }
+      )
       .subscribe()
 
     channelRef.current = channel
