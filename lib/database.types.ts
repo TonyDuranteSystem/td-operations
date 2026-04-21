@@ -898,6 +898,107 @@ export type Database = {
         }
         Relationships: []
       }
+      bank_referral_clicks: {
+        Row: {
+          account_id: string | null
+          bank_slug: string
+          clicked_at: string
+          contact_id: string | null
+          id: string
+        }
+        Insert: {
+          account_id?: string | null
+          bank_slug: string
+          clicked_at?: string
+          contact_id?: string | null
+          id?: string
+        }
+        Update: {
+          account_id?: string | null
+          bank_slug?: string
+          clicked_at?: string
+          contact_id?: string | null
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bank_referral_clicks_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bank_referral_clicks_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bank_referral_clicks_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "bank_referral_clicks_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "bank_referral_clicks_bank_slug_fkey"
+            columns: ["bank_slug"]
+            isOneToOne: false
+            referencedRelation: "bank_referrals"
+            referencedColumns: ["slug"]
+          },
+          {
+            foreignKeyName: "bank_referral_clicks_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bank_referral_clicks_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
+      bank_referrals: {
+        Row: {
+          apply_url: string
+          created_at: string
+          enabled: boolean
+          label: string
+          slug: string
+          updated_at: string
+        }
+        Insert: {
+          apply_url: string
+          created_at?: string
+          enabled?: boolean
+          label: string
+          slug: string
+          updated_at?: string
+        }
+        Update: {
+          apply_url?: string
+          created_at?: string
+          enabled?: boolean
+          label?: string
+          slug?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       bank_transactions: {
         Row: {
           account_id: string | null
@@ -2231,6 +2332,7 @@ export type Database = {
           discount: number | null
           due_date: string | null
           id: string
+          idempotency_key: string | null
           invoice_number: string
           issue_date: string | null
           message: string | null
@@ -2262,6 +2364,7 @@ export type Database = {
           discount?: number | null
           due_date?: string | null
           id?: string
+          idempotency_key?: string | null
           invoice_number: string
           issue_date?: string | null
           message?: string | null
@@ -2293,6 +2396,7 @@ export type Database = {
           discount?: number | null
           due_date?: string | null
           id?: string
+          idempotency_key?: string | null
           invoice_number?: string
           issue_date?: string | null
           message?: string | null
@@ -6775,6 +6879,7 @@ export type Database = {
           followup_stage: string | null
           hubspot_id: string | null
           id: string
+          idempotency_key: string | null
           installment: string | null
           invoice_date: string | null
           invoice_number: string | null
@@ -6832,6 +6937,7 @@ export type Database = {
           followup_stage?: string | null
           hubspot_id?: string | null
           id?: string
+          idempotency_key?: string | null
           installment?: string | null
           invoice_date?: string | null
           invoice_number?: string | null
@@ -6889,6 +6995,7 @@ export type Database = {
           followup_stage?: string | null
           hubspot_id?: string | null
           id?: string
+          idempotency_key?: string | null
           installment?: string | null
           invoice_date?: string | null
           invoice_number?: string | null

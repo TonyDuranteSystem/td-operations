@@ -190,6 +190,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId
 
+  // eslint-disable-next-line no-restricted-syntax -- Stripe-webhook payment record insert; tracked by dev_task 7ebb1e0c
   const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
   if (payErr) {
     console.error("[stripe-webhook] Failed to create payment:", payErr.message)
@@ -244,16 +245,13 @@ async function handleCheckoutCompleted(session: StripeSession) {
         }
 
         if (match) {
+          // eslint-disable-next-line no-restricted-syntax -- Stripe-webhook payment_method tag; tracked by dev_task 7ebb1e0c
           await getSupabase()
             .from("payments")
             .update({ payment_method: "Stripe" })
             .eq("id", match.id)
 
-          // QB sync (non-blocking)
-          try {
-            const { syncPaymentToQB } = await import("@/lib/qb-sync")
-            syncPaymentToQB(match.id, { paymentDate: today, paymentMethod: "Stripe" }).catch(() => {})
-          } catch { /* qb-sync not critical */ }
+          // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
         }
       }
     } catch (matchErr) {
@@ -388,6 +386,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
           console.error(`[stripe-webhook] activate-service returned ${activateRes.status}: ${errText}`)
 
           // Create task so it doesn't get lost
+          // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
           await getSupabase().from("tasks").insert({
             task_title: `Stripe payment: activate-service FAILED for ${clientName || email}`,
             description: `Payment ${paymentIntentId} confirmed but activate-service returned ${activateRes.status}.\nError: ${errText}\nPending activation: ${pending.id}\n\nManual activation needed.`,
@@ -401,6 +400,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
         console.error("[stripe-webhook] Failed to trigger activate-service:", e)
 
         // Create fallback task
+        // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
         await getSupabase().from("tasks").insert({
           task_title: `Stripe payment: activate-service UNREACHABLE for ${clientName || email}`,
           description: `Payment ${paymentIntentId} confirmed but could not reach activate-service.\nError: ${e instanceof Error ? e.message : String(e)}\nPending activation: ${pending.id}\n\nManual activation needed.`,
@@ -412,6 +412,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
       }
     } else {
       // No pending activation — create follow-up task
+      // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
       await getSupabase().from("tasks").insert({
         task_title: `Stripe payment received: ${clientName || email} — ${currency} ${total}`,
         description: `Session ${sessionId}, PaymentIntent ${paymentIntentId}.\nClient: ${clientName || "N/A"}\nEmail: ${email || "N/A"}\nAmount: ${currency} ${total}\nOffer: ${offerToken || "N/A"}\n\nNo pending activation found — check if contract was signed.`,
@@ -424,6 +425,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
     }
   } else {
     // No email and no offer_token — create task
+    // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
     await getSupabase().from("tasks").insert({
       task_title: `Stripe payment received: ${clientName || "unknown"} — ${currency} ${total}`,
       description: `Session ${sessionId}.\nNo email or offer_token found.\nAmount: ${currency} ${total}`,

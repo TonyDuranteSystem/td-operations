@@ -12,7 +12,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { dbWrite, dbWriteSafe } from '@/lib/db'
-import { generateInvoiceNumber } from '@/lib/portal/invoice-number'
+import { generateInvoiceNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 
 // ─── Types ──────────────────────────────────────────
 
@@ -36,6 +36,23 @@ export interface TDInvoiceInput {
   /** Bank account to use for this invoice. Honored by sendTDInvoice when rendering
    *  PDF + email bank block. Null falls back to 'auto' (EUR→Airwallex, USD→Relay). */
   bank_preference?: 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
+  /**
+   * Optional content-level idempotency key. If provided and a payments row
+   * with this key already exists, returns the existing row (no new invoice
+   * created). Callers use natural keys per flow, e.g.:
+   *   'offer-signed:TOKEN:CONTACT_ID'
+   *   'annual-installment:ACCOUNT_ID:1:YEAR'
+   *   'manual-crm:ACCOUNT_ID:LINE_ITEMS_HASH'
+   * Callers without a natural key leave it undefined and get no dedup.
+   */
+  idempotency_key?: string
+  /**
+   * Optional payment-type label for `payments.installment`. One of the
+   * six values in `payment_type_enum`: 'Setup Fee', 'Installment 1 (Jan)',
+   * 'Installment 2 (Jun)', 'Annual Payment', 'One-Time Service', 'Custom'.
+   * Leave undefined for one-off invoices that don't fit the enum.
+   */
+  installment?: string
 }
 
 export interface TDInvoiceResult {
@@ -62,16 +79,22 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     payment_method,
     whop_payment_id,
     bank_preference,
+    idempotency_key,
+    installment,
   } = input
 
   if (!account_id && !contact_id) {
     throw new Error('createTDInvoice: at least one of account_id or contact_id required')
   }
 
-  // 1. Generate invoice number (INV-NNNNNN — global sequence, QB-compatible)
-  const invoiceNumber = await generateInvoiceNumber()
+  // 0. Idempotency check — if a payments row already exists with this key,
+  //    return it instead of creating a new invoice.
+  if (idempotency_key) {
+    const existing = await findByIdempotencyKey(idempotency_key)
+    if (existing) return existing
+  }
 
-  // 2. Calculate totals
+  // 1. Calculate totals
   const items = line_items.map((item) => {
     const qty = item.quantity || 1
     const amount = item.unit_price * qty
@@ -99,15 +122,28 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const today = new Date().toISOString().split('T')[0]
   const paidDateVal = mark_as_paid ? (paid_date || today) : null
 
-  // 3. Create payments record (PRIMARY — CRM + QB source of truth)
-  const payment = await dbWrite(
-    // eslint-disable-next-line no-restricted-syntax -- createTDInvoice IS the single-entry helper for new TD invoices; lives in lib/portal/ rather than lib/operations/ for historical reasons. Future move tracked by dev_task 98484283.
-    supabaseAdmin
+  // 2. Generate invoice number + insert payments row, with retry on unique-violation.
+  //    The generator is not race-safe on its own; the partial unique index
+  //    uq_payments_invoice_number catches concurrent collisions and we retry.
+  //    Idempotency-key unique index is a secondary guard in case a concurrent
+  //    caller wrote a row with the same key between our step-0 check and our insert.
+  const MAX_INSERT_RETRIES = 10
+  let invoiceNumber = ''
+  let paymentId = ''
+  let lastError: { message?: string; code?: string; details?: string } | null = null
+
+  for (let attempt = 0; attempt < MAX_INSERT_RETRIES; attempt++) {
+    invoiceNumber = await generateInvoiceNumber()
+
+    // eslint-disable-next-line no-restricted-syntax -- createTDInvoice IS the single-entry helper for new TD invoices; retry loop needs raw Supabase error codes which dbWrite strips.
+    const { data, error } = await supabaseAdmin
       .from('payments')
       .insert({
         account_id: account_id || null,
         contact_id: contact_id || null,
         invoice_number: invoiceNumber,
+        idempotency_key: idempotency_key || null,
+        installment: installment || null,
         description: items[0]?.description || 'Invoice',
         amount: total,
         amount_paid: amountPaid,
@@ -129,15 +165,44 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         qb_sync_status: 'pending',
       })
       .select('id')
-      .single(),
-    'payments.insert'
-  )
+      .single()
 
-  // 4. Create payment_items
+    if (!error && data) {
+      paymentId = data.id
+      break
+    }
+
+    lastError = error
+
+    // Another caller won the invoice_number race. Regenerate + retry.
+    if (isUniqueViolation(error, 'uq_payments_invoice_number')) {
+      continue
+    }
+
+    // Another caller wrote a row with our idempotency_key between our step-0
+    // check and this insert. Fetch and return theirs.
+    if (idempotency_key && isUniqueViolation(error, 'uq_payments_idempotency_key')) {
+      const winner = await findByIdempotencyKey(idempotency_key)
+      if (winner) return winner
+      // Unlikely fall-through: the winning row disappeared before we could read it.
+      // Break out and let the caller see the error.
+    }
+
+    // Any other error — bubble up.
+    throw new Error(`createTDInvoice[payments.insert]: ${error?.message || 'unknown'}`)
+  }
+
+  if (!paymentId) {
+    throw new Error(
+      `createTDInvoice: exhausted ${MAX_INSERT_RETRIES} retries on invoice_number generation; last error: ${lastError?.message || 'unknown'}`,
+    )
+  }
+
+  // 3. Create payment_items
   await dbWrite(
     supabaseAdmin.from('payment_items').insert(
       items.map((item, i) => ({
-        payment_id: payment.id,
+        payment_id: paymentId,
         description: item.description,
         quantity: item.quantity,
         unit_price: item.unit_price,
@@ -148,7 +213,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     'payment_items.insert'
   )
 
-  // 5. Generate internal expense reference
+  // 4. Generate internal expense reference
   const { data: lastExp } = await supabaseAdmin
     .from('client_expenses')
     .select('internal_ref')
@@ -164,7 +229,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   }
   const internalRef = `EXP-${String(expSeq).padStart(6, '0')}`
 
-  // 6. Create client_expenses record (MIRROR — client sees as incoming expense)
+  // 5. Create client_expenses record (MIRROR — client sees as incoming expense)
   const { data: expense, error: expErr } = await dbWriteSafe(
     supabaseAdmin
       .from('client_expenses')
@@ -184,7 +249,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         paid_date: paidDateVal,
         status: mark_as_paid ? 'Paid' : 'Pending',
         source: 'td_invoice',
-        td_payment_id: payment.id,
+        td_payment_id: paymentId,
         notes: notes || null,
         category: 'Services',
       })
@@ -197,7 +262,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     // Payment was created but expense mirror failed — log but don't fail
     console.error(`[td-invoice] expense mirror failed for ${invoiceNumber}: ${expErr}`)
     return {
-      paymentId: payment.id,
+      paymentId,
       expenseId: '',
       invoiceNumber,
       total,
@@ -205,7 +270,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     }
   }
 
-  // 7. Create expense line items
+  // 6. Create expense line items
   await dbWriteSafe(
     supabaseAdmin.from('client_expense_items').insert(
       items.map((item, i) => ({
@@ -221,11 +286,43 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   )
 
   return {
-    paymentId: payment.id,
+    paymentId,
     expenseId: expense.id,
     invoiceNumber,
     total,
     status: invoiceStatus,
+  }
+}
+
+// ─── Idempotency helper ────────────────────────────
+
+/**
+ * Look up an existing TD invoice by idempotency_key.
+ * Returns null if none exists.
+ */
+async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null> {
+  const { data: payment } = await supabaseAdmin
+    .from('payments')
+    .select('id, invoice_number, total, invoice_status')
+    .eq('idempotency_key', key)
+    .limit(1)
+    .maybeSingle()
+
+  if (!payment || !payment.invoice_number) return null
+
+  const { data: expense } = await supabaseAdmin
+    .from('client_expenses')
+    .select('id')
+    .eq('td_payment_id', payment.id)
+    .limit(1)
+    .maybeSingle()
+
+  return {
+    paymentId: payment.id,
+    expenseId: expense?.id || '',
+    invoiceNumber: payment.invoice_number,
+    total: Number(payment.total) || 0,
+    status: (payment.invoice_status as string) || 'Pending',
   }
 }
 

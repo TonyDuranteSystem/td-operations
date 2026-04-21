@@ -1,23 +1,23 @@
 # Bulk-Park Dry Run — Sandbox Preview
 
-_Generated: 2026-04-20T01:18:34.068Z_
+_Generated: 2026-04-20T16:01:40.757Z_
 _Sandbox: https://xjcxlmlpeywtwkhstjlw.supabase.co_
 
 ## Summary
 
 | Bucket | Count | Action |
 |---|---|---|
-| **WILL PARK** (status active → on_hold) | **62** | Flip to on_hold |
+| **WILL PARK** (status active → on_hold) | **64** | Flip to on_hold |
 | Skip — One-Time account | 5 | Stay active (exempt) |
 | Skip — Account Closed | 0 | Stay active (final TR) |
 | Skip — TR already filed | 5 | Stay active |
-| Skip — Missing extension data | 2 | **NEEDS ANTONIO** — can't safely park without ext_id |
-| Skip — Past data-receipt stage | 119 | Stay active (client already submitted data) |
+| Skip — Missing extension data | 0 | **NEEDS ANTONIO** — can't safely park without ext_id |
+| Skip — Past data-receipt stage | 124 | Stay active (client already submitted data) |
 | Skip — Orphan contact-only SD | 1 | Stay active (pre-wizard) |
 | Skip — Other account_type | 0 | Stay active |
-| **TOTAL active TR SDs scanned** | **194** | |
+| **TOTAL active TR SDs scanned** | **199** | |
 
-## WILL PARK — Client accounts ready for on_hold (62)
+## WILL PARK — Client accounts ready for on_hold (64)
 
 - **Dynamiq SR LLC** — 1st Installment Paid | 2025 MMLLC | ext_id: `7509832026054lmqo5qr`
 - **WM International LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026089baujhow`
@@ -43,6 +43,8 @@ _Sandbox: https://xjcxlmlpeywtwkhstjlw.supabase.co_
 - **ADK Group LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026089c2kxcru`
 - **Achievers Group LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `75098320260890la3r4p`
 - **Everboost Solutions LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `750983202609602shufu`
+- **Fulfil Partners LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026103rpvok0a`
+- **Unique Commerce LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026103xpd1d3s`
 - **Conversion Monsters LLC** — 1st Installment Paid | 2025 MMLLC | ext_id: `7509832026054bx4rc1j`
 - **FramaUS LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `75098320260893jkcd4k`
 - **PAMAG LLC** — 1st Installment Paid | 2025 MMLLC | ext_id: `7509832026052hzfcxi5`
@@ -76,7 +78,7 @@ _Sandbox: https://xjcxlmlpeywtwkhstjlw.supabase.co_
 - **Snowfy LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `750983202608915hhz0t`
 - **Trade Charls LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026089sw5betz`
 - **Univexa International LLC** — 1st Installment Paid | 2025 MMLLC | ext_id: `75098320260540dlzb03`
-- **Zhang Holding LLC** — 1st Installment Paid | 2025 MMLLC | ext_id: `null`
+- **Zhang Holding LLC** — 1st Installment Paid | 2025 MMLLC | ext_id: `7509832026059tpuevms`
 - **LDP Consulting LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026089z12nbv1`
 - **UGC Italia LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `75098320260891ymuv05`
 - **LS Solution LLC** — 1st Installment Paid | 2025 SMLLC | ext_id: `7509832026089ulkn50b`
@@ -98,12 +100,7 @@ _Sandbox: https://xjcxlmlpeywtwkhstjlw.supabase.co_
 - **Lucky Pama Llc** — Tax return already filed — no pause needed
 - **Entregarse US LLC** — Tax return already filed — no pause needed
 
-## SKIP — Missing extension data (NEEDS ANTONIO) (2)
-
-- **Fulfil Partners LLC** — ext_filed=false, submission_id=EXT-SANDBOX-fulfil-partners-llc-2025
-- **Unique Commerce LLC** — ext_filed=false, submission_id=EXT-SANDBOX-unique-commerce-llc-2025
-
-## SKIP — Past data-receipt stage (natural gating) (119)
+## SKIP — Past data-receipt stage (natural gating) (124)
 
 - **Tyron Solutions LLC** — tr.status=Data Received (past data collection)
 - **LXE International LLC** — tr.status=Payment Pending (past data collection)
@@ -111,6 +108,11 @@ _Sandbox: https://xjcxlmlpeywtwkhstjlw.supabase.co_
 - **DGA International LLC** — tr.status=Data Received (past data collection)
 - **Papi Consulting LLC** — tr.status=Payment Pending (past data collection)
 - **Aces Marketing Solutions LLC** — tr.status=Not Invoiced (past data collection)
+- **Tube Marketing Ninja LLC** — tr.status=Data Received (past data collection)
+- **KG Wolf Consulting LLC** — tr.status=Data Received (past data collection)
+- **Flowiz Studio LLC** — tr.status=Data Received (past data collection)
+- **Matsonic LLC** — tr.status=Data Received (past data collection)
+- **Lida Consulting LLC** — tr.status=Data Received (past data collection)
 - **Adact Studio International LLC** — tr.status=Data Received (past data collection)
 - **KML advertising LLC** — tr.status=Data Received (past data collection)
 - **Dieffe International LLC** — tr.status=Data Received (past data collection)
@@ -130,12 +132,7 @@ _Sandbox: https://xjcxlmlpeywtwkhstjlw.supabase.co_
 - **SD Int. LLC** — tr.status=Data Received (past data collection)
 - **OPENMINDWARE LLC** — tr.status=Data Received (past data collection)
 - **ProfitRoots LLC** — tr.status=Data Received (past data collection)
-- **MFCompany LLC** — tr.status=Data Received (past data collection)
-- **FitFusion Solutions LLC** — tr.status=Data Received (past data collection)
-- **Vanallen LLC** — tr.status=Data Received (past data collection)
-- **Growth Impact Consulting LLC** — tr.status=Data Received (past data collection)
-- **Healthy Living LZ LLC** — tr.status=Data Received (past data collection)
-- ...and 89 more (truncated)
+- ...and 94 more (truncated)
 
 ## SKIP — Orphan contact-only SDs (1)
 

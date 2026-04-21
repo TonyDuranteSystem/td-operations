@@ -24,7 +24,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { generateInvoiceNumber } from "@/lib/invoice-number"
+import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { logCron } from "@/lib/cron-log"
 import type { Json } from "@/lib/database.types"
 
@@ -48,7 +48,8 @@ export async function GET(req: NextRequest) {
   const installmentNumber = month === 1 ? 1 : 2
   const installmentLabel = month === 1 ? "1st Installment" : "2nd Installment"
   const dueDate = `${year}-${month === 1 ? "01" : "06"}-01`
-  const issueDate = dueDate
+  // issueDate previously stamped on the manual payments INSERT (now via createTDInvoice
+  // which uses today's date). Removed to satisfy no-unused-vars.
 
   try {
     // Get all active Client accounts
@@ -93,80 +94,70 @@ export async function GET(req: NextRequest) {
         amount = acct.installment_2_amount || (entityUpper.includes("MULTI") || entityUpper.includes("MMLLC") ? 1250 : 1000)
       }
 
-      // Check if invoice already exists for this installment this year
-      const { data: existingPayment } = await supabaseAdmin
-        .from("payments")
-        .select("id")
-        .eq("account_id", acct.id)
-        .ilike("description", `%${installmentLabel} ${year}%`)
-        .limit(1)
+      // Idempotency key — prevents the same installment being invoiced twice
+      // (cron re-run, retry, concurrent fire). createTDInvoice will return the
+      // existing row if this key already exists.
+      const idempotencyKey = `annual-installment:${acct.id}:${installmentNumber}:${year}`
 
-      if (existingPayment?.length) {
+      // Check if already invoiced (by idempotency_key) — preserves the cron's
+      // "exists" reporting separately from the auto-create-or-return semantics.
+      const { data: existingByKey } = await supabaseAdmin
+        .from("payments")
+        .select("id, invoice_number")
+        .eq("idempotency_key", idempotencyKey)
+        .limit(1)
+        .maybeSingle()
+
+      if (existingByKey) {
         results.push({
           company: acct.company_name,
           action: "exists",
-          detail: `${installmentLabel} ${year} already invoiced`,
+          detail: `${installmentLabel} ${year} already invoiced (${existingByKey.invoice_number})`,
         })
         continue
-      }
-
-      // Generate invoice number
-      let invoiceNumber: string
-      try {
-        invoiceNumber = await generateInvoiceNumber()
-      } catch {
-        invoiceNumber = `TD-${year}-AUTO`
       }
 
       const description = `${installmentLabel} ${year} — LLC Annual Management`
-      const nowISO = new Date().toISOString()
+      const installmentLabelEnum = installmentNumber === 1 ? "Installment 1 (Jan)" : "Installment 2 (Jun)"
 
-      // Create CRM invoice (with invoice fields)
-      const { data: payment, error: payErr } = await supabaseAdmin
-        .from("payments")
-        .insert({
+      try {
+        const invoice = await createTDInvoice({
           account_id: acct.id,
-          amount,
-          amount_currency: "USD",
-          payment_type: installmentNumber === 1 ? "1st_installment" : "2nd_installment",
-          status: "Pending",
-          description,
+          line_items: [{
+            description: `LLC Annual Management — ${installmentLabel} ${year}`,
+            unit_price: amount,
+            quantity: 1,
+          }],
+          currency: "USD",
           due_date: dueDate,
-          invoice_number: invoiceNumber,
-          invoice_status: "Draft",
-          issue_date: issueDate,
-          subtotal: amount,
-          discount: 0,
-          total: amount,
           message: `Payment for ${installmentLabel} ${year} — LLC Annual Management fee.\nPlease remit payment by wire transfer to the bank details below, or via card using the link provided separately.`,
-          qb_sync_status: "pending",
-          created_at: nowISO,
-          updated_at: nowISO,
+          idempotency_key: idempotencyKey,
+          installment: installmentLabelEnum,
         })
-        .select("id")
-        .single()
 
-      if (payErr) {
-        results.push({ company: acct.company_name, action: "error", detail: payErr.message })
+        // Override description on the payments row so the human-readable label
+        // matches the historical convention (createTDInvoice defaults to the
+        // first line-item description).
+        // eslint-disable-next-line no-restricted-syntax -- targeted post-create field override; createTDInvoice uses first line-item description.
+        await supabaseAdmin
+          .from("payments")
+          .update({ description })
+          .eq("id", invoice.paymentId)
+
+        results.push({
+          company: acct.company_name,
+          action: "created",
+          detail: `${invoice.invoiceNumber} — $${amount} USD`,
+          paymentId: invoice.paymentId,
+        })
+      } catch (e) {
+        results.push({
+          company: acct.company_name,
+          action: "error",
+          detail: e instanceof Error ? e.message : String(e),
+        })
         continue
       }
-
-      // Create line item
-      await supabaseAdmin.from("payment_items").insert({
-        payment_id: payment.id,
-        description: `LLC Annual Management — ${installmentLabel} ${year}`,
-        quantity: 1,
-        unit_price: amount,
-        amount,
-        sort_order: 0,
-      })
-
-      results.push({
-        company: acct.company_name,
-        action: "created",
-        detail: `${invoiceNumber} — $${amount} USD`,
-        paymentId: payment.id,
-      })
     }
 
     // Auto-send all created invoices
@@ -243,6 +234,7 @@ export async function GET(req: NextRequest) {
         }),
       ].join("\n")
 
+      // eslint-disable-next-line no-restricted-syntax -- billing-cron summary task insert; pre-existing pattern
       await supabaseAdmin.from("tasks").insert({
         task_title: `[BILLING] ${installmentLabel} ${year} — ${created.length} invoices (${sentCount} auto-sent)`,
         description: taskDescription,

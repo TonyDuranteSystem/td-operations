@@ -1,22 +1,25 @@
 /**
  * POST /api/qb/create-invoice
  *
- * Creates an invoice in QuickBooks from CRM payment data.
- * Can be called from the dashboard or triggered by a payment creation.
+ * Pushes an invoice to QuickBooks from CRM payment data.
+ * QB is one-way downstream; our system is the source of truth for invoice
+ * numbers. The `invoice_number` (INV-NNNNNN format) is REQUIRED.
  *
  * Body:
  * {
- *   "payment_id": "uuid",           // Supabase payment ID (optional, for linking)
+ *   "payment_id": "uuid",            // Supabase payment ID (optional, for linking)
+ *   "invoice_number": "INV-002145",  // REQUIRED — our canonical number, used as QB DocNumber
  *   "customer_name": "Company LLC",  // Required
  *   "customer_email": "a@b.com",     // Optional
  *   "line_items": [
  *     { "description": "Tax Return 2024", "amount": 500, "quantity": 1 }
  *   ],
- *   "due_date": "2026-04-15",       // Optional, YYYY-MM-DD
- *   "memo": "Invoice for Q1 2026"   // Optional
+ *   "due_date": "2026-04-15",        // Optional, YYYY-MM-DD
+ *   "memo": "Invoice for Q1 2026"    // Optional
  * }
  */
 
+/* eslint-disable no-console -- API route diagnostic logging */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createInvoice } from '@/lib/quickbooks'
@@ -29,6 +32,13 @@ export async function POST(request: NextRequest) {
     if (!body.customer_name) {
       return NextResponse.json(
         { error: 'customer_name is required' },
+        { status: 400 }
+      )
+    }
+
+    if (!body.invoice_number || typeof body.invoice_number !== 'string') {
+      return NextResponse.json(
+        { error: 'invoice_number is required (string) — QB is one-way downstream, caller must provide our canonical number' },
         { status: 400 }
       )
     }
@@ -59,6 +69,7 @@ export async function POST(request: NextRequest) {
       lineItems: body.line_items,
       dueDate: body.due_date,
       memo: body.memo,
+      invoiceNumber: body.invoice_number,
     })
 
     const invoiceId = result.Invoice?.Id
@@ -75,6 +86,7 @@ export async function POST(request: NextRequest) {
           process.env.SUPABASE_SERVICE_ROLE_KEY!
         )
 
+        // eslint-disable-next-line no-restricted-syntax -- post-QB-create CRM link update; tracked by dev_task 7ebb1e0c
         await supabaseAdmin
           .from('payments')
           .update({

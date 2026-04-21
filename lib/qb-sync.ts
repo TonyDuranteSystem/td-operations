@@ -128,13 +128,18 @@ export async function syncInvoiceToQB(paymentId: string): Promise<QbSyncResult> 
       contactEmail = directContact?.email || undefined
     }
 
-    // Create QB invoice
+    // Create QB invoice — payment must already have our canonical invoice_number
+    // (assigned at creation by createTDInvoice). QB doesn't mint numbers.
+    if (!payment.invoice_number) {
+      throw new Error(`QB sync: payment ${paymentId} has no invoice_number; cannot push to QB without our canonical number`)
+    }
     const result = await createInvoice({
       customerName,
       customerEmail: contactEmail,
       lineItems,
       dueDate: payment.due_date ?? undefined,
-      memo: `CRM Invoice: ${payment.invoice_number ?? paymentId}`,
+      memo: `CRM Invoice: ${payment.invoice_number}`,
+      invoiceNumber: payment.invoice_number,
     })
 
     const qbInvoice = result.Invoice
@@ -142,6 +147,7 @@ export async function syncInvoiceToQB(paymentId: string): Promise<QbSyncResult> 
     const qbDocNumber = qbInvoice?.DocNumber as string
 
     // Store QB reference on CRM record
+    // eslint-disable-next-line no-restricted-syntax -- post-QB-create CRM link update; tracked by dev_task 7ebb1e0c
     await supabaseAdmin
       .from("payments")
       .update({
@@ -243,6 +249,7 @@ export async function syncVoidToQB(paymentId: string): Promise<QbSyncResult> {
       body: { Id: inv.Id, SyncToken: inv.SyncToken },
     })
 
+    // eslint-disable-next-line no-restricted-syntax -- post-QB-void status update; tracked by dev_task 7ebb1e0c
     await supabaseAdmin
       .from("payments")
       .update({
@@ -264,6 +271,7 @@ export async function syncVoidToQB(paymentId: string): Promise<QbSyncResult> {
 
 async function updateSyncStatus(paymentId: string, status: string, error?: string) {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- internal QB-sync status helper; tracked by dev_task 7ebb1e0c
     await supabaseAdmin
       .from("payments")
       .update({

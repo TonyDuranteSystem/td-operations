@@ -49,10 +49,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, message: "No in-progress wizards", ...results })
   }
 
+  const pauseTaxReminders = process.env.PAUSE_TAX_REMINDERS === "true"
+
   for (const w of wizards) {
     const ageMs = now - new Date(w.created_at).getTime()
     const lastUpdateMs = now - new Date(w.updated_at).getTime()
     const label = WIZARD_LABELS[w.wizard_type] || { en: w.wizard_type, it: w.wizard_type }
+
+    // Manual pause switch for tax return reminders (env: PAUSE_TAX_REMINDERS=true)
+    if (pauseTaxReminders && (w.wizard_type === "tax" || w.wizard_type === "tax_return")) {
+      results.skipped++
+      continue
+    }
 
     // Skip if updated recently (client is actively working)
     if (lastUpdateMs < REMINDER_3D_MS) {
@@ -103,6 +111,7 @@ export async function GET(req: NextRequest) {
           if (contact?.full_name) clientName = contact.full_name
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing; no task-creation helper in lib/operations yet
         await supabaseAdmin.from("tasks").insert({
           task_title: `Follow up: ${clientName} — ${label.en} form not completed (7+ days)`,
           description: `The ${label.en} wizard has been in progress for over 7 days without completion. Contact the client to check if they need help.`,

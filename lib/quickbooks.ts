@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- QB-API helper diagnostics; pre-existing log pattern */
 /**
  * QuickBooks Online API Helper
  * Handles OAuth2 token management and API calls
@@ -25,7 +26,7 @@ function getSupabaseAdmin() {
 // QuickBooks OAuth2 endpoints
 const QB_AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2'
 const QB_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
-const QB_REVOKE_URL = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke'
+const _QB_REVOKE_URL = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke'
 
 // API base — uses QB_BASE_URL env var (sandbox or production)
 const QB_API_BASE = process.env.QB_BASE_URL
@@ -264,27 +265,11 @@ export async function qbApiCall(
 }
 
 /**
- * Get the next sequential DocNumber (INV-XXXXXX format)
- * Queries QB for the highest existing DocNumber and increments
- */
-async function getNextDocNumber(): Promise<string> {
-  const query = encodeURIComponent(
-    "SELECT DocNumber FROM Invoice WHERE DocNumber LIKE 'INV-%' ORDERBY DocNumber DESC MAXRESULTS 1"
-  )
-  const result = await qbApiCall(`/query?query=${query}`)
-  const invoices = result.QueryResponse?.Invoice || []
-
-  if (invoices.length > 0) {
-    const lastDoc = invoices[0].DocNumber as string
-    const numPart = parseInt(lastDoc.replace('INV-', ''), 10)
-    return `INV-${String(numPart + 1).padStart(6, '0')}`
-  }
-
-  return 'INV-000001'
-}
-
-/**
- * Create an invoice in QuickBooks
+ * Create an invoice in QuickBooks.
+ *
+ * The DocNumber MUST be provided by the caller — our system is the source of truth
+ * for invoice numbers (`INV-NNNNNN` format from `lib/portal/invoice-number.ts`).
+ * QB is a downstream destination, not a number generator.
  */
 export async function createInvoice(params: {
   customerName: string
@@ -296,7 +281,12 @@ export async function createInvoice(params: {
   }>
   dueDate?: string  // YYYY-MM-DD format
   memo?: string
+  invoiceNumber: string  // REQUIRED — caller passes our canonical invoice_number
 }) {
+  if (!params.invoiceNumber) {
+    throw new Error('createInvoice (QB): invoiceNumber is required — QB is one-way downstream, our system is the source of truth')
+  }
+
   // First, find or create the customer
   const customerRef = await findOrCreateCustomer(params.customerName, params.customerEmail)
 
@@ -327,8 +317,8 @@ export async function createInvoice(params: {
     invoice.PrivateNote = params.memo
   }
 
-  // Auto-assign sequential DocNumber
-  invoice.DocNumber = await getNextDocNumber()
+  // Use the caller-supplied invoice number as the QB DocNumber.
+  invoice.DocNumber = params.invoiceNumber
 
   // Create the invoice
   return qbApiCall('/invoice', {
