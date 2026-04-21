@@ -88,7 +88,7 @@ INVOICING (3-table architecture):
 - Use portal_invoice_create for TD invoices TO clients (OFFICIAL). Writes to payments (CRM) + client_expenses (portal). Supports contact-level (setup fees, pre-account) and account-level (annual installments).
 - Use portal_invoice_send to email the invoice with PDF to the client.
 - client_invoices table is EXCLUSIVELY for client-created sales invoices (their business). TD systems NEVER write to it.
-- QuickBooks (qb_create_invoice) is for ACCOUNTING only -- use when you need a QB ledger entry, not for client invoicing.
+- QuickBooks (qb_create_invoice) is MANUAL DOWNSTREAM ONLY (R097) -- not for client invoicing. QB does NOT mint invoice numbers; the caller MUST pass our canonical invoice_number (INV-NNNNNN from createTDInvoice). NO automatic QB sync runs anywhere. Use only when explicitly pushing an existing invoice to QB on Antonio's request.
 
 DATA COLLECTION:
 - New clients WITH portal access: client uses portal wizard automatically (no Claude action needed)
@@ -201,7 +201,7 @@ All three domains point to the same server. Old links on any domain still work. 
 
 1. Supabase (via CRM and SQL tools) = Single Source of Truth for all client, contact, service, payment, task, and deal data. When docs or memory conflict with the database, database wins.
 2. Google Drive (via drive_* tools) = Document storage. Every client has a folder linked via accounts.drive_folder_id.
-3. QuickBooks (via qb_* tools) = Accounting ledger and FALLBACK invoicing. Portal billing is official. Use QB only when portal billing is unavailable.
+3. QuickBooks (via qb_* tools) = Accounting ledger, MANUAL DOWNSTREAM ONLY (R097). Our system is the source of truth for invoice numbers (INV-NNNNNN format). NO automatic sync triggers exist anywhere. Antonio pushes to QB manually when he wants (typically ~once a year before tax return). Use qb_* tools only on explicit request.
 4. Gmail (via gmail_* tools) = Email communications. Default mailbox: support@tonydurante.us.
 5. Airtable (via crm_sync_airtable) = Legacy data only. Use as fallback when Supabase data is incomplete.
 
@@ -331,10 +331,10 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - msg_send: Send to WhatsApp or Telegram group (legacy). NOT for normal client communication.
 
 ### QuickBooks (9 tools: qb_*)
-- **NOTE: QB is for ACCOUNTING sync only. For TD invoicing, use portal_invoice_create (writes to payments + client_expenses).**
+- **NOTE: QB is MANUAL DOWNSTREAM ONLY (R097). Caller MUST pass invoice_number (INV-NNNNNN, our canonical format) -- QB does NOT generate. For TD invoicing, use portal_invoice_create / createTDInvoice (writes to payments + client_expenses, auto-handles invoice_number with race-safe + idempotency-keyed insert). NO automatic QB sync runs anywhere.**
 - qb_list_invoices/qb_list_payments: Financial records. Filter by customer, status, date.
 - qb_get_invoice: Full invoice details — line items, memo, payment instructions, email status. Use BEFORE sending.
-- qb_create_invoice: Create invoice (auto-finds/creates QB customer). Does NOT send — review first.
+- qb_create_invoice: Push an existing TD invoice to QB (manual). REQUIRES invoice_number param (our canonical INV-NNNNNN). Auto-finds/creates QB customer. Does NOT send — review first.
 - qb_update_invoice: Update customer memo (payment instructions), due date, email. Use to add bank details.
 - qb_send_invoice: Download PDF from QB + send via Gmail with bank details (USD Relay / EUR Wise). Language param: en or it. Returns gmail message_id for tracking.
 - qb_void_invoice: Void or delete incorrect invoices. Void = keeps history, delete = permanent.
