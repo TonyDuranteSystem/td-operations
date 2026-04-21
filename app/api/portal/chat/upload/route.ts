@@ -3,7 +3,9 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
 
-const MAX_SIZE = 10 * 1024 * 1024 // 10MB
+const MAX_SIZE_MB = 10
+const MAX_SIZE = MAX_SIZE_MB * 1024 * 1024
+const ALLOWED_EXT_LABEL = 'PDF, JPG, PNG, WEBP, GIF, DOC, DOCX, XLS, XLSX, TXT, CSV'
 const ALLOWED_TYPES = [
   'application/pdf',
   'image/jpeg',
@@ -64,11 +66,12 @@ export async function POST(request: NextRequest) {
   }
 
   if (file.size > MAX_SIZE) {
-    return NextResponse.json({ error: 'File too large (max 10MB)' }, { status: 400 })
+    const sizeMB = (file.size / 1024 / 1024).toFixed(1)
+    return NextResponse.json({ error: `File too large: ${sizeMB} MB. Maximum allowed: ${MAX_SIZE_MB} MB.` }, { status: 400 })
   }
 
   if (!ALLOWED_TYPES.includes(file.type)) {
-    return NextResponse.json({ error: 'File type not allowed. Use PDF, images, Word, Excel, or text files.' }, { status: 400 })
+    return NextResponse.json({ error: `File type not allowed (${file.type || 'unknown'}). Please use ${ALLOWED_EXT_LABEL}.` }, { status: 400 })
   }
 
   // Access control for client users
@@ -90,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     // Validate file content matches claimed MIME type (magic bytes check)
     if (!validateMagicBytes(buffer, file.type)) {
-      return NextResponse.json({ error: 'File content does not match declared type' }, { status: 400 })
+      return NextResponse.json({ error: 'This file appears to be corrupted or saved with the wrong extension. Try re-saving it and attaching again.' }, { status: 400 })
     }
 
     // Sanitize extension — only allow safe extensions

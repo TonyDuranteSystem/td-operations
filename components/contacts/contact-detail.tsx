@@ -1604,8 +1604,10 @@ function ChatTab({
   }, [messages])
 
   const handleFileSelect = async (file: File) => {
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File too large (max 10 MB)')
+    const MAX_MB = 10
+    if (file.size > MAX_MB * 1024 * 1024) {
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1)
+      toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${MAX_MB} MB.`)
       return
     }
     setUploading(true)
@@ -1613,11 +1615,14 @@ function ChatTab({
       const formData = new FormData()
       formData.append('file', file)
       const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-      if (!res.ok) throw new Error('Upload failed')
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Upload failed — please try again.')
+      }
       const data = await res.json()
       setPendingFile({ name: file.name, url: data.url })
-    } catch {
-      toast.error('File upload failed')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'File upload failed')
     } finally {
       setUploading(false)
     }

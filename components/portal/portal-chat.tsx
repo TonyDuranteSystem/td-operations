@@ -23,6 +23,10 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+const MAX_FILE_SIZE_MB = 10
+const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
+const ALLOWED_EXT_LABEL = 'PDF, JPG, PNG, WEBP, GIF, DOC, DOCX, XLS, XLSX, TXT, CSV'
+
 interface PendingFile {
   file: File
   previewUrl?: string // for images
@@ -146,7 +150,10 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
           formData.append('account_id', accountId || '')
           formData.append('contact_id', contactId)
           const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-          if (!res.ok) throw new Error('Upload failed')
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            throw new Error(data.error || 'Upload failed — please try again.')
+          }
           const { url, name } = await res.json()
           await sendMessage(msg || '', { url, name }, replyId)
         } finally {
@@ -155,8 +162,9 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
       } else {
         await sendMessage(msg, undefined, replyId)
       }
-    } catch {
-      toast.error('Failed to send message')
+    } catch (err) {
+      const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
+      toast.error(errMsg)
       setInput(msg)
     }
     inputRef.current?.focus()
@@ -172,11 +180,11 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const handleFileSelect = (file: File) => {
     const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error('Unsupported file type')
+      toast.error(`File type not allowed (${file.type || 'unknown'}). Please use ${ALLOWED_EXT_LABEL}.`)
       return
     }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File too large (max 10MB)')
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error(`File too large: ${formatFileSize(file.size)}. Maximum allowed: ${MAX_FILE_SIZE_MB} MB.`)
       return
     }
     if (file.type.startsWith('image/')) {
