@@ -8980,6 +8980,13 @@ export type Database = {
             foreignKeyName: "tax_return_submissions_tax_return_id_fkey"
             columns: ["tax_return_id"]
             isOneToOne: false
+            referencedRelation: "v_tax_return_data_received_anomalies"
+            referencedColumns: ["tax_return_id"]
+          },
+          {
+            foreignKeyName: "tax_return_submissions_tax_return_id_fkey"
+            columns: ["tax_return_id"]
+            isOneToOne: false
             referencedRelation: "v_tax_return_tracker"
             referencedColumns: ["id"]
           },
@@ -10124,6 +10131,57 @@ export type Database = {
           total: number | null
         }
         Relationships: []
+      }
+      v_tax_return_data_received_anomalies: {
+        Row: {
+          account_id: string | null
+          company_name: string | null
+          data_received: boolean | null
+          data_received_date: string | null
+          extension_filed: boolean | null
+          has_submission_row: boolean | null
+          has_submitted_data: boolean | null
+          link_sent: boolean | null
+          link_sent_date: string | null
+          paid: boolean | null
+          return_type: Database["public"]["Enums"]["tax_return_type"] | null
+          sent_to_india: boolean | null
+          status: Database["public"]["Enums"]["tax_return_status"] | null
+          submission_completed_at: string | null
+          tax_return_id: string | null
+          tax_return_updated_at: string | null
+          tax_year: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tax_returns_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tax_returns_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tax_returns_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "tax_returns_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+        ]
       }
       v_tax_return_tracker: {
         Row: {
