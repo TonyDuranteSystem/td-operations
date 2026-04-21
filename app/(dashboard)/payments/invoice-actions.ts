@@ -10,8 +10,30 @@ import {
   type CreateInvoiceInput,
   type CreateCreditNoteInput,
 } from '@/lib/schemas/invoice'
-import { generateInvoiceNumber } from '@/lib/invoice-number'
-import { syncPaymentToQB, syncVoidToQB } from '@/lib/qb-sync'
+import { createTDInvoice } from '@/lib/portal/td-invoice'
+import { createHash } from 'crypto'
+
+// Stable content hash for idempotency keys on manual CRM invoice creation.
+// Two clicks of "Create Invoice" with identical inputs produce the same key,
+// so the second click returns the first invoice instead of creating a duplicate.
+// Per Antonio: the invoice can be EDITED (keep same number, same client) or VOIDED,
+// but never duplicated.
+function manualInvoiceIdempotencyKey(
+  prefix: 'manual-crm-invoice' | 'manual-crm-credit-note',
+  accountId: string,
+  items: Array<{ description: string; quantity: number; unit_price: number; amount: number }>,
+  description: string,
+  total: number,
+  currency: string,
+  issueDate: string,
+): string {
+  const sortedItems = [...items].sort((a, b) =>
+    `${a.description}|${a.unit_price}|${a.quantity}`.localeCompare(`${b.description}|${b.unit_price}|${b.quantity}`)
+  )
+  const payload = JSON.stringify({ accountId, description, sortedItems, total, currency, issueDate })
+  const hash = createHash('sha256').update(payload).digest('hex').slice(0, 16)
+  return `${prefix}:${accountId}:${hash}`
+}
 
 // ── Create Invoice (Draft) ─────────────────────────────────────────
 
@@ -24,63 +46,52 @@ export async function createInvoice(
   const { items, ...invoiceData } = parsed.data
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
   const total = subtotal - (invoiceData.discount || 0)
-  const invoiceNumber = await generateInvoiceNumber()
+
+  const idempotencyKey = manualInvoiceIdempotencyKey(
+    'manual-crm-invoice',
+    invoiceData.account_id,
+    items,
+    invoiceData.description,
+    total,
+    invoiceData.amount_currency,
+    invoiceData.issue_date,
+  )
 
   return safeAction(async () => {
+    const result = await createTDInvoice({
+      account_id: invoiceData.account_id,
+      line_items: items.map((item) => ({
+        description: item.description,
+        unit_price: item.unit_price,
+        quantity: item.quantity,
+      })),
+      currency: invoiceData.amount_currency as 'USD' | 'EUR',
+      due_date: invoiceData.due_date || undefined,
+      message: invoiceData.message || undefined,
+      idempotency_key: idempotencyKey,
+    })
+
+    // Override description + billing_entity_id (createTDInvoice sets description
+    // from first line item; staff form lets them set both explicitly).
     const supabase = createClient()
-    const now = new Date().toISOString()
-
-    // Insert payment record with invoice fields
-    const { data: payment, error: payErr } = await supabase
+    // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice field override; createTDInvoice doesn't accept description/billing_entity_id/discount as inputs. Acceptable shape until those flow into the helper signature.
+    await supabase
       .from('payments')
-      .insert({
-        account_id: invoiceData.account_id,
+      .update({
         description: invoiceData.description,
-        amount: total,
-        amount_currency: invoiceData.amount_currency,
-        due_date: invoiceData.due_date || null,
-        status: 'Pending',
-        invoice_number: invoiceNumber,
-        invoice_status: 'Draft',
-        issue_date: invoiceData.issue_date,
-        subtotal,
-        discount: invoiceData.discount || 0,
-        total,
-        message: invoiceData.message || null,
         billing_entity_id: invoiceData.billing_entity_id || null,
-        qb_sync_status: 'pending',
-        created_at: now,
-        updated_at: now,
+        discount: invoiceData.discount || 0,
       })
-      .select('id')
-      .single()
-
-    if (payErr) throw new Error(payErr.message)
-
-    // Insert line items
-    const itemRows = items.map((item, i) => ({
-      payment_id: payment.id,
-      description: item.description,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      amount: item.amount,
-      sort_order: item.sort_order ?? i,
-    }))
-
-    const { error: itemErr } = await supabase
-      .from('payment_items')
-      .insert(itemRows)
-
-    if (itemErr) throw new Error(`Items: ${itemErr.message}`)
+      .eq('id', result.paymentId)
 
     revalidatePath('/payments')
-    return { id: payment.id, invoice_number: invoiceNumber }
+    return { id: result.paymentId, invoice_number: result.invoiceNumber }
   }, {
     action_type: 'create',
     table_name: 'payments',
     account_id: invoiceData.account_id,
-    summary: `Invoice ${invoiceNumber} created (Draft)`,
-    details: { invoice_number: invoiceNumber, total, currency: invoiceData.amount_currency, items_count: items.length },
+    summary: `Invoice created (Draft)`,
+    details: { total, currency: invoiceData.amount_currency, items_count: items.length },
   })
 }
 
@@ -124,6 +135,7 @@ export async function updateInvoice(
       updated_at: new Date().toISOString(),
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- legacy raw write; pre-existing draft-only update path; tracked by dev_task 7ebb1e0c
     const { error: updateErr } = await supabase
       .from('payments')
       .update(updates)
@@ -173,6 +185,7 @@ export async function markInvoicePaid(
     }
     if (paymentMethod) updates.payment_method = paymentMethod
 
+    // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
     const { error } = await supabase
       .from('payments')
       .update(updates)
@@ -181,11 +194,7 @@ export async function markInvoicePaid(
 
     if (error) throw new Error(error.message)
 
-    // QB sync (non-blocking best-effort)
-    syncPaymentToQB(paymentId, {
-      paymentDate: today,
-      paymentMethod: paymentMethod,
-    }).catch(() => {})
+    // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 
     // Check if this invoice is linked to a pending_activation → trigger activation chain
     const adminSupabase = (await import('@/lib/supabase-admin')).supabaseAdmin
@@ -237,6 +246,7 @@ export async function voidInvoice(
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
+    // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
     const { error } = await supabase
       .from('payments')
       .update({
@@ -249,8 +259,7 @@ export async function voidInvoice(
 
     if (error) throw new Error(error.message)
 
-    // QB sync (non-blocking best-effort)
-    syncVoidToQB(paymentId).catch(() => {})
+    // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 
     revalidatePath('/payments')
   }, {
@@ -272,58 +281,57 @@ export async function createCreditNote(
   const { items, ...noteData } = parsed.data
   const subtotal = items.reduce((sum, item) => sum + Math.abs(item.amount), 0)
   const total = -subtotal // Credit notes are negative
-  const invoiceNumber = await generateInvoiceNumber()
+
+  // Idempotency key: if linked to a source payment, the (account, source) tuple
+  // dedupes. Otherwise hash on items.
+  const idempotencyKey = noteData.credit_for_payment_id
+    ? `manual-crm-credit-note:${noteData.account_id}:src:${noteData.credit_for_payment_id}`
+    : manualInvoiceIdempotencyKey(
+        'manual-crm-credit-note',
+        noteData.account_id,
+        items.map((it) => ({ ...it, unit_price: -Math.abs(it.unit_price), amount: -Math.abs(it.amount) })),
+        noteData.description,
+        total,
+        noteData.amount_currency,
+        noteData.issue_date,
+      )
 
   return safeAction(async () => {
-    const supabase = createClient()
-    const now = new Date().toISOString()
+    const result = await createTDInvoice({
+      account_id: noteData.account_id,
+      line_items: items.map((item) => ({
+        description: item.description,
+        unit_price: -Math.abs(item.unit_price),
+        quantity: item.quantity,
+      })),
+      currency: noteData.amount_currency as 'USD' | 'EUR',
+      mark_as_paid: true,
+      paid_date: noteData.issue_date,
+      idempotency_key: idempotencyKey,
+    })
 
-    const { data: payment, error: payErr } = await supabase
+    // Override credit-note-specific fields (createTDInvoice doesn't know about
+    // credit semantics — it sees this as a normal invoice with negative total).
+    const supabase = createClient()
+    // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice override of credit-note-specific fields not in helper signature.
+    await supabase
       .from('payments')
-      .insert({
-        account_id: noteData.account_id,
+      .update({
         description: noteData.description,
-        amount: total,
-        amount_currency: noteData.amount_currency,
-        status: 'Paid', // Credits are immediately "settled"
-        invoice_number: invoiceNumber,
         invoice_status: 'Credit',
-        issue_date: noteData.issue_date,
-        subtotal: -subtotal,
-        discount: 0,
-        total,
         credit_for_payment_id: noteData.credit_for_payment_id || null,
         referral_partner_id: noteData.referral_partner_id || null,
-        qb_sync_status: 'pending',
-        paid_date: noteData.issue_date,
-        created_at: now,
-        updated_at: now,
       })
-      .select('id')
-      .single()
-
-    if (payErr) throw new Error(payErr.message)
-
-    const itemRows = items.map((item, i) => ({
-      payment_id: payment.id,
-      description: item.description,
-      quantity: item.quantity,
-      unit_price: -Math.abs(item.unit_price),
-      amount: -Math.abs(item.amount),
-      sort_order: item.sort_order ?? i,
-    }))
-
-    const { error: itemErr } = await supabase.from('payment_items').insert(itemRows)
-    if (itemErr) throw new Error(`Items: ${itemErr.message}`)
+      .eq('id', result.paymentId)
 
     revalidatePath('/payments')
-    return { id: payment.id, invoice_number: invoiceNumber }
+    return { id: result.paymentId, invoice_number: result.invoiceNumber }
   }, {
     action_type: 'create',
     table_name: 'payments',
     account_id: noteData.account_id,
-    summary: `Credit note ${invoiceNumber} created`,
-    details: { invoice_number: invoiceNumber, total, referral_partner_id: noteData.referral_partner_id },
+    summary: `Credit note created`,
+    details: { total, referral_partner_id: noteData.referral_partner_id },
   })
 }
 

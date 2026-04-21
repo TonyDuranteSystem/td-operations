@@ -190,6 +190,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId
 
+  // eslint-disable-next-line no-restricted-syntax -- Whop-webhook payment record insert; tracked by dev_task 7ebb1e0c
   const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
   if (payErr) {
     console.error("[whop-webhook] Failed to create payment:", payErr.message)
@@ -247,16 +248,13 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
         if (match) {
           // Also set payment method on the payment record
+          // eslint-disable-next-line no-restricted-syntax -- Whop-webhook payment_method tag; tracked by dev_task 7ebb1e0c
           await getSupabase()
             .from("payments")
             .update({ payment_method: "Whop" })
             .eq("id", match.id)
 
-          // QB sync (non-blocking)
-          try {
-            const { syncPaymentToQB } = await import("@/lib/qb-sync")
-            syncPaymentToQB(match.id, { paymentDate: today, paymentMethod: "Whop" }).catch(() => {})
-          } catch { /* qb-sync not critical */ }
+          // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
         }
       }
     } catch (matchErr) {
@@ -381,6 +379,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
       }
     } else {
       // No pending activation — create follow-up task as before
+      // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
       await getSupabase().from("tasks").insert({
         task_title: `Whop payment received: ${clientName || email} — $${total} ${productTitle}`,
         description: `Payment ${paymentId} received via Whop.\nClient: ${clientName || "N/A"}\nEmail: ${email || "N/A"}\nProduct: ${productTitle || "N/A"}\nAmount: $${total} ${currency}\n\nNo pending activation found — check if contract was signed.`,
@@ -393,6 +392,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     }
   } else {
     // No email — create follow-up task
+    // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
     await getSupabase().from("tasks").insert({
       task_title: `Whop payment received: ${clientName || "unknown"} — $${total} ${productTitle}`,
       description: `Payment ${paymentId} received via Whop.\nNo email found.\nProduct: ${productTitle || "N/A"}\nAmount: $${total} ${currency}`,

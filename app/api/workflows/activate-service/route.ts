@@ -32,7 +32,7 @@ import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
-import { syncInvoiceToQB, syncPaymentToQB } from "@/lib/qb-sync"
+// QB sync removed from activate-service — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
 import { findTaxReturnService } from "@/lib/tax-return-context"
@@ -795,25 +795,7 @@ export async function POST(req: NextRequest) {
           detail: `${existingInv?.invoice_number || activation.portal_invoice_id} — marked Paid (created at signing)`,
         })
 
-        // QB sync (best-effort)
-        const { data: linkedPayForQB } = await supabase
-          .from("payments")
-          .select("id")
-          .eq("portal_invoice_id", activation.portal_invoice_id)
-          .limit(1)
-          .maybeSingle()
-        if (linkedPayForQB) {
-          syncInvoiceToQB(linkedPayForQB.id)
-            .then((r) => {
-              if (r.success && r.qb_invoice_id) {
-                syncPaymentToQB(linkedPayForQB.id, {
-                  paymentDate: today,
-                  paymentMethod: activation.payment_method || "Whop",
-                }).catch(() => {})
-              }
-            })
-            .catch(() => {})
-        }
+        // QB sync removed — manual now (CRM "Push to QuickBooks" button).
       } catch (e) {
         steps.push({ step: "crm_invoice", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
@@ -857,19 +839,7 @@ export async function POST(req: NextRequest) {
           detail: `${invoiceResult.invoiceNumber} — ${activation.currency} ${amount} (Paid)`,
         })
 
-        // QB sync (best-effort, non-blocking) — uses payment ID
-        if (invoiceResult.paymentId) {
-          syncInvoiceToQB(invoiceResult.paymentId)
-            .then((r) => {
-              if (r.success && r.qb_invoice_id) {
-                syncPaymentToQB(invoiceResult.paymentId, {
-                  paymentDate: today,
-                  paymentMethod: activation.payment_method || "Whop",
-                }).catch(() => {})
-              }
-            })
-            .catch(() => {})
-        }
+        // QB sync removed — manual now (CRM "Push to QuickBooks" button).
       } catch (e) {
         steps.push({ step: "crm_invoice", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }

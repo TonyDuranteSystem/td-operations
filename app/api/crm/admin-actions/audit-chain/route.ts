@@ -1247,25 +1247,36 @@ export async function POST(req: NextRequest) {
           amount: number; currency: string; payment_method: string
           description: string; paid_date?: string
         }
-        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/payment.ts
-        const { error } = await supabaseAdmin.from("payments").insert({
-          contact_id,
-          account_id: params.account_id ?? null,
-          amount,
-          amount_currency: currency as "USD" | "EUR",
-          status: "Paid",
-          payment_method: payment_method ?? "Wire Transfer",
-          description: description ?? "Setup fee",
-          paid_date: paid_date ?? new Date().toISOString().split("T")[0],
-          invoice_date: paid_date ?? new Date().toISOString().split("T")[0],
-          period: "One-Time",
-        })
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-        return NextResponse.json({
-          success: true,
-          detail: `Payment recorded: ${currency} ${amount} as Paid`,
-          side_effects: ["New row in payments table", "Status: Paid"],
-        })
+        const effectivePaidDate = paid_date ?? new Date().toISOString().split("T")[0]
+        try {
+          const { createTDInvoice } = await import("@/lib/portal/td-invoice")
+          const result = await createTDInvoice({
+            contact_id,
+            account_id: params.account_id ?? undefined,
+            line_items: [{
+              description: description ?? "Setup fee",
+              unit_price: amount,
+              quantity: 1,
+            }],
+            currency: currency as "USD" | "EUR",
+            mark_as_paid: true,
+            paid_date: effectivePaidDate,
+            payment_method: payment_method ?? "Wire Transfer",
+          })
+          // Preserve the legacy `period: "One-Time"` field that createTDInvoice doesn't set.
+          // eslint-disable-next-line no-restricted-syntax -- targeted post-create field update for legacy compat
+          await supabaseAdmin
+            .from("payments")
+            .update({ period: "One-Time", invoice_date: effectivePaidDate })
+            .eq("id", result.paymentId)
+          return NextResponse.json({
+            success: true,
+            detail: `Payment recorded: ${currency} ${amount} as Paid (invoice ${result.invoiceNumber})`,
+            side_effects: ["New row in payments table", `Invoice ${result.invoiceNumber}`, "Status: Paid"],
+          })
+        } catch (e) {
+          return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
+        }
       }
 
       case "create_portal_user": {

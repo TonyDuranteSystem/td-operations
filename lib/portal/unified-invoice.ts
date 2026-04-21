@@ -8,7 +8,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { generateInvoiceNumber } from '@/lib/portal/invoice-number'
+import { generateInvoiceNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { logInvoiceAudit } from '@/lib/portal/invoice-audit'
 
 // ─── Types ──────────────────────────────────────────────
@@ -34,6 +34,12 @@ export interface UnifiedInvoiceInput {
   recurring_parent_id?: string | null
   amount_paid?: number
   parent_invoice_id?: string | null
+  /**
+   * Optional content-level idempotency key. If provided and a client_invoices
+   * row with this key already exists, returns the existing row (no new invoice
+   * created).
+   */
+  idempotency_key?: string
 }
 
 export interface UnifiedInvoiceResult {
@@ -64,10 +70,18 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
     recurring_frequency,
     recurring_end_date,
     recurring_parent_id,
+    idempotency_key,
   } = input
 
   if (!account_id && !contact_id) {
     throw new Error('createUnifiedInvoice: at least one of account_id or contact_id required')
+  }
+
+  // 0. Idempotency check — if a client_invoices row already exists with this key,
+  //    return it instead of creating a new invoice.
+  if (idempotency_key) {
+    const existing = await findClientInvoiceByIdempotencyKey(idempotency_key)
+    if (existing) return existing
   }
 
   // 1. Resolve or create customer
@@ -76,10 +90,7 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
     customerId = await resolveCustomerId(account_id, contact_id)
   }
 
-  // 2. Generate invoice number (INV-NNNNNN — global sequence)
-  const invoiceNumber = await generateInvoiceNumber()
-
-  // 3. Calculate totals (with optional tax)
+  // 2. Calculate totals (with optional tax)
   const items = line_items.map((item) => {
     const qty = item.quantity || 1
     const amount = item.unit_price * qty
@@ -113,39 +124,80 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
   const today = new Date().toISOString().split('T')[0]
   const paidDateVal = mark_as_paid ? (paid_date || today) : null
 
-  // 4. Create client_invoices record (source = 'client' by default from DB)
-  const { data: invoice, error: invErr } = await supabaseAdmin
-    .from('client_invoices')
-    .insert({
-      account_id: account_id || null,
-      contact_id: contact_id || null,
-      customer_id: customerId,
-      invoice_number: invoiceNumber,
-      status,
-      currency,
-      subtotal,
-      discount: 0,
-      tax_total: taxTotal,
-      total,
-      amount_paid: effectiveAmountPaid,
-      amount_due: effectiveAmountDue,
-      issue_date: today,
-      due_date: due_date || null,
-      paid_date: paidDateVal,
-      notes: notes || null,
-      message: message || null,
-      recurring_frequency: recurring_frequency || null,
-      recurring_end_date: recurring_end_date || null,
-      recurring_parent_id: recurring_parent_id || null,
-      parent_invoice_id: input.parent_invoice_id || null,
-      source: 'client',
-    })
-    .select('id, invoice_number')
-    .single()
+  // 3. Generate invoice number + insert client_invoices row, with retry on
+  //    unique-violation. Same pattern as createTDInvoice: generator is not
+  //    race-safe on its own; uq_client_invoices_invoice_number catches concurrent
+  //    collisions and we retry. Idempotency-key unique index is a secondary
+  //    guard in case a concurrent caller wrote a row with the same key between
+  //    our step-0 check and our insert.
+  const MAX_INSERT_RETRIES = 10
+  let invoiceNumber = ''
+  let invoiceId = ''
+  let lastError: { message?: string; code?: string; details?: string } | null = null
 
-  if (invErr || !invoice) {
-    throw new Error(`Failed to create client_invoice: ${invErr?.message}`)
+  for (let attempt = 0; attempt < MAX_INSERT_RETRIES; attempt++) {
+    invoiceNumber = await generateInvoiceNumber()
+
+    const { data, error } = await supabaseAdmin
+      .from('client_invoices')
+      .insert({
+        account_id: account_id || null,
+        contact_id: contact_id || null,
+        customer_id: customerId,
+        invoice_number: invoiceNumber,
+        idempotency_key: idempotency_key || null,
+        status,
+        currency,
+        subtotal,
+        discount: 0,
+        tax_total: taxTotal,
+        total,
+        amount_paid: effectiveAmountPaid,
+        amount_due: effectiveAmountDue,
+        issue_date: today,
+        due_date: due_date || null,
+        paid_date: paidDateVal,
+        notes: notes || null,
+        message: message || null,
+        recurring_frequency: recurring_frequency || null,
+        recurring_end_date: recurring_end_date || null,
+        recurring_parent_id: recurring_parent_id || null,
+        parent_invoice_id: input.parent_invoice_id || null,
+        source: 'client',
+      })
+      .select('id, invoice_number')
+      .single()
+
+    if (!error && data) {
+      invoiceId = data.id
+      break
+    }
+
+    lastError = error
+
+    // Another caller won the invoice_number race. Regenerate + retry.
+    if (isUniqueViolation(error, 'uq_client_invoices_invoice_number')) {
+      continue
+    }
+
+    // Another caller wrote a row with our idempotency_key between our step-0
+    // check and this insert. Fetch and return theirs.
+    if (idempotency_key && isUniqueViolation(error, 'uq_client_invoices_idempotency_key')) {
+      const winner = await findClientInvoiceByIdempotencyKey(idempotency_key)
+      if (winner) return winner
+    }
+
+    // Any other error — bubble up.
+    throw new Error(`Failed to create client_invoice: ${error?.message || 'unknown'}`)
   }
+
+  if (!invoiceId) {
+    throw new Error(
+      `createUnifiedInvoice: exhausted ${MAX_INSERT_RETRIES} retries on invoice_number generation; last error: ${lastError?.message || 'unknown'}`,
+    )
+  }
+
+  const invoice = { id: invoiceId, invoice_number: invoiceNumber }
 
   // 5. Create line items
   const itemRows = items.map((item, i) => ({
@@ -205,6 +257,7 @@ export async function syncInvoiceStatus(
     if (amountPaid !== undefined) {
       payUpdates.amount_paid = amountPaid
     }
+    // eslint-disable-next-line no-restricted-syntax -- legacy syncInvoiceStatus payment update; tracked by dev_task 7ebb1e0c
     await supabaseAdmin.from('payments').update(payUpdates).eq('id', id)
 
     // Also sync to client_expenses (TD invoice → expense mirror)
@@ -346,6 +399,29 @@ async function checkParentCompletion(invoiceId: string): Promise<void> {
 }
 
 // ─── Internal Helpers ───────────────────────────────────
+
+/**
+ * Look up an existing client sales invoice by idempotency_key.
+ * Returns null if none exists.
+ */
+async function findClientInvoiceByIdempotencyKey(key: string): Promise<UnifiedInvoiceResult | null> {
+  const { data: invoice } = await supabaseAdmin
+    .from('client_invoices')
+    .select('id, invoice_number, total, status')
+    .eq('idempotency_key', key)
+    .limit(1)
+    .maybeSingle()
+
+  if (!invoice || !invoice.invoice_number) return null
+
+  return {
+    invoiceId: invoice.id,
+    paymentId: '',
+    invoiceNumber: invoice.invoice_number,
+    total: Number(invoice.total) || 0,
+    status: invoice.status || 'Draft',
+  }
+}
 
 async function resolveCustomerId(accountId?: string, contactId?: string): Promise<string> {
   const matchCol = accountId ? 'account_id' : 'contact_id'

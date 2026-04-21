@@ -295,8 +295,9 @@ export function registerQbTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "qb_create_invoice",
-    "Create a new invoice in QuickBooks Online. Automatically finds the customer by name or creates a new QB customer if not found. Provide line items with description, amount, and optional quantity. Returns the created invoice with ID, doc number, and total. Use qb_search_customers first to verify the customer name.",
+    "Push an invoice to QuickBooks Online. QB is one-way downstream — our system is the source of truth for invoice numbers. The invoice_number (INV-NNNNNN format from createTDInvoice) is REQUIRED and used as QB's DocNumber. Automatically finds the customer by name or creates a new QB customer if not found. Use qb_search_customers first to verify the customer name.",
     {
+      invoice_number: z.string().describe("Canonical invoice number from our system (e.g. INV-002145) — used as QB DocNumber. REQUIRED."),
       customer_name: z.string().describe("Customer display name (exact match or will be created)"),
       customer_email: z.string().optional().describe("Customer email (used if creating new customer)"),
       line_items: z.array(z.object({
@@ -307,7 +308,7 @@ export function registerQbTools(server: McpServer) {
       due_date: z.string().optional().describe("Due date (YYYY-MM-DD)"),
       memo: z.string().optional().describe("Private memo / note"),
     },
-    async ({ customer_name, customer_email, line_items, due_date, memo }) => {
+    async ({ invoice_number, customer_name, customer_email, line_items, due_date, memo }) => {
       try {
         const result = await createInvoice({
           customerName: customer_name,
@@ -315,6 +316,7 @@ export function registerQbTools(server: McpServer) {
           lineItems: line_items,
           dueDate: due_date,
           memo,
+          invoiceNumber: invoice_number,
         })
 
         const invoice = result.Invoice
