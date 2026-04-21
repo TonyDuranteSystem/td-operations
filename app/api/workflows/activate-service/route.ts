@@ -30,6 +30,7 @@ import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
+import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 // QB sync removed from activate-service — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
@@ -991,21 +992,45 @@ export async function POST(req: NextRequest) {
         } else {
           const formLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
 
-          preparedSteps.push({
-            step: "data_form",
-            action: formConfig.action,
-            description: `Create ${formConfig.formName} for ${lead.full_name} (${formLang}) and send link to ${lead.email}.`,
-            params: {
-              lead_id: leadId,
-              contract_type: contractType,
-              entity_type: contractType === "formation" ? "SMLLC" : undefined,
-              state: contractType === "formation" ? "NM" : undefined,
-              language: formLang,
-              client_name: lead.full_name,
-              client_email: lead.email,
-            },
-            status: "pending",
-          })
+          // Phase 0 safety: derive entity_type from the signed contract instead of hardcoding "SMLLC".
+          // For formation: read contracts.llc_type (SMLLC | MMLLC | Corporation) and map to the wizard's short code.
+          // For non-formation contract types: entity_type stays undefined (wizard collects it).
+          const entityTypeLookup = contractType === "formation"
+            ? await getEntityTypeFromContract(activation.offer_token)
+            : null
+
+          // If the client signed as Corporation, the wizard form doesn't have a C-Corp path yet.
+          // Skip auto-wizard creation and create a manual-handling task instead (surfaced via steps[]).
+          if (contractType === "formation" && entityTypeLookup?.source === "corporation_not_wired") {
+            steps.push({
+              step: "data_form",
+              status: "manual_required",
+              detail: `Client signed as C-Corp — formation wizard not wired for Corporation. Manual handling required for ${lead.full_name} (${lead.email}).`,
+            })
+          } else {
+            // Preferred entity_type from signed contract (SMLLC or MMLLC).
+            // Legacy fallback to "SMLLC" only for formation when no contract was found,
+            // to preserve existing behavior for unusual call sites.
+            const entityTypeForForm: string | undefined = contractType === "formation"
+              ? (entityTypeLookup?.wizardCode ?? "SMLLC")
+              : undefined
+
+            preparedSteps.push({
+              step: "data_form",
+              action: formConfig.action,
+              description: `Create ${formConfig.formName} for ${lead.full_name} (${formLang}) and send link to ${lead.email}.`,
+              params: {
+                lead_id: leadId,
+                contract_type: contractType,
+                entity_type: entityTypeForForm,
+                state: contractType === "formation" ? "NM" : undefined,
+                language: formLang,
+                client_name: lead.full_name,
+                client_email: lead.email,
+              },
+              status: "pending",
+            })
+          }
         }
       }
     } else if (!formConfig) {
