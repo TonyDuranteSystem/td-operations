@@ -48,6 +48,11 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(limit)
 
+  // Client users never see soft-deleted messages. Admins see them so they can render tombstones.
+  if (authContactId) {
+    query = query.is('deleted_at', null)
+  }
+
   if (accountId) {
     query = query.eq('account_id', accountId)
   } else if (contactIdParam) {

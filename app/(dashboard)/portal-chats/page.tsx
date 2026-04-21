@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -37,6 +37,8 @@ interface ChatMessage {
   attachment_name?: string
   read_at?: string | null
   reply_to_id?: string | null
+  deleted_at?: string | null
+  deleted_by?: string | null
 }
 
 interface MessageAction {
@@ -304,6 +306,22 @@ export default function PortalChatsPage() {
           )
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: `${filterColumn}=eq.${threadId}`,
+        },
+        (payload) => {
+          const updated = payload.new as ChatMessage
+          queryClient.setQueryData<ChatMessage[]>(
+            ['portal-chat-messages', threadId],
+            (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
+          )
+        }
+      )
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
@@ -427,6 +445,26 @@ export default function PortalChatsPage() {
     },
     onError: () => {
       toast.error('Failed to tag message')
+    },
+  })
+
+  // Soft-delete a message. Client view hides it entirely; admin view renders a tombstone.
+  const deleteMessageMutation = useMutation({
+    mutationFn: async (messageId: string) => {
+      const res = await fetch(`/api/portal/chat/message/${messageId}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Delete failed — please try again.')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+      toast.success('Message deleted')
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to delete message')
     },
   })
 
@@ -1642,6 +1680,26 @@ export default function PortalChatsPage() {
                 {messages?.map(msg => {
                   const isAdmin = msg.sender_type === 'admin'
                   const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
+                  const isDeleted = !!msg.deleted_at
+
+                  if (isDeleted) {
+                    return (
+                      <div key={msg.id} className={cn('flex items-end gap-1', isAdmin ? 'justify-end' : 'justify-start')}>
+                        <div className={cn(
+                          'max-w-[75%] rounded-xl px-3 py-2 border border-dashed',
+                          isAdmin ? 'border-blue-200 bg-blue-50/40 text-zinc-500' : 'border-zinc-200 bg-zinc-50 text-zinc-500'
+                        )}>
+                          <p className="text-xs italic flex items-center gap-1.5">
+                            <Trash2 className="h-3 w-3" /> Message deleted
+                          </p>
+                          <p className="text-[10px] text-zinc-400 mt-0.5">
+                            {msg.deleted_at ? `Deleted ${format(parseISO(msg.deleted_at), 'MMM d, h:mm a')}` : 'Deleted'} · originally sent {format(parseISO(msg.created_at), 'MMM d, h:mm a')}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  }
+
                   const actionButton = (
                     <DropdownMenu.Root>
                       <DropdownMenu.Trigger asChild>
@@ -1715,6 +1773,18 @@ export default function PortalChatsPage() {
                             onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.message })}
                           >
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+                            onSelect={() => {
+                              const preview = msg.message ? (msg.message.length > 80 ? msg.message.slice(0, 80) + '…' : msg.message) : '[Attachment]'
+                              if (window.confirm(`Delete this message?\n\n"${preview}"\n\nThe client will no longer see it. An audit trail (deleted by, when) is kept on the admin side.`)) {
+                                deleteMessageMutation.mutate(msg.id)
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" /> Delete message
                           </DropdownMenu.Item>
                         </DropdownMenu.Content>
                       </DropdownMenu.Portal>

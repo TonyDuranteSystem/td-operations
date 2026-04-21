@@ -7416,6 +7416,8 @@ export type Database = {
           attachment_url: string | null
           contact_id: string | null
           created_at: string | null
+          deleted_at: string | null
+          deleted_by: string | null
           id: string
           message: string
           read_at: string | null
@@ -7429,6 +7431,8 @@ export type Database = {
           attachment_url?: string | null
           contact_id?: string | null
           created_at?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
           message: string
           read_at?: string | null
@@ -7442,6 +7446,8 @@ export type Database = {
           attachment_url?: string | null
           contact_id?: string | null
           created_at?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
           message?: string
           read_at?: string | null
