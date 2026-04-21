@@ -177,10 +177,15 @@ export default function PortalChatsPage() {
 
   // Internal file select
   const handleInternalFileSelect = (file: File) => {
-    const maxSize = 10 * 1024 * 1024
+    const maxSizeMB = 10
+    const maxSize = maxSizeMB * 1024 * 1024
     const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'text/csv', 'text/plain', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
-    if (file.size > maxSize) { toast.error('File too large (max 10MB)'); return }
-    if (!allowedTypes.includes(file.type)) { toast.error('File type not allowed'); return }
+    if (file.size > maxSize) {
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1)
+      toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${maxSizeMB} MB.`)
+      return
+    }
+    if (!allowedTypes.includes(file.type)) { toast.error(`File type not allowed (${file.type || 'unknown'})`); return }
     const isImg = file.type.startsWith('image/')
     if (isImg) {
       const reader = new FileReader()
@@ -785,11 +790,13 @@ export default function PortalChatsPage() {
   const handleAdminFileSelect = (file: File) => {
     const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error('Unsupported file type')
+      toast.error(`File type not allowed (${file.type || 'unknown'})`)
       return
     }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File too large (max 10MB)')
+    const maxMB = 10
+    if (file.size > maxMB * 1024 * 1024) {
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1)
+      toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${maxMB} MB.`)
       return
     }
     if (file.type.startsWith('image/')) {
@@ -831,11 +838,14 @@ export default function PortalChatsPage() {
         formData.append('file', pendingAdminFile.file)
         formData.append(selectedAccountId ? 'account_id' : 'contact_id', (selectedAccountId || selectedContactId)!)
         const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-        if (!res.ok) throw new Error('Upload failed')
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Upload failed — please try again.')
+        }
         const { url, name } = await res.json()
         sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachment_url: url, attachment_name: name })
-      } catch {
-        toast.error('Failed to upload file')
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
         setUploadingAdminFile(false)
         if (adminFileRef.current) adminFileRef.current.value = ''
