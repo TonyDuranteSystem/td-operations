@@ -41,15 +41,36 @@ async function listContactsWithEmail() {
   return res.json()
 }
 
-async function findAuthUserByEmail(email) {
-  // Supabase Admin API — filter users by email
-  const res = await fetch(`${SB_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`, {
-    headers: headers(),
-  })
-  if (!res.ok) return null
-  const body = await res.json()
-  const users = body.users || []
-  return users.find(u => u.email?.toLowerCase() === email.toLowerCase()) || null
+/**
+ * Pre-load every auth user once, keyed by lowercase email.
+ *
+ * Why: Supabase's `/auth/v1/admin/users?email=X` endpoint IGNORES the `email`
+ * query parameter and returns the first page (default 50 users). The previous
+ * idempotency check (one call per contact, trusting the filter) silently
+ * failed for any user not in the first page of results, producing spurious
+ * 422 "email_exists" errors during re-runs.
+ *
+ * This loader paginates through every page (per_page=200) once up-front, so
+ * the main loop is an O(1) Map lookup.
+ */
+async function loadAllAuthUsersByEmail() {
+  const byEmail = new Map()
+  const perPage = 200
+  let page = 1
+  for (;;) {
+    const res = await fetch(`${SB_URL}/auth/v1/admin/users?page=${page}&per_page=${perPage}`, {
+      headers: headers(),
+    })
+    if (!res.ok) throw new Error(`list users page ${page}: ${res.status} ${await res.text()}`)
+    const body = await res.json()
+    const users = body.users || []
+    for (const u of users) {
+      if (u.email) byEmail.set(u.email.toLowerCase(), u)
+    }
+    if (users.length < perPage) break
+    page++
+  }
+  return byEmail
 }
 
 async function createAuthUser(email, fullName, contactId) {
@@ -87,13 +108,16 @@ async function main() {
   const contacts = await listContactsWithEmail()
   console.log(`Found ${contacts.length} contacts with emails`)
 
+  const existingByEmail = await loadAllAuthUsersByEmail()
+  console.log(`Pre-loaded ${existingByEmail.size} existing auth users`)
+
   let created = 0
   let skipped = 0
   let errors = 0
 
   for (const c of contacts) {
     try {
-      const existing = await findAuthUserByEmail(c.email)
+      const existing = existingByEmail.get(c.email.toLowerCase())
       if (existing) {
         skipped++
         console.log(`  SKIP ${c.email} (already exists: ${existing.id.slice(0, 8)})`)
@@ -101,6 +125,9 @@ async function main() {
       }
       const user = await createAuthUser(c.email, c.full_name || 'Test User', c.id)
       created++
+      // Track locally so a duplicate contact email later in the list doesn't
+      // try to re-create and fail.
+      if (user?.id) existingByEmail.set(c.email.toLowerCase(), user)
       console.log(`  OK   ${c.email} (user: ${user.id?.slice(0, 8) || '?'}, contact: ${c.id.slice(0, 8)})`)
     } catch (e) {
       errors++

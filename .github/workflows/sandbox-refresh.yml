@@ -1,0 +1,71 @@
+# Daily sandbox refresh — clones production data into sandbox so the two
+# environments stay within 24h of each other. Both are actively used every
+# day, so weekly drift is too much.
+#
+# Sequence (see scripts/sandbox-seed/_daily-refresh.js):
+#   1. Row-level clone prod → sandbox (05-full-clone.js)
+#   2. Re-seed uniform sandbox auth users (03-create-auth-users.js)
+#   3. Re-apply sandbox-only DDL (tax_returns observability trigger + view)
+#
+# No summary email on success — GitHub's own notification fires on failure,
+# which is the only case Antonio needs to see.
+
+name: Sandbox Daily Refresh
+
+on:
+  schedule:
+    # 03:00 UTC = 05:00 CEST / 04:00 CET (overnight in Italy)
+    #          = 22:00 / 23:00 US Eastern (evening in US)
+    - cron: "0 3 * * *"
+  workflow_dispatch: {} # allow manual trigger from Actions tab
+
+concurrency:
+  group: sandbox-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Write sandbox env file
+        env:
+          SANDBOX_SUPABASE_URL: ${{ secrets.SANDBOX_SUPABASE_URL }}
+          SANDBOX_SERVICE_ROLE_KEY: ${{ secrets.SANDBOX_SERVICE_ROLE_KEY }}
+          SANDBOX_DB_URL: ${{ secrets.SANDBOX_DB_URL }}
+          SANDBOX_SUPABASE_REF: ${{ secrets.SANDBOX_SUPABASE_REF }}
+        run: |
+          {
+            echo "NEXT_PUBLIC_SUPABASE_URL=\"${SANDBOX_SUPABASE_URL}\""
+            echo "SUPABASE_SERVICE_ROLE_KEY=\"${SANDBOX_SERVICE_ROLE_KEY}\""
+            echo "SUPABASE_DB_URL=\"${SANDBOX_DB_URL}\""
+            echo "EXPECTED_SUPABASE_REF=\"${SANDBOX_SUPABASE_REF}\""
+            echo "SANDBOX_MODE=\"1\""
+          } > .env.sandbox
+
+      - name: Write prod env file (clone source only)
+        env:
+          PROD_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          PROD_SERVICE_ROLE_KEY: ${{ secrets.PROD_SERVICE_ROLE_KEY }}
+        run: |
+          {
+            echo "NEXT_PUBLIC_SUPABASE_URL=\"${PROD_SUPABASE_URL}\""
+            echo "SUPABASE_SERVICE_ROLE_KEY=\"${PROD_SERVICE_ROLE_KEY}\""
+          } > .env.local
+
+      - name: Run daily refresh
+        run: node scripts/sandbox-seed/_daily-refresh.js
+
+      - name: Scrub env files
+        if: always()
+        run: rm -f .env.local .env.sandbox

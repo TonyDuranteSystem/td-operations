@@ -113,7 +113,21 @@ const TABLES = [
   // Account-contact junction (FK to both)
   { name: 'account_contacts', conflict: 'account_id,contact_id' },
 
-  // Offers / contracts / activations (tied to leads + accounts)
+  // Deals (referenced by offers/payments/service_deliveries/tasks FKs; most
+  // current rows have NULL deal_id, so clone was previously succeeding by
+  // accident — include it so sandbox mirrors prod and future non-NULL FKs
+  // don't break).
+  { name: 'deals', conflict: 'id', optional: true },
+
+  // Client-side billing reference tables — required for client_invoices
+  // (customer_id + bank_account_id FKs) and client_expenses (vendor_id FK).
+  // Previously missing: client_invoices clone was failing loudly with
+  // 23503 FK violation on customer_id.
+  { name: 'client_customers', conflict: 'id', optional: true },
+  { name: 'client_bank_accounts', conflict: 'id', optional: true },
+  { name: 'client_vendors', conflict: 'id', optional: true },
+
+  // Offers / contracts / activations (tied to leads + accounts + deals)
   { name: 'offers', conflict: 'id' },
   { name: 'contracts', conflict: 'id' },
   { name: 'pending_activations', conflict: 'id' },
@@ -122,15 +136,41 @@ const TABLES = [
   { name: 'service_deliveries', conflict: 'id' },
   { name: 'tax_returns', conflict: 'id' },
   { name: 'payments', conflict: 'id' },
+  { name: 'payment_items', conflict: 'id', optional: true }, // FK → payments
   { name: 'client_invoices', conflict: 'id', optional: true },
   { name: 'client_expenses', conflict: 'id', optional: true },
+  { name: 'client_expense_items', conflict: 'id', optional: true }, // FK → client_expenses
   { name: 'td_expenses', conflict: 'id', optional: true },
+
+  // Deadlines (FK → accounts). 489+ rows: Annual Report, RA Renewal, Tax
+  // Filing deadlines. Without these, sandbox portal shows empty deadline
+  // calendar which hides bugs in deadline UI/reminders.
+  { name: 'deadlines', conflict: 'id', optional: true },
+
+  // Services catalog rows (tasks.service_id FK). Empty in prod today,
+  // but include so any future row is cloned rather than breaking tasks.
+  { name: 'services', conflict: 'id', optional: true },
 
   // Workflow artifacts
   { name: 'tasks', conflict: 'id' },
   { name: 'wizard_progress', conflict: 'id' },
+
+  // Client submission flow tables — each wizard/form the client fills.
+  // Must be cloned so sandbox portal shows correct "data received" state
+  // for historical clients, and so the tax_returns anomaly view isn't
+  // falsely flagged for rows whose evidence lives in tax_return_submissions.
   { name: 'company_info_submissions', conflict: 'id', optional: true },
+  { name: 'tax_return_submissions', conflict: 'id', optional: true },
+  { name: 'tax_quote_submissions', conflict: 'id', optional: true },
+  { name: 'formation_submissions', conflict: 'id', optional: true },
+  { name: 'onboarding_submissions', conflict: 'id', optional: true },
+  { name: 'itin_submissions', conflict: 'id', optional: true },
+  { name: 'closure_submissions', conflict: 'id', optional: true },
+  { name: 'banking_submissions', conflict: 'id', optional: true },
+
+  // Signature artifacts
   { name: 'oa_agreements', conflict: 'id', optional: true },
+  { name: 'oa_signatures', conflict: 'id', optional: true }, // FK → oa_agreements + contacts
   { name: 'lease_agreements', conflict: 'id', optional: true },
   { name: 'ss4_applications', conflict: 'id', optional: true },
   { name: 'signature_requests', conflict: 'id', optional: true },
