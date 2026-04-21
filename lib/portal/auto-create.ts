@@ -13,6 +13,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import type { PortalTier } from './tier-config'
+import { getEntityTypeFromContract } from './entity-type-from-contract'
 
 interface AutoCreateResult {
   success: boolean
@@ -156,6 +157,7 @@ async function createFromEmail(
     // If still no contact, create one (same as new-user path)
     // This guarantees contact_id is always set before returning success
     if (!resolvedContactId) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task 7ebb1e0c
       const { data: createdContact } = await supabaseAdmin
         .from('contacts')
         .insert({ full_name: fullName, email, language: language === 'it' ? 'Italian' : 'English' })
@@ -166,12 +168,15 @@ async function createFromEmail(
 
     // Update contact tier
     if (resolvedContactId) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
       await supabaseAdmin
         .from('contacts')
+        // eslint-disable-next-line no-restricted-syntax -- Phase D1 contacts.portal_tier write; routes through reconcileTier() per dev_task 7ebb1e0c
         .update({ portal_tier: tier })
         .eq('id', resolvedContactId)
     }
     if (accountId) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier; extract to reconcileTier() per dev_task 7ebb1e0c
       await supabaseAdmin
         .from('accounts')
         .update({ portal_tier: tier })
@@ -204,6 +209,7 @@ async function createFromEmail(
     portalContactId = existingContact.id
   } else {
     // Create contact from email + name
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task 7ebb1e0c
     const { data: newContact } = await supabaseAdmin
       .from('contacts')
       .insert({ full_name: fullName, email, language: language === 'it' ? 'Italian' : 'English' })
@@ -234,14 +240,17 @@ async function createFromEmail(
 
   // Update contact tier (source of truth)
   if (portalContactId) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
     await supabaseAdmin
       .from('contacts')
+      // eslint-disable-next-line no-restricted-syntax -- Phase D1 contacts.portal_tier write; routes through reconcileTier() per dev_task 7ebb1e0c
       .update({ portal_tier: tier })
       .eq('id', portalContactId)
   }
 
   // Update account flags (secondary)
   if (accountId) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/portal.ts per dev_task 7ebb1e0c
     await supabaseAdmin
       .from('accounts')
       .update({
@@ -296,6 +305,33 @@ export async function ensureMinimalAccount(params: {
 }): Promise<EnsureAccountResult> {
   const { contactId, clientName, contractType, offerToken, leadId, isStandaloneBusiness } = params
 
+  // Phase 0 safety: read the entity type the client picked on the signed contract.
+  // Used for new-account INSERT below, and for reconciliation on the existing-account branches.
+  const entityTypeLookup = await getEntityTypeFromContract(offerToken)
+
+  // Helper to log entity_type reconciliation mismatches to the audit trail.
+  // Non-fatal: we flag the discrepancy for the post-build case review rather than blocking activation.
+  const logEntityTypeMismatch = async (
+    accountId: string,
+    existingEntityType: string,
+  ): Promise<void> => {
+    await supabaseAdmin.from('action_log').insert({
+      actor: 'system:ensureMinimalAccount',
+      action_type: 'entity_type_mismatch',
+      table_name: 'accounts',
+      record_id: accountId,
+      account_id: accountId,
+      contact_id: contactId,
+      summary: `Contract declares ${entityTypeLookup.accountLabel} but existing account is ${existingEntityType}. Flagged for case review.`,
+      details: {
+        offer_token: offerToken || null,
+        contract_llc_type: entityTypeLookup.rawLlcType,
+        existing_entity_type: existingEntityType,
+        source: entityTypeLookup.source,
+      },
+    })
+  }
+
   // Check if contact is already linked to an account
   const { data: existingLink } = await supabaseAdmin
     .from('account_contacts')
@@ -305,12 +341,24 @@ export async function ensureMinimalAccount(params: {
     .maybeSingle()
 
   if (existingLink?.account_id) {
+    // Reconciliation: if the signed contract declares a different entity type than the existing account, surface it.
+    if (entityTypeLookup.accountLabel) {
+      const { data: existingAccount } = await supabaseAdmin
+        .from('accounts')
+        .select('entity_type')
+        .eq('id', existingLink.account_id)
+        .maybeSingle()
+      if (existingAccount?.entity_type && existingAccount.entity_type !== entityTypeLookup.accountLabel) {
+        await logEntityTypeMismatch(existingLink.account_id, existingAccount.entity_type)
+      }
+    }
     // Backfill account_id on contact-only invoices (created at signing, before account existed)
     await supabaseAdmin
       .from("client_invoices")
       .update({ account_id: existingLink.account_id, updated_at: new Date().toISOString() })
       .eq("contact_id", contactId)
       .is("account_id", null)
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.update; extract to lib/operations/payment.ts per dev_task 7ebb1e0c
     await supabaseAdmin
       .from("payments")
       .update({ account_id: existingLink.account_id, updated_at: new Date().toISOString() })
@@ -327,6 +375,17 @@ export async function ensureMinimalAccount(params: {
       .eq('id', leadId)
       .maybeSingle()
     if (lead?.converted_to_account_id) {
+      // Reconciliation on this branch too
+      if (entityTypeLookup.accountLabel) {
+        const { data: existingAccount } = await supabaseAdmin
+          .from('accounts')
+          .select('entity_type')
+          .eq('id', lead.converted_to_account_id)
+          .maybeSingle()
+        if (existingAccount?.entity_type && existingAccount.entity_type !== entityTypeLookup.accountLabel) {
+          await logEntityTypeMismatch(lead.converted_to_account_id, existingAccount.entity_type)
+        }
+      }
       // Link contact to existing account
       await supabaseAdmin.from('account_contacts').upsert({
         account_id: lead.converted_to_account_id,
@@ -344,13 +403,20 @@ export async function ensureMinimalAccount(params: {
   const separator = isStandaloneBusiness ? ' — ' : ' - '
   const companyName = `${statusLabel}${separator}${clientName}`
 
+  // Phase 0 safety: prefer the signed contract's declared entity_type for formation;
+  // fall back to legacy default (Single Member LLC) only when no contract is available,
+  // to keep legacy/unusual call sites working. Non-formation stays null (wizard fills it in later).
+  const entityTypeForInsert = entityTypeLookup.accountLabel
+    ?? (contractType === 'formation' ? ('Single Member LLC' as const) : null)
+
+  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.insert; extract to lib/operations/account.ts per dev_task 7ebb1e0c
   const { data: account, error: accErr } = await supabaseAdmin
     .from('accounts')
     .insert({
       company_name: companyName,
       status: contractType === 'formation' ? 'Pending Formation' : 'Active',
       account_type: isStandaloneBusiness ? 'One-Time' : 'Client',
-      entity_type: contractType === 'formation' ? 'Single Member LLC' : null,
+      entity_type: entityTypeForInsert,
       portal_account: true,
       portal_auto_created: true,
       portal_tier: 'onboarding',
@@ -362,6 +428,25 @@ export async function ensureMinimalAccount(params: {
 
   if (accErr || !account) {
     return { accountId: '', created: false, error: accErr?.message || 'Failed to create account' }
+  }
+
+  // Phase 0 diagnostic: log when a formation account was created without a matching signed contract.
+  // This means we fell back to the legacy default (Single Member LLC) — surface it for case review.
+  if (contractType === 'formation' && !entityTypeLookup.accountLabel) {
+    await supabaseAdmin.from('action_log').insert({
+      actor: 'system:ensureMinimalAccount',
+      action_type: 'entity_type_fallback',
+      table_name: 'accounts',
+      record_id: account.id,
+      account_id: account.id,
+      contact_id: contactId,
+      summary: `Formation account created without signed contract — entity_type defaulted to Single Member LLC.`,
+      details: {
+        offer_token: offerToken || null,
+        source: entityTypeLookup.source,
+        raw_llc_type: entityTypeLookup.rawLlcType,
+      },
+    })
   }
 
   // Link contact to account
@@ -377,6 +462,7 @@ export async function ensureMinimalAccount(params: {
     .update({ account_id: account.id, updated_at: new Date().toISOString() })
     .eq("contact_id", contactId)
     .is("account_id", null)
+  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.update; extract to lib/operations/payment.ts per dev_task 7ebb1e0c
   await supabaseAdmin
     .from("payments")
     .update({ account_id: account.id, updated_at: new Date().toISOString() })
@@ -623,6 +709,7 @@ export async function upgradePortalTier(
   }
 
   // Update account tier
+  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
   await supabaseAdmin
     .from('accounts')
     .update({ portal_tier: newTier })
@@ -635,8 +722,10 @@ export async function upgradePortalTier(
     .eq('account_id', accountId)
 
   for (const link of links ?? []) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
     await supabaseAdmin
       .from('contacts')
+      // eslint-disable-next-line no-restricted-syntax -- Phase D1 contacts.portal_tier write; routes through reconcileTier() per dev_task 7ebb1e0c
       .update({ portal_tier: newTier })
       .eq('id', link.contact_id)
 
