@@ -1017,15 +1017,15 @@ export async function POST(req: NextRequest) {
           const formLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
 
           // Phase 0 safety: derive entity_type from the signed contract instead of hardcoding "SMLLC".
-          // For formation: read contracts.llc_type (SMLLC | MMLLC | Corporation) and map to the wizard's short code.
-          // For non-formation contract types: entity_type stays undefined (wizard collects it).
-          const entityTypeLookup = contractType === "formation"
+          // For formation + onboarding: read contracts.llc_type (SMLLC | MMLLC | Corporation).
+          // For other contract types: entity_type stays undefined (wizard collects it).
+          const entityTypeLookup = (contractType === "formation" || contractType === "onboarding")
             ? await getEntityTypeFromContract(activation.offer_token)
             : null
 
           // If the client signed as Corporation, the wizard form doesn't have a C-Corp path yet.
           // Skip auto-wizard creation and create a manual-handling task instead (surfaced via steps[]).
-          if (contractType === "formation" && entityTypeLookup?.source === "corporation_not_wired") {
+          if ((contractType === "formation" || contractType === "onboarding") && entityTypeLookup?.source === "corporation_not_wired") {
             steps.push({
               step: "data_form",
               status: "manual_required",
@@ -1033,9 +1033,8 @@ export async function POST(req: NextRequest) {
             })
           } else {
             // Preferred entity_type from signed contract (SMLLC or MMLLC).
-            // Legacy fallback to "SMLLC" only for formation when no contract was found,
-            // to preserve existing behavior for unusual call sites.
-            const entityTypeForForm: string | undefined = contractType === "formation"
+            // Legacy fallback to "SMLLC" for formation/onboarding when no contract was found.
+            const entityTypeForForm: string | undefined = (contractType === "formation" || contractType === "onboarding")
               ? (entityTypeLookup?.wizardCode ?? "SMLLC")
               : undefined
 
