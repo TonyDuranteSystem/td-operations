@@ -105,7 +105,8 @@ export async function POST(request: NextRequest) {
   }
 
   // Validate attachment_url is from our storage only
-  if (attachment_url && !attachment_url.startsWith(process.env.NEXT_PUBLIC_SUPABASE_URL || '')) {
+  // .trim() guards against trailing \n in env var (which broke uploads on 2026-04-18 when env vars were re-entered)
+  if (attachment_url && !attachment_url.startsWith((process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim())) {
     return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
   }
 
