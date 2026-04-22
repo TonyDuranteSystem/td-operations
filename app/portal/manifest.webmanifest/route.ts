@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 // history on this file + failed CI run ee7f762.
 export const dynamic = 'force-static'
 
+
 export function GET() {
   return NextResponse.json(
     {
