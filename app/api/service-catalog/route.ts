@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabaseAdmin
     .from('service_catalog')
-    .select('id, name, slug, category, pipeline, contract_type, has_annual, default_price, default_currency, sort_order, description, active')
+    .select('id, name, slug, category, pipeline, contract_type, has_annual, default_price, default_currency, sort_order, description, active, supports_quantity')
     .order('sort_order', { ascending: true })
 
   if (!includeInactive) {
