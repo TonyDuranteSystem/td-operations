@@ -39,11 +39,15 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const onTranscriptRef = useRef(onTranscript)
+  const onErrorRef = useRef(onError)
 
-  // Keep callback ref current
+  // Keep callback refs current — R099: failures must surface to the user, not die in console.error
   useEffect(() => {
     onTranscriptRef.current = onTranscript
   }, [onTranscript])
+  useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
 
   // Check support
   useEffect(() => {
@@ -93,6 +97,7 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
         // Don't send if too short (< 0.5s ~ < 5KB usually)
         if (audioBlob.size < 1000) {
           setIsRecording(false)
+          onErrorRef.current?.('Recording too short — hold the mic button a bit longer.')
           return
         }
 
@@ -102,9 +107,13 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
           const text = await transcribeAudio(audioBlob, language)
           if (text && onTranscriptRef.current) {
             onTranscriptRef.current(text)
+          } else if (!text) {
+            onErrorRef.current?.('No speech detected — try again in a quieter spot or speak a bit louder.')
           }
         } catch (err) {
           console.error('[useVoiceInput] transcription failed:', err)
+          const msg = err instanceof Error && err.message ? err.message : 'Transcription failed — please try again.'
+          onErrorRef.current?.(msg)
         } finally {
           setIsTranscribing(false)
         }
@@ -115,6 +124,10 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
       setIsRecording(true)
     } catch (err) {
       console.error('[useVoiceInput] mic access denied:', err)
+      const msg = err instanceof Error && /denied|permission/i.test(err.message || err.name)
+        ? 'Microphone access denied. Check your browser permissions and try again.'
+        : 'Could not start recording. Check your microphone connection and browser permissions.'
+      onErrorRef.current?.(msg)
     }
   }, [isRecording, language])
 
