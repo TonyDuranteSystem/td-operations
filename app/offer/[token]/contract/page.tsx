@@ -467,14 +467,24 @@ export default function ContractPage() {
       })
 
       // Save contract record — include business fields from offer
-      // Derive LLC type from services
-      const servicesArr = Array.isArray(offer.services)
-        ? offer.services
-        : (typeof offer.services === 'string' ? JSON.parse(offer.services) : [])
-      const allServiceNames = servicesArr.map((s: any) => (s.name || '').toLowerCase()).join(' ')
-      const llcType = allServiceNames.includes('multi-member') ? 'MMLLC'
-        : allServiceNames.includes('single-member') ? 'SMLLC'
-        : null
+      // Derive LLC type: prefer offer.entity_type (canonical source since the
+      // MMLLC build, 2026-04-22). Fall back to string-matching service names
+      // for legacy offers created before offers.entity_type existed.
+      let llcType: 'MMLLC' | 'SMLLC' | null
+      if (offer.entity_type === 'Multi Member LLC') {
+        llcType = 'MMLLC'
+      } else if (offer.entity_type === 'Single Member LLC') {
+        llcType = 'SMLLC'
+      } else {
+        const servicesArr = Array.isArray(offer.services)
+          ? offer.services
+          : (typeof offer.services === 'string' ? JSON.parse(offer.services) : [])
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const allServiceNames = servicesArr.map((s: any) => (s.name || '').toLowerCase()).join(' ')
+        llcType = allServiceNames.includes('multi-member') ? 'MMLLC'
+          : allServiceNames.includes('single-member') ? 'SMLLC'
+          : null
+      }
 
       // Derive installments + annual_fee from recurring_costs
       const rc = Array.isArray(offer.recurring_costs) ? offer.recurring_costs : []
