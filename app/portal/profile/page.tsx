@@ -49,7 +49,8 @@ export default async function PortalProfilePage() {
         <ProfileEditor
           contactId={contactId}
           initialData={{
-            full_name: contact?.full_name ?? '',
+            first_name: contact?.first_name ?? '',
+            last_name: contact?.last_name ?? '',
             email: contact?.email ?? '',
             phone: contact?.phone ?? '',
             language: contact?.language ?? '',

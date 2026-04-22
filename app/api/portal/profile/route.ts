@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json()
   const {
     contact_id,
-    full_name,
+    first_name,
+    last_name,
     phone,
     language,
     citizenship,
@@ -50,7 +51,19 @@ export async function POST(request: NextRequest) {
   }
 
   const updates: Record<string, unknown> = {}
-  if (full_name !== undefined) updates.full_name = full_name
+  if (first_name !== undefined) updates.first_name = first_name
+  if (last_name !== undefined) updates.last_name = last_name
+  if (first_name !== undefined || last_name !== undefined) {
+    // Keep full_name in sync — fetch the other half if only one side was sent
+    const { data: current } = await supabaseAdmin
+      .from('contacts')
+      .select('first_name, last_name')
+      .eq('id', sessionContactId)
+      .single()
+    const fn = first_name !== undefined ? first_name : (current?.first_name ?? '')
+    const ln = last_name !== undefined ? last_name : (current?.last_name ?? '')
+    updates.full_name = [fn, ln].filter(Boolean).join(' ')
+  }
   if (phone !== undefined) updates.phone = phone
   if (language !== undefined) updates.language = language
   if (citizenship !== undefined) updates.citizenship = citizenship

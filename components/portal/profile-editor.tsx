@@ -9,7 +9,8 @@ import { useLocale } from '@/lib/portal/use-locale'
 interface ProfileEditorProps {
   contactId: string
   initialData: {
-    full_name: string
+    first_name: string
+    last_name: string
     email: string
     phone: string
     language: string
@@ -52,7 +53,8 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
     return (
       <div className="space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-          <Field label={t('profile.fullName')} value={data.full_name} />
+          <Field label={t('profile.firstName')} value={data.first_name} />
+          <Field label={t('profile.lastName')} value={data.last_name} />
           <Field label={t('profile.email')} value={data.email} />
           <Field label={t('profile.phone')} value={data.phone} />
           <Field label={t('profile.language')} value={data.language} />
@@ -79,7 +81,8 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <EditField label={t('profile.fullName')} value={data.full_name} onChange={v => setData(d => ({ ...d, full_name: v }))} />
+        <EditField label={t('profile.firstName')} value={data.first_name} onChange={v => setData(d => ({ ...d, first_name: v }))} />
+        <EditField label={t('profile.lastName')} value={data.last_name} onChange={v => setData(d => ({ ...d, last_name: v }))} />
         <EditField label={t('profile.email')} value={data.email} onChange={v => setData(d => ({ ...d, email: v }))} disabled />
         <EditField label={t('profile.phone')} value={data.phone} onChange={v => setData(d => ({ ...d, phone: v }))} placeholder="+1 555 123 4567" />
         <EditField label={t('profile.language')} value={data.language} onChange={v => setData(d => ({ ...d, language: v }))} placeholder="English, Italian" />
