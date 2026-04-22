@@ -31,6 +31,10 @@ export interface OfferService {
   includes?: string[]
   optional?: boolean        // If true, client can select/deselect on offer page
   pipeline_type?: string    // Maps to bundled_pipelines (e.g., "ITIN", "Tax Return")
+  contract_type?: string    // Service-level contract type (e.g., "itin", "tax_return")
+  service_context?: 'individual' | 'business' | 'ask'
+  quantity?: number         // For multi-unit services (e.g., ITIN ×2); default 1
+  unit_price?: string       // Per-unit price when quantity > 1
 }
 
 export interface CostSummaryItem {
