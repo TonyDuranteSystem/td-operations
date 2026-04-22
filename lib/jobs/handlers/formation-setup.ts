@@ -492,6 +492,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
     }
 
+
     await updateJobProgress(job.id, result)
   }
 
