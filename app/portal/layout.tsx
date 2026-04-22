@@ -30,7 +30,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: 'TD Portal',
   description: 'Tony Durante LLC — Client Portal',
-  manifest: '/portal/manifest',
+  manifest: '/portal/manifest.webmanifest',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
