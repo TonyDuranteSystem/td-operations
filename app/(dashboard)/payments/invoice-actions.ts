@@ -452,6 +452,10 @@ export async function createOneTimeCustomer(
         communication_email: input.email.trim().toLowerCase(),
         installment_1_currency: input.currency ?? 'USD',
         installment_2_currency: input.currency ?? 'USD',
+        // One-time customers have no portal login — null overrides the DB
+        // default of 'active' so resolveInvoiceAudience returns 'no_portal'
+        // and the email gets bank details + card button instead of portal CTA.
+        portal_tier: null,
       })
       .select('id, company_name')
       .single()
