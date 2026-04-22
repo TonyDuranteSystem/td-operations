@@ -89,4 +89,22 @@ jobs:
         run: npm run test:integration
 
       - name: Build
+        # Next.js's static prerender phase eagerly invokes route handlers
+        # and page modules. Modules that instantiate Supabase clients at
+        # load time (via createBrowserClient / createServerClient) throw
+        # "supabaseUrl is required" when NEXT_PUBLIC_SUPABASE_URL is
+        # unset — which cascades into downstream false-positive
+        # "no response returned from route handler" errors on unrelated
+        # routes (e.g. /portal/manifest.webmanifest) and fails the build.
+        #
+        # Vercel's build environment already has these vars set, which
+        # is why prod builds green. We provide dummy placeholder values
+        # here so Supabase client init succeeds; no real network calls
+        # happen during static prerender, so fake URLs are safe. The
+        # EXPECTED_SUPABASE_REF assertion in lib/supabase-admin.ts is
+        # intentionally NOT set here (it only fires when present).
         run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-dummy.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_ci_dummy_placeholder
+          SUPABASE_SERVICE_ROLE_KEY: sb_secret_ci_dummy_placeholder
