@@ -415,8 +415,10 @@ export default function OfferPage() {
           {/* Intro */}
           {(o.intro_en || o.intro_it) && (
             <div className="offer-intro-block">
-              {o.intro_en && <><div className="offer-lang-badge offer-lang-en">EN</div><div className="offer-intro-text">{o.intro_en}</div></>}
-              {o.intro_it && <><div className="offer-lang-badge offer-lang-it">IT</div><div className="offer-intro-text">{o.intro_it}</div></>}
+              {o.language === 'it'
+                ? o.intro_it && <div className="offer-intro-text">{o.intro_it}</div>
+                : o.intro_en && <div className="offer-intro-text">{o.intro_en}</div>
+              }
             </div>
           )}
 
