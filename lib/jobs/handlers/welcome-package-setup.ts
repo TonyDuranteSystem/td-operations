@@ -40,7 +40,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   // ─── 1. FETCH ACCOUNT ───
   const { data: account, error: accErr } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, ein_number, state_of_formation, formation_date, physical_address, registered_agent_address, registered_agent_provider, drive_folder_id, welcome_package_status")
+    .select("id, company_name, ein_number, state_of_formation, formation_date, physical_address, registered_agent_address, registered_agent_provider, drive_folder_id, welcome_package_status, entity_type")
     .eq("id", p.account_id)
     .single()
 
@@ -111,31 +111,36 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     if (!OA_SUPPORTED_STATES.includes(state as typeof OA_SUPPORTED_STATES[number])) {
       result.steps.push(step("oa", "skipped", `State "${state}" not supported`))
     } else {
-      // Check for MMLLC
-      const { data: allContacts } = await supabaseAdmin
-        .from("account_contacts")
-        .select("contact_id")
-        .eq("account_id", p.account_id)
-
-      const isMMLC = (allContacts?.length || 1) > 1
-      const entityType = isMMLC ? "MMLLC" : "SMLLC"
+      // Use entity_type from accounts table (set at account creation from contract)
+      const entityType = (account.entity_type as string | null) === "MMLLC" ? "MMLLC" : "SMLLC"
+      const isMMLC = entityType === "MMLLC"
 
       let membersJson: Record<string, unknown>[] | null = null
-      if (isMMLC && allContacts) {
-        const { data: memberContacts } = await supabaseAdmin
-          .from("contacts")
-          .select("full_name, email")
-          .in("id", allContacts.map(c => c.contact_id))
+      if (isMMLC) {
+        // Read actual ownership_pct from account_contacts junction
+        const { data: allLinks } = await supabaseAdmin
+          .from("account_contacts")
+          .select("contact_id, ownership_pct, role")
+          .eq("account_id", p.account_id)
 
-        if (memberContacts && memberContacts.length > 1) {
-          const pct = Math.floor(100 / memberContacts.length)
-          const remainder = 100 - pct * memberContacts.length
-          membersJson = memberContacts.map((mc, i) => ({
-            name: mc.full_name,
-            email: mc.email || null,
-            ownership_pct: pct + (i === 0 ? remainder : 0),
-            initial_contribution: "$0 (No initial capital contribution required)",
-          }))
+        if (allLinks && allLinks.length > 0) {
+          const contactIds = allLinks.map(l => l.contact_id)
+          const { data: memberContacts } = await supabaseAdmin
+            .from("contacts")
+            .select("id, full_name, email")
+            .in("id", contactIds)
+
+          if (memberContacts && memberContacts.length > 1) {
+            membersJson = memberContacts.map(mc => {
+              const link = allLinks.find(l => l.contact_id === mc.id)
+              return {
+                name: mc.full_name,
+                email: mc.email || null,
+                ownership_pct: link?.ownership_pct ?? null,
+                initial_contribution: "$0 (No initial capital contribution required)",
+              }
+            })
+          }
         }
       }
 
