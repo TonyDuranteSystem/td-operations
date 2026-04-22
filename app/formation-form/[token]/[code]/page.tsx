@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   TOOLTIPS,
@@ -22,7 +21,7 @@ function setVerifiedCookie(token: string) {
   document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
 }
 
-function hasVerifiedCookie(token: string): boolean {
+function _hasVerifiedCookie(token: string): boolean {
   return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
 }
 
@@ -64,6 +63,8 @@ export default function FormationFormCodePage() {
 
   // Dynamic arrays for MMLLC additional members
   const [members, setMembers] = useState<Record<string, string>[]>([])
+  // 0 = owner, 1+ = additional member index (MMLLC primary contact selector)
+  const [primaryMemberIndex, setPrimaryMemberIndex] = useState(0)
 
   const L = LABELS[lang]
 
@@ -275,7 +276,10 @@ export default function FormationFormCodePage() {
 
       // 2. Build submitted data
       const submittedData: Record<string, unknown> = { ...formData }
-      if (members.length > 0) submittedData.additional_members = members
+      if (members.length > 0) {
+        submittedData.additional_members = members
+        if (submission.entity_type === 'MMLLC') submittedData.primary_member_index = primaryMemberIndex
+      }
 
       // 3. Compute changed fields
       const changedFields: Record<string, { old: unknown; new: unknown }> = {}
@@ -412,7 +416,11 @@ export default function FormationFormCodePage() {
           <div key={i} className="tf-array-item">
             <div className="tf-array-item-header">
               <span>#{i + 1}</span>
-              <button type="button" className="tf-remove-btn" onClick={() => setMembers(prev => prev.filter((_, j) => j !== i))}>
+              <button type="button" className="tf-remove-btn" onClick={() => {
+                setMembers(prev => prev.filter((_, j) => j !== i))
+                if (primaryMemberIndex === i + 1) setPrimaryMemberIndex(0)
+                else if (primaryMemberIndex > i + 1) setPrimaryMemberIndex(p => p - 1)
+              }}>
                 {L.removeMember}
               </button>
             </div>
@@ -430,6 +438,31 @@ export default function FormationFormCodePage() {
             </div>
           </div>
         ))}
+        {members.length > 0 && (
+          <div className="tf-primary-selector">
+            <h4 className="tf-primary-title">{L.primaryContactTitle}</h4>
+            <p className="tf-primary-help">{L.primaryContactHelp}</p>
+            <div className="tf-primary-options">
+              <label className="tf-primary-option">
+                <input type="radio" name="primary_member" value={0}
+                  checked={primaryMemberIndex === 0} onChange={() => setPrimaryMemberIndex(0)} />
+                <span>
+                  {[formData.owner_first_name, formData.owner_last_name].filter(Boolean).map(String).join(' ') || 'Owner'}
+                  {' '}<em className="tf-primary-you">{L.primaryContactOwner}</em>
+                </span>
+              </label>
+              {members.map((m, i) => (
+                <label key={i} className="tf-primary-option">
+                  <input type="radio" name="primary_member" value={i + 1}
+                    checked={primaryMemberIndex === i + 1} onChange={() => setPrimaryMemberIndex(i + 1)} />
+                  <span>
+                    {[m.member_first_name, m.member_last_name].filter(Boolean).join(' ') || `Member #${i + 1}`}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     )
   }

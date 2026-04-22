@@ -309,7 +309,193 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     await updateJobProgress(job.id, result)
   }
 
-  // ─── 2b. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
+  // ─── 2b. CREATE / UPDATE CONTACTS FOR ADDITIONAL MMLLC MEMBERS ───
+  const additionalMembers = Array.isArray(submitted.additional_members)
+    ? (submitted.additional_members as Array<Record<string, unknown>>)
+    : []
+
+  if (additionalMembers.length > 0 && accountId) {
+    const primaryMemberIndex = typeof submitted.primary_member_index === 'number'
+      ? submitted.primary_member_index : 0
+
+    // Fetch upload_paths from DB (not in job payload)
+    const { data: subForPaths } = p.submission_id
+      ? await supabaseAdmin.from('formation_submissions').select('upload_paths').eq('id', p.submission_id).single()
+      : { data: null }
+    const uploadPaths: string[] = (subForPaths?.upload_paths as string[]) ?? []
+
+    // Update owner's is_primary on account_contacts
+    if (p.contact_id) {
+      await supabaseAdmin.from('account_contacts')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary added via script 28c, not yet in generated types
+        .update({ is_primary: primaryMemberIndex === 0 } as any)
+        .eq('account_id', accountId)
+        .eq('contact_id', p.contact_id)
+    }
+
+    for (let i = 0; i < additionalMembers.length; i++) {
+      const m = additionalMembers[i]
+      const isPrimary = primaryMemberIndex === i + 1
+      const memberEmail = m.member_email ? String(m.member_email).toLowerCase().trim() : null
+      const memberName = [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || memberEmail || `Member ${i + 1}`
+
+      try {
+        // Find or create contact by email
+        let membContactId: string | null = null
+        if (memberEmail) {
+          const { data: existingC } = await supabaseAdmin
+            .from('contacts')
+            .select('id')
+            .eq('email', memberEmail)
+            .limit(1)
+
+          if (existingC?.length) {
+            membContactId = existingC[0].id
+          } else {
+            const contactInsert: Record<string, unknown> = {
+              email: memberEmail,
+              first_name: m.member_first_name ? String(m.member_first_name) : undefined,
+              last_name: m.member_last_name ? String(m.member_last_name) : undefined,
+              created_at: now,
+              updated_at: now,
+            }
+            // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
+            const { data: newC } = await supabaseAdmin.from('contacts').insert(contactInsert as any).select('id').single()
+            membContactId = newC?.id ?? null
+          }
+        }
+
+        if (membContactId) {
+          // Update contact fields
+          const upd: Record<string, unknown> = { updated_at: now }
+          if (m.member_first_name) upd.first_name = String(m.member_first_name)
+          if (m.member_last_name) upd.last_name = String(m.member_last_name)
+          if (m.member_dob) upd.date_of_birth = String(m.member_dob)
+          if (m.member_nationality) upd.citizenship = String(m.member_nationality)
+          if (m.member_street) upd.address_line1 = String(m.member_street)
+          if (m.member_city) upd.address_city = String(m.member_city)
+          if (m.member_state_province) upd.address_state = String(m.member_state_province)
+          if (m.member_zip) upd.address_zip = String(m.member_zip)
+          if (m.member_country) upd.address_country = String(m.member_country)
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+          await supabaseAdmin.from('contacts').update(upd).eq('id', membContactId)
+
+          // Link to account with role=Member + is_primary + ownership_pct
+          const ownershipPct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : null
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary added via script 28c, not yet in generated types
+          const { error: acLinkErr } = await supabaseAdmin
+            .from('account_contacts')
+            .upsert(
+              { account_id: accountId, contact_id: membContactId, role: 'Member', is_primary: isPrimary, ...(ownershipPct !== null && { ownership_pct: ownershipPct }) } as any,
+              { onConflict: 'account_id,contact_id' }
+            )
+
+          if (acLinkErr && !acLinkErr.message.includes('duplicate')) {
+            result.steps.push(step(`member_${i + 1}_link`, 'error', acLinkErr.message))
+          } else {
+            result.steps.push(step(`member_${i + 1}_link`, 'ok', `${memberName}${isPrimary ? ' [PRIMARY]' : ''}`))
+          }
+
+          // Passport: find path in upload_paths by key pattern passport_member_${i}
+          const passportPath = uploadPaths.find(p => p.includes(`passport_member_${i}`))
+          if (passportPath && contactDriveFolderId) {
+            try {
+              const cleanPath = passportPath.replace(/^\/+/, '')
+              const { data: blob, error: dlErr } = await supabaseAdmin.storage
+                .from('onboarding-uploads')
+                .download(cleanPath)
+
+              if (dlErr || !blob) {
+                result.steps.push(step(`member_${i + 1}_passport`, 'error', dlErr?.message || 'Download failed'))
+              } else {
+                const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+                const fileName = cleanPath.split('/').pop() || `passport_member_${i + 1}.pdf`
+                const buffer = Buffer.from(await blob.arrayBuffer())
+                const mimeType = blob.type || 'application/octet-stream'
+
+                const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, contactDriveFolderId) as { id: string; name: string }
+
+                const { extractAndStorePassportData } = await import('@/lib/jobs/passport-writeback')
+                const passRes = await extractAndStorePassportData({
+                  contact_id: membContactId,
+                  drive_file_id: driveFile.id,
+                  mime_type: mimeType,
+                  skip_dob: !!m.member_dob,
+                  contact_name: memberName,
+                  account_id: accountId,
+                })
+                result.steps.push(step(`member_${i + 1}_passport_ocr`, passRes.status, passRes.detail))
+
+                await supabaseAdmin.from('documents').insert({
+                  file_name: fileName,
+                  drive_file_id: driveFile.id,
+                  drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
+                  document_type_name: 'Passport',
+                  category: 2,
+                  category_name: 'Contacts',
+                  status: 'classified',
+                  contact_id: membContactId,
+                  account_id: accountId,
+                  portal_visible: true,
+                })
+              }
+            } catch (passErr) {
+              result.steps.push(step(`member_${i + 1}_passport`, 'error', passErr instanceof Error ? passErr.message : String(passErr)))
+            }
+          }
+        } else {
+          result.steps.push(step(`member_${i + 1}_link`, 'skipped', 'No email — cannot create/find contact'))
+        }
+      } catch (membErr) {
+        result.steps.push(step(`member_${i + 1}`, 'error', membErr instanceof Error ? membErr.message : String(membErr)))
+      }
+    }
+
+    // ─── Post-loop tasks ───
+    // ITIN tasks for non-US members
+    const itinCandidates = additionalMembers.filter(m => {
+      const nationality = m.member_nationality ? String(m.member_nationality).toLowerCase() : ''
+      return nationality && !['united states', 'us', 'usa', 'american'].includes(nationality)
+    })
+    if (itinCandidates.length > 0 && accountId) {
+      const itinNames = itinCandidates.map((m, i) =>
+        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
+      ).join(', ')
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      await supabaseAdmin.from('tasks').insert({
+        task_title: `ITIN required for MMLLC members: ${itinNames}`,
+        description: `The following members of ${companyName || 'this MMLLC'} are non-US and need ITIN applications:\n${itinCandidates.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} (${m.member_nationality || '?'})`).join('\n')}\n\nCreate ITIN service deliveries after LLC formation is confirmed.`,
+        assigned_to: 'Luca',
+        priority: 'Normal',
+        category: 'Formation' as const,
+        status: 'To Do',
+        ...(accountId ? { account_id: accountId } : {}),
+      })
+      result.steps.push(step('itin_tasks', 'ok', `ITIN task created for ${itinCandidates.length} non-US member(s)`))
+    }
+
+    // Portal invite reminder for all MMLLC members (after LLC is formed, not now)
+    if (additionalMembers.length > 0 && accountId) {
+      const memberNames = additionalMembers.map((m, i) =>
+        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
+      ).join(', ')
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      await supabaseAdmin.from('tasks').insert({
+        task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
+        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} — ${m.member_email || 'no email'}`).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
+        assigned_to: 'Luca',
+        priority: 'Low',
+        category: 'Formation',
+        status: 'To Do',
+        ...(accountId ? { account_id: accountId } : {}),
+      })
+      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
+    }
+
+    await updateJobProgress(job.id, result)
+  }
+
+  // ─── 2c. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
   try {
     const sdContactId = p.contact_id
     if (sdContactId) {
