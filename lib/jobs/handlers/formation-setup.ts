@@ -380,12 +380,13 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           await supabaseAdmin.from('contacts').update(upd).eq('id', membContactId)
 
-          // Link to account with role=Member + is_primary
+          // Link to account with role=Member + is_primary + ownership_pct
+          const ownershipPct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : null
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary added via script 28c, not yet in generated types
           const { error: acLinkErr } = await supabaseAdmin
             .from('account_contacts')
             .upsert(
-              { account_id: accountId, contact_id: membContactId, role: 'Member', is_primary: isPrimary } as any,
+              { account_id: accountId, contact_id: membContactId, role: 'Member', is_primary: isPrimary, ...(ownershipPct !== null && { ownership_pct: ownershipPct }) } as any,
               { onConflict: 'account_id,contact_id' }
             )
 
@@ -448,6 +449,47 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       } catch (membErr) {
         result.steps.push(step(`member_${i + 1}`, 'error', membErr instanceof Error ? membErr.message : String(membErr)))
       }
+    }
+
+    // ─── Post-loop tasks ───
+    // ITIN tasks for non-US members
+    const itinCandidates = additionalMembers.filter(m => {
+      const nationality = m.member_nationality ? String(m.member_nationality).toLowerCase() : ''
+      return nationality && !['united states', 'us', 'usa', 'american'].includes(nationality)
+    })
+    if (itinCandidates.length > 0 && accountId) {
+      const itinNames = itinCandidates.map((m, i) =>
+        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
+      ).join(', ')
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      await supabaseAdmin.from('tasks').insert({
+        task_title: `ITIN required for MMLLC members: ${itinNames}`,
+        description: `The following members of ${companyName || 'this MMLLC'} are non-US and need ITIN applications:\n${itinCandidates.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} (${m.member_nationality || '?'})`).join('\n')}\n\nCreate ITIN service deliveries after LLC formation is confirmed.`,
+        assigned_to: 'Luca',
+        priority: 'Normal',
+        category: 'Formation' as const,
+        status: 'To Do',
+        ...(accountId ? { account_id: accountId } : {}),
+      })
+      result.steps.push(step('itin_tasks', 'ok', `ITIN task created for ${itinCandidates.length} non-US member(s)`))
+    }
+
+    // Portal invite reminder for all MMLLC members (after LLC is formed, not now)
+    if (additionalMembers.length > 0 && accountId) {
+      const memberNames = additionalMembers.map((m, i) =>
+        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
+      ).join(', ')
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      await supabaseAdmin.from('tasks').insert({
+        task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
+        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} — ${m.member_email || 'no email'}`).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
+        assigned_to: 'Luca',
+        priority: 'Low',
+        category: 'Formation',
+        status: 'To Do',
+        ...(accountId ? { account_id: accountId } : {}),
+      })
+      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
     }
 
     await updateJobProgress(job.id, result)
