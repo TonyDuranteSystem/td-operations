@@ -747,6 +747,7 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
       </div>
 
       <InvoiceDialog
+        key={openForInst ?? 'closed'}
         open={openForInst !== null}
         onClose={() => setOpenForInst(null)}
         mode="invoice"
