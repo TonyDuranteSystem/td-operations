@@ -149,6 +149,10 @@ export function CreateOfferDialog({
   const [bankPreference, setBankPreference] = useState('auto')
   const [currency, setCurrency] = useState('EUR')
   const [installmentCurrency, setInstallmentCurrency] = useState('USD')
+  // Entity type — drives formation form shape (SMLLC vs MMLLC collects members),
+  // SS-4 content, OA members, tax routing. Only meaningful when contract_type='formation'.
+  // Empty string = not set → consumers fall back to legacy derivation.
+  const [entityType, setEntityType] = useState<'' | 'SMLLC' | 'MMLLC' | 'Corp'>('')
 
   // Selected services with prices
   const [selected, setSelected] = useState<SelectedService[]>([])
@@ -528,6 +532,7 @@ export function CreateOfferDialog({
             client_email: clientEmail,
             language,
             contract_type: derivedContractType,
+            entity_type: entityType || null,
             payment_type: paymentType === 'both' ? 'checkout' : paymentType,
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,
@@ -854,6 +859,49 @@ export function CreateOfferDialog({
               ) : null}
             </div>
           </div>
+
+          {/* Entity Type — only for formation offers */}
+          {derivedContractType === 'formation' && (
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Entity Type
+                <span className="text-xs font-normal text-muted-foreground ml-2">
+                  (drives the formation wizard shape, SS-4, OA, and tax routing)
+                </span>
+              </label>
+              <div className="flex gap-2">
+                {[
+                  { value: 'SMLLC', label: 'Single-Member LLC' },
+                  { value: 'MMLLC', label: 'Multi-Member LLC' },
+                  { value: 'Corp', label: 'C-Corp' },
+                ].map(opt => (
+                  <label
+                    key={opt.value}
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-md cursor-pointer transition-colors ${
+                      entityType === opt.value
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
+                        : 'border-zinc-200 hover:border-zinc-400'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="entity_type"
+                      value={opt.value}
+                      checked={entityType === opt.value}
+                      onChange={() => setEntityType(opt.value as 'SMLLC' | 'MMLLC' | 'Corp')}
+                      className="sr-only"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+              {!entityType && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Not set — pick explicitly for multi-member offers so the formation wizard, SS-4, and OA use the right shape.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Annual Rates */}
           {showAnnual && (
