@@ -98,7 +98,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
     startRecording,
     stopRecording,
     isSupported: micSupported,
-  } = useVoiceInput({ language: speechLang, onTranscript: handleTranscript })
+  } = useVoiceInput({ language: speechLang, onTranscript: handleTranscript, onError: (msg) => toast.error(msg) })
 
   // Auto-grow textarea whenever input changes (typing, voice, paste)
   useEffect(() => {

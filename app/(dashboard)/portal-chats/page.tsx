@@ -162,7 +162,7 @@ export default function PortalChatsPage() {
     startRecording,
     stopRecording,
     isSupported: micSupported,
-  } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript })
+  } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript, onError: (msg) => toast.error(msg) })
 
   // Voice input for internal chat
   const handleInternalTranscript = useCallback((text: string) => {
@@ -175,7 +175,7 @@ export default function PortalChatsPage() {
     isTranscribing: internalIsTranscribing,
     startRecording: internalStartRecording,
     stopRecording: internalStopRecording,
-  } = useVoiceInput({ language: 'en-US', onTranscript: handleInternalTranscript })
+  } = useVoiceInput({ language: 'en-US', onTranscript: handleInternalTranscript, onError: (msg) => toast.error(msg) })
 
   // Internal file select
   const handleInternalFileSelect = (file: File) => {
