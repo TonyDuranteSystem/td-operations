@@ -1,17 +1,29 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send, CheckCircle2 } from 'lucide-react'
+import { X, Loader2, Plus, Trash2, FileText, CreditCard, Landmark, Building2 as BankIcon, Send, CheckCircle2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { ServiceTypeSelect } from '@/components/shared/service-type-select'
-import { createInvoice, createCreditNote } from '@/app/(dashboard)/payments/invoice-actions'
-import type { CreateInvoiceInput, CreateCreditNoteInput, InvoiceItem } from '@/lib/schemas/invoice'
+import { createInvoice, createCreditNote, createOneTimeCustomer } from '@/app/(dashboard)/payments/invoice-actions'
+import { INSTALLMENT_TYPES, type CreateInvoiceInput, type CreateCreditNoteInput, type InvoiceItem } from '@/lib/schemas/invoice'
+
+export interface InvoiceDialogDefaults {
+  accountId?: string
+  accountName?: string
+  description?: string
+  items?: InvoiceItem[]
+  currency?: 'USD' | 'EUR'
+  installment?: string
+  dueDate?: string
+}
 
 interface InvoiceDialogProps {
   open: boolean
   onClose: () => void
   mode?: 'invoice' | 'credit'
+  /** Pre-fill fields when opened from a specific context (e.g. installment button). */
+  defaultValues?: InvoiceDialogDefaults
   /** Override the default createInvoice action (e.g. to use createUnifiedInvoice) */
   onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string } }>
   /** Called after creation to send the invoice via email. Receives the payment ID. */
@@ -26,22 +38,32 @@ const emptyItem = (): InvoiceItem => ({
   sort_order: 0,
 })
 
-export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice, onSendInvoice }: InvoiceDialogProps) {
+export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, onCreateInvoice, onSendInvoice }: InvoiceDialogProps) {
   const [isPending, startTransition] = useTransition()
   const [sendMode, setSendMode] = useState(false)
-  const [accountId, setAccountId] = useState<string | undefined>()
-  const [accountName, setAccountName] = useState<string | undefined>()
-  const [description, setDescription] = useState('')
-  const [currency, setCurrency] = useState<'USD' | 'EUR'>('USD')
+  const [accountId, setAccountId] = useState<string | undefined>(defaultValues?.accountId)
+  const [accountName, setAccountName] = useState<string | undefined>(defaultValues?.accountName)
+  const [description, setDescription] = useState(defaultValues?.description ?? '')
+  const [currency, setCurrency] = useState<'USD' | 'EUR'>(defaultValues?.currency ?? 'USD')
   const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0])
-  const [dueDate, setDueDate] = useState('')
+  const [dueDate, setDueDate] = useState(defaultValues?.dueDate ?? '')
   const [discount, setDiscount] = useState('')
   const [message, setMessage] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'card' | 'both'>('both')
   const [bankPreference, setBankPreference] = useState<'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'>('auto')
-  const [items, setItems] = useState<InvoiceItem[]>([emptyItem()])
+  const [items, setItems] = useState<InvoiceItem[]>(defaultValues?.items ?? [emptyItem()])
   const [markAsPaid, setMarkAsPaid] = useState(false)
+  const [installment, setInstallment] = useState<string>(defaultValues?.installment ?? '')
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // Phase 3 — New Customer quick-create
+  const [showNewCustomer, setShowNewCustomer] = useState(false)
+  const [ncFirstName, setNcFirstName] = useState('')
+  const [ncLastName, setNcLastName] = useState('')
+  const [ncEmail, setNcEmail] = useState('')
+  const [ncCompany, setNcCompany] = useState('')
+  const [ncCurrency, setNcCurrency] = useState<'USD' | 'EUR'>('USD')
+  const [ncPending, startNcTransition] = useTransition()
 
   if (!open) return null
 
@@ -81,19 +103,51 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
   }
 
   const resetForm = () => {
-    setAccountId(undefined)
-    setAccountName(undefined)
-    setDescription('')
-    setCurrency('USD')
+    setAccountId(defaultValues?.accountId)
+    setAccountName(defaultValues?.accountName)
+    setDescription(defaultValues?.description ?? '')
+    setCurrency(defaultValues?.currency ?? 'USD')
     setIssueDate(new Date().toISOString().split('T')[0])
-    setDueDate('')
+    setDueDate(defaultValues?.dueDate ?? '')
     setDiscount('')
     setMessage('')
     setPaymentMethod('both')
     setBankPreference('auto')
-    setItems([emptyItem()])
+    setItems(defaultValues?.items ?? [emptyItem()])
     setMarkAsPaid(false)
+    setInstallment(defaultValues?.installment ?? '')
     setErrors({})
+    setShowNewCustomer(false)
+    setNcFirstName('')
+    setNcLastName('')
+    setNcEmail('')
+    setNcCompany('')
+    setNcCurrency('USD')
+  }
+
+  const handleCreateNewCustomer = () => {
+    if (!ncFirstName.trim() || !ncEmail.trim()) {
+      toast.error('First name and email are required')
+      return
+    }
+    startNcTransition(async () => {
+      const result = await createOneTimeCustomer({
+        first_name: ncFirstName.trim(),
+        last_name: ncLastName.trim(),
+        email: ncEmail.trim(),
+        company: ncCompany.trim() || undefined,
+        currency: ncCurrency,
+      })
+      if (result.success && result.data) {
+        setAccountId(result.data.accountId)
+        setAccountName(result.data.accountName)
+        setCurrency(ncCurrency)
+        setShowNewCustomer(false)
+        toast.success(`Customer "${result.data.accountName}" created`)
+      } else {
+        toast.error(result.error ?? 'Failed to create customer')
+      }
+    })
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -141,6 +195,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
           bank_preference: bankPreference,
           items: items.map((item, i) => ({ ...item, sort_order: i })),
           mark_as_paid: markAsPaid || undefined,
+          installment: (installment as CreateInvoiceInput['installment']) || undefined,
         }
         const result = onCreateInvoice
           ? await onCreateInvoice(input)
@@ -152,9 +207,9 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
             // If "Create & Send" was clicked, send immediately
             const sendResult = await onSendInvoice(result.data.id)
             if (sendResult.success) {
-              toast.success(`Invoice ${result.data.invoice_number} created and sent`)
+              toast.success(`Invoice ${result.data?.invoice_number} created and sent`)
             } else {
-              toast.success(`Invoice ${result.data.invoice_number} created as Draft`)
+              toast.success(`Invoice ${result.data?.invoice_number} created as Draft`)
               toast.error(`Send failed: ${sendResult.error ?? 'Unknown error'} — you can resend from the invoice list.`)
             }
           } else {
@@ -201,12 +256,85 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
           <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
             {/* Account */}
             <div>
-              <label className="block text-sm font-medium mb-1">Account *</label>
-              <AccountCombobox
-                value={accountId}
-                displayValue={accountName}
-                onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium">Account *</label>
+                {!isCredit && !showNewCustomer && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCustomer(true)}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                  >
+                    <UserPlus className="h-3 w-3" /> New Customer
+                  </button>
+                )}
+              </div>
+              {showNewCustomer ? (
+                <div className="border rounded-lg p-3 bg-blue-50 space-y-2">
+                  <p className="text-xs font-medium text-blue-700 mb-2">Quick-create new customer</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={ncFirstName}
+                      onChange={e => setNcFirstName(e.target.value)}
+                      placeholder="First name *"
+                      className="px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    />
+                    <input
+                      type="text"
+                      value={ncLastName}
+                      onChange={e => setNcLastName(e.target.value)}
+                      placeholder="Last name"
+                      className="px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                    />
+                  </div>
+                  <input
+                    type="email"
+                    value={ncEmail}
+                    onChange={e => setNcEmail(e.target.value)}
+                    placeholder="Email *"
+                    className="w-full px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  />
+                  <input
+                    type="text"
+                    value={ncCompany}
+                    onChange={e => setNcCompany(e.target.value)}
+                    placeholder="Company name (optional — defaults to full name)"
+                    className="w-full px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  />
+                  <select
+                    value={ncCurrency}
+                    onChange={e => setNcCurrency(e.target.value as 'USD' | 'EUR')}
+                    className="w-full px-2 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                  </select>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleCreateNewCustomer}
+                      disabled={ncPending}
+                      className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-1"
+                    >
+                      {ncPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                      Create Customer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewCustomer(false)}
+                      className="px-3 py-1.5 text-sm border rounded hover:bg-white"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <AccountCombobox
+                  value={accountId}
+                  displayValue={accountName}
+                  onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
+                />
+              )}
               {errors.account_id && <p className="text-xs text-red-600 mt-1">{errors.account_id}</p>}
             </div>
 
@@ -246,6 +374,26 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', onCreateInvoice
               )}
               {errors.description && <p className="text-xs text-red-600 mt-1">{errors.description}</p>}
             </div>
+
+            {/* Installment Tag (invoice only) */}
+            {!isCredit && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Payment Type</label>
+                <select
+                  value={installment}
+                  onChange={e => setInstallment(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">— None —</option>
+                  {INSTALLMENT_TYPES.map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-zinc-400 mt-1">
+                  Tag this invoice for installment tracking (e.g. Installment 1 (Jan) triggers the renewal chain when paid).
+                </p>
+              </div>
+            )}
 
             {/* Currency + Dates */}
             <div className="grid grid-cols-3 gap-3">

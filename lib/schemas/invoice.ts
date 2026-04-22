@@ -14,6 +14,17 @@ export const invoiceItemSchema = z.object({
   sort_order: z.number().int().default(0),
 })
 
+export const INSTALLMENT_TYPES = [
+  'Setup Fee',
+  'Installment 1 (Jan)',
+  'Installment 2 (Jun)',
+  'Annual Payment',
+  'One-Time Service',
+  'Custom',
+] as const
+
+export type InstallmentType = (typeof INSTALLMENT_TYPES)[number]
+
 export const createInvoiceSchema = z.object({
   account_id: z.string().uuid(),
   description: z.string().min(1).max(500),
@@ -27,6 +38,7 @@ export const createInvoiceSchema = z.object({
   bank_preference: z.enum(['auto', 'relay', 'mercury', 'revolut', 'airwallex']).optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item required'),
   mark_as_paid: z.boolean().optional(),
+  installment: z.enum(INSTALLMENT_TYPES).optional(),
 })
 
 export const createCreditNoteSchema = z.object({

@@ -10,8 +10,10 @@ import {
   Loader2, ChevronRight, Eye, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
-  Activity,
+  Activity, Plus,
 } from 'lucide-react'
+import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
+import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
@@ -430,7 +432,7 @@ export function ContactDetail({
         <ServicesTab serviceDeliveries={serviceDeliveries} accounts={accounts} contactId={contact.id} />
       )}
       {activeTab === 'invoices' && (
-        <InvoicesTab invoices={invoices} />
+        <InvoicesTab invoices={invoices} accounts={accounts} />
       )}
       {activeTab === 'documents' && (
         <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} driveFolderId={contact.drive_folder_id} />
@@ -2967,13 +2969,31 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   Pending: 'bg-amber-100 text-amber-700',
 }
 
-function InvoicesTab({ invoices }: { invoices: ContactInvoice[] }) {
+function InvoicesTab({ invoices, accounts }: { invoices: ContactInvoice[]; accounts: LinkedAccount[] }) {
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  // Primary linked account for pre-filling invoice dialog
+  const primaryAccount = accounts[0] ?? null
+
+  const dialogDefaults: InvoiceDialogDefaults | undefined = primaryAccount
+    ? { accountId: primaryAccount.id, accountName: primaryAccount.company_name }
+    : undefined
+
+  const handleSendInvoice = async (paymentId: string) => {
+    try {
+      const res = await fetch(`/api/invoices/${paymentId}/send`, { method: 'POST' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        return { success: false, error: (d as { error?: string }).error ?? 'Failed to send invoice' }
+      }
+      return { success: true }
+    } catch {
+      return { success: false, error: 'Failed to send invoice' }
+    }
+  }
+
   const real = invoices.filter(i => i.invoice_number && i.invoice_number !== '1.0' && i.invoice_number !== '2.0')
   const legacy = invoices.filter(i => !i.invoice_number || i.invoice_number === '1.0' || i.invoice_number === '2.0')
-
-  if (real.length === 0 && legacy.length === 0) {
-    return <p className="text-sm text-muted-foreground">No invoices found</p>
-  }
 
   const getCompany = (inv: ContactInvoice) =>
     (inv.accounts as unknown as { company_name: string })?.company_name ?? null
@@ -3022,23 +3042,52 @@ function InvoicesTab({ invoices }: { invoices: ContactInvoice[] }) {
   const other = real.filter(i => !overdue.includes(i) && !pending.includes(i) && !paid.includes(i))
 
   return (
-    <div className="space-y-6">
-      {overdue.length > 0 && (
-        <InvoiceGroup title="Overdue" items={overdue} color="text-red-600" renderRow={renderInvoiceRow} />
+    <>
+      {/* Header with "Invoice this contact" button */}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Invoices</h3>
+        <button
+          onClick={() => setDialogOpen(true)}
+          disabled={!primaryAccount}
+          title={primaryAccount ? `Invoice ${primaryAccount.company_name}` : 'No linked account'}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Invoice
+        </button>
+      </div>
+
+      <InvoiceDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        mode="invoice"
+        defaultValues={dialogDefaults}
+        onCreateInvoice={createInvoice}
+        onSendInvoice={handleSendInvoice}
+      />
+
+      {real.length === 0 && legacy.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No invoices found</p>
+      ) : (
+        <div className="space-y-6">
+          {overdue.length > 0 && (
+            <InvoiceGroup title="Overdue" items={overdue} color="text-red-600" renderRow={renderInvoiceRow} />
+          )}
+          {pending.length > 0 && (
+            <InvoiceGroup title="Pending" items={pending} color="text-amber-600" renderRow={renderInvoiceRow} />
+          )}
+          {paid.length > 0 && (
+            <InvoiceGroup title="Paid" items={paid} color="text-emerald-600" renderRow={renderInvoiceRow} defaultCollapsed />
+          )}
+          {other.length > 0 && (
+            <InvoiceGroup title="Other" items={other} color="text-zinc-600" renderRow={renderInvoiceRow} defaultCollapsed />
+          )}
+          {legacy.length > 0 && (
+            <InvoiceGroup title="Legacy (pre-invoice)" items={legacy} color="text-zinc-400" renderRow={renderInvoiceRow} defaultCollapsed />
+          )}
+        </div>
       )}
-      {pending.length > 0 && (
-        <InvoiceGroup title="Pending" items={pending} color="text-amber-600" renderRow={renderInvoiceRow} />
-      )}
-      {paid.length > 0 && (
-        <InvoiceGroup title="Paid" items={paid} color="text-emerald-600" renderRow={renderInvoiceRow} defaultCollapsed />
-      )}
-      {other.length > 0 && (
-        <InvoiceGroup title="Other" items={other} color="text-zinc-600" renderRow={renderInvoiceRow} defaultCollapsed />
-      )}
-      {legacy.length > 0 && (
-        <InvoiceGroup title="Legacy (pre-invoice)" items={legacy} color="text-zinc-400" renderRow={renderInvoiceRow} defaultCollapsed />
-      )}
-    </div>
+    </>
   )
 }
 

@@ -32,6 +32,8 @@ import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-di
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
 import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
+import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
+import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
@@ -670,29 +672,89 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 /* ── Installments Section ────────────────────────────── */
 
 function InstallmentsSection({ account, payments, makeAccountSaver }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }> }) {
+  const [openForInst, setOpenForInst] = useState<1 | 2 | null>(null)
+
   // Resolve 1st installment invoice first
   const inst1Amount = account.installment_1_amount
-  const inst1Currency = account.installment_1_currency ?? 'USD'
+  const inst1Currency = (account.installment_1_currency ?? 'USD') as 'USD' | 'EUR'
   const inst1Match = inst1Amount ? findInstallmentInvoice(payments, inst1Amount, inst1Currency, []) : null
 
   // Resolve 2nd installment, excluding the 1st match to avoid double-counting
   const inst2Amount = account.installment_2_amount
-  const inst2Currency = account.installment_2_currency ?? 'USD'
+  const inst2Currency = (account.installment_2_currency ?? 'USD') as 'USD' | 'EUR'
   const excludeIds = inst1Match ? [inst1Match.id] : []
   const inst2Match = inst2Amount ? findInstallmentInvoice(payments, inst2Amount, inst2Currency, excludeIds) : null
 
+  const year = new Date().getFullYear()
+
+  const dialogDefaults: InvoiceDialogDefaults | undefined = openForInst === 1
+    ? {
+        accountId: account.id,
+        accountName: account.company_name,
+        description: `1st Installment ${year}`,
+        currency: inst1Currency,
+        installment: 'Installment 1 (Jan)',
+        items: [{
+          description: `1st Installment ${year}`,
+          quantity: 1,
+          unit_price: inst1Amount ?? 0,
+          amount: inst1Amount ?? 0,
+          sort_order: 0,
+        }],
+      }
+    : openForInst === 2
+    ? {
+        accountId: account.id,
+        accountName: account.company_name,
+        description: `2nd Installment ${year}`,
+        currency: inst2Currency,
+        installment: 'Installment 2 (Jun)',
+        items: [{
+          description: `2nd Installment ${year}`,
+          quantity: 1,
+          unit_price: inst2Amount ?? 0,
+          amount: inst2Amount ?? 0,
+          sort_order: 0,
+        }],
+      }
+    : undefined
+
+  const handleSendInvoice = async (paymentId: string) => {
+    try {
+      const res = await fetch(`/api/invoices/${paymentId}/send`, { method: 'POST' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        return { success: false, error: (d as { error?: string }).error ?? 'Failed to send invoice' }
+      }
+      return { success: true }
+    } catch {
+      return { success: false, error: 'Failed to send invoice' }
+    }
+  }
+
   return (
-    <div className="bg-white rounded-lg border p-5 space-y-4">
-      <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
-      <div className="grid gap-3 text-sm">
-        <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
-        <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
-        {inst1Amount && <InstallmentBadge match={inst1Match} />}
-        <EditableField icon={CreditCard} label="2nd Installment" value={inst2Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
-        <EditableField icon={Globe} label="2nd Currency" value={inst2Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
-        {inst2Amount && <InstallmentBadge match={inst2Match} />}
+    <>
+      <div className="bg-white rounded-lg border p-5 space-y-4">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
+        <div className="grid gap-3 text-sm">
+          <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
+          <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
+          {inst1Amount && <InstallmentBadge match={inst1Match} onInvoice={inst1Match ? undefined : () => setOpenForInst(1)} />}
+          <EditableField icon={CreditCard} label="2nd Installment" value={inst2Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_2_amount')} />
+          <EditableField icon={Globe} label="2nd Currency" value={inst2Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_2_currency')} />
+          {inst2Amount && <InstallmentBadge match={inst2Match} onInvoice={inst2Match ? undefined : () => setOpenForInst(2)} />}
+        </div>
       </div>
-    </div>
+
+      <InvoiceDialog
+        open={openForInst !== null}
+        onClose={() => setOpenForInst(null)}
+        mode="invoice"
+        defaultValues={dialogDefaults}
+        onCreateInvoice={createInvoice}
+        onSendInvoice={handleSendInvoice}
+      />
+    </>
   )
 }
 
@@ -705,11 +767,20 @@ function findInstallmentInvoice(payments: Payment[], amount: number, currency: s
   }) ?? null
 }
 
-function InstallmentBadge({ match }: { match: Payment | null }) {
+function InstallmentBadge({ match, onInvoice }: { match: Payment | null; onInvoice?: () => void }) {
   if (!match) {
     return (
       <div className="flex items-center gap-2 pl-6 text-xs">
         <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500">Not invoiced</span>
+        {onInvoice && (
+          <button
+            onClick={onInvoice}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors text-[11px] font-medium border border-blue-200"
+          >
+            <Plus className="h-3 w-3" />
+            Invoice
+          </button>
+        )}
       </div>
     )
   }

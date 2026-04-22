@@ -68,6 +68,7 @@ export async function createInvoice(
       currency: invoiceData.amount_currency as 'USD' | 'EUR',
       due_date: invoiceData.due_date || undefined,
       message: invoiceData.message || undefined,
+      installment: invoiceData.installment || undefined,
       idempotency_key: idempotencyKey,
     })
 
@@ -375,6 +376,99 @@ export async function deleteInvoice(
     table_name: 'payments',
     record_id: paymentId,
     summary: 'Invoice deleted',
+  })
+}
+
+// ── Create One-Time Customer (Phase 3) ─────────────────────────────
+// Quick-creates a contact + account for ad-hoc / one-time clients not yet in the system.
+
+export interface CreateOneTimeCustomerInput {
+  first_name: string
+  last_name: string
+  email: string
+  company?: string
+  currency?: 'USD' | 'EUR'
+}
+
+export async function createOneTimeCustomer(
+  input: CreateOneTimeCustomerInput,
+): Promise<ActionResult<{ accountId: string; accountName: string }>> {
+  if (!input.first_name?.trim()) return { success: false, error: 'First name required' }
+  if (!input.email?.trim()) return { success: false, error: 'Email required' }
+
+  return safeAction(async () => {
+    const supabase = createClient()
+    const companyName = input.company?.trim()
+      || `${input.first_name.trim()} ${input.last_name.trim()}`.trim()
+    const fullName = `${input.first_name.trim()} ${input.last_name.trim()}`.trim()
+
+    // Check if a contact with this email already exists — reuse if so.
+    const { data: existingContact } = await supabase
+      .from('contacts')
+      .select('id')
+      .eq('email', input.email.trim().toLowerCase())
+      .maybeSingle()
+
+    let contactId: string
+
+    if (existingContact) {
+      contactId = existingContact.id
+    } else {
+      // eslint-disable-next-line no-restricted-syntax
+      const { data: newContact, error: contactErr } = await supabase
+        .from('contacts')
+        .insert({
+          first_name: input.first_name.trim(),
+          last_name: input.last_name.trim() || null,
+          email: input.email.trim().toLowerCase(),
+          full_name: fullName,
+        })
+        .select('id')
+        .single()
+      if (contactErr || !newContact) throw new Error(contactErr?.message ?? 'Failed to create contact')
+      contactId = newContact.id
+    }
+
+    // Check if an account already exists for this email / company to avoid duplicates.
+    const { data: existingAccount } = await supabase
+      .from('accounts')
+      .select('id, company_name')
+      .eq('communication_email', input.email.trim().toLowerCase())
+      .maybeSingle()
+
+    if (existingAccount) {
+      return { accountId: existingAccount.id, accountName: existingAccount.company_name }
+    }
+
+    // Create the account.
+    // eslint-disable-next-line no-restricted-syntax
+    const { data: newAccount, error: accountErr } = await supabase
+      .from('accounts')
+      .insert({
+        company_name: companyName,
+        account_type: 'Client',
+        status: 'Active',
+        communication_email: input.email.trim().toLowerCase(),
+        installment_1_currency: input.currency ?? 'USD',
+        installment_2_currency: input.currency ?? 'USD',
+      })
+      .select('id, company_name')
+      .single()
+
+    if (accountErr || !newAccount) throw new Error(accountErr?.message ?? 'Failed to create account')
+
+    // Link contact to account.
+    await supabase
+      .from('account_contacts')
+      .insert({ account_id: newAccount.id, contact_id: contactId, role: 'Owner' })
+
+    revalidatePath('/accounts')
+    return { accountId: newAccount.id, accountName: newAccount.company_name }
+  }, {
+    action_type: 'create',
+    table_name: 'accounts',
+    summary: `One-time customer created: ${input.first_name} ${input.last_name}`,
+    details: { email: input.email, company: input.company },
   })
 }
 
