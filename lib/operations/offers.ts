@@ -141,6 +141,11 @@ export interface CreateOfferParams {
   payment_gateway?: OfferPaymentGateway
   bank_preference?: BankPreference
   currency?: "EUR" | "USD"
+  // Entity type (single-member / multi-member / corporation). Accepts short
+  // codes (SMLLC/MMLLC/Corp) or the full DB enum values — normalized before
+  // insert. Nullable — older offer flows that don't know the entity type
+  // leave it NULL and consumers fall back to legacy derivation.
+  entity_type?: "SMLLC" | "MMLLC" | "Corp" | "Single Member LLC" | "Multi Member LLC" | "C-Corp Elected" | null
 
   // Content (JSONB fields)
   services: unknown
@@ -215,6 +220,23 @@ async function generateUniqueToken(clientName: string): Promise<string> {
     .maybeSingle()
   if (!existing) return base
   return `${base}-${Date.now().toString(36).slice(-4)}`
+}
+
+/**
+ * Normalize entity_type input to the canonical company_type enum values
+ * stored on offers.entity_type + accounts.entity_type. Accepts short codes
+ * (SMLLC/MMLLC/Corp) from MCP callers or full enum values from internal code.
+ * Returns null for anything unrecognized so the DB leaves the column NULL.
+ */
+function normalizeEntityType(
+  v: string | null | undefined
+): "Single Member LLC" | "Multi Member LLC" | "C-Corp Elected" | null {
+  if (!v) return null
+  const t = String(v).trim().toUpperCase()
+  if (t === "SMLLC" || t === "SINGLE MEMBER LLC") return "Single Member LLC"
+  if (t === "MMLLC" || t === "MULTI MEMBER LLC") return "Multi Member LLC"
+  if (t === "CORP" || t === "C-CORP" || t === "C-CORP ELECTED") return "C-Corp Elected"
+  return null
 }
 
 function detectCurrency(
@@ -399,6 +421,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         required_documents: (params.required_documents ?? null) as Json,
         installment_currency: params.installment_currency ?? null,
         bundled_pipelines: params.bundled_pipelines ?? [],
+        entity_type: normalizeEntityType(params.entity_type),
         bank_details: bank_details as unknown as Json,
         payment_links: (params.payment_links ?? null) as Json,
         effective_date: params.effective_date ?? null,
@@ -464,6 +487,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         lead_id: params.lead_id,
         account_id: params.account_id,
         contract_type: params.contract_type,
+        entity_type: normalizeEntityType(params.entity_type),
         payment_type: params.payment_type,
         payment_gateway: params.payment_gateway,
         bank_preference: params.bank_preference,
