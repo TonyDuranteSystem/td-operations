@@ -364,7 +364,7 @@ export function registerPortalTools(server: McpServer) {
       // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from("service_deliveries").insert({
         account_id: account.id, service_type: "ITIN",
-        service_name: `ITIN -- ${account.company_name}`,
+        service_name: `ITIN -- ${contact.full_name || account.company_name}`,
         status: "completed", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
         notes: `Legacy onboard - ITIN ${contact.itin_number}`,
       })
@@ -709,7 +709,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
         // Update contact tier
         // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
         await supabaseAdmin.from("contacts").update({
-          portal_tier: "active",
+          portal_tier: "active", // eslint-disable-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
         }).eq("id", contact.id)
 
         // ─── 4. PROCESS EACH ACCOUNT ───

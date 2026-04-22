@@ -1460,14 +1460,30 @@ export async function POST(req: NextRequest) {
           account_id: string; contact_id: string; pipelines: string[]
         }
 
+        // Load account name once (used for all non-ITIN pipelines)
+        const { data: acct } = await supabaseAdmin
+          .from("accounts")
+          .select("company_name")
+          .eq("id", account_id)
+          .single()
+
+        // Load contact name for ITIN (personal document — must use person name, not company)
+        let contactFullName: string | null = null
+        if (pipelines.includes("ITIN") && contact_id) {
+          const { data: ct } = await supabaseAdmin
+            .from("contacts")
+            .select("full_name")
+            .eq("id", contact_id)
+            .single()
+          contactFullName = ct?.full_name ?? null
+        }
+
         const created: string[] = []
         for (const pipeline of pipelines) {
-          // Get account name for service_name
-          const { data: acct } = await supabaseAdmin
-            .from("accounts")
-            .select("company_name")
-            .eq("id", account_id)
-            .single()
+          // ITIN is a personal document — use the contact's name, not the company name
+          const displayName = pipeline === "ITIN"
+            ? `ITIN — ${contactFullName ?? acct?.company_name ?? "Unknown"}`
+            : `${pipeline} — ${acct?.company_name ?? "Unknown"}`
 
           // Tax Return: intake stages (stage_order < 1) are only for the
           // business activation path. Chain audit always starts at "1st
@@ -1477,7 +1493,7 @@ export async function POST(req: NextRequest) {
             pipeline === "Tax Return"
               ? {
                   service_type: pipeline,
-                  service_name: `${pipeline} — ${acct?.company_name ?? "Unknown"}`,
+                  service_name: displayName,
                   account_id,
                   contact_id,
                   target_stage: "1st Installment Paid",
@@ -1485,7 +1501,7 @@ export async function POST(req: NextRequest) {
                 }
               : {
                   service_type: pipeline,
-                  service_name: `${pipeline} — ${acct?.company_name ?? "Unknown"}`,
+                  service_name: displayName,
                   account_id,
                   contact_id,
                   notes: "Created from chain audit fix",

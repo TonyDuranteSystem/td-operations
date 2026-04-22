@@ -308,7 +308,7 @@ export async function POST(request: NextRequest) {
       // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'ITIN',
-        service_name: `ITIN -- ${acct.company_name}`,
+        service_name: `ITIN -- ${contact.full_name || acct.company_name}`,
         status: 'completed', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
         notes: `Legacy onboard - ITIN ${contact.itin_number}`,
       })
