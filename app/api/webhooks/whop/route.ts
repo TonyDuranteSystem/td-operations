@@ -230,6 +230,12 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         if (match) {
           console.warn(`[whop-webhook] Auto-matched Whop payment to invoice ${match.invoice_number}`)
           await syncInvoiceStatus("payment", match.id, "Paid", today, total)
+          // Fire-and-forget receipt email for exact-match Paid transitions.
+          import("@/lib/invoice-auto-send").then(({ sendPaidReceipt }) =>
+            sendPaidReceipt(match!.id).catch((err) =>
+              console.error("[whop-webhook] receipt send failed:", err),
+            ),
+          )
         } else {
           // Fallback: partial match (Whop amount < invoice balance, at least 20% of total)
           const partialMatch = openInvoices.find(inv => {

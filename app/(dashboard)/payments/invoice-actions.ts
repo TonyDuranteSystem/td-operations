@@ -194,6 +194,13 @@ export async function markInvoicePaid(
 
     if (error) throw new Error(error.message)
 
+    // Fire-and-forget receipt email — must not block the Paid transition.
+    import('@/lib/invoice-auto-send').then(({ sendPaidReceipt }) =>
+      sendPaidReceipt(paymentId).catch((err) =>
+        console.error('[markInvoicePaid] receipt send failed:', err),
+      ),
+    )
+
     // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 
     // Check if this invoice is linked to a pending_activation → trigger activation chain

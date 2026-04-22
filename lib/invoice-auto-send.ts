@@ -273,3 +273,172 @@ export async function sendTDInvoice(
 // lib/email/invoice-email.ts::buildInvoiceEmail, which covers every
 // purpose × audience combination (initial, reminder, credit, receipt) ×
 // (portal, no_portal) with one shared shell.
+
+/**
+ * Send a "payment received" receipt email AFTER a payment has been
+ * transitioned to Paid. Called from:
+ *   - confirmPayment() in lib/operations/payment.ts (Stripe / Whop /
+ *     confirm-payment route)
+ *   - markInvoicePaid() in payments/invoice-actions.ts (dashboard Mark
+ *     Paid button)
+ *
+ * Idempotent-ish: callers wrap this in a fire-and-forget .catch(() => {})
+ * so a failed send never blocks the paid-transition. Duplicate receipts
+ * are prevented at the caller level by only invoking this on the first
+ * Paid transition (confirmPayment already checks for "already_paid").
+ *
+ * Portal-audience recipients get an emerald "Payment Received" email
+ * with a link to their portal's paid-invoice archive. No-portal
+ * recipients get the same email minus the portal link — both get the
+ * paid PDF attached.
+ */
+export async function sendPaidReceipt(paymentId: string): Promise<void> {
+  const { data: payment, error: pErr } = await supabaseAdmin
+    .from("payments")
+    .select("*")
+    .eq("id", paymentId)
+    .single()
+  if (pErr || !payment) throw new Error(`sendPaidReceipt: payment not found: ${pErr?.message}`)
+
+  // Only send receipts for payments with an invoice (Draft-and-Paid ad-hoc
+  // bookkeeping entries without invoice_number shouldn't email anyone).
+  if (!payment.invoice_number || !payment.invoice_status) return
+
+  const { data: items } = await supabaseAdmin
+    .from("payment_items")
+    .select("description, quantity, unit_price, amount, sort_order")
+    .eq("payment_id", paymentId)
+    .order("sort_order")
+
+  const { data: account } = payment.account_id
+    ? await supabaseAdmin
+        .from("accounts")
+        .select("company_name, physical_address")
+        .eq("id", payment.account_id)
+        .single()
+    : { data: null as { company_name: string | null; physical_address: string | null } | null }
+
+  // Resolve recipient email + name. Prefer contact_id, then account owner,
+  // then account communication_email (same priority as sendTDInvoice).
+  let recipientEmail: string | null = null
+  let recipientName = account?.company_name ?? "Client"
+
+  if (payment.contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("first_name, last_name, email, full_name")
+      .eq("id", payment.contact_id)
+      .single()
+    if (contact?.email) recipientEmail = contact.email
+    if (contact?.first_name) {
+      recipientName = `${contact.first_name} ${contact.last_name ?? ""}`.trim()
+    } else if (contact?.full_name) {
+      recipientName = contact.full_name
+    }
+  } else if (payment.account_id) {
+    const { data: link } = await supabaseAdmin
+      .from("account_contacts")
+      .select("contacts(first_name, last_name, email)")
+      .eq("account_id", payment.account_id)
+      .eq("role", "Owner")
+      .limit(1)
+      .maybeSingle()
+    const c = (link as unknown as { contacts: { first_name: string; last_name: string; email: string } } | null)?.contacts
+    if (c?.email) recipientEmail = c.email
+    if (c?.first_name) recipientName = `${c.first_name} ${c.last_name ?? ""}`.trim()
+  }
+
+  if (!recipientEmail && payment.account_id) {
+    const { data: acctEmail } = await supabaseAdmin
+      .from("accounts")
+      .select("communication_email")
+      .eq("id", payment.account_id)
+      .single()
+    if (acctEmail?.communication_email) recipientEmail = acctEmail.communication_email
+  }
+
+  if (!recipientEmail) {
+    // Silent — callers are fire-and-forget, and a missing email is not a
+    // payment-blocking condition.
+    console.warn(`[sendPaidReceipt] no recipient email for payment ${paymentId} — skipping`)
+    return
+  }
+
+  const currency: "USD" | "EUR" = payment.amount_currency === "EUR" ? "EUR" : "USD"
+  const csym = currency === "EUR" ? "€" : "$"
+  const total = Number(payment.total ?? payment.amount ?? 0)
+  const bankDetails = resolveBankDetails(payment.bank_preference, currency)
+
+  // Generate the PAID PDF (reuses the same template; the document is
+  // marked Paid in the payment record by now so the PDF's status line
+  // reflects it).
+  const pdfInput: InvoicePdfInput = {
+    companyName: TD_COMPANY.name,
+    companyAddress: TD_COMPANY.address,
+    companyState: TD_COMPANY.state,
+    companyEin: TD_COMPANY.ein,
+    documentType: "INVOICE",
+    invoiceNumber: payment.invoice_number,
+    status: "Paid",
+    currency,
+    issueDate: payment.issue_date ?? new Date().toISOString().split("T")[0],
+    dueDate: payment.due_date,
+    billTo: {
+      name: account?.company_name ?? "Client",
+      email: recipientEmail,
+      address: account?.physical_address ?? null,
+    },
+    items: items ?? [],
+    subtotal: Number(payment.subtotal ?? 0),
+    discount: Number(payment.discount ?? 0),
+    total,
+    message: payment.message,
+    bankDetails,
+  }
+  const pdfBytes = await generateInvoicePdf(pdfInput)
+  const pdfBase64 = Buffer.from(pdfBytes).toString("base64")
+
+  const audience = await resolveInvoiceAudience(
+    { account_id: payment.account_id, contact_id: payment.contact_id },
+    supabaseAdmin,
+  )
+
+  const paidDate = payment.paid_date ?? new Date().toISOString().split("T")[0]
+  const { subject, html } = buildInvoiceEmail({
+    purpose: "receipt",
+    audience,
+    clientName: recipientName,
+    invoiceNumber: payment.invoice_number,
+    issueDate: paidDate,
+    total,
+    currencySymbol: csym,
+    currency,
+    message: payment.message,
+  })
+
+  const boundary = `boundary_${Date.now()}`
+  const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
+  const parts = [
+    "From: Tony Durante LLC <support@tonydurante.us>",
+    `To: ${recipientEmail}`,
+    `Subject: ${encodedSubject}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(html).toString("base64"),
+    `--${boundary}`,
+    `Content-Type: application/pdf; name="${payment.invoice_number}.pdf"`,
+    `Content-Disposition: attachment; filename="${payment.invoice_number}.pdf"`,
+    "Content-Transfer-Encoding: base64",
+    "",
+    pdfBase64,
+    `--${boundary}--`,
+  ]
+  const raw = Buffer.from(parts.join("\r\n")).toString("base64url")
+
+  await gmailPost("/messages/send", { raw })
+}

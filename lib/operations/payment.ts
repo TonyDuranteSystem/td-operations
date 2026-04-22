@@ -193,6 +193,16 @@ export async function confirmPayment(
     }
   }
 
+  // Fire-and-forget receipt email. Never blocks the paid transition —
+  // a missing email address or transient Gmail error must not roll back
+  // the payment. sendPaidReceipt guards against payments without an
+  // invoice_number (ad-hoc bookkeeping entries) internally.
+  import("@/lib/invoice-auto-send").then(({ sendPaidReceipt }) =>
+    sendPaidReceipt(params.payment_id).catch((err) =>
+      console.error("[confirmPayment] receipt send failed:", err),
+    ),
+  )
+
   return {
     success: true,
     payment_id: params.payment_id,

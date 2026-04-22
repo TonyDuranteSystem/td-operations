@@ -228,6 +228,12 @@ async function handleCheckoutCompleted(session: StripeSession) {
         if (match) {
           console.warn(`[stripe-webhook] Auto-matched payment to invoice ${match.invoice_number}`)
           await syncInvoiceStatus("payment", match.id, "Paid", today, total)
+          // Fire-and-forget receipt email for exact-match Paid transitions.
+          import("@/lib/invoice-auto-send").then(({ sendPaidReceipt }) =>
+            sendPaidReceipt(match!.id).catch((err) =>
+              console.error("[stripe-webhook] receipt send failed:", err),
+            ),
+          )
         } else {
           // Partial match (amount < remaining balance, ≥20% of total)
           const partialMatch = openInvoices.find(inv => {
