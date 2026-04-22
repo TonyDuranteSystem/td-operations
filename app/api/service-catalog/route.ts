@@ -4,15 +4,23 @@ import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * GET /api/service-catalog
- * Returns all active services sorted by sort_order.
+ * Returns services sorted by sort_order.
+ * ?include_inactive=true  → return all (active + inactive)
+ * default                 → active only
  */
-export async function GET() {
-  const { data, error } = await supabaseAdmin
+export async function GET(request: NextRequest) {
+  const includeInactive = request.nextUrl.searchParams.get('include_inactive') === 'true'
+
+  let query = supabaseAdmin
     .from('service_catalog')
-    .select('id, name, slug, category, pipeline, contract_type, has_annual, default_price, default_currency, sort_order, description')
-    .eq('active', true)
+    .select('id, name, slug, category, pipeline, contract_type, has_annual, default_price, default_currency, sort_order, description, active')
     .order('sort_order', { ascending: true })
 
+  if (!includeInactive) {
+    query = query.eq('active', true)
+  }
+
+  const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ services: data ?? [] })
 }
