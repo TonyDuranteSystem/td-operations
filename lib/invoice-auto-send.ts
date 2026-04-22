@@ -15,6 +15,8 @@ import { gmailPost } from "@/lib/gmail"
 import { generateInvoicePdf, type InvoicePdfInput } from "@/lib/pdf/invoice-pdf"
 import { syncInvoiceToQB } from "@/lib/qb-sync"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
+import { buildInvoiceEmail, buildPortalInvoiceUrl } from "@/lib/email/invoice-email"
+import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
 
 // TD LLC company info
 const TD_COMPANY = {
@@ -187,9 +189,39 @@ export async function sendTDInvoice(
   const pdfBytes = await generateInvoicePdf(pdfInput)
   const pdfBase64 = Buffer.from(pdfBytes).toString("base64")
 
-  // Build email
-  const subject = `Invoice ${invoiceNumber} from Tony Durante LLC`
-  const html = buildAutoSendEmail({ clientName, invoiceNumber, issueDate: pdfInput.issueDate, dueDate: payment.due_date, total, csym, bankDetails })
+  // Resolve audience (portal vs no_portal). Portal-audience recipients get
+  // a "log in to your portal to pay" CTA and NO bank details in the body,
+  // per R092. No-portal recipients (One-Time customers + closed-portal
+  // Clients) get a Pay-with-Card button (via /pay/<token> redirect) plus
+  // inline bank details — that's their whole payment path.
+  const audience = await resolveInvoiceAudience(
+    { account_id: payment.account_id, contact_id: payment.contact_id },
+    supabaseAdmin,
+  )
+
+  // Generate / reuse pay token only for no-portal audiences (no email link
+  // = no token needed). Token lives on payments.pay_token so reminders and
+  // resends reuse the same URL.
+  const payToken = audience === "no_portal"
+    ? await ensurePayToken(paymentId, supabaseAdmin)
+    : null
+
+  const { subject, html } = buildInvoiceEmail({
+    purpose: "initial",
+    audience,
+    clientName,
+    invoiceNumber,
+    issueDate: pdfInput.issueDate,
+    dueDate: payment.due_date,
+    total,
+    currencySymbol: csym,
+    currency,
+    payToken,
+    // Portal audience gets NO bank details in the email per R092.
+    bankDetails: audience === "no_portal" ? bankDetails : null,
+    message: payment.message,
+    portalInvoiceUrl: audience === "portal" ? buildPortalInvoiceUrl(paymentId) : undefined,
+  })
 
   const boundary = `boundary_${Date.now()}`
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
@@ -221,6 +253,7 @@ export async function sendTDInvoice(
 
   // Update status AFTER successful send. Destructure {error} per the
   // silent-failure pattern fix from commit ebbb450.
+  // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c: this send-status writeback on payments pre-dates the operations-layer routing and will move when that migration lands.
   const { error: updateErr } = await supabaseAdmin
     .from("payments")
     .update({
@@ -236,69 +269,7 @@ export async function sendTDInvoice(
   syncInvoiceToQB(paymentId).catch(() => {})
 }
 
-function buildAutoSendEmail(opts: {
-  clientName: string
-  invoiceNumber: string
-  issueDate: string
-  dueDate?: string | null
-  total: number
-  csym: string
-  bankDetails: InvoicePdfInput["bankDetails"]
-}): string {
-  const bankHtml = opts.bankDetails
-    ? (() => {
-        const fields = [
-          opts.bankDetails.accountHolder && `Account Holder: ${opts.bankDetails.accountHolder}`,
-          opts.bankDetails.bankName && `Bank: ${opts.bankDetails.bankName}`,
-          opts.bankDetails.iban && `IBAN: ${opts.bankDetails.iban}`,
-          opts.bankDetails.swiftBic && `SWIFT/BIC: ${opts.bankDetails.swiftBic}`,
-          opts.bankDetails.accountNumber && `Account: ${opts.bankDetails.accountNumber}`,
-          opts.bankDetails.routingNumber && `Routing: ${opts.bankDetails.routingNumber}`,
-        ]
-          .filter(Boolean)
-          .join("<br/>")
-        return `<div style="background:#f0fdf4;padding:16px;border-radius:8px;margin-top:16px;border:1px solid #bbf7d0;">
-      <p style="margin:0;font-size:12px;color:#15803d;text-transform:uppercase;font-weight:bold;">Bank Details — ${opts.bankDetails.label}</p>
-      <p style="margin:8px 0 0;font-size:13px;color:#166534;">${fields}</p>
-    </div>`
-      })()
-    : ""
-
-  return `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-      <div style="background:#2563eb;padding:24px;border-radius:12px 12px 0 0;">
-        <h1 style="color:white;margin:0;font-size:20px;">Tony Durante LLC</h1>
-        <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:13px;">Invoice</p>
-      </div>
-      <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px;">
-        <p>Dear ${opts.clientName},</p>
-        <p>Please find attached invoice <strong>${opts.invoiceNumber}</strong> for your review.</p>
-        <table style="width:100%;border-collapse:collapse;margin:20px 0;">
-          <tr style="background:#f8fafc;">
-            <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">Invoice Number</td>
-            <td style="padding:8px 12px;font-size:14px;">${opts.invoiceNumber}</td>
-          </tr>
-          <tr>
-            <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">Issue Date</td>
-            <td style="padding:8px 12px;font-size:14px;">${opts.issueDate}</td>
-          </tr>
-          ${opts.dueDate ? `<tr style="background:#f8fafc;">
-            <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">Due Date</td>
-            <td style="padding:8px 12px;font-size:14px;">${opts.dueDate}</td>
-          </tr>` : ""}
-          <tr>
-            <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">Total</td>
-            <td style="padding:8px 12px;font-size:18px;font-weight:bold;color:#2563eb;">${opts.csym}${opts.total.toFixed(2)}</td>
-          </tr>
-        </table>
-        ${bankHtml}
-        <p style="color:#6b7280;font-size:13px;margin-top:24px;">
-          The PDF invoice is attached to this email. If you have any questions, please reply directly.
-        </p>
-        <div style="border-top:1px solid #e5e7eb;margin-top:24px;padding-top:16px;font-size:11px;color:#9ca3af;">
-          Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139
-        </div>
-      </div>
-    </div>
-  `
-}
+// Deprecated local buildAutoSendEmail removed — superseded by
+// lib/email/invoice-email.ts::buildInvoiceEmail, which covers every
+// purpose × audience combination (initial, reminder, credit, receipt) ×
+// (portal, no_portal) with one shared shell.
