@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
 
+// Content is 100% static (no cookies, no DB, no request-dependent data).
+// Force-static tells Next's build worker to cache the response indefinitely
+// instead of attempting a dynamic prerender — which is flaky in CI and
+// intermittently emits a false "no response returned from route handler"
+// error on a handler that only has one branch (this one). See commit
+// history on this file + failed CI run ee7f762.
+export const dynamic = 'force-static'
+
 export function GET() {
   return NextResponse.json(
     {
