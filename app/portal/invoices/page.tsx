@@ -20,7 +20,7 @@ import { listVendors } from './vendor-actions'
 export default async function PortalInvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>
+  searchParams: Promise<{ tab?: string; view?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -36,7 +36,14 @@ export default async function PortalInvoicesPage({
   if (!selectedAccountId) redirect('/portal')
 
   const params = await searchParams
-  const activeTab = params.tab === 'expenses' ? 'expenses' : params.tab === 'vendors' ? 'vendors' : 'sales'
+  // view=paid (receipt email deep-link) → expenses tab showing paid TD invoices
+  const activeTab = params.tab === 'expenses' || params.view === 'paid'
+    ? 'expenses'
+    : params.tab === 'vendors'
+    ? 'vendors'
+    : 'sales'
+  // Pre-filter to paid when arriving from a receipt email link
+  const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
 
   // Fetch data for all tabs in parallel
@@ -214,7 +221,11 @@ export default async function PortalInvoicesPage({
               <p className="text-sm text-zinc-500">{t('expenses.noExpensesDesc', locale)}</p>
             </div>
           ) : (
-            <ExpenseList expenses={expenses} locale={locale} />
+            <ExpenseList
+              expenses={expenses}
+              locale={locale}
+              initialFilter={defaultExpenseFilter === 'paid' ? 'Paid' : 'All'}
+            />
           )}
         </>
       )}

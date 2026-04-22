@@ -46,9 +46,17 @@ function fmtDate(d: string | null): string {
   try { return format(parseISO(d), 'MMM d, yy') } catch { return d }
 }
 
-export function ExpenseList({ expenses, locale }: { expenses: Expense[]; locale: string }) {
+export function ExpenseList({
+  expenses,
+  locale,
+  initialFilter = 'All',
+}: {
+  expenses: Expense[]
+  locale: string
+  initialFilter?: 'All' | 'Pending' | 'Paid' | 'Overdue'
+}) {
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('All')
+  const [statusFilter, setStatusFilter] = useState<string>(initialFilter)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [payingExpense, setPayingExpense] = useState<Expense | null>(null)
 
