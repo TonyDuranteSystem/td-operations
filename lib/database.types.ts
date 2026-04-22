@@ -6892,6 +6892,7 @@ export type Database = {
           notes: string | null
           paid_by_name: string | null
           paid_date: string | null
+          pay_token: string | null
           payment_method: string | null
           payment_record: string | null
           penalty_disclaimer_signed: boolean | null
@@ -6950,6 +6951,7 @@ export type Database = {
           notes?: string | null
           paid_by_name?: string | null
           paid_date?: string | null
+          pay_token?: string | null
           payment_method?: string | null
           payment_record?: string | null
           penalty_disclaimer_signed?: boolean | null
@@ -7008,6 +7010,7 @@ export type Database = {
           notes?: string | null
           paid_by_name?: string | null
           paid_date?: string | null
+          pay_token?: string | null
           payment_method?: string | null
           payment_record?: string | null
           penalty_disclaimer_signed?: boolean | null

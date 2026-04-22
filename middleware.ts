@@ -52,6 +52,9 @@ const PUBLIC_PREFIXES = [
   '/contract-template',
   '/ss4',
   '/sign-document',
+  // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session
+  // and 302s the client to the checkout URL. Token-gated, no Supabase auth.
+  '/pay',
   '/api/signature-request',
   '/api/signature-request-signed',
   '/api/offers',
