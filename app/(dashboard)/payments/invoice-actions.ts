@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { INTERNAL_BASE_URL } from '@/lib/config'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
@@ -415,7 +416,7 @@ export async function createOneTimeCustomer(
       contactId = existingContact.id
     } else {
       // eslint-disable-next-line no-restricted-syntax
-      const { data: newContact, error: contactErr } = await supabase
+      const { data: newContact, error: contactErr } = await supabaseAdmin
         .from('contacts')
         .insert({
           first_name: input.first_name.trim(),
@@ -430,7 +431,7 @@ export async function createOneTimeCustomer(
     }
 
     // Check if an account already exists for this email / company to avoid duplicates.
-    const { data: existingAccount } = await supabase
+    const { data: existingAccount } = await supabaseAdmin
       .from('accounts')
       .select('id, company_name')
       .eq('communication_email', input.email.trim().toLowerCase())
@@ -442,7 +443,7 @@ export async function createOneTimeCustomer(
 
     // Create the account.
     // eslint-disable-next-line no-restricted-syntax
-    const { data: newAccount, error: accountErr } = await supabase
+    const { data: newAccount, error: accountErr } = await supabaseAdmin
       .from('accounts')
       .insert({
         company_name: companyName,
@@ -458,7 +459,7 @@ export async function createOneTimeCustomer(
     if (accountErr || !newAccount) throw new Error(accountErr?.message ?? 'Failed to create account')
 
     // Link contact to account.
-    await supabase
+    await supabaseAdmin
       .from('account_contacts')
       .insert({ account_id: newAccount.id, contact_id: contactId, role: 'Owner' })
 
