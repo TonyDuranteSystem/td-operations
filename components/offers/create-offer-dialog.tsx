@@ -16,11 +16,13 @@ interface CatalogService {
   category: string
   default_price: number | null
   default_currency: string | null
+  supports_quantity: boolean
 }
 
 interface SelectedService {
   id: string
-  price: string
+  price: string            // unit price entered by staff
+  quantity: number         // default 1; >1 only for services with supports_quantity
   service_context: 'individual' | 'business' | 'ask'
 }
 
@@ -135,6 +137,7 @@ export function CreateOfferDialog({
           category: (s.category as string) || 'addon',
           default_price: s.default_price != null ? Number(s.default_price) : null,
           default_currency: (s.default_currency as string | null) ?? null,
+          supports_quantity: (s.supports_quantity as boolean) ?? false,
         })))
       })
       .catch(() => toast.error('Failed to load service catalog'))
@@ -346,7 +349,7 @@ export function CreateOfferDialog({
 
   const servicesTotalAmount = selected.reduce((sum, s) => {
     const n = parseFloat(s.price.replace(/[^0-9.]/g, ''))
-    return sum + (isNaN(n) ? 0 : n)
+    return sum + (isNaN(n) ? 0 : n * (s.quantity ?? 1))
   }, 0)
 
   const preconditionsTotalAmount = preconditions.reduce((sum, p) => {
@@ -370,16 +373,21 @@ export function CreateOfferDialog({
     setSelected(prev => {
       const exists = prev.find(s => s.id === id)
       if (exists) return prev.filter(s => s.id !== id)
-      // Pre-fill price and context from catalog
       const svc = catalog.find(c => c.id === id)
       const defaultPrice = svc?.default_price != null ? String(svc.default_price) : ''
-      return [...prev, { id, price: defaultPrice, service_context: getDefaultContext(svc) }]
+      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc) }]
     })
   }
 
   const updatePrice = (id: string, price: string) => {
     setSelected(prev =>
       prev.map(s => s.id === id ? { ...s, price } : s)
+    )
+  }
+
+  const updateQuantity = (id: string, quantity: number) => {
+    setSelected(prev =>
+      prev.map(s => s.id === id ? { ...s, quantity: Math.max(1, quantity) } : s)
     )
   }
 
@@ -433,20 +441,30 @@ export function CreateOfferDialog({
           .filter(s => s.price.trim())
           .map(s => {
             const svc_cat = catalog.find(c => c.id === s.id)
+            const unitPrice = s.price.replace(/[^0-9.]/g, '')
+            const qty = s.quantity ?? 1
+            const totalPrice = (parseFloat(unitPrice) * qty).toLocaleString('en-US')
             const svc: Record<string, unknown> = {
               name: svc_cat?.name || s.id,
-              price: `${currencySymbol}${s.price.replace(/[^0-9.]/g, '')}`,
+              price: `${currencySymbol}${qty > 1 ? totalPrice : unitPrice}`,
               service_context: s.service_context,
             }
             if (svc_cat?.contract_type) svc.contract_type = svc_cat.contract_type
             if (svc_cat?.pipeline) svc.pipeline_type = svc_cat.pipeline
+            if (qty > 1) {
+              svc.quantity = qty
+              svc.unit_price = `${currencySymbol}${unitPrice}`
+            }
             return svc
           })
 
-        const costItems = servicesJson.map(s => ({
-          name: s.name as string,
-          price: s.price as string,
-        }))
+        const costItems = servicesJson.map(s => {
+          const qty = (s.quantity as number | undefined) ?? 1
+          const displayName = qty > 1
+            ? `${s.name as string} × ${qty}`
+            : s.name as string
+          return { name: displayName, price: s.price as string }
+        })
 
         const costSummary: Array<{ label: string; total: string; items: Array<{ name: string; price: string }> }> = [{
           label: 'Setup Fee',
@@ -719,10 +737,12 @@ export function CreateOfferDialog({
                   service={svc}
                   isSelected={isSelected(svc.id)}
                   price={selected.find(s => s.id === svc.id)?.price || ''}
+                  quantity={selected.find(s => s.id === svc.id)?.quantity ?? 1}
                   serviceContext={selected.find(s => s.id === svc.id)?.service_context || 'ask'}
                   currencySymbol={currencySymbol}
                   onToggle={() => toggleService(svc.id)}
                   onPriceChange={(p) => updatePrice(svc.id, p)}
+                  onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
                 />
               ))}
@@ -736,10 +756,12 @@ export function CreateOfferDialog({
                   service={svc}
                   isSelected={isSelected(svc.id)}
                   price={selected.find(s => s.id === svc.id)?.price || ''}
+                  quantity={selected.find(s => s.id === svc.id)?.quantity ?? 1}
                   serviceContext={selected.find(s => s.id === svc.id)?.service_context || 'ask'}
                   currencySymbol={currencySymbol}
                   onToggle={() => toggleService(svc.id)}
                   onPriceChange={(p) => updatePrice(svc.id, p)}
+                  onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
                 />
               ))}
@@ -753,10 +775,12 @@ export function CreateOfferDialog({
                   service={svc}
                   isSelected={isSelected(svc.id)}
                   price={selected.find(s => s.id === svc.id)?.price || ''}
+                  quantity={selected.find(s => s.id === svc.id)?.quantity ?? 1}
                   serviceContext={selected.find(s => s.id === svc.id)?.service_context || 'ask'}
                   currencySymbol={currencySymbol}
                   onToggle={() => toggleService(svc.id)}
                   onPriceChange={(p) => updatePrice(svc.id, p)}
+                  onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
                 />
               ))}
@@ -1257,21 +1281,30 @@ function ServiceRow({
   service,
   isSelected,
   price,
+  quantity,
   serviceContext,
   currencySymbol,
   onToggle,
   onPriceChange,
+  onQuantityChange,
   onContextChange,
 }: {
-  service: { id: string; name: string }
+  service: { id: string; name: string; supports_quantity: boolean }
   isSelected: boolean
   price: string
+  quantity: number
   serviceContext: 'individual' | 'business' | 'ask'
   currencySymbol: string
   onToggle: () => void
   onPriceChange: (price: string) => void
+  onQuantityChange: (quantity: number) => void
   onContextChange: (ctx: 'individual' | 'business' | 'ask') => void
 }) {
+  const unitPrice = parseFloat(price.replace(/[^0-9.]/g, ''))
+  const lineTotal = !isNaN(unitPrice) && quantity > 1
+    ? `= ${currencySymbol}${(unitPrice * quantity).toLocaleString('en-US')}`
+    : null
+
   return (
     <div
       className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors cursor-pointer ${
@@ -1304,6 +1337,23 @@ function ServiceRow({
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
+          {/* Quantity input — only for services that support it (e.g. ITIN) */}
+          {service.supports_quantity && (
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={quantity}
+                onChange={e => onQuantityChange(parseInt(e.target.value, 10) || 1)}
+                className="w-14 px-2 py-1.5 text-sm text-center border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                title="Quantity"
+              />
+              {lineTotal && (
+                <span className="text-xs text-zinc-500 whitespace-nowrap">{lineTotal}</span>
+              )}
+            </div>
+          )}
           <div className="relative">
             <span className="absolute left-2.5 top-1.5 text-sm text-zinc-400">{currencySymbol}</span>
             <input

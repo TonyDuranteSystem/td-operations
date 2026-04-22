@@ -435,6 +435,22 @@ export async function POST(req: NextRequest) {
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
     const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
+    // Build quantity map: how many SDs to create per pipeline.
+    // Quantity > 1 is set by the Create Offer dialog for multi-unit services (e.g. ITIN ×2).
+    // The quantity is stored in offer.services[i].quantity alongside pipeline_type.
+    // For services without an explicit quantity, default is 1.
+    const pipelineQuantity = new Map<string, number>()
+    if (Array.isArray(offer?.services)) {
+      for (const svc of offer.services as Array<Record<string, unknown>>) {
+        const pType = svc.pipeline_type as string | undefined
+        const qty = typeof svc.quantity === 'number' && svc.quantity > 1 ? svc.quantity : 1
+        if (pType && qty > 1) {
+          // Take the max if multiple service rows map to the same pipeline
+          pipelineQuantity.set(pType, Math.max(pipelineQuantity.get(pType) ?? 1, qty))
+        }
+      }
+    }
+
     // Onboarding skips all SD creation at payment per SOP v7.2:
     // - Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD
     // - Phase 1 Auto-Chain step 11: wizard creates Tax Return SD when tax answer is "No"
@@ -476,112 +492,120 @@ export async function POST(req: NextRequest) {
 
       for (const pipeline of pipelines) {
         try {
-          // Check if service delivery already exists for this offer + pipeline
-          const { data: existingSd } = await supabase
+          const quantity = pipelineQuantity.get(pipeline) ?? 1
+
+          // Guard 1: count SDs already created for this exact offer + pipeline
+          // (tied by offer_token in notes — the canonical link).
+          // For quantity > 1, we need exactly `quantity` SDs; skip if we already have them all.
+          const { data: existingByOffer } = await supabase
             .from("service_deliveries")
             .select("id")
             .eq("service_type", pipeline)
             .ilike("notes", `%${activation.offer_token}%`)
-            .limit(1)
 
-          if (existingSd && existingSd.length > 0) {
-            sdResults.push({ pipeline, status: "existing", id: existingSd[0].id })
+          const existingOfferCount = existingByOffer?.length ?? 0
+          if (existingOfferCount >= quantity) {
+            sdResults.push({ pipeline, status: "existing", id: existingByOffer![0]?.id })
             continue
           }
 
-          // Secondary guard: same service_type already active on this account
-          // (catches SDs created by other paths without offer token in notes)
+          // Guard 2: same service_type already active on this account via another path.
+          // For quantity > 1, allow up to `quantity` active SDs of this type.
           if (accountId) {
-            const { data: activeSd } = await supabase
+            const { data: activeSds } = await supabase
               .from("service_deliveries")
               .select("id")
               .eq("service_type", pipeline)
               .eq("account_id", accountId)
               .eq("status", "active")
-              .limit(1)
-            if (activeSd && activeSd.length > 0) {
-              sdResults.push({ pipeline, status: "existing", id: activeSd[0].id })
+            if ((activeSds?.length ?? 0) >= quantity) {
+              sdResults.push({ pipeline, status: "existing", id: activeSds![0]?.id })
               continue
             }
           }
 
-          // Route through P1.6 operation layer (createSD).
-          // Tax Return has context-dependent entry points — pass target_stage
-          // + target_stage_order explicitly so createSD uses the contextual
-          // value instead of defaulting to stage_order=-1 "Company Data
-          // Pending".
-          let createParams: Parameters<typeof createSD>[0]
-          // Tax season pause: only bundled (Installments-funded) Tax Return
-          // SDs get parked at on_hold. Standalone business Tax Return clients
-          // pay upfront as a One-Time Service and have no 2nd-installment
-          // gate to reactivate on — if parked, the reactivation cron would
-          // never flip them back. Per Tax Return SOP v7.0 Phase 3 Scenario 2
-          // ("SKIP this phase entirely" for one-time), they must stay active
-          // during a pause.
+          // How many more SDs to create (quantity minus what already exists for this offer)
+          const toCreate = quantity - existingOfferCount
+
+          // Tax season pause computed once before the quantity loop (same result for all N SDs)
           const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR
             ? await isTaxSeasonPaused()
             : false
           const taxPauseNote = taxPausedBundled ? " [on_hold — tax_season_paused flag set]" : ""
-          if (pipeline === "Tax Return") {
-            if (isStandaloneBusinessTR) {
-              createParams = {
-                service_type: pipeline,
-                service_name: `${pipeline} - ${activation.client_name}`,
-                account_id: null,
-                contact_id: contactId,
-                target_stage: "Company Data Pending",
-                target_stage_order: -1,
-                status: "active",
-                notes: `Auto-created from offer ${activation.offer_token}`,
+
+          // Create `toCreate` SDs for this pipeline.
+          // For quantity > 1, each SD is suffixed with "#N" so they are distinguishable
+          // in the CRM. Per-member identification happens later in the portal flow.
+          for (let unitIndex = 0; unitIndex < toCreate; unitIndex++) {
+            const unitSuffix = quantity > 1 ? ` #${existingOfferCount + unitIndex + 1}` : ""
+            const sdName = `${pipeline} - ${activation.client_name}${unitSuffix}`
+
+            // Route through P1.6 operation layer (createSD).
+            // Tax Return has context-dependent entry points — pass target_stage
+            // + target_stage_order explicitly so createSD uses the contextual
+            // value instead of defaulting to stage_order=-1 "Company Data
+            // Pending".
+            let createParams: Parameters<typeof createSD>[0]
+            if (pipeline === "Tax Return") {
+              if (isStandaloneBusinessTR) {
+                createParams = {
+                  service_type: pipeline,
+                  service_name: sdName,
+                  account_id: null,
+                  contact_id: contactId,
+                  target_stage: "Company Data Pending",
+                  target_stage_order: -1,
+                  status: "active",
+                  notes: `Auto-created from offer ${activation.offer_token}`,
+                }
+              } else {
+                createParams = {
+                  service_type: pipeline,
+                  service_name: sdName,
+                  account_id: accountId,
+                  contact_id: contactId,
+                  target_stage: "1st Installment Paid",
+                  status: taxPausedBundled ? "on_hold" : "active",
+                  notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
+                }
               }
             } else {
+              // All other pipelines — createSD resolves the first stage
+              // from pipeline_stages automatically.
               createParams = {
                 service_type: pipeline,
-                service_name: `${pipeline} - ${activation.client_name}`,
+                service_name: sdName,
                 account_id: accountId,
                 contact_id: contactId,
-                target_stage: "1st Installment Paid",
-                status: taxPausedBundled ? "on_hold" : "active",
-                notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
+                notes: `Auto-created from offer ${activation.offer_token}`,
               }
             }
-          } else {
-            // All other pipelines — createSD resolves the first stage
-            // from pipeline_stages automatically.
-            createParams = {
-              service_type: pipeline,
-              service_name: `${pipeline} - ${activation.client_name}`,
-              account_id: accountId,
-              contact_id: contactId,
-              notes: `Auto-created from offer ${activation.offer_token}`,
-            }
-          }
 
-          const sd = await createSD(createParams)
-          sdResults.push({ pipeline, status: "created", id: sd.id })
+            const sd = await createSD(createParams)
+            sdResults.push({ pipeline, status: "created", id: sd.id })
 
-          // Auto-create tasks from pipeline_stages.auto_tasks (mirrors
-          // sd_create logic — kept here because createSD intentionally
-          // does not create tasks on insert).
-          const stageData = firstStageData.get(pipeline)
-          if (sd.id && stageData?.auto_tasks?.length) {
-            const serviceName = `${pipeline} - ${activation.client_name}`
-            for (const taskDef of stageData.auto_tasks) {
-              await dbWriteSafe(
-                // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-                supabase.from("tasks").insert({
-                  task_title: `[${serviceName}] ${taskDef.title}`,
-                  assigned_to: taskDef.assigned_to || "Luca",
-                  category: (taskDef.category || "Internal") as never,
-                  priority: (taskDef.priority || "Normal") as never,
-                  description: "Auto-created on service delivery creation",
-                  status: "To Do",
-                  account_id: accountId,
-                  delivery_id: sd.id,
-                  stage_order: stageData.stage_order,
-                }),
-                "tasks.insert"
-              )
+            // Auto-create tasks from pipeline_stages.auto_tasks (mirrors
+            // sd_create logic — kept here because createSD intentionally
+            // does not create tasks on insert).
+            const stageData = firstStageData.get(pipeline)
+            if (sd.id && stageData?.auto_tasks?.length) {
+              for (const taskDef of stageData.auto_tasks) {
+                await dbWriteSafe(
+                  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
+                  supabase.from("tasks").insert({
+                    task_title: `[${sdName}] ${taskDef.title}`,
+                    assigned_to: taskDef.assigned_to || "Luca",
+                    category: (taskDef.category || "Internal") as never,
+                    priority: (taskDef.priority || "Normal") as never,
+                    description: "Auto-created on service delivery creation",
+                    status: "To Do",
+                    account_id: accountId,
+                    delivery_id: sd.id,
+                    stage_order: stageData.stage_order,
+                  }),
+                  "tasks.insert"
+                )
+              }
             }
           }
         } catch (e) {

@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function GET() {
   const { data, error } = await supabaseAdmin
     .from('service_catalog')
-    .select('id, name, slug, category, pipeline, contract_type, has_annual, default_price, default_currency, sort_order, description')
+    .select('id, name, slug, category, pipeline, contract_type, has_annual, default_price, default_currency, sort_order, description, supports_quantity')
     .eq('active', true)
     .order('sort_order', { ascending: true })
 

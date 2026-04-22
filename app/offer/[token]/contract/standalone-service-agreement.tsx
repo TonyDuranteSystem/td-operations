@@ -128,12 +128,21 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
   const sigPadRef = useRef<any>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
 
-  // Extract service info from offer
-  const service = offer.services?.[0]
+  // Extract service info from offer — prefer the service matching contractType
+  const service = offer.services?.find(s => s.contract_type === contractType)
+    ?? offer.services?.[0]
   const serviceName = service?.name || 'Tax Return'
   const serviceDesc = service?.description || ''
   const fee = service?.price || ''
   const includes = service?.includes || []
+
+  // Quantity-aware closing text for ITIN (Design B: one contract covers N members)
+  const itinQuantity = (contractType === 'itin' && service?.quantity && Number(service.quantity) > 1)
+    ? Number(service.quantity)
+    : null
+  const scopeClosing = contractType === 'itin' && itinQuantity
+    ? `This Agreement covers up to ${itinQuantity} ITIN applications (one per member of the company). Each member's individual application is initiated separately through their own client portal dashboard. Any applications beyond ${itinQuantity} require a separate agreement.`
+    : ct.scope.closing
 
   // Init signature pad
   useEffect(() => {
@@ -429,7 +438,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
           <ul>
             {ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}
           </ul>
-          <p><strong>{ct.scope.closing}</strong></p>
+          <p><strong>{scopeClosing}</strong></p>
         </div>
 
         {/* SECTION 2 — CLIENT RESPONSIBILITIES */}
