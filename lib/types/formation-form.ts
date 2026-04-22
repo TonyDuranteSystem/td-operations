@@ -187,6 +187,9 @@ export const LABELS = {
     member_country: 'Country',
     addMember: '+ Add Member',
     removeMember: 'Remove',
+    primaryContactTitle: 'Primary Contact',
+    primaryContactHelp: 'The primary contact is your main point of contact with our firm and will manage the company portal. Pick the person who will handle communications.',
+    primaryContactOwner: '(you — the person filling this form)',
 
     // Step 4
     step4Title: 'Documents & Review',
@@ -270,6 +273,9 @@ export const LABELS = {
     member_country: 'Paese',
     addMember: '+ Aggiungi Membro',
     removeMember: 'Rimuovi',
+    primaryContactTitle: 'Contatto Principale',
+    primaryContactHelp: 'Il contatto principale è la persona di riferimento con il nostro studio e gestirà il portale aziendale. Scegli chi si occuperà delle comunicazioni.',
+    primaryContactOwner: '(tu — la persona che compila questo modulo)',
 
     // Step 4
     step4Title: 'Documenti e Revisione',
