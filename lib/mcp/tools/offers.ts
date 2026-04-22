@@ -396,6 +396,8 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
       // Contract type
       contract_type: z.enum(["formation", "onboarding", "tax_return", "itin", "renewal"]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement), 'renewal' (annual renewal — simple installment-based contract for existing annual clients)."),
+      // Entity type — drives downstream formation form shape, SS-4 content, OA members, tax routing
+      entity_type: z.enum(["SMLLC", "MMLLC", "Corp"]).optional().describe("Entity type: 'SMLLC' (single-member LLC — default behavior for formation offers), 'MMLLC' (multi-member LLC — client fills multiple members + per-member passports in formation form), 'Corp' (C-Corp). Set explicitly for any multi-member offer so downstream automation (formation form, SS-4, OA, tax) knows the entity shape. If omitted, downstream code falls back to legacy derivation (service-name string match)."),
       // Linking — use lead_id for new leads, account_id for existing CRM clients, or neither for standalone offers
       lead_id: z.string().optional().describe("Link to lead UUID (for new leads)"),
       account_id: z.string().optional().describe("Link to CRM account UUID (for existing clients — use this instead of lead_id when client is already in the CRM)"),
@@ -423,6 +425,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         token: params.token,
         offer_date: params.offer_date,
         contract_type: params.contract_type as OfferContractType | undefined,
+        entity_type: params.entity_type,
         payment_type: params.payment_type as OfferPaymentType,
         payment_gateway: params.payment_gateway as OfferPaymentGateway | undefined,
         bank_preference: params.bank_preference,

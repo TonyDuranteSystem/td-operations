@@ -135,6 +135,12 @@ export interface Offer {
   // Client selections (set when client signs, based on optional services chosen)
   selected_services?: string[]
   account_id?: string
+  // Entity type (SMLLC / MMLLC / C-Corp). Added 2026-04-22 as part of the
+  // MMLLC build. Uses the same company_type enum as accounts.entity_type so
+  // values round-trip without translation. Older offers created before the
+  // column existed may have this field unset — consumers must fall back to
+  // legacy derivation (e.g., service-name string match).
+  entity_type?: 'Single Member LLC' | 'Multi Member LLC' | 'C-Corp Elected'
 }
 
 // ─── Contract Interface ─────────────────────────────────────

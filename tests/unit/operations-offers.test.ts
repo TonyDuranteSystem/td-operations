@@ -512,3 +512,60 @@ describe("createOffer — action_log", () => {
     expect(actionLogCalls[0].actor).toBe("claude.ai")
   })
 })
+
+describe("createOffer — entity_type normalization (MMLLC build)", () => {
+  const baseParams = {
+    client_name: "Mario Rossi",
+    language: "en" as const,
+    payment_type: "bank_transfer" as const,
+    services: [{ name: "Formation", price: "$500" }],
+    cost_summary: [{ label: "Total", total: "$500" }],
+  }
+
+  it("normalizes short code 'MMLLC' to 'Multi Member LLC' on insert", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({ ...baseParams, token: "test-mmllc-short", entity_type: "MMLLC" })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-mmllc-short")
+    expect(insert?.entity_type).toBe("Multi Member LLC")
+  })
+
+  it("normalizes short code 'SMLLC' to 'Single Member LLC' on insert", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({ ...baseParams, token: "test-smllc-short", entity_type: "SMLLC" })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-smllc-short")
+    expect(insert?.entity_type).toBe("Single Member LLC")
+  })
+
+  it("normalizes short code 'Corp' to 'C-Corp Elected' on insert", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({ ...baseParams, token: "test-corp-short", entity_type: "Corp" })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-corp-short")
+    expect(insert?.entity_type).toBe("C-Corp Elected")
+  })
+
+  it("passes full DB enum value through unchanged", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({ ...baseParams, token: "test-mmllc-full", entity_type: "Multi Member LLC" })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-mmllc-full")
+    expect(insert?.entity_type).toBe("Multi Member LLC")
+  })
+
+  it("writes null when entity_type is omitted", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({ ...baseParams, token: "test-no-entity" })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-no-entity")
+    expect(insert?.entity_type).toBeNull()
+  })
+
+  it("writes null when entity_type value is unrecognized", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      ...baseParams,
+      token: "test-bad-entity",
+      // @ts-expect-error — intentionally passing unsupported value to prove it gets nulled
+      entity_type: "LLP",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-bad-entity")
+    expect(insert?.entity_type).toBeNull()
+  })
+})
