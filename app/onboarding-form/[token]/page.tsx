@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   TOOLTIPS,
@@ -65,6 +64,7 @@ export default function OnboardingFormPage() {
 
   // Dynamic arrays for MMLLC additional members
   const [members, setMembers] = useState<Record<string, string>[]>([])
+  const [primaryMemberIndex, setPrimaryMemberIndex] = useState<number>(0)
 
   const L = LABELS[lang]
 
@@ -242,7 +242,10 @@ export default function OnboardingFormPage() {
 
       // 2. Build submitted data
       const submittedData: Record<string, unknown> = { ...formData }
-      if (members.length > 0) submittedData.additional_members = members
+      if (members.length > 0) {
+        submittedData.additional_members = members
+        submittedData.primary_member_index = primaryMemberIndex
+      }
 
       // 3. Compute changed fields
       const changedFields: Record<string, { old: unknown; new: unknown }> = {}
@@ -366,11 +369,46 @@ export default function OnboardingFormPage() {
         {members.length === 0 && (
           <p className="tf-empty-msg">{L.step3Empty}</p>
         )}
+        {members.length > 0 && (
+          <div className="tf-primary-member">
+            <h4 className="tf-primary-member-label">{L.primaryMemberLabel}</h4>
+            <div className="tf-radio-group">
+              <label className="tf-radio-option">
+                <input
+                  type="radio"
+                  name="primary_member"
+                  value={0}
+                  checked={primaryMemberIndex === 0}
+                  onChange={() => setPrimaryMemberIndex(0)}
+                />
+                <span>{L.primaryMemberOwner}</span>
+              </label>
+              {members.map((m, i) => (
+                <label key={i} className="tf-radio-option">
+                  <input
+                    type="radio"
+                    name="primary_member"
+                    value={i + 1}
+                    checked={primaryMemberIndex === i + 1}
+                    onChange={() => setPrimaryMemberIndex(i + 1)}
+                  />
+                  <span>{L.primaryMemberMember}{i + 1}{m.member_first_name ? ` — ${m.member_first_name} ${m.member_last_name || ''}`.trim() : ''}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
         {members.map((member, i) => (
           <div key={i} className="tf-array-item">
             <div className="tf-array-item-header">
               <span>#{i + 1}</span>
-              <button type="button" className="tf-remove-btn" onClick={() => setMembers(prev => prev.filter((_, j) => j !== i))}>
+              <button type="button" className="tf-remove-btn" onClick={() => {
+                setMembers(prev => prev.filter((_, j) => j !== i))
+                const slot = i + 1
+                setPrimaryMemberIndex(prev =>
+                  prev === slot ? 0 : prev > slot ? prev - 1 : prev
+                )
+              }}>
                 {L.removeMember}
               </button>
             </div>

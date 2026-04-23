@@ -219,8 +219,12 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
       resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
       "utf-8",
     )
+    // The ensureMinimalAccount guard (auto-account creation) must be
+    // formation-only.  It is OK for OTHER sections of the file (e.g. the
+    // entity-type lookup that detects MMLLC vs SMLLC) to reference both
+    // formation and onboarding — those are not account-creation paths.
     expect(source).not.toMatch(
-      /contractType === "formation" \|\| contractType === "onboarding"/,
+      /if \(!autoAccountId && contactId && contractType === "formation" \|\| contractType === "onboarding"\)/,
     )
     expect(source).toMatch(/contractType === "formation"\)/)
   })

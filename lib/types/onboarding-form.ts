@@ -205,6 +205,9 @@ export const LABELS = {
     member_country: 'Country',
     addMember: '+ Add Member',
     removeMember: 'Remove',
+    primaryMemberLabel: 'Managing Member (Primary Contact)',
+    primaryMemberOwner: 'Owner (you)',
+    primaryMemberMember: 'Member #',
 
     // Step 4
     step4Title: 'Documents & Review',
@@ -299,6 +302,9 @@ export const LABELS = {
     member_country: 'Paese',
     addMember: '+ Aggiungi Membro',
     removeMember: 'Rimuovi',
+    primaryMemberLabel: 'Membro Principale (Contatto Primario)',
+    primaryMemberOwner: 'Titolare (tu)',
+    primaryMemberMember: 'Membro #',
 
     // Step 4
     step4Title: 'Documenti e Revisione',

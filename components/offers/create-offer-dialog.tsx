@@ -884,8 +884,8 @@ export function CreateOfferDialog({
             </div>
           </div>
 
-          {/* Entity Type — only for formation offers */}
-          {derivedContractType === 'formation' && (
+          {/* Entity Type — formation and onboarding offers */}
+          {(derivedContractType === 'formation' || derivedContractType === 'onboarding') && (
             <div>
               <label className="block text-sm font-medium mb-2">
                 Entity Type
