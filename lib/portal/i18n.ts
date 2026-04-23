@@ -22,7 +22,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.partnerClients': 'My Clients',
     'nav.partnerInvoices': 'Invoices',
     'nav.offer': 'Your Proposal',
-    'nav.wizard': 'Complete Setup',
+    'nav.wizard': 'Bank Applications',
     'nav.settings': 'Settings',
     'nav.billing': 'Billing',
     'nav.guide': 'Guide',
@@ -1060,7 +1060,7 @@ export function t(key: string, locale: Locale = 'en'): string {
 /**
  * Get locale from Supabase user metadata.
  */
-export function getLocale(user: { user_metadata?: Record<string, unknown> } | null): Locale {
-  const lang = user?.user_metadata?.portal_language || user?.user_metadata?.language
-  return lang === 'it' ? 'it' : 'en'
+export function getLocale(_user: { user_metadata?: Record<string, unknown> } | null): Locale {
+  // Portal is English-only. Italian translations kept for reference but not served.
+  return 'en'
 }
