@@ -532,6 +532,11 @@ export default async function WizardPage({
               <span className="text-[11px] text-zinc-500">FX</span>
               <span className="text-[11px] font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
             </a>
+            <a href="/portal/apply/bank/sokin" target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-1 p-3 border border-zinc-200 rounded-lg hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
+              <span className="text-sm font-bold text-zinc-900">Sokin</span>
+              <span className="text-[11px] text-zinc-500">IBAN</span>
+              <span className="text-[11px] font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
+            </a>
           </div>
           <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-700 leading-relaxed">
             <strong>{locale === 'it' ? 'Il nostro consiglio:' : 'Our recommendation:'}</strong>{' '}
@@ -610,7 +615,7 @@ function BankingPicker({ locale, wizardList }: { locale: 'en' | 'it'; wizardList
       </div>
 
       {/* Self-service links */}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <a href="https://mercury.com/r/tonydurante" target="_blank" rel="noopener noreferrer"
           className="flex flex-col items-center gap-1.5 rounded-lg border border-zinc-200 p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
           <span className="text-base font-bold text-zinc-900">Mercury</span>
@@ -627,6 +632,12 @@ function BankingPicker({ locale, wizardList }: { locale: 'en' | 'it'; wizardList
           className="flex flex-col items-center gap-1.5 rounded-lg border border-zinc-200 p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
           <span className="text-base font-bold text-zinc-900">Verto</span>
           <span className="text-xs text-zinc-500">{locale === 'it' ? 'Multi-valuta / FX' : 'Multi-currency / FX'}</span>
+          <span className="text-xs font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
+        </a>
+        <a href="/portal/apply/bank/sokin" target="_blank" rel="noopener noreferrer"
+          className="flex flex-col items-center gap-1.5 rounded-lg border border-zinc-200 p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-colors text-center">
+          <span className="text-base font-bold text-zinc-900">Sokin</span>
+          <span className="text-xs text-zinc-500">IBAN</span>
           <span className="text-xs font-medium text-violet-600">{locale === 'it' ? 'Richiedi tu' : 'Apply yourself'} &rarr;</span>
         </a>
       </div>
