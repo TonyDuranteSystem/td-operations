@@ -129,7 +129,7 @@ export default async function PortalDashboardPage() {
         .from('wizard_progress')
         .select('id')
         .eq('contact_id', contactId)
-        .eq('wizard_type', 'onboarding')
+        .in('wizard_type', ['onboarding', 'formation'])
         .eq('status', 'submitted')
         .limit(1)
         .maybeSingle()
@@ -213,21 +213,34 @@ export default async function PortalDashboardPage() {
         .from('wizard_progress')
         .select('id')
         .eq('contact_id', contactId)
-        .eq('wizard_type', 'onboarding')
+        .in('wizard_type', ['onboarding', 'formation'])
         .eq('status', 'submitted')
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
     }
 
+    // Pending actions (signatures, invoices, wizards) for pre-active tier clients.
+    // Rendered above the WelcomeDashboard when non-empty so items like a pending
+    // SS-4 surface on the home page instead of being stranded behind the
+    // sidebar's Sign Documents entry (which may be hidden by stale sessions).
+    const actionItems = await getPortalActionItems(selectedAccountId, contactId || undefined)
+
     return (
-      <WelcomeDashboard
-        tier={portalTier}
-        firstName={firstName}
-        offerData={offerData}
-        locale={locale}
-        wizardSubmitted={wizardSubmitted}
-      />
+      <>
+        {actionItems.items.length > 0 && (
+          <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
+            <ActionItems data={actionItems} locale={locale} />
+          </div>
+        )}
+        <WelcomeDashboard
+          tier={portalTier}
+          firstName={firstName}
+          offerData={offerData}
+          locale={locale}
+          wizardSubmitted={wizardSubmitted}
+        />
+      </>
     )
   }
 
