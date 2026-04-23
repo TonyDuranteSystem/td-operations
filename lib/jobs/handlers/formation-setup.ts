@@ -354,6 +354,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           } else {
             const contactInsert: Record<string, unknown> = {
               email: memberEmail,
+              full_name: memberName,
               first_name: m.member_first_name ? String(m.member_first_name) : undefined,
               last_name: m.member_last_name ? String(m.member_last_name) : undefined,
               created_at: now,

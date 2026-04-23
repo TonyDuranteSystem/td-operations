@@ -426,6 +426,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
             const { data: newC } = await supabaseAdmin.from('contacts').insert({
               email: memberEmail,
+              full_name: memberName,
               first_name: m.member_first_name ? String(m.member_first_name) : undefined,
               last_name: m.member_last_name ? String(m.member_last_name) : undefined,
               created_at: now2, updated_at: now2,
