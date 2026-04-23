@@ -23,6 +23,7 @@ import {
   FolderOpen,
   CreditCard,
   TrendingDown,
+  PenLine,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -70,6 +71,7 @@ const topItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
+  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
   { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
   { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
@@ -295,7 +297,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             // Hide company/document/billing items
             if (isPartner) {
               if (item.tierOnly) return false
-              if (['nav.myCompany', 'nav.documents', 'nav.tdBilling'].includes(item.key)) return false
+              if (['nav.myCompany', 'nav.documents', 'nav.tdBilling', 'nav.signDocuments'].includes(item.key)) return false
               if (item.key === 'nav.referrals') return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
               return true // chat, overview
             }
@@ -316,6 +318,12 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             // Referrals: tier gate
             if (item.key === 'nav.referrals') {
               return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+            }
+
+            // Generic visibilityKey gate (tier check + data check)
+            if (item.visibilityKey) {
+              if (!isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType, portalRole)) return false
+              return navVisibility?.[item.visibilityKey] ?? false
             }
 
             // Standard tier gates
