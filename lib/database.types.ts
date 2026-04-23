@@ -18,18 +18,21 @@ export type Database = {
         Row: {
           account_id: string
           contact_id: string
+          is_primary: boolean | null
           ownership_pct: number | null
           role: string | null
         }
         Insert: {
           account_id: string
           contact_id: string
+          is_primary?: boolean | null
           ownership_pct?: number | null
           role?: string | null
         }
         Update: {
           account_id?: string
           contact_id?: string
+          is_primary?: boolean | null
           ownership_pct?: number | null
           role?: string | null
         }
