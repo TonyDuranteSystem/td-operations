@@ -231,14 +231,14 @@ export default function FormationFormCodePage() {
   async function handleSubmit() {
     if (!submission || !disclaimerAccepted) return
 
-    // Validate passport upload is mandatory
-    if (!uploadFiles.passport_owner) {
+    // Validate passport upload is mandatory (skip in admin preview mode)
+    if (!isAdmin && !uploadFiles.passport_owner) {
       setSubmitError(lang === 'it' ? 'Il passaporto del titolare è obbligatorio. Carica una copia del passaporto per procedere.' : 'Owner passport is required. Please upload a copy of your passport to proceed.')
       return
     }
 
-    // For MMLLC, validate all member passports
-    if (submission.entity_type === 'MMLLC' && members.length > 0) {
+    // For MMLLC, validate all member passports (skip in admin preview mode)
+    if (!isAdmin && submission.entity_type === 'MMLLC' && members.length > 0) {
       for (let i = 0; i < members.length; i++) {
         if (!uploadFiles[`passport_member_${i}`]) {
           setSubmitError(lang === 'it' ? `Il passaporto del membro ${members[i].member_first_name || ''} ${members[i].member_last_name || ''} è obbligatorio.` : `Passport for member ${members[i].member_first_name || ''} ${members[i].member_last_name || ''} is required.`)
