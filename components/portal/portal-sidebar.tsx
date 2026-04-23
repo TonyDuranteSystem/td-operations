@@ -24,6 +24,7 @@ import {
   CreditCard,
   TrendingDown,
   PenLine,
+  FilePen,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -71,6 +72,7 @@ const topItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
+  { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
   { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
