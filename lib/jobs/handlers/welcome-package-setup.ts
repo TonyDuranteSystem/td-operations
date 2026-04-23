@@ -117,30 +117,21 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
       let membersJson: Record<string, unknown>[] | null = null
       if (isMMLC) {
-        // Read actual ownership_pct from account_contacts junction
-        const { data: allLinks } = await supabaseAdmin
-          .from("account_contacts")
-          .select("contact_id, ownership_pct, role")
+        // Read from members table: individual rows use full_name, company rows use company_name
+        // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
+        const { data: membersRows } = await (supabaseAdmin as any)
+          .from("members")
+          .select("member_type, full_name, company_name, email, ownership_pct")
           .eq("account_id", p.account_id)
+          .order("is_primary", { ascending: false })
 
-        if (allLinks && allLinks.length > 0) {
-          const contactIds = allLinks.map(l => l.contact_id)
-          const { data: memberContacts } = await supabaseAdmin
-            .from("contacts")
-            .select("id, full_name, email")
-            .in("id", contactIds)
-
-          if (memberContacts && memberContacts.length > 1) {
-            membersJson = memberContacts.map(mc => {
-              const link = allLinks.find(l => l.contact_id === mc.id)
-              return {
-                name: mc.full_name,
-                email: mc.email || null,
-                ownership_pct: link?.ownership_pct ?? null,
-                initial_contribution: "$0 (No initial capital contribution required)",
-              }
-            })
-          }
+        if (membersRows && membersRows.length > 1) {
+          membersJson = membersRows.map(mr => ({
+            name: mr.member_type === "company" ? mr.company_name : mr.full_name,
+            email: mr.member_type === "company" ? null : (mr.email || null),
+            ownership_pct: mr.ownership_pct ?? null,
+            initial_contribution: "$0 (No initial capital contribution required)",
+          }))
         }
       }
 
