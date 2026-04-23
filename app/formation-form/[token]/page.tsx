@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   TOOLTIPS,
@@ -233,9 +232,10 @@ export default function FormationFormPage() {
       return
     }
 
-    // For MMLLC, validate all member passports
+    // For MMLLC, validate passports for individual members only
     if (submission.entity_type === 'MMLLC' && members.length > 0) {
       for (let i = 0; i < members.length; i++) {
+        if (members[i].member_type === 'company') continue
         if (!uploadFiles[`passport_member_${i}`]) {
           setSubmitError(lang === 'it' ? `Il passaporto del membro ${members[i].member_first_name || ''} ${members[i].member_last_name || ''} è obbligatorio.` : `Passport for member ${members[i].member_first_name || ''} ${members[i].member_last_name || ''} is required.`)
           return
@@ -405,7 +405,10 @@ export default function FormationFormPage() {
         {members.length === 0 && (
           <p className="tf-empty-msg">{L.step3Empty}</p>
         )}
-        {members.map((member, i) => (
+        {members.map((member, i) => {
+          const isCompany = member.member_type === 'company'
+          const update = (field: string, val: string) => { const m = [...members]; m[i] = { ...m[i], [field]: val }; setMembers(m) }
+          return (
           <div key={i} className="tf-array-item">
             <div className="tf-array-item-header">
               <span>#{i + 1}</span>
@@ -413,20 +416,55 @@ export default function FormationFormPage() {
                 {L.removeMember}
               </button>
             </div>
+            <div className="tf-type-toggle">
+              <label className="tf-type-option">
+                <input type="radio" name={`member_type_${i}`} value="individual" checked={!isCompany} onChange={() => update('member_type', 'individual')} />
+                {L.member_type_individual}
+              </label>
+              <label className="tf-type-option">
+                <input type="radio" name={`member_type_${i}`} value="company" checked={isCompany} onChange={() => update('member_type', 'company')} />
+                {L.member_type_company}
+              </label>
+            </div>
             <div className="tf-array-fields">
-              <input className="tf-input" placeholder={L.member_first_name} value={member.member_first_name || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_first_name: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" placeholder={L.member_last_name} value={member.member_last_name || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_last_name: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" type="email" placeholder={L.member_email} value={member.member_email || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_email: e.target.value }; setMembers(m) }} />
-              <input className="tf-input tf-input-sm" type="number" placeholder={L.member_ownership_pct} value={member.member_ownership_pct || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_ownership_pct: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" type="date" placeholder={L.member_dob} value={member.member_dob || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_dob: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" placeholder={L.member_nationality} value={member.member_nationality || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_nationality: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" placeholder={L.member_street} value={member.member_street || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_street: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" placeholder={L.member_city} value={member.member_city || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_city: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" placeholder={L.member_zip} value={member.member_zip || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_zip: e.target.value }; setMembers(m) }} />
-              <input className="tf-input" placeholder={L.member_country} value={member.member_country || ''} onChange={e => { const m = [...members]; m[i] = { ...m[i], member_country: e.target.value }; setMembers(m) }} />
+              {!isCompany ? (
+                <>
+                  <input className="tf-input" placeholder={L.member_first_name} value={member.member_first_name || ''} onChange={e => update('member_first_name', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_last_name} value={member.member_last_name || ''} onChange={e => update('member_last_name', e.target.value)} />
+                  <input className="tf-input" type="email" placeholder={L.member_email} value={member.member_email || ''} onChange={e => update('member_email', e.target.value)} />
+                  <input className="tf-input tf-input-sm" type="number" placeholder={L.member_ownership_pct} value={member.member_ownership_pct || ''} onChange={e => update('member_ownership_pct', e.target.value)} />
+                  <input className="tf-input" type="date" placeholder={L.member_dob} value={member.member_dob || ''} onChange={e => update('member_dob', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_nationality} value={member.member_nationality || ''} onChange={e => update('member_nationality', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_street} value={member.member_street || ''} onChange={e => update('member_street', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_city} value={member.member_city || ''} onChange={e => update('member_city', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_zip} value={member.member_zip || ''} onChange={e => update('member_zip', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_country} value={member.member_country || ''} onChange={e => update('member_country', e.target.value)} />
+                </>
+              ) : (
+                <>
+                  <input className="tf-input" placeholder={L.member_company_name} value={member.member_company_name || ''} onChange={e => update('member_company_name', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_company_ein} value={member.member_company_ein || ''} onChange={e => update('member_company_ein', e.target.value)} />
+                  <input className="tf-input tf-input-sm" type="number" placeholder={L.member_ownership_pct} value={member.member_ownership_pct || ''} onChange={e => update('member_ownership_pct', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_company_street} value={member.member_company_street || ''} onChange={e => update('member_company_street', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_company_city} value={member.member_company_city || ''} onChange={e => update('member_company_city', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_company_state} value={member.member_company_state || ''} onChange={e => update('member_company_state', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_company_zip} value={member.member_company_zip || ''} onChange={e => update('member_company_zip', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_company_country} value={member.member_company_country || ''} onChange={e => update('member_company_country', e.target.value)} />
+                  <hr className="tf-divider" />
+                  <input className="tf-input" placeholder={L.member_rep_name} value={member.member_rep_name || ''} onChange={e => update('member_rep_name', e.target.value)} />
+                  <input className="tf-input" type="email" placeholder={L.member_rep_email} value={member.member_rep_email || ''} onChange={e => update('member_rep_email', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_rep_phone} value={member.member_rep_phone || ''} onChange={e => update('member_rep_phone', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_rep_address_street} value={member.member_rep_address_street || ''} onChange={e => update('member_rep_address_street', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_rep_address_city} value={member.member_rep_address_city || ''} onChange={e => update('member_rep_address_city', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_rep_address_state} value={member.member_rep_address_state || ''} onChange={e => update('member_rep_address_state', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_rep_address_zip} value={member.member_rep_address_zip || ''} onChange={e => update('member_rep_address_zip', e.target.value)} />
+                  <input className="tf-input" placeholder={L.member_rep_address_country} value={member.member_rep_address_country || ''} onChange={e => update('member_rep_address_country', e.target.value)} />
+                </>
+              )}
             </div>
           </div>
-        ))}
+          )
+        })}
       </div>
     )
   }
@@ -457,8 +495,8 @@ export default function FormationFormPage() {
               </div>
             </div>
 
-            {/* Member passport uploads for MMLLC */}
-            {submission.entity_type === 'MMLLC' && members.map((m, i) => (
+            {/* Member passport uploads for MMLLC — individuals only */}
+            {submission.entity_type === 'MMLLC' && members.map((m, i) => m.member_type === 'company' ? null : (
               <div key={`passport_member_${i}`} className="tf-doc-item">
                 <span>{L.passportMemberUpload}: {m.member_first_name || ''} {m.member_last_name || ''}</span>
                 <div className="tf-doc-upload">
