@@ -93,7 +93,6 @@ const navGroups: NavGroup[] = [
 ]
 
 const bottomItems: NavItem[] = [
-  { key: 'nav.settings', href: '/portal/settings', icon: Settings },
   { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
 ]
 
