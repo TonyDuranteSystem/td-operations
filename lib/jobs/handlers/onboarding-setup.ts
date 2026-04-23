@@ -499,6 +499,20 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       }
     }
 
+    // Set owner's ownership_pct = 100 - sum(additional members' pcts)
+    if (contact_id && account_id) {
+      const additionalPctSum = additionalMembers.reduce((sum, m) => {
+        const pct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : 0
+        return sum + (isNaN(pct) ? 0 : pct)
+      }, 0)
+      const ownerPct = Math.max(0, Math.round((100 - additionalPctSum) * 100) / 100)
+      await supabaseAdmin.from('account_contacts')
+        .update({ ownership_pct: ownerPct })
+        .eq('account_id', account_id)
+        .eq('contact_id', contact_id)
+      result.steps.push(step('owner_pct', 'ok', `Owner ownership_pct = ${ownerPct}%`))
+    }
+
     // ITIN tasks for non-US members
     const itinCandidates = additionalMembers.filter(m => {
       const nat = m.member_nationality ? String(m.member_nationality).toLowerCase() : ''
