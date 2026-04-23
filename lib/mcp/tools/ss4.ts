@@ -30,7 +30,7 @@ Entity type rules (auto-detected from account):
 - MMLLC: Line 9a = "Partnership", title = "Member". IMPORTANT: For MMLLC with multiple members, you MUST provide contact_id to specify which member signs. If omitted, the tool will list all members and ask you to choose.
 - Corporation: Line 9a = "Corporation" + "1120", title = "President". After EIN is received, Form 8832 must be filed for C-Corp election.
 
-The SS-4 is created as 'draft'. Client signs it in the portal (Sign Documents page).
+By default the SS-4 is created as 'draft' for admin review. Pass ready_to_sign=true to create it directly at 'awaiting_signature' so it appears in the client's portal Sign Documents page immediately without a manual status flip.
 After signing, Luca receives a notification to fax it to the IRS.
 
 Admin preview: ${APP_BASE_URL}/ss4/{token}/{access_code}?preview=td
@@ -42,6 +42,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
       contact_id: z.string().uuid().optional().describe("Contact UUID for responsible party (auto-detects primary contact if omitted)"),
       entity_type: z.enum(["SMLLC", "MMLLC", "Corporation"]).optional().describe("Entity type (auto-detected from account.entity_type if omitted)"),
       member_count: z.number().optional().describe("Number of LLC members (auto: 1 for SMLLC, from account_contacts for MMLLC)"),
+      ready_to_sign: z.boolean().optional().describe("If true, creates the record at 'awaiting_signature' so it surfaces in the client's portal Sign Documents page immediately. Default false (creates at 'draft' for admin review first)."),
     },
     async (params) => {
       try {
@@ -171,7 +172,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
             responsible_party_phone: contact.phone || null,
             responsible_party_title: title,
             language: "en", // SS-4 is always English (IRS form)
-            status: "draft",
+            status: params.ready_to_sign ? "awaiting_signature" : "draft",
           })
           .select("id, token, access_code, status")
           .single()
