@@ -9,21 +9,20 @@ import {
   Receipt,
   Building2,
   MessageCircle,
-  Activity,
   BookOpen,
-  Upload,
   Users,
   Settings,
   LogOut,
   Menu,
   X,
   User,
-  CalendarDays,
   ChevronDown,
   PenSquare,
-  PenLine,
   Share2,
-  FileSignature,
+  Briefcase,
+  FolderOpen,
+  CreditCard,
+  TrendingDown,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -65,14 +64,17 @@ interface NavGroup {
   defaultOpen?: boolean
 }
 
-// Flat items (always visible, no group)
+// Flat items (always visible, filtered by role/tier/data)
 const topItems: NavItem[] = [
-  { key: 'nav.dashboard', href: '/portal', icon: LayoutDashboard },
+  { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
+  { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
+  { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
   { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
   { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
   { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
   { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
-  { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
 ]
 
@@ -81,20 +83,10 @@ const navGroups: NavGroup[] = [
   {
     key: 'nav.group.business',
     items: [
-      { key: 'nav.documents', href: '/portal/documents', icon: FileText, visibilityKey: 'documents' },
-      { key: 'nav.services', href: '/portal/services', icon: Activity, visibilityKey: 'services' },
-      { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
-      { key: 'nav.deadlines', href: '/portal/deadlines', icon: CalendarDays, visibilityKey: 'deadlines' },
-      { key: 'nav.taxDocuments', href: '/portal/tax-documents', icon: Upload, visibilityKey: 'taxDocuments' },
-      { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FileSignature, visibilityKey: 'documentGenerator' },
-    ],
-    defaultOpen: true,
-  },
-  {
-    key: 'nav.group.finance',
-    items: [
+      { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
       { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
-      { key: 'nav.customers', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
+      { key: 'nav.expenses', href: '/portal/invoices?tab=expenses', icon: TrendingDown, visibilityKey: 'billing' },
+      { key: 'nav.businessSettings', href: '/portal/profile', icon: Settings },
     ],
     defaultOpen: true,
   },
@@ -107,8 +99,7 @@ const bottomItems: NavItem[] = [
 
 // i18n fallback for group labels
 const GROUP_LABELS: Record<string, Record<string, string>> = {
-  'nav.group.business': { en: 'Business', it: 'Azienda' },
-  'nav.group.finance': { en: 'Finance', it: 'Finanza' },
+  'nav.group.business': { en: 'Business', it: 'Business' },
 }
 
 export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending }: PortalSidebarProps) {
@@ -189,8 +180,12 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     })
   }
 
-  const isActive = (href: string) =>
-    href === '/portal' ? pathname === '/portal' : pathname.startsWith(href)
+  const isActive = (href: string) => {
+    // Strip query params for path matching
+    const hrefPath = href.split('?')[0]
+    if (hrefPath === '/portal') return pathname === '/portal'
+    return pathname.startsWith(hrefPath)
+  }
 
   const displayName = user.email?.split('@')[0] ?? 'User'
 
@@ -293,14 +288,38 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           {/* Top items (filtered by tier + role) */}
           {topItems.filter(item => {
             const isPartner = isPartnerPortal(portalRole)
-            // Partner-only items: show only for partners
+
+            // Partner-only items (partnerClients, partnerInvoices): show ONLY for partners
             if (item.partnerOnly) return isPartner
-            // Non-partner items with tierOnly: hide for partners
-            if (item.tierOnly && isPartner) return false
-            // Referrals: gate with tier feature visibility
+
+            // For partners: only show general items (chat, overview, referrals)
+            // Hide company/document/billing items
+            if (isPartner) {
+              if (item.tierOnly) return false
+              if (['nav.myCompany', 'nav.documents', 'nav.tdBilling'].includes(item.key)) return false
+              if (item.key === 'nav.referrals') return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+              return true // chat, overview
+            }
+
+            // Non-partner from here:
+
+            // TD Billing: tier + data gate (needs billing feature AND actual billing data)
+            if (item.key === 'nav.tdBilling') {
+              if (!isTierFeatureVisible(portalTier || null, 'billing', accountType, portalRole)) return false
+              return navVisibility?.billing ?? false
+            }
+
+            // My Company: visible for active/full tiers (uses 'services' as proxy)
+            if (item.key === 'nav.myCompany') {
+              return isTierFeatureVisible(portalTier || null, 'services', accountType, portalRole)
+            }
+
+            // Referrals: tier gate
             if (item.key === 'nav.referrals') {
               return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
             }
+
+            // Standard tier gates
             if (!item.tierOnly) return true
             // Wizard link: show for tier match OR when there are pending wizard-eligible services
             if (item.wizardDynamic && hasWizardPending) return true
