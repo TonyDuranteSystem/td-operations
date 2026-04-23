@@ -514,25 +514,6 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step('owner_pct', 'ok', `Owner ownership_pct = ${ownerPct}%`))
     }
 
-    // ITIN tasks for non-US members
-    const itinCandidates = additionalMembers.filter(m => {
-      const nat = m.member_nationality ? String(m.member_nationality).toLowerCase() : ''
-      return nat && !['united states', 'us', 'usa', 'american'].includes(nat)
-    })
-    if (itinCandidates.length > 0) {
-      const itinNames = itinCandidates.map((m, i) =>
-        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
-      ).join(', ')
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      await supabaseAdmin.from('tasks').insert({
-        task_title: `ITIN required for MMLLC members: ${itinNames}`,
-        description: `Non-US members of ${company_name} needing ITIN:\n${itinCandidates.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} (${m.member_nationality || '?'})`).join('\n')}`,
-        assigned_to: 'Luca', priority: 'Normal', category: 'Formation' as const,
-        status: 'To Do', account_id,
-      })
-      result.steps.push(step('itin_tasks', 'ok', `ITIN task created for ${itinCandidates.length} non-US member(s)`))
-    }
-
     // Portal invite reminder for all members
     const memberNames = additionalMembers.map((m, i) =>
       [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`

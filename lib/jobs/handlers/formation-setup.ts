@@ -467,28 +467,6 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     }
 
     // ─── Post-loop tasks ───
-    // ITIN tasks for non-US members
-    const itinCandidates = additionalMembers.filter(m => {
-      const nationality = m.member_nationality ? String(m.member_nationality).toLowerCase() : ''
-      return nationality && !['united states', 'us', 'usa', 'american'].includes(nationality)
-    })
-    if (itinCandidates.length > 0 && accountId) {
-      const itinNames = itinCandidates.map((m, i) =>
-        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
-      ).join(', ')
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      await supabaseAdmin.from('tasks').insert({
-        task_title: `ITIN required for MMLLC members: ${itinNames}`,
-        description: `The following members of ${companyName || 'this MMLLC'} are non-US and need ITIN applications:\n${itinCandidates.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} (${m.member_nationality || '?'})`).join('\n')}\n\nCreate ITIN service deliveries after LLC formation is confirmed.`,
-        assigned_to: 'Luca',
-        priority: 'Normal',
-        category: 'Formation' as const,
-        status: 'To Do',
-        ...(accountId ? { account_id: accountId } : {}),
-      })
-      result.steps.push(step('itin_tasks', 'ok', `ITIN task created for ${itinCandidates.length} non-US member(s)`))
-    }
-
     // Portal invite reminder for all MMLLC members (after LLC is formed, not now)
     if (additionalMembers.length > 0 && accountId) {
       const memberNames = additionalMembers.map((m, i) =>
