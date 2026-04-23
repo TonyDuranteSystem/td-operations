@@ -41,18 +41,30 @@ export async function getPortalAccountDetail(accountId: string) {
 export async function getPortalMembers(accountId: string) {
   const { data } = await supabaseAdmin
     .from('account_contacts')
-    .select('role, ownership_pct, contacts(first_name, last_name, email, phone)')
+    .select('role, ownership_pct, is_primary, contacts(id, first_name, last_name, email, phone, citizenship, date_of_birth, address_line1, address_city, address_state, address_country)')
     .eq('account_id', accountId)
 
   return (data ?? []).map(d => {
-    const c = d.contacts as unknown as { first_name: string; last_name: string; email: string | null; phone: string | null } | null
+    const c = d.contacts as unknown as {
+      id: string; first_name: string; last_name: string; email: string | null; phone: string | null
+      citizenship: string | null; date_of_birth: string | null
+      address_line1: string | null; address_city: string | null; address_state: string | null; address_country: string | null
+    } | null
     return {
+      contact_id: c?.id ?? null,
       role: d.role,
       ownership_pct: d.ownership_pct,
+      is_primary: d.is_primary ?? false,
       first_name: c?.first_name ?? '',
       last_name: c?.last_name ?? '',
       email: c?.email ?? null,
       phone: c?.phone ?? null,
+      citizenship: c?.citizenship ?? null,
+      date_of_birth: c?.date_of_birth ?? null,
+      address_line1: c?.address_line1 ?? null,
+      address_city: c?.address_city ?? null,
+      address_state: c?.address_state ?? null,
+      address_country: c?.address_country ?? null,
     }
   })
 }

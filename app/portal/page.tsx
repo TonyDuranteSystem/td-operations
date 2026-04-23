@@ -5,7 +5,8 @@ import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
-import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User } from 'lucide-react'
+import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
+import Link from 'next/link'
 import { PaymentHistory } from '@/components/portal/payment-history'
 import { cn } from '@/lib/utils'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -358,25 +359,36 @@ export default async function PortalDashboardPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <User className="h-4 w-4 text-zinc-400" />
-                      <span className="text-sm font-medium text-zinc-900">{m.first_name} {m.last_name}</span>
+                      {m.contact_id ? (
+                        <Link
+                          href={`/portal/members/${m.contact_id}`}
+                          className="text-sm font-medium text-blue-700 hover:underline flex items-center gap-1"
+                        >
+                          {m.first_name} {m.last_name}
+                          {m.is_primary && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-500 font-normal">Primary</span>}
+                          <ChevronRight className="h-3 w-3 opacity-50" />
+                        </Link>
+                      ) : (
+                        <span className="text-sm font-medium text-zinc-900">{m.first_name} {m.last_name}</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{m.role}</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 capitalize">{m.role}</span>
                       {m.ownership_pct != null && (
-                        <span className="text-xs text-zinc-500">{m.ownership_pct}%</span>
+                        <span className="text-xs font-medium text-zinc-600">{m.ownership_pct}%</span>
                       )}
                     </div>
                   </div>
                   {m.email && (
                     <div className="flex items-center gap-2 text-xs text-zinc-500">
                       <Mail className="h-3.5 w-3.5" />
-                      <span>{m.email}</span>
+                      <a href={`mailto:${m.email}`} className="hover:text-zinc-700">{m.email}</a>
                     </div>
                   )}
                   {m.phone && (
                     <div className="flex items-center gap-2 text-xs text-zinc-500">
                       <Phone className="h-3.5 w-3.5" />
-                      <span>{m.phone}</span>
+                      <a href={`tel:${m.phone}`} className="hover:text-zinc-700">{m.phone}</a>
                     </div>
                   )}
                 </div>
