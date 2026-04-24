@@ -49,6 +49,7 @@ const TABS = [
 
 const TIER_COLORS: Record<string, string> = {
   lead: 'bg-zinc-100 text-zinc-600',
+  formation: 'bg-purple-100 text-purple-700',
   onboarding: 'bg-amber-100 text-amber-700',
   active: 'bg-emerald-100 text-emerald-700',
   full: 'bg-blue-100 text-blue-700',

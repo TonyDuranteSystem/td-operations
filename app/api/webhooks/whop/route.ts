@@ -276,9 +276,9 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
       .eq("id", leadId)
   }
 
-  // 4b. Upgrade portal tier: lead → onboarding (syncs account + contacts)
-  // contract_type is not in the Whop payload — 'onboarding' is the safe fallback.
-  // Formation clients activated via Whop will be corrected by activate-service (which has contract_type).
+  // 4b. Upgrade portal tier: lead → formation or onboarding (syncs account + contacts)
+  // Product ID determines tier: prod_nzrLiGLomSYZT = formation plan.
+  // activate-service will correct if the product mapping is wrong (it has contract_type).
   let resolvedAccountId = accountId
   if (!resolvedAccountId && email) {
     const { data: contactAccounts } = await getSupabase()
@@ -293,7 +293,7 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   }
   if (resolvedAccountId) {
     const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-    await upgradePortalTier(resolvedAccountId, "onboarding")
+    await upgradePortalTier(resolvedAccountId, _productId === 'prod_nzrLiGLomSYZT' ? 'formation' : 'onboarding')
   }
 
   // 5. Check if there's a pending_activation waiting for this payment

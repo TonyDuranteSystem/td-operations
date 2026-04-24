@@ -66,6 +66,14 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
   Waived: 'bg-zinc-100 text-zinc-500',
 }
 
+const TIER_COLORS: Record<string, string> = {
+  lead: 'bg-zinc-100 text-zinc-600',
+  formation: 'bg-purple-100 text-purple-700',
+  onboarding: 'bg-amber-100 text-amber-700',
+  active: 'bg-emerald-100 text-emerald-700',
+  full: 'bg-blue-100 text-blue-700',
+}
+
 const ENTITY_LABELS: Record<string, string> = {
   'Single Member LLC': 'SMLLC',
   'Multi Member LLC': 'MMLLC',
@@ -473,6 +481,11 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             )}>
               {account.status}
             </span>
+            {(account as unknown as Record<string, unknown>).portal_tier && (
+              <span className={cn('text-xs font-medium px-2 py-0.5 rounded', TIER_COLORS[(account as unknown as Record<string, unknown>).portal_tier as string] ?? 'bg-zinc-100')}>
+                {(account as unknown as Record<string, unknown>).portal_tier as string}
+              </span>
+            )}
             <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <PortalTransitionButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <ComposeEmailButton

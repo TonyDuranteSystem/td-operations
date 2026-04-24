@@ -714,11 +714,13 @@ export async function GET(req: NextRequest) {
     const hasPaidPayment = paidPayments.length > 0
     const hasCompletedForm = formationSub?.status === "completed" || onboardingSub?.status === "completed"
     const hasCompletedServices = services.some(s => s.status === "Completed" || s.status === "completed")
+    const hasActiveFormationNoEin = services.some(s => s.service_type === "Company Formation" && s.status === "active") && !account.ein_number
     const expectedTier = (isActiveAccount && (hasCompletedServices || hasCompletedForm)) ? "active"
       : (isActiveAccount && account.portal_account) ? "active"  // legacy clients with portal access
         : hasCompletedForm ? "active"
-          : hasPaidPayment ? "onboarding"
-            : "lead"
+          : hasActiveFormationNoEin ? "formation"
+            : hasPaidPayment ? "onboarding"
+              : "lead"
 
     checks.push({
       id: "portal_tier_contact",

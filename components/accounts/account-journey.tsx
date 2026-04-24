@@ -281,12 +281,12 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
       status: 'done',
       tooltip: [`Account type: ${accountType}`, `Portal tier: ${portalTier}`, 'Client is fully active'],
     })
-  } else if (portalTier === 'onboarding') {
+  } else if (portalTier === 'onboarding' || portalTier === 'formation') {
     steps.push({
       label: 'Active',
       status: 'current',
-      detail: 'Onboarding',
-      tooltip: [`Account type: ${accountType ?? 'N/A'}`, 'Portal tier: onboarding', 'Client still going through onboarding'],
+      detail: portalTier === 'formation' ? 'Formation' : 'Onboarding',
+      tooltip: [`Account type: ${accountType ?? 'N/A'}`, `Portal tier: ${portalTier}`, portalTier === 'formation' ? 'Client is in formation process' : 'Client still going through onboarding'],
     })
   } else if (activeServices.length > 0) {
     steps.push({

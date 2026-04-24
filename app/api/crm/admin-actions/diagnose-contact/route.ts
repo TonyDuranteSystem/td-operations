@@ -596,11 +596,14 @@ export async function GET(req: NextRequest) {
       || onboardingSub?.status === "completed" || onboardingSub?.status === "reviewed"
     const hasActiveAccount = linkedAccounts.some(a => a.status === "Active")
     const hasActiveService = services.some(s => s.status === "active")
+    const hasActiveFormationNoEin = services.some(s => s.service_type === "Company Formation" && s.status === "active")
+      && linkedAccounts.some(a => !a.ein_number)
     // Active account = strongest signal (company exists, client is active)
     const expectedTier = hasActiveAccount ? "active"
       : (hasCompletedForm || hasActiveService) ? "active"
-        : hasPaidPayment ? "onboarding"
-          : "lead"
+        : hasActiveFormationNoEin ? "formation"
+          : hasPaidPayment ? "onboarding"
+            : "lead"
 
     const currentTier = contact.portal_tier as string | null
     checks.push({

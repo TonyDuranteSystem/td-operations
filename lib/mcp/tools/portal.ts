@@ -1094,9 +1094,11 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
           if (acctData?.account_type === "One-Time") {
             portalTier = "active"
           } else {
-            const { data: offers } = await supabaseAdmin.from("offers").select("status")
+            const { data: offers } = await supabaseAdmin.from("offers").select("status, contract_type")
               .eq("account_id", account_id).in("status", ["completed", "signed"]).limit(1)
-            if (offers?.length) portalTier = "onboarding"
+            if (offers?.length) {
+              portalTier = offers[0].contract_type === "formation" ? "formation" : "onboarding"
+            }
           }
 
           if (portalTier === "lead") {
