@@ -221,3 +221,56 @@ describe("computeHasWizardPending — branch precedence", () => {
     expect(result).toBe(true)
   })
 })
+
+// ─── Tax Return wizard gate (requires active tier + EIN) ───
+
+describe("computeHasWizardPending — Tax Return gate", () => {
+  it("returns true when only Tax Return SD exists but tier is formation (tier fallback fires)", async () => {
+    // Tax Return SD is filtered out (formation phase, no EIN), but the tier-based
+    // fallback still returns true so formation clients see the "Complete Setup" button
+    // for their formation wizard. The wizard PAGE (not this function) prevents routing
+    // to the tax wizard — it checks portal_tier=active && ein_number before pushing.
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    wizardProgressFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "formation",
+      einNumber: null,
+    })
+    expect(result).toBe(true)
+  })
+
+  it("returns false when only Tax Return SD exists, tier is active but EIN missing", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+      einNumber: null,
+    })
+    expect(result).toBe(false)
+  })
+
+  it("returns true when Tax Return SD exists and tier is active with EIN", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+      einNumber: "12-3456789",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("returns true when account has both Tax Return and Banking Fintech SDs even if tier is formation", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }, { service_type: "Banking Fintech" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "formation",
+      einNumber: null,
+    })
+    expect(result).toBe(true)
+  })
+})

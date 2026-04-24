@@ -96,6 +96,7 @@ export default async function PortalLayout({
     contactId: contactId || null,
     selectedAccountId,
     portalTier,
+    einNumber: selectedAccount?.ein_number || null,
   })
 
   return (

@@ -36,12 +36,14 @@ export interface ComputeHasWizardPendingParams {
   contactId: string | null
   selectedAccountId: string
   portalTier: string
+  einNumber?: string | null
 }
 
 export async function computeHasWizardPending(
   params: ComputeHasWizardPendingParams,
 ): Promise<boolean> {
-  const { contactId, selectedAccountId, portalTier } = params
+  const { contactId, selectedAccountId, portalTier, einNumber } = params
+  const taxWizardEligible = portalTier === "active" && !!einNumber
 
   if (selectedAccountId) {
     const { data } = await supabaseAdmin
@@ -50,8 +52,11 @@ export async function computeHasWizardPending(
       .eq("account_id", selectedAccountId)
       .in("status", ["active"])
       .in("service_type", WIZARD_SERVICE_TYPES as unknown as string[])
-      .limit(1)
-    if ((data?.length ?? 0) > 0) return true
+      .limit(10)
+    const eligible = (data || []).filter(d =>
+      d.service_type === "Tax Return" ? taxWizardEligible : true
+    )
+    if (eligible.length > 0) return true
   } else if (contactId) {
     const { data } = await supabaseAdmin
       .from("service_deliveries")
@@ -60,8 +65,11 @@ export async function computeHasWizardPending(
       .is("account_id", null)
       .in("status", ["active"])
       .in("service_type", WIZARD_SERVICE_TYPES as unknown as string[])
-      .limit(1)
-    if ((data?.length ?? 0) > 0) return true
+      .limit(10)
+    const eligible = (data || []).filter(d =>
+      d.service_type === "Tax Return" ? taxWizardEligible : true
+    )
+    if (eligible.length > 0) return true
   }
 
   if (contactId && (portalTier === "onboarding" || portalTier === "formation")) {

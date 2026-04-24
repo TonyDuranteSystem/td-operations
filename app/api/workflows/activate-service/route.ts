@@ -433,6 +433,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ─── STEP 1.7: Record setup fee on account ──────────────────────────────
+    if (autoAccountId && activation.amount) {
+      await dbWrite(
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/ per dev_task fda76fd3
+        supabase
+          .from("accounts")
+          .update({
+            setup_fee_amount: Number(activation.amount),
+            setup_fee_currency: (activation.currency || "USD") as "USD" | "EUR",
+            setup_fee_paid_date: new Date().toISOString().split("T")[0],
+          })
+          .eq("id", autoAccountId),
+        "accounts.update"
+      )
+      steps.push({
+        step: "setup_fee",
+        status: "done",
+        detail: `Setup fee ${activation.currency || "USD"} ${activation.amount} recorded on account`,
+      })
+    }
+
     // ─── STEP 2: Service Deliveries from bundled_pipelines (AUTO) ─────
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
     const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
@@ -493,6 +514,14 @@ export async function POST(req: NextRequest) {
       const accountId = autoAccountId
 
       for (const pipeline of pipelines) {
+        // Formation contracts only get Company Formation SD now.
+        // All other bundled pipelines (e.g. Tax Return) are deferred until
+        // EIN is received and tier advances to active.
+        if (contractType === 'formation' && pipeline !== 'Company Formation') {
+          steps.push({ step: 'sd_deferred', status: 'skipped', detail: `${pipeline} deferred — formation phase` })
+          continue
+        }
+
         try {
           const quantity = pipelineQuantity.get(pipeline) ?? 1
 

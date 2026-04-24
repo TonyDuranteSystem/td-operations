@@ -125,7 +125,7 @@ export default async function WizardPage({
     } else if (types.includes('ITIN')) {
       pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
     }
-    if (types.includes('Tax Return')) {
+    if (types.includes('Tax Return') && account.portal_tier === 'active' && account.ein_number) {
       // Stage-based gating for standalone business Tax Return:
       // If SD is at "Company Data Pending", show company_info wizard instead of tax wizard.
       const taxReturnSd = (sds || []).find(s => s.service_type === 'Tax Return')
