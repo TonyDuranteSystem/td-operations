@@ -703,19 +703,23 @@ export async function upgradePortalTier(
   const currentIdx = tierOrder.indexOf((account.portal_tier || 'active') as PortalTier)
   const newIdx = tierOrder.indexOf(newTier)
 
-  // Only upgrade, never downgrade
-  if (newIdx <= currentIdx) {
+  // Never downgrade the account row
+  if (newIdx < currentIdx) {
     return { success: true, previousTier: account.portal_tier }
   }
 
-  // Update account tier
-  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
-  await supabaseAdmin
-    .from('accounts')
-    .update({ portal_tier: newTier })
-    .eq('id', accountId)
+  // Only write account row on an actual upgrade (skip when already equal, contacts/auth still sync below)
+  if (newIdx > currentIdx) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
+    await supabaseAdmin
+      .from('accounts')
+      .update({ portal_tier: newTier })
+      .eq('id', accountId)
+  }
 
-  // Also upgrade tier on all linked contacts (source of truth) and their auth users
+  // Always sync tier on all linked contacts and their auth users — even when the account
+  // row is already at newTier (ensureMinimalAccount sets account first; without this sync
+  // contacts/auth users created before payment never receive the tier update).
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id')
