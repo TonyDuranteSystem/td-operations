@@ -49,6 +49,7 @@ export default async function PortalDocumentsPage() {
       .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
+      .or(`category.is.null,category.neq.2,and(category.eq.2,contact_id.eq.${contactId})`)
       .order('created_at', { ascending: false })
       .limit(100)
     documents = data
