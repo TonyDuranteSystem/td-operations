@@ -82,19 +82,16 @@ export type InvoiceAudience = "portal" | "no_portal"
 
 /**
  * Resolve the email audience for a payment. Checks the account's
- * portal_tier — 'active' means the recipient has a working portal
- * login; anything else (null, 'inactive', 'closed', 'onboarding' for
- * accounts that never got past formation, etc.) is treated as
- * no_portal because we can't trust the portal link to resolve for
- * them.
+ * portal_tier — 'active', 'onboarding', and 'formation' all mean the
+ * recipient has a working portal login and can pay via the portal.
+ * 'lead' (no account yet) and null fall back to no_portal, which sends
+ * a Pay-with-Card button + bank details inline.
  *
  * For contact-only payments (account_id null, contact_id set — the
  * ITIN / standalone flow), we look at contacts.portal_tier instead.
- *
- * When neither account nor contact has an active portal, audience
- * is no_portal and the email gets a Pay-with-Card button + bank
- * details inline.
  */
+const PORTAL_AUDIENCE_TIERS = new Set(["active", "onboarding", "formation"])
+
 export async function resolveInvoiceAudience(
   opts: { account_id: string | null; contact_id: string | null },
   supabase: SupabaseClient<Database>,
@@ -106,7 +103,7 @@ export async function resolveInvoiceAudience(
       .select("portal_tier, account_type")
       .eq("id", opts.account_id)
       .single()
-    if (acct?.portal_tier === "active") return "portal"
+    if (acct?.portal_tier && PORTAL_AUDIENCE_TIERS.has(acct.portal_tier)) return "portal"
     return "no_portal"
   }
 
@@ -117,7 +114,7 @@ export async function resolveInvoiceAudience(
       .select("portal_tier")
       .eq("id", opts.contact_id)
       .single()
-    if (c?.portal_tier === "active") return "portal"
+    if (c?.portal_tier && PORTAL_AUDIENCE_TIERS.has(c.portal_tier)) return "portal"
     return "no_portal"
   }
 
