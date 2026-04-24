@@ -2,9 +2,9 @@
 
 import {
   LayoutDashboard, FileText, Receipt, MessageCircle, Activity,
-  Bell, CreditCard, CheckCircle, ArrowRight, Package,
-  Upload, CalendarDays, Shield, BookOpen, Fingerprint,
-  Building2, Phone, ChevronDown,
+  CreditCard, CheckCircle, ArrowRight, Package,
+  Upload, CalendarDays, Fingerprint,
+  Building2, Phone, ChevronDown, Globe,
 } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useState } from 'react'
@@ -77,6 +77,27 @@ export default function PortalGuidePage() {
           <Package className="h-4 w-4" />
           {t.requestBtn}
         </Link>
+      </div>
+
+      {/* Step-by-Step Guides */}
+      <div className="space-y-3">
+        <h2 className="text-base font-semibold">{t.guidesTitle}</h2>
+        {t.guideLinks.map((guide, i) => (
+          <Link
+            key={i}
+            href={guide.href}
+            className="flex items-center gap-4 bg-white rounded-xl border p-4 hover:bg-zinc-50 transition-colors"
+          >
+            <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center shrink-0', guide.color)}>
+              <guide.icon className="h-5 w-5" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-zinc-900">{guide.title}</p>
+              <p className="text-xs text-zinc-500 mt-0.5">{guide.desc}</p>
+            </div>
+            <ArrowRight className="h-4 w-4 text-zinc-400 shrink-0" />
+          </Link>
+        ))}
       </div>
 
       {/* FAQ */}
@@ -263,6 +284,16 @@ const EN = {
     { icon: Phone, color: 'text-teal-600', name: 'Consulting', desc: 'One-on-one consultation' },
   ],
   requestBtn: 'Request a Service',
+  guidesTitle: 'Step-by-Step Guides',
+  guideLinks: [
+    {
+      icon: Globe,
+      color: 'bg-blue-50 text-blue-600',
+      title: 'How to Send an International Wire',
+      desc: 'Step-by-step guide for sending a SWIFT transfer via your Relay account.',
+      href: '/portal/guide/relay-wire',
+    },
+  ],
   faqTitle: 'Frequently Asked Questions',
   faq: [
     { q: 'How long does LLC formation take?', a: 'Typically 3-5 business days for New Mexico, 5-7 for Wyoming and Delaware. After formation, EIN takes an additional 2-4 weeks.' },
@@ -381,6 +412,16 @@ const IT = {
     { icon: Phone, color: 'text-teal-600', name: 'Consulenza', desc: 'Consulenza personalizzata' },
   ],
   requestBtn: 'Richiedi un Servizio',
+  guidesTitle: 'Guide Pratiche',
+  guideLinks: [
+    {
+      icon: Globe,
+      color: 'bg-blue-50 text-blue-600',
+      title: 'Come Inviare un Bonifico Internazionale',
+      desc: 'Guida passo passo per inviare un bonifico SWIFT tramite il tuo conto Relay.',
+      href: '/portal/guide/relay-wire',
+    },
+  ],
   faqTitle: 'Domande Frequenti',
   faq: [
     { q: 'Quanto tempo ci vuole per la costituzione della LLC?', a: 'Tipicamente 3-5 giorni lavorativi per il New Mexico, 5-7 per Wyoming e Delaware. Dopo la costituzione, l\'EIN richiede ulteriori 2-4 settimane.' },
