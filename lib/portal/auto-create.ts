@@ -4,7 +4,7 @@
  * Reusable function called from:
  * - offer_send (MCP tool) → creates portal with 'lead' tier
  * - activate-service (payment confirmed) → auto-creates with 'onboarding' tier
- * - portal_create_user (MCP tool) → manual creation with 'full' tier
+ * - portal_create_user (MCP tool) → manual creation with 'active' tier
  *
  * Idempotent: if user already exists, just updates the tier.
  */
@@ -12,7 +12,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { PORTAL_BASE_URL } from '@/lib/config'
-import type { PortalTier } from './tier-config'
+import { TIER_ORDER, type PortalTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
 
 interface AutoCreateResult {
@@ -699,7 +699,7 @@ export async function upgradePortalTier(
     return { success: false, error: error?.message || 'Account not found' }
   }
 
-  const tierOrder: PortalTier[] = ['lead', 'onboarding', 'active', 'full']
+  const tierOrder = [...TIER_ORDER]
   const currentIdx = tierOrder.indexOf((account.portal_tier || 'active') as PortalTier)
   const newIdx = tierOrder.indexOf(newTier)
 

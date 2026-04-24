@@ -1102,7 +1102,7 @@ function deriveJourneySteps({
 
   // 7. Active step
   let activeStep: JourneyStep
-  if (contact.portal_tier === 'active' || contact.portal_tier === 'full') {
+  if (contact.portal_tier === 'active') {
     activeStep = { label: 'Active', status: 'done', detail: contact.portal_tier }
   } else if (contact.portal_tier === 'onboarding') {
     activeStep = { label: 'Active', status: 'current', detail: 'Onboarding' }

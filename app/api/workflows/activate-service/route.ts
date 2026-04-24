@@ -30,6 +30,7 @@ import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
+import { TIER_ORDER } from "@/lib/portal/tier-config"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
@@ -667,7 +668,7 @@ export async function POST(req: NextRequest) {
       // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
       const { upgradePortalTier } = await import("@/lib/portal/auto-create")
       const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
-      const tierAlreadyAtOrAbove = ['onboarding', 'active', 'full'].includes(tierResult.previousTier || '')
+      const tierAlreadyAtOrAbove = ['onboarding', 'active'].includes(tierResult.previousTier || '')
       steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → onboarding (via account)`) : (tierResult.error || "Unknown error") })
     } else if (contactId) {
       // Contact-only (individual service): upgrade contacts.portal_tier + auth metadata directly
@@ -680,7 +681,7 @@ export async function POST(req: NextRequest) {
           .single()
 
         const currentTier = currentContact?.portal_tier || "lead"
-        const tierOrder = ["lead", "onboarding", "active", "full"]
+        const tierOrder: string[] = [...TIER_ORDER]
         const currentIdx = tierOrder.indexOf(currentTier)
         const newIdx = tierOrder.indexOf("onboarding")
 

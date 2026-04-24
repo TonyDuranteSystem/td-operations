@@ -8,15 +8,18 @@
  * Tiers:
  * - lead: After call, offer sent. Can view offer, chat, profile.
  * - onboarding: After payment. Can fill data wizard, upload docs.
+ * - formation: During LLC formation. Same tools as onboarding.
  * - active: After data reviewed. Can see services, invoices, deadlines.
- * - full: After EIN/completion. Everything visible.
  *
  * Account Types:
  * - Client: Annual management — full feature set per tier.
  * - One-Time: Standalone service — limited features (no billing/invoicing/customers/deadlines).
  */
 
-export type PortalTier = 'lead' | 'onboarding' | 'active' | 'full'
+export type PortalTier = 'lead' | 'onboarding' | 'formation' | 'active'
+
+export const TIER_ORDER = ['lead', 'onboarding', 'formation', 'active'] as const satisfies readonly PortalTier[]
+export const PORTAL_TIERS: readonly PortalTier[] = TIER_ORDER
 
 // Which nav item keys are allowed at each tier
 // Each tier INCLUDES all features from previous tiers
@@ -38,6 +41,15 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'documents',   // Full document upload
     'pendingSignatures', // SS-4, OA, lease signing during formation
   ],
+  formation: [
+    'dashboard',
+    'wizard',      // Data collection wizard
+    'chat',
+    'profile',
+    'guide',
+    'documents',   // Full document upload
+    'pendingSignatures', // SS-4, OA, lease signing during formation
+  ],
   active: [
     'dashboard',
     'chat',
@@ -51,24 +63,6 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'deadlines',
     'activity',
     'customers',
-    'referralManagement',
-    'documentGenerator',
-  ],
-  full: [
-    'dashboard',
-    'chat',
-    'profile',
-    'guide',
-    'documents',
-    'services',
-    'pendingSignatures',
-    'billing',
-    'invoices',
-    'deadlines',
-    'activity',
-    'customers',
-    'bankAccounts',
-    'taxDocuments',
     'referralManagement',
     'documentGenerator',
   ],
@@ -123,7 +117,7 @@ export function isTierFeatureVisible(
 
   const t = (tier || 'lead') as PortalTier // Default to most restricted tier, not 'active'
   const allowed = TIER_FEATURES[t]
-  if (!allowed) return true // Unknown tier = show everything (safe fallback)
+  if (!allowed) return false // Unknown tier = hide everything (safe fallback)
   if (!allowed.includes(featureKey)) return false
   if (accountType === 'One-Time' && ONE_TIME_EXCLUDED.includes(featureKey)) return false
   return true
@@ -133,12 +127,12 @@ export function isTierFeatureVisible(
  * Get the dashboard variant for a given tier.
  * Controls what the main dashboard page shows.
  */
-export function getDashboardVariant(tier: PortalTier | string | null): 'offer' | 'wizard' | 'services' | 'full' {
+export function getDashboardVariant(tier: PortalTier | string | null): 'offer' | 'wizard' | 'services' {
   switch (tier) {
     case 'lead': return 'offer'
-    case 'onboarding': return 'wizard'
-    case 'active': return 'services'
-    case 'full': return 'full'
-    default: return 'full'
+    case 'onboarding':
+    case 'formation': return 'wizard'
+    case 'active':
+    default: return 'services'
   }
 }

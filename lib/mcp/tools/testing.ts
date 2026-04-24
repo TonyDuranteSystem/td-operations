@@ -90,6 +90,7 @@ async function createLead(overrides: Record<string, unknown> = {}): Promise<stri
 }
 
 async function createContact(overrides: Record<string, unknown> = {}): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   const { data, error } = await supabaseAdmin
     .from('contacts')
     .insert({ ...TEST_CONTACT, ...overrides })
@@ -100,6 +101,7 @@ async function createContact(overrides: Record<string, unknown> = {}): Promise<s
 }
 
 async function createAccount(overrides: Record<string, unknown> = {}): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   const { data, error } = await supabaseAdmin
     .from('accounts')
     .insert({ ...TEST_ACCOUNT, ...overrides })
@@ -124,6 +126,7 @@ async function createSD(params: {
   stageOrder: number
   serviceName?: string
 }): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   const { data, error } = await supabaseAdmin
     .from('service_deliveries')
     .insert({
@@ -153,6 +156,7 @@ async function createPayment(params: {
   status?: string
   currency?: string
 }): Promise<string> {
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   const { data, error } = await supabaseAdmin
     .from('payments')
     .insert({
@@ -331,7 +335,7 @@ async function scenarioFormationStage4(): Promise<TestScenarioResult> {
 
 async function scenarioFormationCompleted(): Promise<TestScenarioResult> {
   const leadId = await createLead({ status: 'Converted' })
-  const contactId = await createContact({ portal_tier: 'full' })
+  const contactId = await createContact({ portal_tier: 'active' })
   const accountId = await createAccount({
     status: 'Active' as const,
     formation_date: '2026-01-15',
@@ -348,9 +352,10 @@ async function scenarioFormationCompleted(): Promise<TestScenarioResult> {
     stageOrder: 5,
     serviceName: 'Company Formation - TEST (Completed)',
   })
-  // Mark SD as completed
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   await supabaseAdmin.from('service_deliveries').update({ status: 'completed' }).eq('id', sdId)
   const paymentId = await createPayment({ accountId, contactId, amount: 3250, description: 'TEST - Formation fee' })
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
 
   return {
@@ -361,7 +366,7 @@ async function scenarioFormationCompleted(): Promise<TestScenarioResult> {
     payment_id: paymentId,
     summary: [
       'Lead: Converted',
-      'Contact: TEST - Mario Rossi (portal_tier: full)',
+      'Contact: TEST - Mario Rossi (portal_tier: active)',
       'Account: TEST - Rossi LLC (Active, EIN, formation complete)',
       'SD: Company Formation - Completed',
       'Ready to test: Portal as fully active client',
@@ -407,8 +412,10 @@ async function scenarioOnboardingCompleted(): Promise<TestScenarioResult> {
     stageOrder: 5,
     serviceName: 'Onboarding - TEST (Completed)',
   })
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   await supabaseAdmin.from('service_deliveries').update({ status: 'completed' }).eq('id', sdId)
   const paymentId = await createPayment({ accountId, contactId, amount: 2000, description: 'TEST - Onboarding fee' })
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: direct DB write intentional
   await supabaseAdmin.from('leads').update({ converted_to_contact_id: contactId, converted_to_account_id: accountId }).eq('id', leadId)
 
   return {

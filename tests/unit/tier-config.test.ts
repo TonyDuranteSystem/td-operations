@@ -57,12 +57,21 @@ describe('isTierFeatureVisible', () => {
     expect(isTierFeatureVisible('active', 'taxDocuments')).toBe(false)
   })
 
-  // Full tier — everything visible
-  it('full: shows everything', () => {
-    const features = ['dashboard', 'services', 'billing', 'invoices', 'deadlines', 'taxDocuments', 'documents', 'customers']
-    for (const f of features) {
-      expect(isTierFeatureVisible('full', f)).toBe(true)
-    }
+  // Formation tier — same features as onboarding
+  it('formation: shows wizard', () => {
+    expect(isTierFeatureVisible('formation', 'wizard')).toBe(true)
+  })
+
+  it('formation: shows pendingSignatures', () => {
+    expect(isTierFeatureVisible('formation', 'pendingSignatures')).toBe(true)
+  })
+
+  it('formation: hides services', () => {
+    expect(isTierFeatureVisible('formation', 'services')).toBe(false)
+  })
+
+  it('formation: hides billing', () => {
+    expect(isTierFeatureVisible('formation', 'billing')).toBe(false)
   })
 
   // Null/undefined defaults to lead (most restricted)
@@ -71,9 +80,9 @@ describe('isTierFeatureVisible', () => {
     expect(isTierFeatureVisible(null, 'documents')).toBe(true)
   })
 
-  // Unknown tier shows everything (safe fallback)
-  it('unknown tier shows everything', () => {
-    expect(isTierFeatureVisible('xyz', 'services')).toBe(true)
+  // Unknown tier hides everything (safe fallback)
+  it('unknown tier hides everything', () => {
+    expect(isTierFeatureVisible('xyz', 'services')).toBe(false)
   })
 
   // Partner role — only partner features visible
@@ -142,11 +151,12 @@ describe('getDashboardVariant', () => {
     expect(getDashboardVariant('active')).toBe('services')
   })
 
-  it('full → full', () => {
-    expect(getDashboardVariant('full')).toBe('full')
+  it('formation → wizard', () => {
+    expect(getDashboardVariant('formation')).toBe('wizard')
   })
 
-  it('null → full', () => {
-    expect(getDashboardVariant(null)).toBe('full')
+  it('unknown/null → services', () => {
+    expect(getDashboardVariant(null)).toBe('services')
+    expect(getDashboardVariant('xyz')).toBe('services')
   })
 })

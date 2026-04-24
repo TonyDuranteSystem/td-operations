@@ -214,31 +214,6 @@ export async function POST(req: NextRequest) {
           if (created > 0) sideEffects.push(`${created} auto-tasks created`)
         }
 
-        // 7. Portal tier upgrade check
-        if (delivery.account_id) {
-          const shouldUpgrade = isCompleted
-            || targetStage.stage_name === "EIN Received"
-            || targetStage.stage_name === "Welcome Package"
-            || targetStage.stage_order >= 8
-
-          if (shouldUpgrade) {
-            const { data: acct } = await supabaseAdmin
-              .from("accounts")
-              .select("portal_tier")
-              .eq("id", delivery.account_id)
-              .single()
-
-            if (acct?.portal_tier === "active") {
-              // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-              await supabaseAdmin
-                .from("accounts")
-                .update({ portal_tier: "full", updated_at: new Date().toISOString() })
-                .eq("id", delivery.account_id)
-              sideEffects.push("Portal tier upgraded: active → full")
-            }
-          }
-        }
-
         // 8. Portal notification to client
         if (delivery.account_id) {
           const title = isCompleted

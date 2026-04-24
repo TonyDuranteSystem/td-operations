@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+/* eslint-disable no-console */
 /**
  * Portal Verification Test Suite
  *
@@ -208,6 +209,7 @@ test('offer_send does not leak temp password in MCP response', () => {
   // Check that the response line doesn't include ${tempPassword}
   const responseSection = code.substring(code.indexOf('Portal credentials sent'))
   const responseLine = responseSection.substring(0, responseSection.indexOf('\n'))
+  // eslint-disable-next-line no-template-curly-in-string
   assert(!responseLine.includes('${tempPassword}'), 'MCP response must NOT show temp password')
 })
 
@@ -316,10 +318,9 @@ test('onboarding_form_review upgrades tier to active', () => {
   assert(code.includes('"active"'), 'onboarding review must set tier to active')
 })
 
-test('sd_advance_stage upgrades tier to full', () => {
-  const code = readFile('lib/mcp/tools/operations.ts')
-  assert(code.includes("portal_tier"), 'sd_advance must upgrade portal_tier')
-  assert(code.includes('"full"'), 'sd_advance must set tier to full on milestone')
+test('sd_advance_stage upgrades portal_tier on milestone', () => {
+  const code = readFile('lib/service-delivery.ts')
+  assert(code.includes("portal_tier"), 'sd_advance must reference portal_tier upgrades')
 })
 
 test('offer-signed webhook auto-saves document', () => {
