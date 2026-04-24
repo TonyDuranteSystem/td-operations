@@ -17,20 +17,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const { account_id } = await request.json()
-  if (!account_id) {
-    return NextResponse.json({ error: 'account_id required' }, { status: 400 })
+  const { account_id, contact_id } = await request.json()
+  if (!account_id && !contact_id) {
+    return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
   // Find the most recent client message in this thread
-  const { data: latest, error: findError } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('portal_messages')
     .select('id')
-    .eq('account_id', account_id)
     .eq('sender_type', 'client')
     .order('created_at', { ascending: false })
     .limit(1)
-    .maybeSingle()
+
+  if (account_id) {
+    query = query.eq('account_id', account_id)
+  } else {
+    query = query.eq('contact_id', contact_id).is('account_id', null)
+  }
+
+  const { data: latest, error: findError } = await query.maybeSingle()
 
   if (findError) return NextResponse.json({ error: findError.message }, { status: 500 })
   if (!latest) return NextResponse.json({ unmarked: 0 })
