@@ -908,11 +908,14 @@ export default function PortalChatsPage() {
     finally { setPolishing(false) }
   }
 
-  const markAsUnread = async (accountId: string) => {
+  const markAsUnread = async (thread: { account_id: string | null; contact_id: string | null }) => {
+    const body = thread.account_id
+      ? { account_id: thread.account_id }
+      : { contact_id: thread.contact_id }
     await fetch('/api/portal/chat/unread', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_id: accountId }),
+      body: JSON.stringify(body),
     })
     queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
   }
@@ -1179,12 +1182,12 @@ export default function PortalChatsPage() {
                     >
                       <MailCheck className="h-3 w-3" />
                     </span>
-                  ) : thread.account_id && (
+                  ) : (thread.account_id || thread.contact_id) && (
                     <span
                       role="button"
                       tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); markAsUnread(thread.account_id!) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread.account_id!) } }}
+                      onClick={(e) => { e.stopPropagation(); markAsUnread(thread) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); markAsUnread(thread) } }}
                       className="p-1 rounded text-zinc-300 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0 ml-1 cursor-pointer"
                       title="Mark as unread"
                     >
