@@ -724,7 +724,7 @@ export async function POST(req: NextRequest) {
       const portalResult = await autoCreatePortalUser({
         contactId,
         accountId: autoAccountId || undefined,
-        tier: "onboarding",
+        tier: contractType === 'formation' ? 'formation' : 'onboarding',
       })
 
       if (portalResult.success && !portalResult.alreadyExists && portalResult.tempPassword && portalResult.email) {

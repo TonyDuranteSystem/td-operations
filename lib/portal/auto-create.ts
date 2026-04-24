@@ -3,7 +3,7 @@
  *
  * Reusable function called from:
  * - offer_send (MCP tool) → creates portal with 'lead' tier
- * - activate-service (payment confirmed) → auto-creates with 'onboarding' tier
+ * - activate-service (payment confirmed) → auto-creates with 'formation' tier for formation contracts, 'onboarding' for all others
  * - portal_create_user (MCP tool) → manual creation with 'full' tier
  *
  * Idempotent: if user already exists, just updates the tier.
