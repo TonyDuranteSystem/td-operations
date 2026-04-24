@@ -110,9 +110,8 @@ For tasks that process many records (mass document processing, bulk updates, aud
 
 1. **Supabase** (via CRM and SQL tools) = Single Source of Truth for all client, contact, service, payment, task, and deal data.
 2. **Google Drive** (via drive_* tools) = Document storage. Every client has a folder linked via `accounts.drive_folder_id`.
-3. **QuickBooks** (via qb_* tools) = Accounting ledger, MANUAL DOWNSTREAM ONLY (R097). Our system is the source of truth for invoice numbers (INV-NNNNNN format). NO automatic sync runs anywhere. Use qb_* tools only on explicit Antonio request.
-4. **Gmail** (via gmail_* tools) = Email communications. Default mailbox: `support@tonydurante.us`.
-5. **Airtable** (via crm_sync_airtable) = Legacy data only. Use as fallback when Supabase data is incomplete.
+3. **Gmail** (via gmail_* tools) = Email communications. Default mailbox: `support@tonydurante.us`.
+4. **Airtable** (via crm_sync_airtable) = Legacy data only. Use as fallback when Supabase data is incomplete.
 
 ## Common Workflows — Follow These, Don't Improvise
 
@@ -230,19 +229,6 @@ You have **147 tools** organized into functional groups. Read each tool's descri
 - `msg_send`: Send to WhatsApp or Telegram group (legacy). NOT for normal client communication.
 - `msg_mark_read`: Mark messages as read (legacy).
 - `msg_list_channels`: List available messaging channels (legacy).
-
-### QuickBooks (9 tools: qb_*)
-**R097: QB is MANUAL DOWNSTREAM ONLY. Caller MUST pass invoice_number (INV-NNNNNN from createTDInvoice). QB does NOT mint numbers. No automatic sync runs anywhere.**
-- `qb_list_invoices/qb_list_payments`: Financial records. Filter by customer, status, date.
-- `qb_get_invoice`: Full invoice details. Use BEFORE sending.
-- `qb_create_invoice`: Push an existing TD invoice to QB (manual). REQUIRES invoice_number (our canonical INV-NNNNNN). Auto-finds/creates QB customer. Does NOT send.
-- `qb_update_invoice`: Update customer memo (payment instructions), due date, email.
-- `qb_send_invoice`: Download PDF from QB + send via Gmail with bank details. Language param: en or it.
-- `qb_void_invoice`: Void or delete incorrect invoices.
-- `qb_record_payment`: Record a payment against invoices (marks as Paid).
-- `qb_search_customers`: Find QB customers by name/email.
-- `qb_get_company_info` / `qb_token_status`: Check connection health.
-- **WORKFLOW**: `qb_create_invoice` → `qb_get_invoice` (review) → `qb_update_invoice` (if needed) → CONFIRM with user → `qb_send_invoice`.
 
 ### Calendly (3 tools: cal_*)
 - `cal_list_bookings`: List upcoming (or past) meetings.
