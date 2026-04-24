@@ -114,7 +114,7 @@ export default function PortalChatsPage() {
   // Right-pane sub-tab: switches between chat messages and the per-thread Tasks list
   const [chatViewMode, setChatViewMode] = useState<'messages' | 'tasks'>('messages')
   // Internal team chat
-  const [sidebarView, setSidebarView] = useState<'chats' | 'internal'>('chats')
+  const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>('chats')
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
   const [internalReplyText, setInternalReplyText] = useState('')
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
@@ -250,6 +250,24 @@ export default function PortalChatsPage() {
     queryKey: ['portal-chat-threads'],
     queryFn: () => fetch('/api/portal/chat/threads').then(r => r.json()),
     refetchInterval: 60_000, // fallback reconciliation; realtime thread-list subscription below is primary
+  })
+
+  type OpenAction = {
+    id: string
+    action_type: string
+    updated_at: string | null
+    message_id: string | null
+    account_id: string | null
+    contact_id: string | null
+    portal_messages: { message: string } | null
+    accounts: { company_name: string } | null
+    contacts: { full_name: string } | null
+  }
+  const { data: openActions, isLoading: openActionsLoading } = useQuery<OpenAction[]>({
+    queryKey: ['open-message-actions'],
+    queryFn: () => fetch('/api/crm/admin-actions/message-actions?open=true').then(r => r.json()).then(d => d.actions || []),
+    refetchInterval: 30_000,
+    enabled: sidebarView === 'actions',
   })
 
   // Fetch open-task counts per thread. Merged with the threads list client-side
@@ -1074,7 +1092,7 @@ export default function PortalChatsPage() {
               </button>
             </div>
           </div>
-          {/* Sidebar tabs: Chats | Team */}
+          {/* Sidebar tabs: Chats | Actions | Team */}
           <div className="flex rounded-lg bg-zinc-100 p-0.5">
             <button
               onClick={() => { setSidebarView('chats'); setSelectedThreadId(null) }}
@@ -1088,6 +1106,16 @@ export default function PortalChatsPage() {
               {totalUnread > 0 && (
                 <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white">{totalUnread}</span>
               )}
+            </button>
+            <button
+              onClick={() => { setSidebarView('actions'); setSelectedAccountId(null); setSelectedContactId(null); setSelectedThreadId(null) }}
+              className={cn(
+                'flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors',
+                sidebarView === 'actions' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
+              )}
+            >
+              <AlertCircle className="h-3.5 w-3.5" />
+              Actions
             </button>
             <button
               onClick={() => { setSidebarView('internal'); setSelectedAccountId(null) }}
@@ -1268,6 +1296,64 @@ export default function PortalChatsPage() {
           )}
         </div>
         </>
+        ) : sidebarView === 'actions' ? (
+        /* Action Items list */
+        <div className="flex-1 overflow-y-auto">
+          {openActionsLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+            </div>
+          ) : !openActions?.length ? (
+            <div className="text-center py-12 px-4">
+              <CheckCircle2 className="h-10 w-10 text-zinc-200 mx-auto mb-2" />
+              <p className="text-sm text-zinc-400">No open action items</p>
+              <p className="text-xs text-zinc-300 mt-1">Tag messages with Action Needed, In Progress, or Waiting on Client to track them here</p>
+            </div>
+          ) : (
+            (() => {
+              const order: string[] = ['action_needed', 'in_progress', 'waiting_on_client']
+              const grouped = order
+                .map(type => ({ type, items: openActions.filter(a => a.action_type === type) }))
+                .filter(g => g.items.length > 0)
+              return grouped.map(({ type, items }) => {
+                const cfg = ACTION_TAG_CONFIG[type]
+                const TagIcon = cfg.icon
+                return (
+                  <div key={type}>
+                    <div className="px-4 py-2 bg-zinc-50 border-b flex items-center gap-2">
+                      <TagIcon className={cn('h-3.5 w-3.5', cfg.color)} />
+                      <span className={cn('text-xs font-semibold uppercase tracking-wider', cfg.color)}>{cfg.label}</span>
+                      <span className={cn('ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full', cfg.bg, cfg.color)}>{items.length}</span>
+                    </div>
+                    {items.map(action => {
+                      const clientName = action.accounts?.company_name || action.contacts?.full_name || '—'
+                      const preview = action.portal_messages?.message?.slice(0, 90) || '(attachment)'
+                      return (
+                        <button
+                          key={action.id}
+                          onClick={() => {
+                            if (action.account_id) { setSelectedAccountId(action.account_id); setSelectedContactId(null) }
+                            else if (action.contact_id) { setSelectedContactId(action.contact_id); setSelectedAccountId(null) }
+                            setSidebarView('chats')
+                          }}
+                          className="w-full px-4 py-3 text-left border-b hover:bg-zinc-50 transition-colors"
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-medium text-zinc-900 truncate">{clientName}</span>
+                            <span className="text-[10px] text-zinc-400 shrink-0 ml-2">
+                              {action.updated_at ? format(parseISO(action.updated_at), 'MMM d') : ''}
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-500 line-clamp-2">{preview}</p>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })
+            })()
+          )}
+        </div>
         ) : (
         /* Internal team threads list */
         <div className="flex-1 overflow-y-auto">
