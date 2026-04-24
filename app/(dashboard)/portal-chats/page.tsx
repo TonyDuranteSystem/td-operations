@@ -107,6 +107,7 @@ export default function PortalChatsPage() {
   const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
   const [saveTemplate, setSaveTemplate] = useState<{ messageText: string; title: string } | null>(null)
   const [saveTemplateLoading, setSaveTemplateLoading] = useState(false)
+  const [saveTemplatePrompt, setSaveTemplatePrompt] = useState<string | null>(null)
   const [pendingAdminFile, setPendingAdminFile] = useState<PendingAdminFile | null>(null)
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
@@ -138,6 +139,7 @@ export default function PortalChatsPage() {
   const adminFileRef = useRef<HTMLInputElement>(null)
   const prevTotalUnreadRef = useRef(0)
   const lastSuggestedMsgRef = useRef<string | null>(null)
+  const lastSentTextRef = useRef<string>('')
   const queryClient = useQueryClient()
   const { playSound } = useNotificationSound()
 
@@ -789,9 +791,12 @@ export default function PortalChatsPage() {
       return res.json()
     },
     onSuccess: async () => {
+      const sentText = lastSentTextRef.current
       setReplyText('')
       setReplyToMsg(null)
       setPendingAdminFile(null)
+      // Prompt to save as template only for substantive replies (>40 chars)
+      if (sentText.trim().length > 40) setSaveTemplatePrompt(sentText.trim())
       const readBody = selectedAccountId
         ? { account_id: selectedAccountId }
         : { contact_id: selectedContactId }
@@ -870,6 +875,7 @@ export default function PortalChatsPage() {
     if ((!replyText.trim() && !pendingAdminFile) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
+    lastSentTextRef.current = replyText.trim()
 
     if (pendingAdminFile) {
       setUploadingAdminFile(true)
@@ -1807,17 +1813,6 @@ export default function PortalChatsPage() {
                           >
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
                           </DropdownMenu.Item>
-                          {isAdmin && msg.message?.trim() && (
-                            <DropdownMenu.Item
-                              className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
-                              onSelect={() => {
-                                const firstLine = msg.message.split('\n').find(l => l.trim()) ?? msg.message
-                                setSaveTemplate({ messageText: msg.message, title: firstLine.trim().slice(0, 80) })
-                              }}
-                            >
-                              <BookmarkPlus className="h-3.5 w-3.5 text-zinc-400" /> Save as AI Template
-                            </DropdownMenu.Item>
-                          )}
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-red-600 hover:bg-red-50 cursor-pointer outline-none"
@@ -2310,7 +2305,31 @@ export default function PortalChatsPage() {
         </div>
       )}
 
-      {/* Save as AI Template modal */}
+      {/* Save-as-template prompt banner — appears after sending a substantive reply */}
+      {saveTemplatePrompt && !saveTemplate && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-zinc-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg animate-in slide-in-from-bottom-2">
+          <BookmarkPlus className="h-4 w-4 text-violet-400 shrink-0" />
+          <span>Save this reply as an AI template?</span>
+          <button
+            onClick={() => {
+              const firstLine = saveTemplatePrompt.split('\n').find(l => l.trim()) ?? saveTemplatePrompt
+              setSaveTemplate({ messageText: saveTemplatePrompt, title: firstLine.trim().slice(0, 80) })
+              setSaveTemplatePrompt(null)
+            }}
+            className="px-3 py-1 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium transition-colors"
+          >
+            Yes
+          </button>
+          <button
+            onClick={() => setSaveTemplatePrompt(null)}
+            className="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 rounded-lg transition-colors"
+          >
+            No
+          </button>
+        </div>
+      )}
+
+      {/* Save-as-template title-edit modal — opened from the prompt banner */}
       {saveTemplate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4">
@@ -2318,9 +2337,9 @@ export default function PortalChatsPage() {
               <BookmarkPlus className="h-5 w-5 text-violet-600 shrink-0" />
               <h2 className="text-base font-semibold text-zinc-900">Save as AI Template</h2>
             </div>
-            <p className="text-xs text-zinc-500">This reply will be added to the AI knowledge base. The AI will use it as a reference when similar questions come up from other clients.</p>
+            <p className="text-xs text-zinc-500">Give this reply a short title so the AI can find it when a similar question comes up.</p>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-700">Title <span className="text-zinc-400">(describe what this answers)</span></label>
+              <label className="text-xs font-medium text-zinc-700">Title</label>
               <input
                 type="text"
                 value={saveTemplate.title}
