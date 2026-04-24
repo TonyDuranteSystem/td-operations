@@ -16,6 +16,7 @@ import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { WelcomeDashboard } from './welcome-dashboard'
 import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
+import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
@@ -282,6 +283,9 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Relay Wire guide announcement — dismissible per device via localStorage */}
+      <GuideAnnouncementBanner locale={locale} />
 
       {/* Profile completion banner — shown for standalone tax-return clients
           with missing contact fields (phone, address, DOB, citizenship). The
