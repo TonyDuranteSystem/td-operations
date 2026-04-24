@@ -18,6 +18,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { upgradePortalTier } from "@/lib/portal/auto-create"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 import type { Json } from "@/lib/database.types"
@@ -714,7 +715,11 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // 4. Log
+        // 4. Sync portal tier to active across contact + account + auth
+        const tierResult = await upgradePortalTier(accountId, "active")
+        einSideEffects.push(`Portal tier → active (prev: ${tierResult.previousTier ?? "unknown"}, success: ${tierResult.success})`)
+
+        // 5. Log
         await supabaseAdmin.from("action_log").insert({
           actor: "crm-admin",
           action_type: "enter_ein",
