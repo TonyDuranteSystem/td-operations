@@ -94,6 +94,53 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   result.steps.push(step("fetch_data", "ok", `${account.company_name} / ${contact.full_name}`))
   await updateJobProgress(job.id, result)
 
+  // ─── 2.5. AUTO-CREATE PORTAL ACCOUNTS FOR ALL LINKED MEMBERS ───
+  // Runs here (post-EIN / state-confirmed) so members get access only after the LLC is real.
+  // Idempotent: autoCreatePortalUser skips existing users and just updates tier.
+  try {
+    const { autoCreatePortalUser } = await import("@/lib/portal/auto-create")
+
+    const { data: allLinks } = await supabaseAdmin
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", p.account_id)
+
+    let portalCreated = 0
+    let portalExisting = 0
+    let portalErrors = 0
+
+    for (const link of allLinks ?? []) {
+      try {
+        const pr = await autoCreatePortalUser({
+          accountId: p.account_id,
+          contactId: link.contact_id,
+          tier: "active",
+          autoCreated: true,
+        })
+        if (pr.success) {
+          if (pr.alreadyExists) portalExisting++
+          else portalCreated++
+        } else {
+          portalErrors++
+          console.warn("[welcome-package] portal user failed:", pr.error)
+        }
+      } catch (memberErr) {
+        portalErrors++
+        console.warn("[welcome-package] portal user error:", memberErr instanceof Error ? memberErr.message : memberErr)
+      }
+    }
+
+    result.steps.push(step(
+      "portal_members",
+      portalErrors > 0 ? "error" : "ok",
+      `${portalCreated} created, ${portalExisting} existing, ${portalErrors} errors`
+    ))
+  } catch (e) {
+    result.steps.push(step("portal_members", "error", e instanceof Error ? e.message : String(e)))
+  }
+
+  await updateJobProgress(job.id, result)
+
   const lang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
   const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
 
