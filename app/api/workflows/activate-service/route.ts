@@ -494,6 +494,13 @@ export async function POST(req: NextRequest) {
 
       for (const pipeline of pipelines) {
         try {
+          // Formation contracts only activate the Company Formation SD at payment.
+          // Other bundled pipelines (Annual Renewal, CMRA, etc.) are created later.
+          if (contractType === 'formation' && pipeline !== 'Company Formation') {
+            sdResults.push({ pipeline, status: 'skipped' })
+            continue
+          }
+
           const quantity = pipelineQuantity.get(pipeline) ?? 1
 
           // Guard 1: count SDs already created for this exact offer + pipeline
@@ -874,6 +881,33 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "crm_invoice", status: "skipped", detail: "No account or contact to link invoice to" })
     } else {
       steps.push({ step: "crm_invoice", status: "skipped", detail: "No amount on activation" })
+    }
+
+    // ─── STEP 3.2: Populate setup_fee_amount on account (AUTO) ──────
+    if (autoAccountId && activation.amount) {
+      try {
+        await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/ per dev_task fda76fd3
+          supabase
+            .from('accounts')
+            .update({
+              setup_fee_amount: Number(activation.amount),
+              setup_fee_currency: (activation.currency || 'USD') as never,
+              setup_fee_paid_date: new Date().toISOString().split('T')[0],
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', autoAccountId)
+            .is('setup_fee_amount', null),
+          'accounts.update'
+        )
+        steps.push({
+          step: 'setup_fee',
+          status: 'done',
+          detail: `setup_fee_amount=${activation.amount} ${activation.currency || 'USD'} on account ${autoAccountId.slice(0, 8)}`,
+        })
+      } catch (e) {
+        steps.push({ step: 'setup_fee', status: 'error', detail: e instanceof Error ? e.message : String(e) })
+      }
     }
 
     // ─── STEP 3.5: Referral Record (AUTO, non-blocking) ──────

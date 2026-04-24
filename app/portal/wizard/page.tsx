@@ -131,7 +131,9 @@ export default async function WizardPage({
       const taxReturnSd = (sds || []).find(s => s.service_type === 'Tax Return')
       if (taxReturnSd?.stage === 'Company Data Pending') {
         pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType: 'Tax Return' })
-      } else {
+      } else if (account.portal_tier === 'active' && account.ein_number) {
+        // Only show tax wizard when EIN is received and account is fully active.
+        // Formation-tier clients must wait for EIN before filing.
         pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: 'Tax Return' })
       }
     }
