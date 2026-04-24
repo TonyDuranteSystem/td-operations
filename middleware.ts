@@ -58,8 +58,6 @@ const PUBLIC_PREFIXES = [
   '/api/signature-request',
   '/api/signature-request-signed',
   '/api/offers',
-  // Sandbox-only testing endpoints (blocked in production by route guard)
-  '/api/sandbox',
   // OAuth and well-known
   '/.well-known',
   '/oauth',
