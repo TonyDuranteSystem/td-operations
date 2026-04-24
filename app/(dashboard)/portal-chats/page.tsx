@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2 } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -105,6 +105,8 @@ export default function PortalChatsPage() {
   // Extra accounts found by search that aren't in existing threads
   const [searchExtraAccounts, setSearchExtraAccounts] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
   const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
+  const [saveTemplate, setSaveTemplate] = useState<{ messageText: string; title: string } | null>(null)
+  const [saveTemplateLoading, setSaveTemplateLoading] = useState(false)
   const [pendingAdminFile, setPendingAdminFile] = useState<PendingAdminFile | null>(null)
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
@@ -918,6 +920,34 @@ export default function PortalChatsPage() {
       body: JSON.stringify(body),
     })
     queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+  }
+
+  const handleSaveTemplate = async () => {
+    if (!saveTemplate || saveTemplateLoading) return
+    setSaveTemplateLoading(true)
+    try {
+      const body: Record<string, string> = { message_text: saveTemplate.messageText, title: saveTemplate.title }
+      if (selectedAccountId) body.account_id = selectedAccountId
+      else if (selectedContactId) body.contact_id = selectedContactId
+      const res = await fetch('/api/portal/chat/save-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 409) {
+        toast.error(`Already saved as "${data.existing_title}"`)
+      } else if (!res.ok) {
+        toast.error(data.error || 'Failed to save template')
+      } else {
+        toast.success('Saved to AI knowledge base')
+        setSaveTemplate(null)
+      }
+    } catch {
+      toast.error('Failed to save template')
+    } finally {
+      setSaveTemplateLoading(false)
+    }
   }
 
   const markAsRead = async (thread: { account_id: string | null; contact_id: string | null }) => {
@@ -1777,6 +1807,17 @@ export default function PortalChatsPage() {
                           >
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
                           </DropdownMenu.Item>
+                          {isAdmin && msg.message?.trim() && (
+                            <DropdownMenu.Item
+                              className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                              onSelect={() => {
+                                const firstLine = msg.message.split('\n').find(l => l.trim()) ?? msg.message
+                                setSaveTemplate({ messageText: msg.message, title: firstLine.trim().slice(0, 80) })
+                              }}
+                            >
+                              <BookmarkPlus className="h-3.5 w-3.5 text-zinc-400" /> Save as AI Template
+                            </DropdownMenu.Item>
+                          )}
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-red-600 hover:bg-red-50 cursor-pointer outline-none"
@@ -2265,6 +2306,49 @@ export default function PortalChatsPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Save as AI Template modal */}
+      {saveTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <BookmarkPlus className="h-5 w-5 text-violet-600 shrink-0" />
+              <h2 className="text-base font-semibold text-zinc-900">Save as AI Template</h2>
+            </div>
+            <p className="text-xs text-zinc-500">This reply will be added to the AI knowledge base. The AI will use it as a reference when similar questions come up from other clients.</p>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-700">Title <span className="text-zinc-400">(describe what this answers)</span></label>
+              <input
+                type="text"
+                value={saveTemplate.title}
+                onChange={e => setSaveTemplate(t => t ? { ...t, title: e.target.value } : null)}
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+                maxLength={120}
+                autoFocus
+              />
+            </div>
+            <div className="bg-zinc-50 rounded-lg p-3 max-h-32 overflow-y-auto">
+              <p className="text-xs text-zinc-600 whitespace-pre-wrap">{saveTemplate.messageText}</p>
+            </div>
+            <div className="flex gap-2 justify-end pt-1">
+              <button
+                onClick={() => setSaveTemplate(null)}
+                className="px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveTemplate}
+                disabled={saveTemplateLoading || !saveTemplate.title.trim()}
+                className="px-4 py-2 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+              >
+                {saveTemplateLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />}
+                Save
+              </button>
+            </div>
           </div>
         </div>
       )}
