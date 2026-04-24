@@ -184,6 +184,7 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
     ss4.id,
     'system',
     `FaxAge confirmed (Job ${jobId}, message ${messageId})`,
+    { message_id: messageId, job_id: jobId },
   )
 
   if (faxResult.success) {
@@ -236,6 +237,7 @@ async function handleFaxFailure(
   const displayName = companyName || 'Unknown Company'
 
   // Create Urgent task for retry
+  // eslint-disable-next-line no-restricted-syntax
   await supabaseAdmin.from('tasks').insert({
     task_title: `FAXAGE FAILED: ${displayName} -- Retry SS-4 fax`,
     assigned_to: 'Luca',
