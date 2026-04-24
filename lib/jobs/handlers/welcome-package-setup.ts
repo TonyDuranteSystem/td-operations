@@ -121,14 +121,14 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
         const { data: membersRows } = await (supabaseAdmin as any)
           .from("members")
-          .select("member_type, full_name, company_name, email, ownership_pct")
+          .select("member_type, full_name, company_name, email, representative_email, ownership_pct")
           .eq("account_id", p.account_id)
           .order("is_primary", { ascending: false })
 
         if (membersRows && membersRows.length > 1) {
           membersJson = membersRows.map(mr => ({
             name: mr.member_type === "company" ? mr.company_name : mr.full_name,
-            email: mr.member_type === "company" ? null : (mr.email || null),
+            email: mr.member_type === "company" ? (mr.representative_email || null) : (mr.email || null),
             ownership_pct: mr.ownership_pct ?? null,
             initial_contribution: "$0 (No initial capital contribution required)",
           }))
@@ -152,6 +152,8 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           member_address: account.physical_address || null,
           member_email: contact.email || null,
           members: membersJson as unknown as Json,
+          total_signers: isMMLC && membersJson ? membersJson.length : 1,
+          signed_count: 0,
           effective_date: account.formation_date || today,
           business_purpose: "any and all lawful business activities",
           initial_contribution: "$0 (No initial capital contribution required)",
@@ -171,6 +173,46 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         result.steps.push(step("oa", "error", oaErr?.message || "insert failed"))
       } else {
         result.steps.push(step("oa", "ok", `${oa.token} (${entityType})`))
+
+        // ─── CREATE OA_SIGNATURES FOR MMLLC ───
+        if (isMMLC && membersJson && membersJson.length > 0) {
+          const { data: allContacts } = await supabaseAdmin
+            .from("account_contacts")
+            .select("contact_id, contacts(id, full_name, email)")
+            .eq("account_id", p.account_id)
+
+          const contactsByEmail = new Map<string, string>()
+          const contactsByName = new Map<string, string>()
+          for (const link of allContacts || []) {
+            const c = link.contacts as unknown as { id: string; full_name: string; email: string } | null
+            if (c?.email) contactsByEmail.set(c.email.toLowerCase(), c.id)
+            if (c?.full_name) contactsByName.set(c.full_name.toLowerCase(), c.id)
+          }
+
+          const sigRows = membersJson.map((m, idx) => {
+            const memberEmail = (m.email as string | null) || null
+            const memberName = (m.name as string) || ""
+            const matchedContactId =
+              (memberEmail && contactsByEmail.get(memberEmail.toLowerCase())) ||
+              contactsByName.get(memberName.toLowerCase()) ||
+              null
+            return {
+              oa_id: oa.id,
+              member_index: idx,
+              member_name: memberName,
+              member_email: memberEmail,
+              contact_id: matchedContactId,
+              status: "pending",
+            }
+          })
+
+          const { error: sigErr } = await supabaseAdmin.from("oa_signatures").insert(sigRows)
+          if (sigErr) {
+            result.steps.push(step("oa_signatures", "error", sigErr.message))
+          } else {
+            result.steps.push(step("oa_signatures", "ok", `${sigRows.length} signature rows created`))
+          }
+        }
       }
     }
   }

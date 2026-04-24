@@ -223,6 +223,8 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             if (c?.full_name) contactsByName.set(c.full_name.toLowerCase(), c.id)
           }
 
+          // For company members, callers must pass the representative's email as m.email
+          // (i.e. the member_type=company row's representative_email field, not company_email)
           const sigRows = params.members.map((m, idx) => {
             const matchedContactId = (m.email && contactsByEmail.get(m.email.toLowerCase()))
               || contactsByName.get(m.name.toLowerCase())
