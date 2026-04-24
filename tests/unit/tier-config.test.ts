@@ -31,6 +31,27 @@ describe('isTierFeatureVisible', () => {
     expect(isTierFeatureVisible('lead', 'taxDocuments')).toBe(false)
   })
 
+  // Formation tier — wizard + docs + signatures (between lead and onboarding)
+  it('formation: shows wizard', () => {
+    expect(isTierFeatureVisible('formation', 'wizard')).toBe(true)
+  })
+
+  it('formation: shows documents', () => {
+    expect(isTierFeatureVisible('formation', 'documents')).toBe(true)
+  })
+
+  it('formation: shows pendingSignatures', () => {
+    expect(isTierFeatureVisible('formation', 'pendingSignatures')).toBe(true)
+  })
+
+  it('formation: hides services', () => {
+    expect(isTierFeatureVisible('formation', 'services')).toBe(false)
+  })
+
+  it('formation: hides billing', () => {
+    expect(isTierFeatureVisible('formation', 'billing')).toBe(false)
+  })
+
   // Onboarding tier
   it('onboarding: shows documents', () => {
     expect(isTierFeatureVisible('onboarding', 'documents')).toBe(true)
@@ -57,23 +78,16 @@ describe('isTierFeatureVisible', () => {
     expect(isTierFeatureVisible('active', 'taxDocuments')).toBe(false)
   })
 
-  // Full tier — everything visible
-  it('full: shows everything', () => {
-    const features = ['dashboard', 'services', 'billing', 'invoices', 'deadlines', 'taxDocuments', 'documents', 'customers']
-    for (const f of features) {
-      expect(isTierFeatureVisible('full', f)).toBe(true)
-    }
-  })
-
   // Null/undefined defaults to lead (most restricted)
   it('null tier defaults to lead', () => {
     expect(isTierFeatureVisible(null, 'services')).toBe(false)
     expect(isTierFeatureVisible(null, 'documents')).toBe(true)
   })
 
-  // Unknown tier shows everything (safe fallback)
-  it('unknown tier shows everything', () => {
-    expect(isTierFeatureVisible('xyz', 'services')).toBe(true)
+  // Unknown tier hides everything (security: fail closed)
+  it('unknown tier hides everything', () => {
+    expect(isTierFeatureVisible('xyz', 'services')).toBe(false)
+    expect(isTierFeatureVisible('xyz', 'dashboard')).toBe(false)
   })
 
   // Partner role — only partner features visible
@@ -101,7 +115,7 @@ describe('isTierFeatureVisible', () => {
     expect(isTierFeatureVisible('active', 'documents', null, 'partner')).toBe(false)
   })
 
-  // Client referral management — visible at active/full tiers
+  // Client referral management — visible at active tier
   it('active client: shows referralManagement', () => {
     expect(isTierFeatureVisible('active', 'referralManagement')).toBe(true)
   })
@@ -134,6 +148,10 @@ describe('getDashboardVariant', () => {
     expect(getDashboardVariant('lead')).toBe('offer')
   })
 
+  it('formation → wizard', () => {
+    expect(getDashboardVariant('formation')).toBe('wizard')
+  })
+
   it('onboarding → wizard', () => {
     expect(getDashboardVariant('onboarding')).toBe('wizard')
   })
@@ -142,11 +160,11 @@ describe('getDashboardVariant', () => {
     expect(getDashboardVariant('active')).toBe('services')
   })
 
-  it('full → full', () => {
-    expect(getDashboardVariant('full')).toBe('full')
+  it('unknown → offer (most restricted)', () => {
+    expect(getDashboardVariant('full')).toBe('offer')
   })
 
-  it('null → full', () => {
-    expect(getDashboardVariant(null)).toBe('full')
+  it('null → offer (most restricted)', () => {
+    expect(getDashboardVariant(null)).toBe('offer')
   })
 })

@@ -41,7 +41,8 @@ interface WelcomeDashboardProps {
 
 export function WelcomeDashboard({ tier, firstName, offerData, locale, wizardSubmitted = false }: WelcomeDashboardProps) {
   const isLead = tier === 'lead'
-  const isOnboarding = tier === 'onboarding'
+  const isFormation = tier === 'formation'
+  const isOnboarding = tier === 'onboarding' || isFormation
   const isViewed = offerData?.status === 'viewed' || offerData?.status === 'signed' || offerData?.status === 'completed'
   const isSigned = offerData?.status === 'signed' || offerData?.status === 'completed'
   const isPaid = offerData?.status === 'completed'

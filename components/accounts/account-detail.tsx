@@ -7,7 +7,7 @@ import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Pencil, Plus, Search, Loader2, Stethoscope, X, Activity,
+  Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -64,6 +64,14 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
   'Partially Paid': 'bg-orange-100 text-orange-700',
   Cancelled: 'bg-zinc-100 text-zinc-500',
   Waived: 'bg-zinc-100 text-zinc-500',
+}
+
+const TIER_COLORS: Record<string, string> = {
+  lead: 'bg-zinc-100 text-zinc-600',
+  formation: 'bg-purple-100 text-purple-700',
+  onboarding: 'bg-amber-100 text-amber-700',
+  active: 'bg-emerald-100 text-emerald-700',
+  full: 'bg-blue-100 text-blue-700',
 }
 
 const ENTITY_LABELS: Record<string, string> = {
@@ -434,10 +442,12 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showPlaceClient, setShowPlaceClient] = useState(false)
   const [showDiagnostic, setShowDiagnostic] = useState(false)
   const [showStatusDialog, setShowStatusDialog] = useState(false)
+  const [showEINReceived, setShowEINReceived] = useState(false)
 
   const primaryContact = contacts[0] || null
 
   const activeServices = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
+  const formationSD = services.find(s => s.service_type === 'Company Formation' && s.status !== 'Completed' && s.status !== 'Cancelled')
   const overduePayments = payments.filter(p =>
     (p.status === 'Due' || p.status === 'Overdue' || p.status === 'Partially Paid') &&
     p.due_date && p.due_date < today
@@ -471,6 +481,11 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
             )}>
               {account.status}
             </span>
+            {(account as unknown as Record<string, unknown>).portal_tier && (
+              <span className={cn('text-xs font-medium px-2 py-0.5 rounded', TIER_COLORS[(account as unknown as Record<string, unknown>).portal_tier as string] ?? 'bg-zinc-100')}>
+                {(account as unknown as Record<string, unknown>).portal_tier as string}
+              </span>
+            )}
             <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <PortalTransitionButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <ComposeEmailButton
@@ -497,6 +512,15 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
               <Building2 className="h-3.5 w-3.5" />
               Place Client
             </button>
+            {isAdmin && formationSD && !account.ein_number && (
+              <button
+                onClick={() => setShowEINReceived(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors"
+              >
+                <BadgeCheck className="h-3.5 w-3.5" />
+                EIN Received
+              </button>
+            )}
           </div>
           <p className="text-muted-foreground text-sm mt-1">
             {account.state_of_formation && `${account.state_of_formation} · `}
@@ -603,6 +627,12 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         companyName={account.company_name}
         currentStatus={account.status ?? ''}
         updatedAt={account.updated_at}
+      />
+      <EINReceivedDialog
+        open={showEINReceived}
+        onClose={() => { setShowEINReceived(false); router.refresh() }}
+        accountId={account.id}
+        companyName={account.company_name}
       />
 
       {/* Tabs */}
@@ -1032,6 +1062,91 @@ function ServiziTab({ services, today, accountId }: { services: Service[]; today
       )}
       <AddServiceDialog open={showAddService} onClose={() => { setShowAddService(false); router.refresh() }} accountId={accountId} existingTypes={services.map(s => s.service_type)} />
     </div>
+  )
+}
+
+function EINReceivedDialog({ open, onClose, accountId, companyName }: {
+  open: boolean; onClose: () => void; accountId: string; companyName: string
+}) {
+  const [einValue, setEinValue] = useState('')
+  const [driveFileId, setDriveFileId] = useState('')
+  const [recording, setRecording] = useState(false)
+
+  if (!open) return null
+
+  const handleRecord = async () => {
+    if (!einValue.trim()) { toast.error('EIN is required'); return }
+    setRecording(true)
+    const res = await fetch('/api/crm/admin-actions/record-ein-received', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        account_id: accountId,
+        ein_number: einValue.trim(),
+        drive_file_id: driveFileId.trim() || undefined,
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    setRecording(false)
+    if (data.success) {
+      toast.success(`EIN ${data.ein_number} recorded — tier upgraded to active`)
+      setEinValue('')
+      setDriveFileId('')
+      onClose()
+    } else {
+      toast.error(data.error ?? 'Failed to record EIN')
+    }
+  }
+
+  const handleClose = () => { setEinValue(''); setDriveFileId(''); onClose() }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/50" onClick={handleClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-4 border-b">
+            <h2 className="text-lg font-semibold">Record EIN Received</h2>
+            <button onClick={handleClose} className="p-1 rounded hover:bg-zinc-100"><X className="h-5 w-5" /></button>
+          </div>
+          <div className="px-6 py-4 space-y-4">
+            <p className="text-sm text-muted-foreground">{companyName}</p>
+            <div>
+              <label className="block text-sm font-medium mb-1">EIN Number *</label>
+              <input
+                type="text"
+                value={einValue}
+                onChange={e => setEinValue(e.target.value)}
+                placeholder="30-1482516"
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <p className="text-xs text-muted-foreground mt-1">9 digits, with or without dash</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Drive File ID (optional)</label>
+              <input
+                type="text"
+                value={driveFileId}
+                onChange={e => setDriveFileId(e.target.value)}
+                placeholder="Google Drive file ID of EIN letter"
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+          <div className="px-6 py-4 border-t flex justify-end gap-2">
+            <button onClick={handleClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">Cancel</button>
+            <button
+              onClick={handleRecord}
+              disabled={recording || !einValue.trim()}
+              className="px-4 py-2 text-sm bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {recording && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {recording ? 'Processing…' : 'Record EIN'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
 

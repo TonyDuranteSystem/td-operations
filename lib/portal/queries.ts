@@ -28,6 +28,32 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
   return (accounts ?? []) as PortalAccount[]
 }
 
+/**
+ * Finds the 'Pending Formation' account linked to a contact.
+ * Used by the formation dashboard — these accounts are excluded from
+ * getPortalAccounts (which only returns Active/Suspended) so we query separately.
+ */
+export async function getFormationAccount(contactId: string) {
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id')
+    .eq('contact_id', contactId)
+
+  if (!links || links.length === 0) return null
+
+  const accountIds = links.map(l => l.account_id)
+  const { data } = await supabaseAdmin
+    .from('accounts')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, filing_id, status, physical_address')
+    .in('id', accountIds)
+    .eq('status', 'Pending Formation')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return data
+}
+
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await supabaseAdmin
     .from('accounts')
@@ -309,7 +335,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
 
 /**
  * Get the portal tier for an account.
- * Returns 'lead', 'onboarding', 'active', or 'full'.
+ * Returns 'lead', 'formation', 'onboarding', or 'active'.
  */
 export async function getPortalTier(accountId: string): Promise<string> {
   const { data } = await supabaseAdmin

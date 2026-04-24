@@ -192,34 +192,6 @@ export async function advanceServiceDelivery(
 
   const autoTriggers: string[] = []
 
-  // 7b. Portal tier upgrade: active → full
-  if (delivery.account_id) {
-    const shouldUpgradeToFull = isCompleted
-      || targetStage.stage_name === "EIN Received"
-      || targetStage.stage_name === "Welcome Package"
-      || targetStage.stage_order >= 8
-
-    if (shouldUpgradeToFull) {
-      const { data: acct } = await supabaseAdmin
-        .from("accounts")
-        .select("portal_tier")
-        .eq("id", delivery.account_id)
-        .single()
-
-      if (acct?.portal_tier === "active") {
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          supabaseAdmin
-            .from("accounts")
-            .update({ portal_tier: "full", updated_at: new Date().toISOString() })
-            .eq("id", delivery.account_id),
-          "accounts.update"
-        )
-        autoTriggers.push("Portal tier upgraded: active → full")
-      }
-    }
-  }
-
   // 8. Portal notification for client
   if (delivery.account_id) {
     try {

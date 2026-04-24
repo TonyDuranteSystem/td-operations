@@ -38,6 +38,7 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
+import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -325,6 +326,7 @@ export async function POST(req: NextRequest) {
         contractType,
         offerToken: activation.offer_token,
         leadId: leadId || undefined,
+        tier: 'formation',
       })
       if (accountResult.accountId) {
         autoAccountId = accountResult.accountId
@@ -665,10 +667,11 @@ export async function POST(req: NextRequest) {
     // Upgrade portal tier from lead → onboarding after payment (syncs account + contacts)
     if (autoAccountId) {
       // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
-      const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-      const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
-      const tierAlreadyAtOrAbove = ['onboarding', 'active', 'full'].includes(tierResult.previousTier || '')
-      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → onboarding (via account)`) : (tierResult.error || "Unknown error") })
+      const { syncTier } = await import("@/lib/operations/sync-tier")
+      const targetTier: PortalTier = contractType === 'formation' ? 'formation' : 'onboarding'
+      const tierResult = await syncTier({ accountId: autoAccountId, newTier: targetTier, reason: 'payment confirmed — portal tier activate' })
+      const tierAlreadyAtOrAbove = (TIER_ORDER[(tierResult.previousTier || '') as PortalTier] ?? -1) >= TIER_ORDER[targetTier]
+      steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → ${targetTier} (via account)`) : (tierResult.error || "Unknown error") })
     } else if (contactId) {
       // Contact-only (individual service): upgrade contacts.portal_tier + auth metadata directly
       // Must keep all tier sources in sync: contacts table + auth.users.app_metadata
@@ -680,9 +683,8 @@ export async function POST(req: NextRequest) {
           .single()
 
         const currentTier = currentContact?.portal_tier || "lead"
-        const tierOrder = ["lead", "onboarding", "active", "full"]
-        const currentIdx = tierOrder.indexOf(currentTier)
-        const newIdx = tierOrder.indexOf("onboarding")
+        const currentIdx = TIER_ORDER[(currentTier as PortalTier)] ?? -1
+        const newIdx = TIER_ORDER["onboarding"]
 
         if (newIdx > currentIdx) {
           // 1. Update contacts.portal_tier
@@ -722,7 +724,7 @@ export async function POST(req: NextRequest) {
       const portalResult = await autoCreatePortalUser({
         contactId,
         accountId: autoAccountId || undefined,
-        tier: "onboarding",
+        tier: contractType === 'formation' ? 'formation' : 'onboarding',
       })
 
       if (portalResult.success && !portalResult.alreadyExists && portalResult.tempPassword && portalResult.email) {

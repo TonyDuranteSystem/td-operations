@@ -93,6 +93,18 @@ export async function POST(req: NextRequest) {
       }
 
       portalUserId = newUser.user.id
+
+      // Sync lead tier to contacts table (no account yet — special case, no syncTier)
+      const { data: contactByEmail } = await supabaseAdmin
+        .from('contacts')
+        .select('id')
+        .eq('email', lead.email)
+        .limit(1)
+        .maybeSingle()
+      if (contactByEmail?.id) {
+        // eslint-disable-next-line no-restricted-syntax -- lead activation: no account yet, syncTier needs accountId; write contact directly
+        await supabaseAdmin.from('contacts').update({ portal_tier: 'lead' }).eq('id', contactByEmail.id)
+      }
     }
 
     // Update lead status to Offer Sent

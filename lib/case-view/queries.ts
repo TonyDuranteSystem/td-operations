@@ -56,7 +56,8 @@ export function derivePhase(
 
   if (
     accountStatus === 'Pending Formation' ||
-    activeSDs.some(sd => sd.service_type === 'Company Formation')
+    activeSDs.some(sd => sd.service_type === 'Company Formation') ||
+    portalTier === 'formation'
   ) {
     return 'Formation'
   }

@@ -123,7 +123,7 @@ describe("computeHasWizardPending — SD-by-contact branch", () => {
   })
 })
 
-// ─── Branch 3 (Commit C): tier-based onboarding fallback ───
+// ─── Branch 3 (Commit C): tier-based onboarding/formation fallback ───
 
 describe("computeHasWizardPending — tier-based onboarding fallback (Commit C)", () => {
   it("returns true when tier='onboarding', no SDs, no submitted wizard_progress", async () => {
@@ -150,7 +150,31 @@ describe("computeHasWizardPending — tier-based onboarding fallback (Commit C)"
     expect(result).toBe(false)
   })
 
-  it("does NOT trigger tier fallback when tier is 'active' (only onboarding qualifies)", async () => {
+  it("returns true when tier='formation', no SDs, no submitted wizard_progress", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("returns false when tier='formation' but contact has already submitted a wizard", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = [{ id: "wp-1" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("does NOT trigger tier fallback when tier is 'active'", async () => {
     sdAccountFixture = []
     sdContactFixture = []
     wizardProgressFixture = []
@@ -168,6 +192,16 @@ describe("computeHasWizardPending — tier-based onboarding fallback (Commit C)"
       contactId: null,
       selectedAccountId: "",
       portalTier: "onboarding",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("returns false when contactId is null even if tier='formation'", async () => {
+    wizardProgressFixture = []
+    const result = await computeHasWizardPending({
+      contactId: null,
+      selectedAccountId: "",
+      portalTier: "formation",
     })
     expect(result).toBe(false)
   })

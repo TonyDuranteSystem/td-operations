@@ -10,14 +10,15 @@
  *   2. SD-based by contact_id fallback (no selectedAccountId): show
  *      button if any active service_delivery linked only to the contact
  *      (account_id IS NULL) has a wizard-eligible service_type.
- *   3. Tier-based fallback for onboarding clients (Commit C): per SOP
- *      v7.2 Phase 0 (sop_runbooks bcf88e7e v7.2), onboarding payment
- *      does NOT create an account or SDs — those are deferred to wizard
- *      submit (lib/jobs/handlers/onboarding-setup.ts). So an onboarding
- *      client between payment and wizard-submit has zero SDs and would
- *      otherwise see no path to the wizard. This branch shows the button
- *      whenever portal_tier='onboarding' AND no wizard_progress row with
- *      status='submitted' exists for this contact.
+ *   3. Tier-based fallback for formation/onboarding clients (Commit C +
+ *      Step 4 refactor): per SOP v7.2 Phase 0 (sop_runbooks bcf88e7e
+ *      v7.2), payment does NOT create an account or SDs — those are
+ *      deferred to wizard submit (lib/jobs/handlers/onboarding-setup.ts).
+ *      So a formation or onboarding client between payment and wizard-
+ *      submit has zero SDs and would otherwise see no path to the wizard.
+ *      This branch shows the button whenever portal_tier is 'formation'
+ *      or 'onboarding' AND no wizard_progress row with status='submitted'
+ *      exists for this contact.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -63,7 +64,7 @@ export async function computeHasWizardPending(
     if ((data?.length ?? 0) > 0) return true
   }
 
-  if (contactId && portalTier === "onboarding") {
+  if (contactId && (portalTier === "onboarding" || portalTier === "formation")) {
     const { data: submitted } = await supabaseAdmin
       .from("wizard_progress")
       .select("id")

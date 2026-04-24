@@ -669,12 +669,8 @@ export function registerOnboardingTools(server: McpServer) {
 
           // Upgrade portal tier: onboarding → active
           if (accountId) {
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            await supabaseAdmin
-              .from("accounts")
-              .update({ portal_tier: "active", updated_at: new Date().toISOString() })
-              .eq("id", accountId)
-              .in("portal_tier", ["onboarding"])
+            const { syncTier } = await import("@/lib/operations/sync-tier")
+            await syncTier({ accountId, newTier: 'active', reason: 'onboarding review completed' })
             lines.push(`🔓 Portal tier upgraded: onboarding → active`)
           }
 

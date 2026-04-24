@@ -17,13 +17,13 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import {
   autoCreatePortalUser,
   sendPortalWelcomeEmail,
   upgradePortalTier,
 } from "@/lib/portal/auto-create"
 import type { PortalTier } from "@/lib/portal/tier-config"
+import { syncTier } from "@/lib/operations/sync-tier"
 
 // ─── Re-exports (single import surface for P1.6 callers) ──
 
@@ -109,16 +109,7 @@ export async function reconcileTier(
 
   result.resolved_tier = tier
 
-  // 1. Contact — only write if target_tier overrode and differs
-  if (params.target_tier && params.target_tier !== contact.portal_tier) {
-    await supabaseAdmin
-      .from("contacts")
-      .update({ portal_tier: params.target_tier })
-      .eq("id", contact.id)
-    result.changed.contact = true
-  }
-
-  // 2. Linked accounts
+  // Sync each linked account via syncTier (handles account + contact recompute + auth)
   const { data: links } = await supabaseAdmin
     .from("account_contacts")
     .select("account_id")
@@ -126,30 +117,18 @@ export async function reconcileTier(
 
   for (const link of links ?? []) {
     if (!link.account_id) continue
-    const { data: acct } = await supabaseAdmin
-      .from("accounts")
-      .select("id, portal_tier")
-      .eq("id", link.account_id)
-      .single()
-    if (acct && acct.portal_tier !== tier) {
-      await supabaseAdmin
-        .from("accounts")
-        .update({ portal_tier: tier, updated_at: new Date().toISOString() })
-        .eq("id", acct.id)
-      result.changed.accounts.push(acct.id)
-    }
-  }
-
-  // 3. Auth user (by email) — paginated via findAuthUserByEmail (P1.9)
-  if (contact.email) {
-    const authUser = await findAuthUserByEmail(contact.email)
-    if (authUser) {
-      const currentTier =
-        (authUser.app_metadata?.portal_tier as string | undefined) ?? null
-      if (currentTier !== tier) {
-        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
-          app_metadata: { ...authUser.app_metadata, portal_tier: tier },
-        })
+    const syncResult = await syncTier({
+      accountId: link.account_id,
+      newTier: tier,
+      reason: 'reconcile tier',
+      actor: 'system:reconcileTier',
+    })
+    if (syncResult.success) {
+      if (syncResult.previousTier !== tier) {
+        result.changed.accounts.push(link.account_id)
+      }
+      if (syncResult.contactsUpdated.length > 0) {
+        result.changed.contact = true
         result.changed.auth_user = true
       }
     }

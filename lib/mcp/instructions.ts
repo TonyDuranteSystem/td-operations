@@ -70,6 +70,8 @@ ACCOUNT = a company (LLC/Corp). Belongs to a Contact via account_contacts juncti
 LEAD = first touch with a person. When a Lead converts (signs + pays), they become a Contact (leads.converted_to_contact_id). No Account exists yet at conversion.
 Lifecycle: Lead -> Contact -> Account(s). Never skip this order.
 
+portal_tier progression: lead (offer sent, not yet paid) → formation (paid for formation service, company not yet formed — access to wizard + docs + signatures) → onboarding (existing LLC client going through onboarding) → active (fully onboarded client). The 'formation' tier is assigned when a client pays for a formation contract (contract_type='formation'). It is removed and replaced with 'active' once EIN is received and formation is marked complete (activate-service or manual via Record EIN Received button).
+
 R094 — leads.status semantics (as of 2026-04-17, commit 4d5f403):
 - "Converted" means PAYMENT CONFIRMED (activation chain triggered), NOT offer signed.
 - offer-signed webhook links leads.converted_to_contact_id at sign time but does NOT flip leads.status. Flip happens at confirm-payment (admin CRM button) / Stripe webhook / Whop webhook — after payment.

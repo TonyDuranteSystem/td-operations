@@ -610,12 +610,9 @@ export async function changeAccountStatus(
         .eq('id', accountId)
         .single()
       if (current?.portal_tier === 'suspended') {
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        const { error } = await supabaseAdmin
-          .from('accounts')
-          .update({ portal_tier: 'active' })
-          .eq('id', accountId)
-        if (error) throw new Error(error.message)
+        const { syncTier } = await import('@/lib/operations/sync-tier')
+        const result = await syncTier({ accountId, newTier: 'active', reason: 'account reactivated from suspended' })
+        if (!result.success) throw new Error(result.error)
       }
     })
   }

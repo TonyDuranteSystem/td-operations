@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus, getFormationAccount } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -14,6 +14,7 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { WelcomeDashboard } from './welcome-dashboard'
+import { FormationDashboard } from '@/components/portal/formation-dashboard'
 import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
@@ -121,6 +122,57 @@ export default async function PortalDashboardPage() {
       }
     }
 
+    // Formation tier with no Active/Suspended account: the client has a
+    // 'Pending Formation' account (excluded from getPortalAccounts) — render
+    // the formation-specific dashboard with full progress tracking.
+    if (authTier === 'formation' && contactId) {
+      const formationAccount = await getFormationAccount(contactId)
+      if (formationAccount) {
+        const [wizardRes, ss4Res, oaRes, leaseRes] = await Promise.all([
+          supabaseAdmin
+            .from('wizard_progress')
+            .select('id, status')
+            .eq('account_id', formationAccount.id)
+            .eq('wizard_type', 'formation')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabaseAdmin
+            .from('ss4_applications')
+            .select('id, status')
+            .eq('account_id', formationAccount.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabaseAdmin
+            .from('oa_agreements')
+            .select('id, status')
+            .eq('account_id', formationAccount.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabaseAdmin
+            .from('lease_agreements')
+            .select('id, status')
+            .eq('account_id', formationAccount.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        ])
+        return (
+          <FormationDashboard
+            firstName={firstName}
+            locale={locale}
+            account={formationAccount}
+            wizardData={wizardRes.data}
+            ss4Data={ss4Res.data}
+            oaData={oaRes.data}
+            leaseData={leaseRes.data}
+          />
+        )
+      }
+    }
+
     // Check if an onboarding wizard submission is already in for this contact —
     // used by the welcome dashboard to flip step 4 from "Complete Setup" link
     // into a passive "Data submitted — we're reviewing" state (Tier Model B).
@@ -144,6 +196,64 @@ export default async function PortalDashboardPage() {
         offerData={offerData}
         locale={locale}
         wizardSubmitted={wizardSubmitted}
+      />
+    )
+  }
+
+  // Formation tier with an Active account (LLC formed but portal_tier not yet promoted).
+  // Uses selectedAccountId since the account is visible in getPortalAccounts.
+  if (portalTier === 'formation') {
+    const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
+    const [accountRes, wizardRes, ss4Res, oaRes, leaseRes] = await Promise.all([
+      getPortalAccountDetail(selectedAccountId),
+      supabaseAdmin
+        .from('wizard_progress')
+        .select('id, status')
+        .eq('account_id', selectedAccountId)
+        .eq('wizard_type', 'formation')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('ss4_applications')
+        .select('id, status')
+        .eq('account_id', selectedAccountId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('oa_agreements')
+        .select('id, status')
+        .eq('account_id', selectedAccountId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('lease_agreements')
+        .select('id, status')
+        .eq('account_id', selectedAccountId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+    return (
+      <FormationDashboard
+        firstName={firstName}
+        locale={locale}
+        account={accountRes ? {
+          id: accountRes.id,
+          company_name: accountRes.company_name,
+          entity_type: accountRes.entity_type,
+          state_of_formation: accountRes.state_of_formation,
+          formation_date: accountRes.formation_date,
+          filing_id: accountRes.filing_id,
+          status: accountRes.status,
+          ein_number: accountRes.ein_number,
+        } : null}
+        wizardData={wizardRes.data}
+        ss4Data={ss4Res.data}
+        oaData={oaRes.data}
+        leaseData={leaseRes.data}
       />
     )
   }

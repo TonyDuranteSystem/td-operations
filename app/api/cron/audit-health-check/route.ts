@@ -586,11 +586,11 @@ const AUDIT_SQL = `WITH audit_results AS (
     'P1',
     COUNT(*)::int,
     LEFT(STRING_AGG(id::text, ', ' ORDER BY created_at DESC), 200),
-    'portal_tier values not in (lead, onboarding, active, NULL): found ' ||
+    'portal_tier values not in (lead, formation, onboarding, active, NULL): found ' ||
       COALESCE(STRING_AGG(DISTINCT portal_tier, ', '), 'N/A')
   FROM contacts
   WHERE portal_tier IS NOT NULL
-    AND portal_tier NOT IN ('lead', 'onboarding', 'active')
+    AND portal_tier NOT IN ('lead', 'formation', 'onboarding', 'active')
 
   UNION ALL
 
@@ -616,11 +616,11 @@ const AUDIT_SQL = `WITH audit_results AS (
     'P1',
     COUNT(*)::int,
     LEFT(STRING_AGG(id::text, ', ' ORDER BY created_at DESC), 200),
-    'portal_tier values not in (lead, onboarding, active, NULL): found ' ||
+    'portal_tier values not in (lead, formation, onboarding, active, NULL): found ' ||
       COALESCE(STRING_AGG(DISTINCT portal_tier, ', '), 'N/A')
   FROM accounts
   WHERE portal_tier IS NOT NULL
-    AND portal_tier NOT IN ('lead', 'onboarding', 'active')
+    AND portal_tier NOT IN ('lead', 'formation', 'onboarding', 'active')
 
   UNION ALL
 

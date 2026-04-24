@@ -4,6 +4,7 @@ import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { updateAccount } from '@/lib/operations/account'
+import { syncTier } from '@/lib/operations/sync-tier'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
 
@@ -386,13 +387,14 @@ export async function POST(request: NextRequest) {
       id: acct.id,
       patch: {
         portal_account: true,
-        portal_tier: 'active',
         portal_created_date: new Date().toISOString().split('T')[0],
         notes: (acct.notes || '') + `\n${new Date().toISOString().split('T')[0]}: Portal transition (CRM button). [PORTAL_TRANSITION]`,
       },
       actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
       summary: `Portal transition (CRM): ${acct.company_name}`,
     })
+    // Sync tier (handles account + contact + auth metadata)
+    await syncTier({ accountId: acct.id, newTier: 'active', reason: 'portal transition (CRM button)' })
 
     acctLines.push('portal_account = true')
     reportLines.push(...acctLines, '')
@@ -448,9 +450,7 @@ export async function POST(request: NextRequest) {
     reportLines.push(emailSent ? 'Welcome email: SENT' : 'Welcome email: FAILED (send manually)')
   }
 
-  // ── 5. Update contact ──
-  // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-  await supabaseAdmin.from('contacts').update({ portal_tier: 'active' }).eq('id', contact.id)
+  // ── 5. Contact tier already synced per-account by syncTier above ──
 
   const processedCount = activeAccounts.filter(a => !a.portal_account).length
 
