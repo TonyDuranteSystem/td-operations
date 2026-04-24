@@ -34,6 +34,23 @@ export async function GET(req: NextRequest) {
       query = query.neq("action_type", "done")
     }
 
+    // When fetching all open actions, join message text + client names for the Actions tab
+    if (openOnly) {
+      const { data: enriched, error: err } = await supabaseAdmin
+        .from("message_actions")
+        .select(`
+          id, action_type, created_at, updated_at, message_id, account_id, contact_id,
+          portal_messages(message),
+          accounts(company_name),
+          contacts(full_name)
+        `)
+        .neq("action_type", "done")
+        .order("updated_at", { ascending: false })
+        .limit(200)
+      if (err) throw err
+      return NextResponse.json({ actions: enriched })
+    }
+
     const { data, error } = await query.limit(200)
     if (error) throw error
 
