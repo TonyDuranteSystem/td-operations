@@ -22,7 +22,6 @@
  *   sd_*       — Service delivery pipeline (search, pipeline view)
  *   conv_*     — Conversation history (log, search)
  *   sop_*      — Standard Operating Procedures (search, get)
- *   qb_*       — QuickBooks Online (invoices, customers, payments, company info)
  *   drive_*    — Google Drive (search, list, upload, read, create folder, move)
  *   gmail_*    — Gmail (search, read, read thread, draft, send, labels, attachments)
  *   docai_*    — Document AI OCR (extract text from PDFs/images)
@@ -42,7 +41,6 @@
 
 import { createMcpHandler } from "mcp-handler"
 import { registerCrmTools } from "@/lib/mcp/tools/crm"
-import { registerQbTools } from "@/lib/mcp/tools/qb"
 import { registerDriveTools } from "@/lib/mcp/tools/drive"
 import { registerGmailTools } from "@/lib/mcp/tools/gmail"
 import { registerDocaiTools } from "@/lib/mcp/tools/docai"
@@ -71,7 +69,6 @@ import { registerWelcomePackageTools } from "@/lib/mcp/tools/welcome-package"
 import { registerBankingFormTools } from "@/lib/mcp/tools/banking-form"
 import { registerJobTools } from "@/lib/mcp/tools/jobs"
 import { registerPortalTools } from "@/lib/mcp/tools/portal"
-import { registerQbExpenseTools } from "@/lib/mcp/tools/qb-expenses"
 import { registerITINFormTools } from "@/lib/mcp/tools/itin-form"
 import { registerClosureTools } from "@/lib/mcp/tools/closure"
 import { registerTaxQuoteTools } from "@/lib/mcp/tools/tax-quote"
@@ -99,7 +96,6 @@ const handler = createMcpHandler(
     // Register all tool groups
     registerCheckpointTools(server)
     registerCrmTools(server)
-    registerQbTools(server)
     registerDriveTools(server)
     registerGmailTools(server)
     registerDocaiTools(server)
@@ -127,7 +123,6 @@ const handler = createMcpHandler(
     registerWelcomePackageTools(server)
     registerJobTools(server)
     registerPortalTools(server)
-    registerQbExpenseTools(server)
     registerITINFormTools(server)
     registerClosureTools(server)
     registerTaxQuoteTools(server)

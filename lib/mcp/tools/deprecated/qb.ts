@@ -1,0 +1,940 @@
+/**
+ * QuickBooks MCP Tools
+ * Wraps existing quickbooks.ts functions as MCP-compatible tools.
+ * Used by the Remote MCP server at /api/mcp.
+ */
+
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { z } from "zod"
+import { qbApiCall, createInvoice, getActiveToken } from "@/lib/quickbooks"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { getGreeting } from "@/lib/greeting"
+import { getGmailToken } from "@/lib/gmail"
+
+export function registerQbTools(server: McpServer) {
+  // ═══════════════════════════════════════
+  // qb_list_invoices
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_list_invoices",
+    "List invoices from QuickBooks Online. Filter by customer name, status (Open/Paid/Overdue), or date range. Returns invoice number, customer, amount, balance due, due date, and status. Also shows aggregate totals. For CRM payment data, use crm_search_payments instead.",
+    {
+      customer_name: z.string().optional().describe("Filter by customer display name (partial match)"),
+      status: z.enum(["Open", "Paid", "Overdue"]).optional().describe("Invoice status filter"),
+      start_date: z.string().optional().describe("Start date filter (YYYY-MM-DD)"),
+      end_date: z.string().optional().describe("End date filter (YYYY-MM-DD)"),
+      limit: z.number().optional().default(50).describe("Max results (default 50, max 200)"),
+    },
+    async ({ customer_name, status, start_date, end_date, limit }) => {
+      try {
+        // Build QB SQL query
+        let sql = "SELECT * FROM Invoice"
+        const conditions: string[] = []
+
+        // Note: QB Query Language doesn't support CustomerRef.name for Invoice
+        // Filter by customer name in memory after fetching results
+
+        if (start_date) {
+          conditions.push(`TxnDate >= '${start_date}'`)
+        }
+        if (end_date) {
+          conditions.push(`TxnDate <= '${end_date}'`)
+        }
+
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ")
+        }
+
+        sql += ` ORDERBY TxnDate DESC MAXRESULTS ${Math.min(limit || 50, 200)}`
+
+        const query = encodeURIComponent(sql)
+        const result = await qbApiCall(`/query?query=${query}`)
+
+        let invoices = result.QueryResponse?.Invoice || []
+
+        // Filter by customer name in memory (QB Query doesn't support CustomerRef.name on Invoice)
+        if (customer_name) {
+          const search = customer_name.toLowerCase()
+          invoices = invoices.filter((inv: Record<string, unknown>) => {
+            const name = ((inv.CustomerRef as Record<string, unknown>)?.name as string) || ""
+            return name.toLowerCase().includes(search)
+          })
+        }
+
+        // Filter by status in memory (QB doesn't have a direct status field in query)
+        if (status) {
+          const now = new Date()
+          invoices = invoices.filter((inv: Record<string, unknown>) => {
+            const balance = inv.Balance as number
+            const dueDate = new Date(inv.DueDate as string)
+
+            if (status === "Paid") return balance === 0
+            if (status === "Open") return balance > 0 && dueDate >= now
+            if (status === "Overdue") return balance > 0 && dueDate < now
+            return true
+          })
+        }
+
+        // Format output
+        const formatted = invoices.map((inv: Record<string, unknown>) => ({
+          id: inv.Id,
+          doc_number: inv.DocNumber,
+          customer: (inv.CustomerRef as Record<string, unknown>)?.name,
+          date: inv.TxnDate,
+          due_date: inv.DueDate,
+          total: inv.TotalAmt,
+          balance: inv.Balance,
+          currency: (inv.CurrencyRef as Record<string, unknown>)?.value || "USD",
+          email_status: inv.EmailStatus,
+          status: (inv.Balance as number) === 0
+            ? "Paid"
+            : new Date(inv.DueDate as string) < new Date()
+              ? "Overdue"
+              : "Open",
+        }))
+
+        // Calculate totals
+        const totalAmount = formatted.reduce((sum: number, i: Record<string, unknown>) => sum + ((i.total as number) || 0), 0)
+        const totalBalance = formatted.reduce((sum: number, i: Record<string, unknown>) => sum + ((i.balance as number) || 0), 0)
+
+        const summary = `Found ${formatted.length} invoices | Total: $${totalAmount.toLocaleString()} | Outstanding: $${totalBalance.toLocaleString()}`
+
+        return {
+          content: [{ type: "text" as const, text: `${summary}\n\n${JSON.stringify(formatted, null, 2)}` }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error listing invoices: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_search_customers
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_search_customers",
+    "Search QuickBooks Online customers by name, email, or company. Returns customer ID, display name, email, phone, balance, currency, and active status. For CRM contacts, use crm_search_contacts instead — QuickBooks customers are for invoicing only.",
+    {
+      query: z.string().optional().describe("Search text (matches display name, company name, or email)"),
+      active_only: z.boolean().optional().default(true).describe("Only return active customers (default true)"),
+      limit: z.number().optional().default(50).describe("Max results (default 50)"),
+    },
+    async ({ query, active_only, limit }) => {
+      try {
+        let sql = "SELECT * FROM Customer"
+        const conditions: string[] = []
+
+        if (query) {
+          conditions.push(`DisplayName LIKE '%${query.replace(/'/g, "\\''")}%'`)
+        }
+        if (active_only !== false) {
+          conditions.push("Active = true")
+        }
+
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ")
+        }
+
+        sql += ` ORDERBY DisplayName MAXRESULTS ${Math.min(limit || 50, 200)}`
+
+        const encodedQuery = encodeURIComponent(sql)
+        const result = await qbApiCall(`/query?query=${encodedQuery}`)
+
+        const customers = result.QueryResponse?.Customer || []
+
+        const formatted = customers.map((c: Record<string, unknown>) => ({
+          id: c.Id,
+          display_name: c.DisplayName,
+          company_name: c.CompanyName,
+          email: (c.PrimaryEmailAddr as Record<string, unknown>)?.Address,
+          phone: (c.PrimaryPhone as Record<string, unknown>)?.FreeFormNumber,
+          balance: c.Balance,
+          currency: (c.CurrencyRef as Record<string, unknown>)?.value || "USD",
+          active: c.Active,
+          notes: c.Notes,
+        }))
+
+        return {
+          content: [{ type: "text" as const, text: `Found ${formatted.length} customers\n\n${JSON.stringify(formatted, null, 2)}` }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error searching customers: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_list_payments
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_list_payments",
+    "List payments received in QuickBooks Online. Filter by customer name or date range. Returns payment amount, date, method, memo, and unapplied amount. Also shows aggregate total received. For CRM payment records, use crm_search_payments instead.",
+    {
+      customer_name: z.string().optional().describe("Filter by customer name"),
+      start_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
+      end_date: z.string().optional().describe("End date (YYYY-MM-DD)"),
+      limit: z.number().optional().default(50).describe("Max results (default 50)"),
+    },
+    async ({ customer_name, start_date, end_date, limit }) => {
+      try {
+        let sql = "SELECT * FROM Payment"
+        const conditions: string[] = []
+
+        // Note: QB Query Language doesn't support CustomerRef.name for Payment
+        // Filter by customer name in memory after fetching results
+        if (start_date) {
+          conditions.push(`TxnDate >= '${start_date}'`)
+        }
+        if (end_date) {
+          conditions.push(`TxnDate <= '${end_date}'`)
+        }
+
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ")
+        }
+
+        sql += ` ORDERBY TxnDate DESC MAXRESULTS ${Math.min(limit || 50, 200)}`
+
+        const encodedQuery = encodeURIComponent(sql)
+        const result = await qbApiCall(`/query?query=${encodedQuery}`)
+
+        let payments = result.QueryResponse?.Payment || []
+
+        // Filter by customer name in memory
+        if (customer_name) {
+          const search = customer_name.toLowerCase()
+          payments = payments.filter((p: Record<string, unknown>) => {
+            const name = ((p.CustomerRef as Record<string, unknown>)?.name as string) || ""
+            return name.toLowerCase().includes(search)
+          })
+        }
+
+        const formatted = payments.map((p: Record<string, unknown>) => ({
+          id: p.Id,
+          date: p.TxnDate,
+          customer: (p.CustomerRef as Record<string, unknown>)?.name,
+          amount: p.TotalAmt,
+          currency: (p.CurrencyRef as Record<string, unknown>)?.value || "USD",
+          payment_method: (p.PaymentMethodRef as Record<string, unknown>)?.name,
+          memo: p.PrivateNote,
+          unapplied: p.UnappliedAmt,
+        }))
+
+        const totalReceived = formatted.reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
+
+        return {
+          content: [{ type: "text" as const, text: `Found ${formatted.length} payments | Total received: $${totalReceived.toLocaleString()}\n\n${JSON.stringify(formatted, null, 2)}` }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error listing payments: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_get_company_info
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_get_company_info",
+    "Get QuickBooks company info (name, country, fiscal year, email, phone) and OAuth2 connection health (access/refresh token expiry and remaining time). Use this to verify QuickBooks is connected before running other qb_* tools.",
+    {},
+    async () => {
+      try {
+        const realmId = process.env.QB_REALM_ID!
+
+        // Get company info from QB
+        const result = await qbApiCall(`/companyinfo/${realmId}`)
+        const info = result.CompanyInfo
+
+        // Get token status from Supabase
+        const { data: token } = await supabaseAdmin
+          .from('qb_tokens')
+          .select('access_token_expires_at, refresh_token_expires_at, updated_at')
+          .eq('realm_id', realmId)
+          .eq('is_active', true)
+          .single()
+
+        const now = new Date()
+        const accessExpiry = token ? new Date(token.access_token_expires_at) : null
+        const refreshExpiry = token ? new Date(token.refresh_token_expires_at) : null
+
+        const output = {
+          company: {
+            name: info.CompanyName,
+            legal_name: info.LegalName,
+            country: info.Country,
+            fiscal_year_start: info.FiscalYearStartMonth,
+            email: info.Email?.Address,
+            phone: info.PrimaryPhone?.FreeFormNumber,
+          },
+          connection: {
+            realm_id: realmId,
+            status: "connected",
+            access_token_expires: accessExpiry?.toISOString(),
+            access_token_valid: accessExpiry ? accessExpiry > now : false,
+            refresh_token_expires: refreshExpiry?.toISOString(),
+            refresh_token_valid: refreshExpiry ? refreshExpiry > now : false,
+            refresh_token_days_remaining: refreshExpiry
+              ? Math.floor((refreshExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+              : null,
+            last_refresh: token?.updated_at,
+          },
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error getting company info: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_create_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_create_invoice",
+    "Push an invoice to QuickBooks Online. QB is one-way downstream — our system is the source of truth for invoice numbers. The invoice_number (INV-NNNNNN format from createTDInvoice) is REQUIRED and used as QB's DocNumber. Automatically finds the customer by name or creates a new QB customer if not found. Use qb_search_customers first to verify the customer name.",
+    {
+      invoice_number: z.string().describe("Canonical invoice number from our system (e.g. INV-002145) — used as QB DocNumber. REQUIRED."),
+      customer_name: z.string().describe("Customer display name (exact match or will be created)"),
+      customer_email: z.string().optional().describe("Customer email (used if creating new customer)"),
+      line_items: z.array(z.object({
+        description: z.string().describe("Line item description"),
+        amount: z.number().describe("Unit price"),
+        quantity: z.number().optional().describe("Quantity (default 1)"),
+      })).min(1).describe("Invoice line items"),
+      due_date: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+      memo: z.string().optional().describe("Private memo / note"),
+    },
+    async ({ invoice_number, customer_name, customer_email, line_items, due_date, memo }) => {
+      try {
+        const result = await createInvoice({
+          customerName: customer_name,
+          customerEmail: customer_email,
+          lineItems: line_items,
+          dueDate: due_date,
+          memo,
+          invoiceNumber: invoice_number,
+        })
+
+        const invoice = result.Invoice
+
+        const output = {
+          id: invoice.Id,
+          doc_number: invoice.DocNumber,
+          customer: invoice.CustomerRef?.name,
+          total: invoice.TotalAmt,
+          balance: invoice.Balance,
+          due_date: invoice.DueDate,
+          currency: invoice.CurrencyRef?.value || "USD",
+          status: "Created",
+          message: `Invoice #${invoice.DocNumber} created successfully for ${invoice.CustomerRef?.name}`,
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error creating invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_void_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_void_invoice",
+    "Void or delete an invoice in QuickBooks Online. Void (recommended) keeps the invoice in history but zeroes the balance. Delete removes it completely. Requires the invoice ID (from qb_list_invoices). Use this to cancel incorrect or duplicate invoices.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID (the 'id' field from qb_list_invoices, NOT the doc_number)"),
+      action: z.enum(["void", "delete"]).optional().default("void").describe("'void' (recommended — keeps history) or 'delete' (permanent removal)"),
+    },
+    async ({ invoice_id, action }) => {
+      try {
+        // First, get the invoice to retrieve SyncToken
+        const invoice = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = invoice.Invoice
+
+        if (!inv) {
+          return {
+            content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_id} not found in QuickBooks` }]
+          }
+        }
+
+        const result = await qbApiCall(`/invoice?operation=${action}`, {
+          method: "POST",
+          body: {
+            Id: inv.Id,
+            SyncToken: inv.SyncToken,
+          },
+        })
+
+        const updated = result.Invoice
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Invoice #${inv.DocNumber} (${(inv.CustomerRef as Record<string, unknown>)?.name}) — ${action === "void" ? "VOIDED" : "DELETED"} successfully\nOriginal amount: $${inv.TotalAmt}\nNew balance: $${updated?.Balance ?? 0}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error ${action}ing invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_get_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_get_invoice",
+    "Get full details of a single QuickBooks invoice by ID. Returns ALL fields: line items, customer memo, footer, custom fields, email status, payment info, tax details. Use this to inspect invoices before sending or to check payment instructions. Use qb_list_invoices first to find the invoice ID.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID (the 'id' field from qb_list_invoices)"),
+    },
+    async ({ invoice_id }) => {
+      try {
+        const result = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = result.Invoice
+
+        if (!inv) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_id} not found` }] }
+        }
+
+        // Extract all relevant fields
+        const output = {
+          id: inv.Id,
+          doc_number: inv.DocNumber,
+          sync_token: inv.SyncToken,
+          customer: {
+            id: inv.CustomerRef?.value,
+            name: inv.CustomerRef?.name,
+          },
+          dates: {
+            txn_date: inv.TxnDate,
+            due_date: inv.DueDate,
+            ship_date: inv.ShipDate,
+          },
+          amounts: {
+            total: inv.TotalAmt,
+            balance: inv.Balance,
+            home_total: inv.HomeTotalAmt,
+            home_balance: inv.HomeBalance,
+            deposit: inv.Deposit,
+          },
+          currency: inv.CurrencyRef?.value || "USD",
+          exchange_rate: inv.ExchangeRate,
+          email: {
+            status: inv.EmailStatus,
+            bill_email: inv.BillEmail?.Address,
+            bill_email_cc: inv.BillEmailCc?.Address,
+            bill_email_bcc: inv.BillEmailBcc?.Address,
+          },
+          addresses: {
+            billing: inv.BillAddr ? {
+              line1: inv.BillAddr.Line1,
+              city: inv.BillAddr.City,
+              state: inv.BillAddr.CountrySubDivisionCode,
+              postal: inv.BillAddr.PostalCode,
+              country: inv.BillAddr.Country,
+            } : null,
+            shipping: inv.ShipAddr ? {
+              line1: inv.ShipAddr.Line1,
+              city: inv.ShipAddr.City,
+              state: inv.ShipAddr.CountrySubDivisionCode,
+              postal: inv.ShipAddr.PostalCode,
+              country: inv.ShipAddr.Country,
+            } : null,
+          },
+          line_items: (inv.Line || [])
+            .filter((l: Record<string, unknown>) => l.DetailType !== "SubTotalLineDetail")
+            .map((l: Record<string, unknown>) => ({
+              id: l.Id,
+              description: l.Description,
+              amount: l.Amount,
+              detail_type: l.DetailType,
+              ...(l.SalesItemLineDetail ? {
+                qty: (l.SalesItemLineDetail as Record<string, unknown>).Qty,
+                unit_price: (l.SalesItemLineDetail as Record<string, unknown>).UnitPrice,
+                item: ((l.SalesItemLineDetail as Record<string, unknown>).ItemRef as Record<string, unknown>)?.name,
+              } : {}),
+            })),
+          customer_memo: inv.CustomerMemo?.value || null,
+          private_note: inv.PrivateNote || null,
+          footer: inv.PrintStatus === "NeedToPrint" ? "(needs printing)" : null,
+          custom_fields: inv.CustomField?.filter((f: Record<string, unknown>) => f.StringValue) || [],
+          tax: inv.TxnTaxDetail ? {
+            total_tax: inv.TxnTaxDetail.TotalTax,
+            lines: inv.TxnTaxDetail.TaxLine,
+          } : null,
+          payment_method: inv.PaymentMethodRef?.name || null,
+          deposit_to_account: inv.DepositToAccountRef?.name || null,
+          print_status: inv.PrintStatus,
+          apply_tax_after_discount: inv.ApplyTaxAfterDiscount,
+          allow_online_payment: inv.AllowOnlinePayment,
+          allow_online_credit_card: inv.AllowOnlineCreditCardPayment,
+          allow_online_ach: inv.AllowOnlineACHPayment,
+          status: inv.Balance === 0
+            ? "Paid"
+            : new Date(inv.DueDate) < new Date()
+              ? "Overdue"
+              : "Open",
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error getting invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_send_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_send_invoice",
+    "Send an invoice via Gmail API with PDF attachment. Downloads the invoice PDF from QuickBooks and sends it as an email attachment with bank payment details (USD or EUR based on invoice currency). The customer receives a professional bilingual email from support@tonydurante.us. WORKFLOW: qb_create_invoice → qb_get_invoice (review) → qb_update_invoice (if needed) → CONFIRM with user → qb_send_invoice.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID to send"),
+      email_to: z.string().describe("Recipient email address"),
+      language: z.enum(["en", "it"]).optional().default("en").describe("Email language: 'en' (default) or 'it' for Italian"),
+    },
+    async ({ invoice_id, email_to, language }) => {
+      try {
+        // 1. Get invoice details from QB
+        const invResult = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = invResult.Invoice
+        if (!inv) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ${invoice_id} not found` }] }
+        }
+
+        // 2. Download invoice PDF from QB
+        const accessToken = await getActiveToken()
+        const realmId = process.env.QB_REALM_ID!
+        const pdfRes = await fetch(
+          `https://quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoice_id}/pdf`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/pdf",
+            },
+          }
+        )
+        if (!pdfRes.ok) throw new Error(`PDF download failed: ${pdfRes.status}`)
+        const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer())
+        const pdfBase64 = pdfBuffer.toString("base64")
+
+        // 3. Bank details based on invoice currency
+        const currency = (inv.CurrencyRef?.value as string) || "USD"
+        const bankSection =
+          currency === "EUR"
+            ? "Banca: Banking Circle (via Wise)\nIBAN: DK8989000023658198\nBIC/SWIFT: SXPYDKKK\nBeneficiario: Tony Durante LLC"
+            : "Bank: Relay Financial\nAccount Name: TONY DURANTE L.L.C.\nAddress: 10225 Ulmerton Rd, Suite 3D, Largo, FL 33771\nAccount Number: 200000306770\nRouting Number: 064209588\nBeneficiary: Tony Durante LLC"
+
+        // 4. Build email content (with gender-aware greeting)
+        const customerName = (inv.CustomerRef?.name as string) || "Customer"
+        // Look up contact gender by email
+        const { data: invContact } = await supabaseAdmin
+          .from("contacts")
+          .select("gender, last_name, language")
+          .eq("email", email_to)
+          .single()
+        const invoiceGreeting = getGreeting({
+          firstName: customerName,
+          lastName: invContact?.last_name,
+          gender: invContact?.gender,
+          language,
+        })
+        const docNumber = inv.DocNumber || inv.Id
+        const total = inv.TotalAmt
+        const dueDate = inv.DueDate
+
+        const subject =
+          language === "it"
+            ? `Fattura #${docNumber} — Tony Durante LLC`
+            : `Invoice #${docNumber} — Tony Durante LLC`
+
+        // RFC 2047: encode subject as base64 if it contains non-ASCII chars (e.g. em dash —)
+        const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+        const encodedSubject = hasNonAscii
+          ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+          : subject
+
+        const htmlBody =
+          language === "it"
+            ? `<p>${invoiceGreeting},</p>
+<p>In allegato trova la fattura <strong>#${docNumber}</strong> per un importo di <strong>${currency} ${total}</strong>.</p>
+<p><strong>Scadenza:</strong> ${dueDate}</p>
+<p><strong>Modalità di pagamento — Bonifico bancario:</strong></p>
+<pre style="background:#f5f5f5;padding:12px;border-radius:4px;">${bankSection}</pre>
+<p>Causale: Invoice #${docNumber}</p>
+<p>Per qualsiasi domanda, non esiti a contattarci.</p>
+<p>Cordiali saluti,<br><strong>Tony Durante LLC</strong><br>support@tonydurante.us</p>`
+            : `<p>${invoiceGreeting},</p>
+<p>Please find attached invoice <strong>#${docNumber}</strong> for <strong>${currency} ${total}</strong>.</p>
+<p><strong>Due date:</strong> ${dueDate}</p>
+<p><strong>Payment method — Wire Transfer:</strong></p>
+<pre style="background:#f5f5f5;padding:12px;border-radius:4px;">${bankSection}</pre>
+<p>Reference: Invoice #${docNumber}</p>
+<p>If you have any questions, please don't hesitate to reach out.</p>
+<p>Best regards,<br><strong>Tony Durante LLC</strong><br>support@tonydurante.us</p>`
+
+        // 5. Build MIME message with PDF attachment and send via Gmail API
+        const pdfFilename = `Invoice-${docNumber}.pdf`
+        const boundary = "----=_Part_" + Date.now()
+        const mime = [
+          `From: Tony Durante LLC <support@tonydurante.us>`,
+          `To: ${email_to}`,
+          `Subject: ${encodedSubject}`,
+          "MIME-Version: 1.0",
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          "Content-Type: text/html; charset=UTF-8",
+          "Content-Transfer-Encoding: 7bit",
+          "",
+          htmlBody,
+          "",
+          `--${boundary}`,
+          `Content-Type: application/pdf; name="${pdfFilename}"`,
+          "Content-Transfer-Encoding: base64",
+          `Content-Disposition: attachment; filename="${pdfFilename}"`,
+          "",
+          pdfBase64,
+          "",
+          `--${boundary}--`,
+        ].join("\r\n")
+        const raw = Buffer.from(mime).toString("base64url")
+
+        const { token: gmailToken } = await getGmailToken()
+        const sendRes = await fetch(
+          "https://gmail.googleapis.com/gmail/v1/users/support@tonydurante.us/messages/send",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${gmailToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ raw }),
+          }
+        )
+
+        if (!sendRes.ok) {
+          const err = await sendRes.json().catch(() => ({}))
+          throw new Error(`Gmail send error ${sendRes.status}: ${JSON.stringify(err)}`)
+        }
+
+        const gmailResult = (await sendRes.json()) as { id: string; threadId: string }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `✅ Invoice #${docNumber} sent to ${email_to}\nCustomer: ${customerName}\nTotal: ${currency} ${total}\nDue: ${dueDate}\nGmail Message ID: ${gmailResult.id}\nThread ID: ${gmailResult.threadId}`,
+            },
+          ],
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error sending invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_update_invoice
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_update_invoice",
+    "Update an existing QuickBooks invoice. Can modify customer memo (payment instructions visible to customer), private note, due date, or email address. Use qb_get_invoice first to review current values. Requires a sparse update — only provided fields are changed, all others remain.",
+    {
+      invoice_id: z.string().describe("QuickBooks Invoice ID to update"),
+      customer_memo: z.string().optional().describe("Message visible to customer on the invoice (e.g., bank details, payment instructions)"),
+      private_note: z.string().optional().describe("Internal note (not visible to customer)"),
+      due_date: z.string().optional().describe("New due date (YYYY-MM-DD)"),
+      bill_email: z.string().optional().describe("Update customer email address for this invoice"),
+    },
+    async ({ invoice_id, customer_memo, private_note, due_date, bill_email }) => {
+      try {
+        // First, get the current invoice for SyncToken and existing data
+        const current = await qbApiCall(`/invoice/${invoice_id}`)
+        const inv = current.Invoice
+
+        if (!inv) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_id} not found` }] }
+        }
+
+        // Build sparse update — QB requires Id, SyncToken, and changed fields
+        const update: Record<string, unknown> = {
+          Id: inv.Id,
+          SyncToken: inv.SyncToken,
+          sparse: true,
+        }
+
+        if (customer_memo !== undefined) {
+          update.CustomerMemo = { value: customer_memo }
+        }
+        if (private_note !== undefined) {
+          update.PrivateNote = private_note
+        }
+        if (due_date !== undefined) {
+          update.DueDate = due_date
+        }
+        if (bill_email !== undefined) {
+          update.BillEmail = { Address: bill_email }
+        }
+
+        const result = await qbApiCall(`/invoice`, {
+          method: "POST",
+          body: update,
+        })
+
+        const updated = result.Invoice
+        const changes: string[] = []
+        if (customer_memo !== undefined) changes.push("customer memo")
+        if (private_note !== undefined) changes.push("private note")
+        if (due_date !== undefined) changes.push("due date")
+        if (bill_email !== undefined) changes.push("bill email")
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Invoice #${updated.DocNumber} updated — changed: ${changes.join(", ")}\nCustomer: ${updated.CustomerRef?.name}\nMemo: ${updated.CustomerMemo?.value || "(none)"}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error updating invoice: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_token_status
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_token_status",
+    "Check QuickBooks OAuth2 token health. Returns access token validity (minutes remaining), refresh token validity (days remaining), and warnings if refresh token is expiring soon. If status is 'disconnected', re-authorize at /api/qb/authorize.",
+    {},
+    async () => {
+      try {
+        const realmId = process.env.QB_REALM_ID!
+
+        const { data: token, error } = await supabaseAdmin
+          .from('qb_tokens')
+          .select('*')
+          .eq('realm_id', realmId)
+          .eq('is_active', true)
+          .single()
+
+        if (error || !token) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                status: "disconnected",
+                message: "No active QB token found. Re-authorize at /api/qb/authorize",
+              }, null, 2)
+            }]
+          }
+        }
+
+        const now = new Date()
+        const accessExpiry = new Date(token.access_token_expires_at)
+        const refreshExpiry = new Date(token.refresh_token_expires_at)
+        const refreshDaysRemaining = Math.floor((refreshExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+
+        const output = {
+          status: refreshDaysRemaining > 0 ? "connected" : "expired",
+          access_token: {
+            expires_at: accessExpiry.toISOString(),
+            valid: accessExpiry > now,
+            minutes_remaining: Math.max(0, Math.floor((accessExpiry.getTime() - now.getTime()) / (1000 * 60))),
+          },
+          refresh_token: {
+            expires_at: refreshExpiry.toISOString(),
+            valid: refreshExpiry > now,
+            days_remaining: refreshDaysRemaining,
+            warning: refreshDaysRemaining < 14 ? "⚠️ Refresh token expiring soon! Re-authorize before it expires." : null,
+          },
+          last_refreshed: token.updated_at,
+          realm_id: realmId,
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error checking token status: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_record_payment
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_record_payment",
+    "Record a payment against one or more QuickBooks invoices. This marks the invoice(s) as Paid (balance = 0). Use this for clients who already paid (via Whop, bank transfer, etc.) so the invoice PDF shows 'Paid'. Provide the invoice ID(s) — the tool auto-detects the customer and amount. Optionally specify payment method, date, and reference number. WORKFLOW: qb_create_invoice → qb_record_payment → qb_send_invoice (sends Paid invoice PDF).",
+    {
+      invoice_ids: z.array(z.string()).min(1).describe("QuickBooks Invoice ID(s) to mark as paid (from qb_list_invoices)"),
+      payment_date: z.string().optional().describe("Payment date (YYYY-MM-DD). Defaults to today."),
+      payment_method: z.string().optional().describe("Payment method (e.g., 'Credit Card', 'Bank Transfer', 'Whop')"),
+      reference_number: z.string().optional().describe("Reference/confirmation number for the payment"),
+      memo: z.string().optional().describe("Private memo about the payment"),
+    },
+    async ({ invoice_ids, payment_date, payment_method, reference_number, memo }) => {
+      try {
+        // Fetch all invoices to get customer and amounts
+        const invoices = await Promise.all(
+          invoice_ids.map(async (id) => {
+            const result = await qbApiCall(`/invoice/${id}`)
+            return result.Invoice
+          })
+        )
+
+        // Validate all invoices exist and belong to same customer
+        const missing = invoices.findIndex((inv) => !inv)
+        if (missing >= 0) {
+          return { content: [{ type: "text" as const, text: `❌ Invoice ID ${invoice_ids[missing]} not found` }] }
+        }
+
+        const customerRef = invoices[0].CustomerRef
+        const allSameCustomer = invoices.every(
+          (inv) => inv.CustomerRef.value === customerRef.value
+        )
+        if (!allSameCustomer) {
+          return { content: [{ type: "text" as const, text: `❌ All invoices must belong to the same customer` }] }
+        }
+
+        // Calculate total amount from invoice balances
+        const totalAmt = invoices.reduce((sum: number, inv: Record<string, unknown>) => sum + ((inv.Balance as number) || 0), 0)
+
+        if (totalAmt === 0) {
+          return { content: [{ type: "text" as const, text: `⚠️ All invoices already fully paid (balance = $0)` }] }
+        }
+
+        // Build payment object
+        const payment: Record<string, unknown> = {
+          CustomerRef: {
+            value: customerRef.value,
+            name: customerRef.name,
+          },
+          TotalAmt: totalAmt,
+          Line: invoices
+            .filter((inv: Record<string, unknown>) => (inv.Balance as number) > 0)
+            .map((inv: Record<string, unknown>) => ({
+              Amount: inv.Balance,
+              LinkedTxn: [{
+                TxnId: inv.Id,
+                TxnType: "Invoice",
+              }],
+            })),
+        }
+
+        if (payment_date) {
+          payment.TxnDate = payment_date
+        }
+
+        if (reference_number) {
+          payment.PaymentRefNum = reference_number
+        }
+
+        if (memo) {
+          payment.PrivateNote = memo
+        }
+
+        // Create the payment
+        const result = await qbApiCall("/payment", {
+          method: "POST",
+          body: payment,
+        })
+
+        const pmt = result.Payment
+        const invoiceList = invoices
+          .map((inv: Record<string, unknown>) => `  • #${inv.DocNumber} — $${inv.Balance} → Paid`)
+          .join("\n")
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `✅ Payment recorded — $${pmt.TotalAmt}\nCustomer: ${customerRef.name}\nPayment ID: ${pmt.Id}\nDate: ${pmt.TxnDate}\n${payment_method ? `Method: ${payment_method}\n` : ""}${reference_number ? `Reference: ${reference_number}\n` : ""}\nInvoices paid:\n${invoiceList}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error recording payment: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // qb_list_accounts
+  // ═══════════════════════════════════════
+  server.tool(
+    "qb_list_accounts",
+    "List bank and financial accounts from QuickBooks Online. Shows all connected bank accounts (Mercury, Relay, Airwallex, etc.), credit cards, and other account types. Use to verify which banks are connected, check balances, or audit the chart of accounts.",
+    {
+      account_type: z.enum(["Bank", "Credit Card", "Accounts Receivable", "Accounts Payable", "Other Current Asset", "Fixed Asset", "Other Asset", "Other Current Liability", "Long Term Liability", "Equity", "Income", "Cost of Goods Sold", "Expense", "Other Income", "Other Expense"]).optional().describe("Filter by account type. Use 'Bank' to see connected bank accounts."),
+      active_only: z.boolean().optional().default(true).describe("Only show active accounts (default true)"),
+    },
+    async ({ account_type, active_only }) => {
+      try {
+        let sql = "SELECT * FROM Account"
+        const conditions: string[] = []
+
+        if (account_type) {
+          conditions.push(`AccountType = '${account_type}'`)
+        }
+        if (active_only !== false) {
+          conditions.push("Active = true")
+        }
+
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ")
+        }
+
+        sql += " ORDERBY Name ASC MAXRESULTS 200"
+
+        const query = encodeURIComponent(sql)
+        const result = await qbApiCall(`/query?query=${query}`)
+        const accounts = result.QueryResponse?.Account || []
+
+        if (accounts.length === 0) {
+          return { content: [{ type: "text" as const, text: `No accounts found${account_type ? ` of type "${account_type}"` : ""}.` }] }
+        }
+
+        const lines = accounts.map((acc: Record<string, unknown>) => {
+          const name = acc.Name as string
+          const type = acc.AccountType as string
+          const subType = acc.AccountSubType as string || ""
+          const balance = acc.CurrentBalance as number ?? 0
+          const currency = (acc.CurrencyRef as Record<string, unknown>)?.value || "USD"
+          const active = acc.Active as boolean
+          const bankNum = acc.BankNum as string || ""
+          return `• ${name}${!active ? " [INACTIVE]" : ""}\n  Type: ${type}${subType ? ` / ${subType}` : ""}\n  Balance: ${currency} ${balance.toLocaleString("en-US", { minimumFractionDigits: 2 })}${bankNum ? `\n  Bank#: ...${bankNum.slice(-4)}` : ""}`
+        })
+
+        const totalBalance = accounts
+          .filter((a: Record<string, unknown>) => a.AccountType === "Bank")
+          .reduce((sum: number, a: Record<string, unknown>) => sum + ((a.CurrentBalance as number) || 0), 0)
+
+        let summary = `📊 ${accounts.length} accounts found`
+        if (account_type === "Bank") {
+          summary += `\nTotal bank balance: $${totalBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}`
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `${summary}\n\n${lines.join("\n\n")}`,
+          }]
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `❌ Error listing accounts: ${(err as Error).message}` }] }
+      }
+    }
+  )
+
+}

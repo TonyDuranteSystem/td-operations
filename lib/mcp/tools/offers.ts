@@ -300,36 +300,38 @@ export function registerOfferTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "offer_get",
-    "Get complete offer details by token (e.g. 'mario-rossi-2026'). Returns all fields including: services, cost_summary, recurring_costs, intro text, payment links, bank details, strategy, next_steps, referrer info, access_code, signed contract status, and bundled_pipelines (which service deliveries to create on activation). Also returns the public URL with access code.",
+    "Get complete offer details by token (e.g. 'mario-rossi-2026'). Returns all fields including: services, cost_summary, recurring_costs, intro text, payment links, bank details, strategy, next_steps, referrer info, access_code, signed contract status, and bundled_pipelines. Also returns the public URL, email open tracking (how many times the offer email was opened, first/last opened timestamps), and portal view tracking (view_count, viewed_at).",
     {
       token: z.string().describe("Offer token (e.g. 'hamid-oumoumen-2026')"),
     },
     async ({ token }) => {
       try {
-        const { data, error } = await supabaseAdmin
-          .from("offers")
-          .select("*")
-          .eq("token", token)
-          .single()
+        const [offerRes, contractRes, trackingRes] = await Promise.all([
+          supabaseAdmin.from("offers").select("*").eq("token", token).single(),
+          supabaseAdmin
+            .from("contracts")
+            .select("id, client_name, client_email, signed_at, pdf_path, status, wire_receipt_path, payment_verified")
+            .eq("offer_token", token)
+            .maybeSingle(),
+          supabaseAdmin
+            .from("email_tracking")
+            .select("tracking_id, subject, recipient, opened, open_count, first_opened_at, last_opened_at, created_at")
+            .eq("offer_token", token)
+            .order("created_at", { ascending: false }),
+        ])
 
-        if (error) throw error
-        if (!data) return { content: [{ type: "text" as const, text: `❌ Offer not found: ${token}` }] }
+        if (offerRes.error) throw offerRes.error
+        if (!offerRes.data) return { content: [{ type: "text" as const, text: `❌ Offer not found: ${token}` }] }
 
-        // Also check if there's a signed contract
-        const { data: contract } = await supabaseAdmin
-          .from("contracts")
-          .select("id, client_name, client_email, signed_at, pdf_path, status, wire_receipt_path, payment_verified")
-          .eq("offer_token", token)
-          .maybeSingle()
-
-        const accessCode = data.access_code || ""
+        const accessCode = offerRes.data.access_code || ""
 
         return {
           content: [{
             type: "text" as const,
             text: JSON.stringify({
-              offer: data,
-              contract: contract || null,
+              offer: offerRes.data,
+              contract: contractRes.data || null,
+              email_tracking: trackingRes.data || [],
               url: `${APP_BASE_URL}/offer/${token}/${accessCode}`,
             }, null, 2),
           }],
