@@ -28,12 +28,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { message, account_id } = await request.json()
+  const { message, account_id, contact_id } = await request.json()
   if (!message?.trim()) return NextResponse.json({ error: 'message required' }, { status: 400 })
 
   try {
-    // Get company name for context
+    // Get company name and client language for context
     let companyName = ''
+    let clientLanguage = ''
+
     if (account_id) {
       const { data: account } = await supabaseAdmin
         .from('accounts')
@@ -41,7 +43,30 @@ export async function POST(request: NextRequest) {
         .eq('id', account_id)
         .single()
       companyName = account?.company_name || ''
+
+      // Get language from the primary contact of this account
+      const { data: primaryAc } = await supabaseAdmin
+        .from('account_contacts')
+        .select('contacts(language)')
+        .eq('account_id', account_id)
+        .eq('is_primary', true)
+        .limit(1)
+        .maybeSingle()
+      const lang = (primaryAc?.contacts as { language?: string | null } | null)?.language
+      clientLanguage = lang || ''
+    } else if (contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('language')
+        .eq('id', contact_id)
+        .single()
+      clientLanguage = contact?.language || ''
     }
+
+    // Normalise to a readable language name for the prompt
+    const isItalian = clientLanguage === 'it' || clientLanguage === 'Italian'
+    const isEnglish = clientLanguage === 'en' || clientLanguage === 'English'
+    const targetLanguage = isItalian ? 'Italian' : isEnglish ? 'English' : clientLanguage || null
 
     // Get admin's past polished messages for style reference
     const { data: styleMessages } = await supabaseAdmin
@@ -66,7 +91,7 @@ export async function POST(request: NextRequest) {
 YOUR JOB: Rewrite his rough message into a clean, professional version.
 
 RULES:
-- Keep the SAME language as the input (if Italian, output Italian. If English, output English).
+- ${targetLanguage ? `ALWAYS output in ${targetLanguage}, regardless of the language the input is written in. Translate if necessary.` : 'Keep the SAME language as the input (if Italian, output Italian. If English, output English).'}
 - Keep the SAME meaning and information — don't add facts he didn't mention.
 - Fix grammar, punctuation, and sentence structure.
 - Make it clear, concise, and professional but warm.
