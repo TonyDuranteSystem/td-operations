@@ -8,10 +8,13 @@ import { DocumentList } from '@/components/portal/document-list'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
-import { FileText, Mail } from 'lucide-react'
+import { FileText, Mail, Building2, User } from 'lucide-react'
 import { InvoiceArchive } from '@/components/portal/invoice-archive'
 
 export const dynamic = 'force-dynamic'
+
+// Company categories: shared with all account members
+const COMPANY_CATEGORIES = [1, 3, 4, 5] // Company, Tax, Banking, Correspondence
 
 const CATEGORY_LABELS: Record<number, string> = {
   1: 'Company',
@@ -36,24 +39,40 @@ export default async function PortalDocumentsPage() {
 
   const locale = getLocale(user)
 
-  // Fetch regular documents: account-based OR contact-based, filtered by portal_visible
-  let documents: Array<{
+  type DocRow = {
     id: string; file_name: string; document_type_name: string | null
     category: number | null; drive_file_id: string | null
-    processed_at: string | null; created_at: string | null
-  }> | null = null
+    processed_at: string | null; created_at: string
+  }
+
+  let companyDocs: DocRow[] = []
+  let myDocs: DocRow[] = []
 
   if (selectedAccountId) {
-    const { data } = await supabaseAdmin
+    // Company docs: shared categories (1,3,4,5) OR no contact assigned
+    const { data: cdData } = await supabaseAdmin
       .from('documents')
       .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
+      .or(`category.in.(${COMPANY_CATEGORIES.join(',')}),contact_id.is.null`)
       .order('created_at', { ascending: false })
       .limit(100)
-    documents = data
+    companyDocs = (cdData ?? []) as DocRow[]
+
+    // My docs: personal category (Contacts = 2) belonging to this contact only
+    const { data: mdData } = await supabaseAdmin
+      .from('documents')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
+      .eq('account_id', selectedAccountId)
+      .eq('contact_id', contactId)
+      .eq('category', 2)
+      .eq('portal_visible', true)
+      .order('created_at', { ascending: false })
+      .limit(50)
+    myDocs = (mdData ?? []) as DocRow[]
   } else {
-    // Contact-only clients (ITIN, no LLC) — show their personal documents
+    // Contact-only clients (ITIN, no LLC) — all docs are personal
     const { data } = await supabaseAdmin
       .from('documents')
       .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at')
@@ -61,7 +80,7 @@ export default async function PortalDocumentsPage() {
       .eq('portal_visible', true)
       .order('created_at', { ascending: false })
       .limit(100)
-    documents = data
+    myDocs = (data ?? []) as DocRow[]
   }
 
   // Fetch correspondence (contact-centric: direct + all linked accounts)
@@ -113,18 +132,35 @@ export default async function PortalDocumentsPage() {
         <InvoiceArchive items={invoiceArchive} />
       )}
 
-      {/* Regular documents */}
-      {(!documents || documents.length === 0) ? (
+      {/* Documents — split into Company and My */}
+      {companyDocs.length === 0 && myDocs.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
           <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('documents.noDocuments', locale)}</h3>
           <p className="text-sm text-zinc-500">{t('documents.noDocumentsDesc', locale)}</p>
         </div>
       ) : (
-        <DocumentList
-          documents={documents}
-          categoryLabels={CATEGORY_LABELS}
-        />
+        <>
+          {companyDocs.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Building2 className="h-4 w-4 text-zinc-500" />
+                <h2 className="text-sm font-semibold text-zinc-700">Company Documents</h2>
+              </div>
+              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} />
+            </div>
+          )}
+
+          {myDocs.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <User className="h-4 w-4 text-zinc-500" />
+                <h2 className="text-sm font-semibold text-zinc-700">My Documents</h2>
+              </div>
+              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} />
+            </div>
+          )}
+        </>
       )}
     </div>
   )
