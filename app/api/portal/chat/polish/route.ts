@@ -32,19 +32,23 @@ export async function POST(request: NextRequest) {
   if (!message?.trim()) return NextResponse.json({ error: 'message required' }, { status: 400 })
 
   try {
-    // Get company name and client language for context
+    // 1. Account + client info
     let companyName = ''
     let clientLanguage = ''
+    let entityType = ''
+    let stateOfFormation = ''
 
     if (account_id) {
       const { data: account } = await supabaseAdmin
         .from('accounts')
-        .select('company_name')
+        .select('company_name, entity_type, state_of_formation')
         .eq('id', account_id)
         .single()
       companyName = account?.company_name || ''
+      entityType = account?.entity_type || ''
+      stateOfFormation = account?.state_of_formation || ''
 
-      // Get language from the primary contact of this account
+      // Language from primary contact
       const { data: primaryAc } = await supabaseAdmin
         .from('account_contacts')
         .select('contacts(language)')
@@ -57,18 +61,59 @@ export async function POST(request: NextRequest) {
     } else if (contact_id) {
       const { data: contact } = await supabaseAdmin
         .from('contacts')
-        .select('language')
+        .select('language, full_name')
         .eq('id', contact_id)
         .single()
       clientLanguage = contact?.language || ''
+      companyName = contact?.full_name || ''
     }
 
-    // Normalise to a readable language name for the prompt
     const isItalian = clientLanguage === 'it' || clientLanguage === 'Italian'
     const isEnglish = clientLanguage === 'en' || clientLanguage === 'English'
     const targetLanguage = isItalian ? 'Italian' : isEnglish ? 'English' : clientLanguage || null
 
-    // Get admin's past polished messages for style reference
+    // 2. Active services
+    let services: { service_name: string; status: string }[] = []
+    if (account_id) {
+      const { data: svc } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('service_name, status')
+        .eq('account_id', account_id)
+        .eq('status', 'active')
+        .limit(8)
+      services = svc ?? []
+    }
+
+    // 3. Upcoming deadlines
+    let deadlines: { deadline_type: string; due_date: string; status: string }[] = []
+    if (account_id) {
+      const today = new Date().toISOString().split('T')[0]
+      const { data: dl } = await supabaseAdmin
+        .from('deadlines')
+        .select('deadline_type, due_date, status')
+        .eq('account_id', account_id)
+        .in('status', ['Pending', 'Overdue'])
+        .gte('due_date', today)
+        .order('due_date')
+        .limit(5)
+      deadlines = dl ?? []
+    }
+
+    // 4. Conversation history (last 15 messages) — critical for context
+    let conversationQuery = supabaseAdmin
+      .from('portal_messages')
+      .select('sender_type, message, created_at')
+      .order('created_at', { ascending: false })
+      .limit(15)
+    if (account_id) {
+      conversationQuery = conversationQuery.eq('account_id', account_id)
+    } else {
+      conversationQuery = conversationQuery.eq('contact_id', contact_id).is('account_id', null)
+    }
+    const { data: conversation } = await conversationQuery
+    const conversationHistory = (conversation ?? []).reverse()
+
+    // 5. Style examples from admin's past messages (other threads)
     const { data: styleMessages } = await supabaseAdmin
       .from('portal_messages')
       .select('message')
@@ -76,40 +121,49 @@ export async function POST(request: NextRequest) {
       .not('message', 'eq', '')
       .order('created_at', { ascending: false })
       .limit(20)
-
     const styleExamples = (styleMessages ?? [])
       .filter(m => m.message.length > 20)
-      .slice(0, 8)
+      .slice(0, 6)
       .map(m => m.message)
 
-    // Fetch KB Brain context matching the message content
+    // 6. KB Brain context
     const kbQuery = buildKBQuery(message)
     const kbContext = await fetchKBContext(kbQuery)
 
+    // Build context block
+    const clientContext = [
+      companyName ? `Client: ${companyName}` : '',
+      entityType ? `Entity: ${entityType}` : '',
+      stateOfFormation ? `State: ${stateOfFormation}` : '',
+      services.length ? `Active services: ${services.map(s => s.service_name).join(', ')}` : '',
+      deadlines.length ? `Upcoming deadlines: ${deadlines.map(d => `${d.deadline_type} (${d.due_date})`).join(', ')}` : '',
+    ].filter(Boolean).join('\n')
+
+    const conversationText = conversationHistory.length
+      ? conversationHistory.map(m => `${m.sender_type === 'admin' ? 'Antonio' : 'Client'}: ${m.message}`).join('\n')
+      : ''
+
     const systemPrompt = `You are a writing assistant for Antonio, who runs Tony Durante LLC (US business formation & tax consulting).
 
-YOUR JOB: Rewrite his rough message into a clean, professional version.
+YOUR JOB: Take Antonio's rough draft and rewrite it as a clean, professional message to the client.
 
+${clientContext ? `CLIENT CONTEXT:\n${clientContext}\n` : ''}
+${conversationText ? `RECENT CONVERSATION (use this to understand what Antonio is responding to):\n${conversationText}\n` : ''}
+${kbContext ? `${kbContext}\n` : ''}
 RULES:
-- ${targetLanguage ? `ALWAYS output in ${targetLanguage}, regardless of the language the input is written in. Translate if necessary.` : 'Keep the SAME language as the input (if Italian, output Italian. If English, output English).'}
-- Keep the SAME meaning and information — don't add facts he didn't mention.
+- ${targetLanguage ? `ALWAYS output in ${targetLanguage}, regardless of the language of the draft. Translate if necessary.` : 'Keep the SAME language as the draft.'}
+- Keep the SAME meaning and information — do not add facts that Antonio did not mention.
 - Fix grammar, punctuation, and sentence structure.
-- Make it clear, concise, and professional but warm.
-- Add a brief greeting if appropriate (e.g., "Ciao [name]," or "Hi,").
-- Don't make it overly formal or robotic — it should sound natural, like a knowledgeable professional.
-- If the message mentions specific services, deadlines, or steps, present them clearly (bullet points if helpful).
-- Output ONLY the polished message — no explanations, no "here's the rewritten version", just the message itself.
-
-${styleExamples.length > 0 ? `ANTONIO'S WRITING STYLE (examples from past messages):\n${styleExamples.map((m, i) => `${i + 1}. "${m}"`).join('\n')}` : ''}
-
-${kbContext ? `\n${kbContext}` : ''}
-
-${companyName ? `CLIENT COMPANY: ${companyName}` : ''}`
+- Make it clear, concise, professional but warm — not robotic.
+- Add a brief greeting only if the draft doesn't already have one.
+- If the message mentions specific services, steps, or deadlines, present them clearly (bullet points if helpful).
+- Output ONLY the polished message — no preamble, no "here's the rewrite", just the message itself.
+${styleExamples.length > 0 ? `\nANTONIO'S WRITING STYLE (examples):\n${styleExamples.map((m, i) => `${i + 1}. "${m}"`).join('\n')}` : ''}`
 
     const result = await callAI({
       systemPrompt,
-      userPrompt: `Rewrite this message:\n\n${message}`,
-      maxTokens: 500,
+      userPrompt: `Antonio's rough draft:\n\n${message}`,
+      maxTokens: 600,
       temperature: 0.5,
     })
 
