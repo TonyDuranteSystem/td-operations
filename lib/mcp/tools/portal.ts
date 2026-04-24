@@ -5,6 +5,7 @@ import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
 import { updateAccount } from "@/lib/operations/account"
+import { syncTier } from "@/lib/operations/sync-tier"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
 import { gmailPost } from "@/lib/gmail"
@@ -447,12 +448,11 @@ export function registerPortalTools(server: McpServer) {
       flags.push(`FLAG: Old TD address (${account.physical_address}) -- will need Form 8822-B to change to Ulmerton (do later)`)
     }
 
-    // UPDATE ACCOUNT FLAGS — portal tier + portal_account + dated setup note
+    // UPDATE ACCOUNT FLAGS — portal_account + dated setup note (tier set via syncTier by caller)
     await updateAccount({
       id: account.id,
       patch: {
         portal_account: true,
-        portal_tier: "active",
         portal_created_date: new Date().toISOString().split("T")[0],
         notes: (account.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Portal transition setup completed. [PORTAL_TRANSITION_SETUP]`,
       },
@@ -706,12 +706,6 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
           globalFlags.push(`NOTE: Auth user already exists for ${contact.email} -- metadata repaired (account_ids synced)`)
         }
 
-        // Update contact tier
-        // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-        await supabaseAdmin.from("contacts").update({
-          portal_tier: "active", // eslint-disable-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-        }).eq("id", contact.id)
-
         // ─── 4. PROCESS EACH ACCOUNT ───
         const reportLines: string[] = [
           `== LEGACY PORTAL ONBOARD: ${contact.full_name} ==`,
@@ -727,6 +721,8 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
           reportLines.push("")
           globalFlags.push(...result.flags)
           allPendingDocs.push(...result.pendingDocs)
+          // Sync tier per account (handles account + contact recompute + auth metadata)
+          await syncTier({ accountId: acct.id, newTier: 'active', reason: 'legacy portal transition' })
         }
 
         // ─── 5. BUILD SUMMARY ───
@@ -941,9 +937,6 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
               })
             }
 
-            // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-            await supabaseAdmin.from("contacts").update({ portal_tier: "active" }).eq("id", contact.id)
-
             // Process each active account
             const allPendingDocs: string[] = []
             const processedAccountIds: string[] = []
@@ -953,6 +946,8 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
                 const result = await processAccountForTransition(acct, contact, lang)
                 allPendingDocs.push(...result.pendingDocs)
                 processedAccountIds.push(acct.id)
+                // Sync tier per account (handles account + contact recompute + auth metadata)
+                await syncTier({ accountId: acct.id, newTier: 'active', reason: 'legacy portal transition' })
 
                 perAccountResults.push({
                   account_id: acct.id,

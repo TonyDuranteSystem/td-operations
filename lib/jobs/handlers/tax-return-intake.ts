@@ -333,12 +333,8 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
 
   // ─── 10. PORTAL TIER UPGRADE (NON-CRITICAL) ───
   try {
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    await supabaseAdmin
-      .from("accounts")
-      .update({ portal_tier: "active", updated_at: new Date().toISOString() })
-      .eq("id", accountId!)
-
+    const { syncTier } = await import("@/lib/operations/sync-tier")
+    await syncTier({ accountId: accountId!, newTier: 'active', reason: 'standalone tax client activated' })
     result.steps.push(step("portal_tier", "ok", "Upgraded to active"))
   } catch (e) {
     result.steps.push(step("portal_tier", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))

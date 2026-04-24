@@ -666,8 +666,8 @@ export async function POST(req: NextRequest) {
     // Upgrade portal tier from lead → onboarding after payment (syncs account + contacts)
     if (autoAccountId) {
       // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
-      const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-      const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
+      const { syncTier } = await import("@/lib/operations/sync-tier")
+      const tierResult = await syncTier({ accountId: autoAccountId, newTier: 'onboarding', reason: 'payment confirmed — portal tier activate' })
       const tierAlreadyAtOrAbove = (TIER_ORDER[(tierResult.previousTier || '') as PortalTier] ?? -1) >= TIER_ORDER['onboarding']
       steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → onboarding (via account)`) : (tierResult.error || "Unknown error") })
     } else if (contactId) {

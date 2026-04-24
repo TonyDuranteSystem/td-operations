@@ -12,8 +12,9 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { PORTAL_BASE_URL } from '@/lib/config'
-import { TIER_ORDER, type PortalTier } from './tier-config'
+import { type PortalTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
+import { syncTier } from '@/lib/operations/sync-tier'
 
 interface AutoCreateResult {
   success: boolean
@@ -166,30 +167,29 @@ async function createFromEmail(
       resolvedContactId = createdContact?.id
     }
 
-    // Update contact tier
-    if (resolvedContactId) {
-      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
-      await supabaseAdmin
-        .from('contacts')
-        // eslint-disable-next-line no-restricted-syntax -- Phase D1 contacts.portal_tier write; routes through reconcileTier() per dev_task 7ebb1e0c
-        .update({ portal_tier: tier })
-        .eq('id', resolvedContactId)
-    }
+    // Sync tier via syncTier (handles account + contacts + auth.portal_tier)
     if (accountId) {
-      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier; extract to reconcileTier() per dev_task 7ebb1e0c
-      await supabaseAdmin
-        .from('accounts')
-        .update({ portal_tier: tier })
-        .eq('id', accountId)
+      await syncTier({ accountId, newTier: tier, reason: 'portal user updated' })
+      // Backfill contact_id in auth metadata (syncTier does not set contact_id)
+      if (resolvedContactId) {
+        await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+          app_metadata: { ...existingUser.app_metadata, contact_id: resolvedContactId },
+        })
+      }
+    } else {
+      // No account — write directly (syncTier requires accountId)
+      if (resolvedContactId) {
+        // eslint-disable-next-line no-restricted-syntax -- no-account special case: syncTier needs accountId; write contact directly
+        await supabaseAdmin.from('contacts').update({ portal_tier: tier }).eq('id', resolvedContactId)
+      }
+      await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+        app_metadata: {
+          ...existingUser.app_metadata,
+          portal_tier: tier,
+          ...(resolvedContactId ? { contact_id: resolvedContactId } : {}),
+        },
+      })
     }
-    // Sync portal_tier + backfill contact_id to auth metadata
-    await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
-      app_metadata: {
-        ...existingUser.app_metadata,
-        portal_tier: tier,
-        ...(resolvedContactId ? { contact_id: resolvedContactId } : {}),
-      },
-    })
     return { success: true, alreadyExists: true, email, userId: existingUser.id }
   }
 
@@ -238,28 +238,23 @@ async function createFromEmail(
     return { success: false, alreadyExists: false, error: createError.message }
   }
 
-  // Update contact tier (source of truth)
-  if (portalContactId) {
-    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
-    await supabaseAdmin
-      .from('contacts')
-      // eslint-disable-next-line no-restricted-syntax -- Phase D1 contacts.portal_tier write; routes through reconcileTier() per dev_task 7ebb1e0c
-      .update({ portal_tier: tier })
-      .eq('id', portalContactId)
-  }
-
-  // Update account flags (secondary)
+  // Sync tier via syncTier (handles account + contacts + auth.portal_tier)
   if (accountId) {
-    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/portal.ts per dev_task 7ebb1e0c
+    await syncTier({ accountId, newTier: tier, reason: 'portal user created' })
+    // Account metadata flags (not part of tier sync)
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; portal_tier extracted to syncTier above
     await supabaseAdmin
       .from('accounts')
       .update({
         portal_account: true,
-        portal_tier: tier,
         portal_auto_created: autoCreated,
         portal_created_date: new Date().toISOString().split('T')[0],
       })
       .eq('id', accountId)
+  } else if (portalContactId) {
+    // No account — write contact directly (syncTier requires accountId)
+    // eslint-disable-next-line no-restricted-syntax -- no-account special case: syncTier needs accountId; write contact directly
+    await supabaseAdmin.from('contacts').update({ portal_tier: tier }).eq('id', portalContactId)
   }
 
   return {
@@ -302,8 +297,9 @@ export async function ensureMinimalAccount(params: {
   offerToken?: string
   leadId?: string
   isStandaloneBusiness?: boolean
+  tier?: PortalTier
 }): Promise<EnsureAccountResult> {
-  const { contactId, clientName, contractType, offerToken, leadId, isStandaloneBusiness } = params
+  const { contactId, clientName, contractType, offerToken, leadId, isStandaloneBusiness, tier = 'onboarding' } = params
 
   // Phase 0 safety: read the entity type the client picked on the signed contract.
   // Used for new-account INSERT below, and for reconciliation on the existing-account branches.
@@ -419,7 +415,6 @@ export async function ensureMinimalAccount(params: {
       entity_type: entityTypeForInsert,
       portal_account: true,
       portal_auto_created: true,
-      portal_tier: 'onboarding',
       portal_created_date: new Date().toISOString().split('T')[0],
       notes: `Auto-created on payment. Offer: ${offerToken || 'N/A'}. Will be updated when data form is reviewed.`,
     })
@@ -455,6 +450,9 @@ export async function ensureMinimalAccount(params: {
     contact_id: contactId,
     role: 'Owner',
   })
+
+  // Set initial portal tier (syncs account + linked contacts + auth metadata)
+  await syncTier({ accountId: account.id, newTier: tier, reason: 'auto-created during payment' })
 
   // Backfill account_id on contact-only invoices (created at signing, before account existed)
   await supabaseAdmin
@@ -689,60 +687,7 @@ export async function upgradePortalTier(
   accountId: string,
   newTier: PortalTier
 ): Promise<{ success: boolean; previousTier?: string; error?: string }> {
-  const { data: account, error } = await supabaseAdmin
-    .from('accounts')
-    .select('portal_tier')
-    .eq('id', accountId)
-    .single()
-
-  if (error || !account) {
-    return { success: false, error: error?.message || 'Account not found' }
-  }
-
-  const currentIdx = TIER_ORDER[(account.portal_tier || 'active') as PortalTier] ?? -1
-  const newIdx = TIER_ORDER[newTier] ?? -1
-
-  // Only upgrade, never downgrade
-  if (newIdx <= currentIdx) {
-    return { success: true, previousTier: account.portal_tier }
-  }
-
-  // Update account tier
-  // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
-  await supabaseAdmin
-    .from('accounts')
-    .update({ portal_tier: newTier })
-    .eq('id', accountId)
-
-  // Also upgrade tier on all linked contacts (source of truth) and their auth users
-  const { data: links } = await supabaseAdmin
-    .from('account_contacts')
-    .select('contact_id')
-    .eq('account_id', accountId)
-
-  for (const link of links ?? []) {
-    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to reconcileTier() in lib/operations/portal.ts per dev_task 7ebb1e0c
-    await supabaseAdmin
-      .from('contacts')
-      // eslint-disable-next-line no-restricted-syntax -- Phase D1 contacts.portal_tier write; routes through reconcileTier() per dev_task 7ebb1e0c
-      .update({ portal_tier: newTier })
-      .eq('id', link.contact_id)
-
-    // Sync to auth.users app_metadata so portal dashboard reads the correct tier
-    const { data: contactRow } = await supabaseAdmin
-      .from('contacts')
-      .select('email')
-      .eq('id', link.contact_id)
-      .single()
-    if (contactRow?.email) {
-      const authUser = await findAuthUserByEmail(contactRow.email)
-      if (authUser) {
-        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
-          app_metadata: { ...authUser.app_metadata, portal_tier: newTier },
-        })
-      }
-    }
-  }
-
-  return { success: true, previousTier: account.portal_tier }
+  const result = await syncTier({ accountId, newTier, reason: `upgrade to ${newTier}` })
+  if (!result.success) return { success: false, error: result.error }
+  return { success: true, previousTier: result.previousTier ?? undefined }
 }

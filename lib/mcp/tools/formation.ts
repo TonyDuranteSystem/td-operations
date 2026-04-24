@@ -387,15 +387,12 @@ export function registerFormationTools(server: McpServer) {
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${jobId}')`)
 
-          // Upgrade portal tier: onboarding → active
+          // Upgrade portal tier: onboarding → formation (company still being formed)
           const formAccountId = (sub as Record<string, unknown>).account_id as string | undefined
           if (formAccountId) {
-            await supabaseAdmin
-              .from("accounts")
-              .update({ portal_tier: "active", updated_at: new Date().toISOString() })
-              .eq("id", formAccountId)
-              .in("portal_tier", ["onboarding"])
-            lines.push(`🔓 Portal tier upgraded: onboarding → active`)
+            const { syncTier } = await import("@/lib/operations/sync-tier")
+            await syncTier({ accountId: formAccountId, newTier: 'formation', reason: 'formation data reviewed' })
+            lines.push(`🔓 Portal tier upgraded: onboarding → formation`)
           }
         }
 

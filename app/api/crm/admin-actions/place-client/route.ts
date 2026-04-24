@@ -480,8 +480,8 @@ async function setPortalTier(
   tier: string,
 ): Promise<StepResult> {
   try {
-    const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-    const result = await upgradePortalTier(accountId, tier as import("@/lib/portal/tier-config").PortalTier)
+    const { syncTier } = await import("@/lib/operations/sync-tier")
+    const result = await syncTier({ accountId, newTier: tier as import("@/lib/portal/tier-config").PortalTier, reason: `place-client: set to ${tier}` })
 
     if (!result.success) {
       return { name: "portal_tier", status: "error", detail: result.error || "Unknown error" }
