@@ -277,6 +277,8 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   }
 
   // 4b. Upgrade portal tier: lead → onboarding (syncs account + contacts)
+  // contract_type is not in the Whop payload — 'onboarding' is the safe fallback.
+  // Formation clients activated via Whop will be corrected by activate-service (which has contract_type).
   let resolvedAccountId = accountId
   if (!resolvedAccountId && email) {
     const { data: contactAccounts } = await getSupabase()

@@ -112,6 +112,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
   const clientName = session.metadata?.client_name || session.customer_details?.name || null
   const offerToken = session.metadata?.offer_token || null
   const leadIdFromMeta = session.metadata?.lead_id || null
+  const contractType = session.metadata?.contract_type || null
 
   console.warn(`[stripe-webhook] checkout.session.completed: ${sessionId} — ${clientName || email} — ${currency} ${total}`)
 
@@ -273,7 +274,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
       .eq("id", leadId)
   }
 
-  // 7. Upgrade portal tier: lead → onboarding (syncs account + contacts)
+  // 7. Upgrade portal tier: lead → formation|onboarding (syncs account + contacts)
   let resolvedAccountId = accountId
   if (!resolvedAccountId && email) {
     // Resolve account via contact's linked accounts
@@ -289,7 +290,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
   }
   if (resolvedAccountId) {
     const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-    await upgradePortalTier(resolvedAccountId, "onboarding")
+    await upgradePortalTier(resolvedAccountId, contractType === 'formation' ? 'formation' : 'onboarding')
   }
 
   // 8. Match pending_activation — use offer_token (exact) OR email (fallback)
