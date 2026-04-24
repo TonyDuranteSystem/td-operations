@@ -38,6 +38,7 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 import { calculateCommission } from "@/lib/referral-utils"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
+import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -667,7 +668,7 @@ export async function POST(req: NextRequest) {
       // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
       const { upgradePortalTier } = await import("@/lib/portal/auto-create")
       const tierResult = await upgradePortalTier(autoAccountId, "onboarding")
-      const tierAlreadyAtOrAbove = ['onboarding', 'active', 'full'].includes(tierResult.previousTier || '')
+      const tierAlreadyAtOrAbove = (TIER_ORDER[(tierResult.previousTier || '') as PortalTier] ?? -1) >= TIER_ORDER['onboarding']
       steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → onboarding (via account)`) : (tierResult.error || "Unknown error") })
     } else if (contactId) {
       // Contact-only (individual service): upgrade contacts.portal_tier + auth metadata directly
@@ -680,9 +681,8 @@ export async function POST(req: NextRequest) {
           .single()
 
         const currentTier = currentContact?.portal_tier || "lead"
-        const tierOrder = ["lead", "onboarding", "active", "full"]
-        const currentIdx = tierOrder.indexOf(currentTier)
-        const newIdx = tierOrder.indexOf("onboarding")
+        const currentIdx = TIER_ORDER[(currentTier as PortalTier)] ?? -1
+        const newIdx = TIER_ORDER["onboarding"]
 
         if (newIdx > currentIdx) {
           // 1. Update contacts.portal_tier

@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
+import { PORTAL_TIERS } from '@/lib/portal/tier-config'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -43,16 +44,18 @@ export async function POST(request: NextRequest) {
   const findAuthUser = async () => findAuthUserByEmail(contact.email!)
 
   if (action === 'change_tier') {
-    const validTiers = ['lead', 'onboarding', 'active', 'full']
+    const validTiers: readonly string[] = PORTAL_TIERS
     if (!tier || !validTiers.includes(tier)) {
       return NextResponse.json({ error: `Invalid tier. Must be one of: ${validTiers.join(', ')}` }, { status: 400 })
     }
 
     // Update contacts table
+    /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts/accounts portal_tier update; extract to reconcileTier() in lib/operations/portal.ts */
     await supabaseAdmin
       .from('contacts')
       .update({ portal_tier: tier, updated_at: new Date().toISOString() })
       .eq('id', contact_id)
+    /* eslint-enable no-restricted-syntax */
 
     // Also sync tier to all linked accounts
     const { data: links } = await supabaseAdmin
@@ -60,6 +63,7 @@ export async function POST(request: NextRequest) {
       .select('account_id')
       .eq('contact_id', contact_id)
     for (const link of links ?? []) {
+      /* eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier */
       await supabaseAdmin
         .from('accounts')
         .update({ portal_tier: tier, updated_at: new Date().toISOString() })
@@ -117,6 +121,7 @@ export async function POST(request: NextRequest) {
 
     // Ensure portal flags on all linked accounts
     if (accountIds.length > 0) {
+      /* eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_account/portal_tier */
       await supabaseAdmin
         .from('accounts')
         .update({
@@ -129,10 +134,12 @@ export async function POST(request: NextRequest) {
 
     // Ensure contact has portal_tier set
     if (!contact.portal_tier) {
+      /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts.update portal_tier */
       await supabaseAdmin
         .from('contacts')
         .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
         .eq('id', contact_id)
+      /* eslint-enable no-restricted-syntax */
     }
 
     // Send reset email
@@ -224,6 +231,7 @@ export async function POST(request: NextRequest) {
 
       // Set portal flags on accounts
       if (existingAccountIds.length > 0) {
+        /* eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_account/portal_tier */
         await supabaseAdmin
           .from('accounts')
           .update({
@@ -236,10 +244,12 @@ export async function POST(request: NextRequest) {
 
       // Set portal_tier on contact if not set
       if (!contact.portal_tier) {
+        /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts.update portal_tier */
         await supabaseAdmin
           .from('contacts')
           .update({ portal_tier: existingTier, updated_at: new Date().toISOString() })
           .eq('id', contact_id)
+        /* eslint-enable no-restricted-syntax */
       }
 
       // Send welcome email with new credentials
@@ -336,14 +346,17 @@ export async function POST(request: NextRequest) {
     // Update portal_tier on contact if not set
     const effectiveTier = contact.portal_tier || 'active'
     if (!contact.portal_tier) {
+      /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts.update portal_tier */
       await supabaseAdmin
         .from('contacts')
         .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
         .eq('id', contact_id)
+      /* eslint-enable no-restricted-syntax */
     }
 
     // Update linked accounts portal flags + sync tier
     if (accountIds.length > 0) {
+      /* eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_account/portal_tier */
       await supabaseAdmin
         .from('accounts')
         .update({

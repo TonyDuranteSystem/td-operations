@@ -309,7 +309,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
 
 /**
  * Get the portal tier for an account.
- * Returns 'lead', 'onboarding', 'active', or 'full'.
+ * Returns 'lead', 'formation', 'onboarding', or 'active'.
  */
 export async function getPortalTier(accountId: string): Promise<string> {
   const { data } = await supabaseAdmin

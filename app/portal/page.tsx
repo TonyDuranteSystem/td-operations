@@ -147,7 +147,7 @@ export default async function PortalDashboardPage() {
     )
   }
 
-  if (portalTier === 'lead' || portalTier === 'onboarding') {
+  if (portalTier === 'lead' || portalTier === 'formation' || portalTier === 'onboarding') {
     // Get offer data for welcome dashboard
     // Collect all possible emails: auth email + contact email
     const emails = new Set<string>()

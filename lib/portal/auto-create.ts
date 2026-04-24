@@ -12,7 +12,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { PORTAL_BASE_URL } from '@/lib/config'
-import type { PortalTier } from './tier-config'
+import { TIER_ORDER, type PortalTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
 
 interface AutoCreateResult {
@@ -699,9 +699,8 @@ export async function upgradePortalTier(
     return { success: false, error: error?.message || 'Account not found' }
   }
 
-  const tierOrder: PortalTier[] = ['lead', 'onboarding', 'active', 'full']
-  const currentIdx = tierOrder.indexOf((account.portal_tier || 'active') as PortalTier)
-  const newIdx = tierOrder.indexOf(newTier)
+  const currentIdx = TIER_ORDER[(account.portal_tier || 'active') as PortalTier] ?? -1
+  const newIdx = TIER_ORDER[newTier] ?? -1
 
   // Only upgrade, never downgrade
   if (newIdx <= currentIdx) {

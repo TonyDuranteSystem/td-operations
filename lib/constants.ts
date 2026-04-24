@@ -77,9 +77,7 @@ export const WIZARD_STATUS = [
   'in_progress', 'submitted', 'reviewed',
 ] as const
 
-export const PORTAL_TIER = [
-  'lead', 'onboarding', 'active',
-] as const
+// PortalTier moved to lib/portal/tier-config.ts — single canonical source
 
 export const PORTAL_ROLE = [
   'client', 'partner',
@@ -163,7 +161,6 @@ export type PendingActivationStatus = (typeof PENDING_ACTIVATION_STATUS)[number]
 export type ReferralStatus = (typeof REFERRAL_STATUS)[number]
 export type SignatureRequestStatus = (typeof SIGNATURE_REQUEST_STATUS)[number]
 export type WizardStatus = (typeof WIZARD_STATUS)[number]
-export type PortalTier = (typeof PORTAL_TIER)[number]
 export type PortalRole = (typeof PORTAL_ROLE)[number]
 
 // Badge color mappings

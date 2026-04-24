@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isAdmin } from "@/lib/auth"
 import { reconcileTier } from "@/lib/operations/portal"
-import type { PortalTier } from "@/lib/portal/tier-config"
+import { PORTAL_TIERS, type PortalTier } from "@/lib/portal/tier-config"
 
 /**
  * POST /api/crm/admin-actions/reconcile-portal-tier
@@ -19,7 +19,7 @@ import type { PortalTier } from "@/lib/portal/tier-config"
  *
  * Idempotent. Admin-only. Logged to action_log with the admin's identity.
  */
-const VALID_TIERS: readonly PortalTier[] = ["lead", "onboarding", "active", "full"] as const
+const VALID_TIERS: readonly PortalTier[] = PORTAL_TIERS
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
