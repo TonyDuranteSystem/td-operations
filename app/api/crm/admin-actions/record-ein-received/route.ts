@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 import { normalizeEIN } from '@/lib/jobs/validation'
-import { advanceStage } from '@/lib/operations/service-delivery'
+import { advanceStage, createSD } from '@/lib/operations/service-delivery'
 import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { enqueueJob } from '@/lib/jobs/queue'
@@ -82,6 +82,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Failed to save EIN: ${einWriteResult.error}` }, { status: 500 })
     }
 
+    // 2b. Create Banking Fintech SD (deferred from payment per SOP v7.2 Phase 0)
+    // Guard: skip if one already exists (idempotent — old clients may have it from before the formation SD filter fix)
+    let bankingSdId: string | null = null
+    const { data: existingBankingSd } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id')
+      .eq('account_id', account_id)
+      .eq('service_type', 'Banking Fintech')
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle()
+
+    if (!existingBankingSd) {
+      try {
+        const bankingSd = await createSD({
+          service_type: 'Banking Fintech',
+          service_name: `Banking Fintech - ${account.company_name}`,
+          account_id,
+          contact_id: formationSD.contact_id || null,
+          notes: `Auto-created on EIN received for ${account.company_name} (${normalizedEIN})`,
+        })
+        bankingSdId = bankingSd.id
+      } catch (e) {
+        console.error('[record-ein-received] Banking Fintech SD creation failed:', e)
+        // Non-fatal — EIN recording continues
+      }
+    } else {
+      bankingSdId = existingBankingSd.id
+    }
+
     // 3. Advance Company Formation SD: current → "EIN Received" → "Post-Formation + Banking"
     const einReceivedResult = await advanceStage({
       delivery_id: formationSD.id,
@@ -132,6 +162,7 @@ export async function POST(req: NextRequest) {
         ein_number: normalizedEIN,
         drive_file_id: drive_file_id || null,
         formation_sd_id: formationSD.id,
+        banking_sd_id: bankingSdId,
         previous_stage: previousStage,
         new_stage: sdStage,
         previous_tier: previousTier,
@@ -150,6 +181,7 @@ export async function POST(req: NextRequest) {
         success: tierResult.success,
       },
       sd_stage: sdStage,
+      banking_sd_id: bankingSdId,
       welcome_package_job_id: welcomeJob.id,
     })
   } catch (err) {
