@@ -178,6 +178,8 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
 
   const paymentRecord: Record<string, unknown> = {
     amount: total,
+    subtotal: total,
+    total: total,
     amount_paid: total,
     amount_currency: currency === "USD" ? "USD" : "EUR",
     paid_date: paidAt ? paidAt.split("T")[0] : new Date().toISOString().split("T")[0],

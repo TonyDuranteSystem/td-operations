@@ -179,6 +179,8 @@ async function handleCheckoutCompleted(session: StripeSession) {
 
   const paymentRecord: Record<string, unknown> = {
     amount: total,
+    subtotal: total,
+    total: total,
     amount_paid: total,
     amount_currency: currency === "USD" ? "USD" : "EUR",
     paid_date: new Date().toISOString().split("T")[0],
