@@ -249,20 +249,32 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // CRM task for staff
+      // CRM task for staff — idempotent: skip if a task for this provider already exists
       if (account_id) {
         try {
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          await supabaseAdmin.from('tasks').insert({
-            task_title: `Review banking application (${provider}) — ${compName}`,
-            assigned_to: 'Luca',
-            status: 'To Do',
-            priority: 'High',
-            category: 'KYC',
-            description: `Client submitted ${provider} banking application via portal wizard. Review the data and submit to the provider.`,
-            account_id,
-            created_by: 'System',
-          })
+          const taskTitle = `Review banking application (${provider}) — ${compName}`
+          const { data: existingTask } = await supabaseAdmin
+            .from('tasks')
+            .select('id')
+            .eq('account_id', account_id)
+            .eq('task_title', taskTitle)
+            .neq('status', 'Done')
+            .limit(1)
+            .maybeSingle()
+
+          if (!existingTask) {
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+            await supabaseAdmin.from('tasks').insert({
+              task_title: taskTitle,
+              assigned_to: 'Luca',
+              status: 'To Do',
+              priority: 'High',
+              category: 'KYC',
+              description: `Client submitted ${provider} banking application via portal wizard. Review the data and submit to the provider.`,
+              account_id,
+              created_by: 'System',
+            })
+          }
         } catch (e) {
           console.error('[wizard-submit] Task creation error:', e)
         }

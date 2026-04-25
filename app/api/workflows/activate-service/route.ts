@@ -493,6 +493,13 @@ export async function POST(req: NextRequest) {
       const accountId = autoAccountId
 
       for (const pipeline of pipelines) {
+        // Formation contracts: only Company Formation SD is created at payment per SOP v7.2.
+        // Banking/Tax/CMRA/Renewal SDs are deferred to lifecycle events (EIN received, renewal signed).
+        if (contractType === "formation" && pipeline !== "Company Formation") {
+          sdResults.push({ pipeline, status: "deferred" })
+          continue
+        }
+
         try {
           const quantity = pipelineQuantity.get(pipeline) ?? 1
 
@@ -617,10 +624,11 @@ export async function POST(req: NextRequest) {
 
       const created = sdResults.filter(r => r.status === "created").length
       const existing = sdResults.filter(r => r.status === "existing").length
+      const deferred = sdResults.filter(r => r.status === "deferred").length
       steps.push({
         step: "service_deliveries",
         status: "done",
-        detail: `${created} created, ${existing} existing, ${sdResults.length} total from bundled_pipelines`,
+        detail: `${created} created, ${existing} existing${deferred ? `, ${deferred} deferred (formation — lifecycle-gated)` : ""}, ${sdResults.length} total from bundled_pipelines`,
       })
     } else {
       steps.push({ step: "service_deliveries", status: "skipped", detail: "No bundled_pipelines on offer" })

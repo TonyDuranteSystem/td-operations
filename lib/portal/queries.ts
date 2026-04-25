@@ -572,7 +572,29 @@ export async function getPortalActionItems(
   const items: ActionItem[] = []
 
   // ── Wizard forms ──
+  // Gate: some wizard types require an active SD to be actionable.
+  // banking_payset/banking_relay need Banking Fintech; tax needs Tax Return.
+  // Without the gate, orphaned in_progress wizard_progress rows (e.g. from
+  // SDs deleted during data cleanup) surface as action items that fail on submit.
+  // onboarding has no SD at payment (deferred per SOP v7.2) — no gate for it.
+  const WIZARD_SD_REQUIRED: Record<string, string> = {
+    banking_payset: 'Banking Fintech',
+    banking_relay: 'Banking Fintech',
+    tax: 'Tax Return',
+  }
+  const requiredSdTypes = Array.from(new Set(Object.values(WIZARD_SD_REQUIRED)))
+  const { data: activeWizardSds } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('service_type')
+    .eq('account_id', accountId)
+    .eq('status', 'active')
+    .in('service_type', requiredSdTypes)
+  const activeWizardSdTypes = new Set((activeWizardSds ?? []).map(s => s.service_type))
+
   for (const w of wizardRes.data ?? []) {
+    const requiredSd = WIZARD_SD_REQUIRED[w.wizard_type]
+    if (requiredSd && !activeWizardSdTypes.has(requiredSd)) continue
+
     const age = daysSince(w.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
     const typeLabel = w.wizard_type === 'formation' ? 'Formation' : w.wizard_type === 'onboarding' ? 'Onboarding' : w.wizard_type
