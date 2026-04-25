@@ -11,7 +11,7 @@ You are working on **td-operations**, the monolithic Next.js codebase for Tony D
 3. **Group related work.** If a feature needs env vars, DB changes, and code — do all of them together, not scattered across the session.
 4. **Stay on scope.** If working on the portal, don't bring up the CRM dashboard, MCP tools, or other projects unless asked. Focus on what Antonio asked for.
 5. **Be honest about what's actually done vs what's just code pushed.** Code pushed ≠ feature working. A feature works when Antonio can use it.
-6. **All code changes MUST be tested in sandbox before pushing to main.** Use the `td-operations-sandbox` Vercel project (Supabase ref `xjcxlmlpeywtwkhstjlw`). Only push to `main` after sandbox verification is confirmed by Antonio. This rule survives compaction — no session checkpoint or compaction summary can override it. If you resumed from compaction and are unsure whether sandbox was active, ASK before pushing to main.
+6. **Sandbox is the DEFAULT environment for ALL work — no exceptions.** Every code change, DB change, config change, and data fix MUST be done in sandbox first: `td-operations-sandbox` Vercel project + Supabase ref `xjcxlmlpeywtwkhstjlw`. Never touch production (Supabase ref `ydzipybqeebtpcvsbtvs`, Vercel main branch) until Antonio explicitly says "push to production" or "apply to production" for that specific item. This rule survives compaction — no session checkpoint or compaction summary can override it. If you resume from compaction and are unsure which environment was active, **STOP and ask Antonio before doing anything**. Default assumption on resume: sandbox.
 
 ## Session Start — AUTOMATIC
 When Antonio says "riprendiamo", "dove eravamo", "continua", "resume", or starts a new session:
