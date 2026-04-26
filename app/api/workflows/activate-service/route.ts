@@ -453,25 +453,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Formation and Onboarding both skip ALL SD creation at payment per SOP v7.2:
-    //
-    // Formation: at payment the LLC does not exist yet (waiting for Secretary of
-    // State Articles of Organization). No account exists, so no SD can be linked
-    // meaningfully. The Company Formation SD + auto-tasks are created by
-    // formation-setup.ts when the wizard is submitted and the account is created.
-    // Banking Fintech SD is created when EIN is received (record-ein-received).
-    //
-    // Onboarding: SDs created by wizard submit / closing per SOP v7.2.
+    // Onboarding skips ALL SD creation at payment per SOP v7.2:
     //   - Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD
     //   - Phase 1 Auto-Chain step 11: wizard creates Tax Return SD when answer is "No"
     //   - Phase 3 steps 30-31: closing creates RA Renewal + Annual Report SDs
-    if (contractType === "formation" || contractType === "onboarding") {
+    //
+    // Formation: Company Formation + Banking Fintech are lifecycle-gated and
+    // deferred inside the loop below. Add-on SDs explicitly purchased alongside
+    // formation (e.g. ITIN, Tax Return) ARE created at payment immediately.
+    const FORMATION_LIFECYCLE_GATED = new Set(['Company Formation', 'Banking Fintech'])
+
+    if (contractType === "onboarding") {
       steps.push({
         step: "service_deliveries",
         status: "skipped",
-        detail: contractType === "formation"
-          ? "formation — Company Formation SD created by formation-setup.ts at wizard submit; Banking Fintech SD created at EIN received"
-          : "onboarding — SDs created by wizard submit / closing per SOP v7.2",
+        detail: "onboarding — SDs created by wizard submit / closing per SOP v7.2",
       })
     } else if (pipelines.length > 0) {
       // Get first pipeline stage for each type (including auto_tasks for task creation)
@@ -500,6 +496,13 @@ export async function POST(req: NextRequest) {
       const accountId = autoAccountId
 
       for (const pipeline of pipelines) {
+        // Formation: Company Formation created at wizard submit (formation-setup.ts);
+        // Banking Fintech created at EIN received (record-ein-received). Defer both.
+        if (contractType === 'formation' && FORMATION_LIFECYCLE_GATED.has(pipeline)) {
+          sdResults.push({ pipeline, status: 'deferred' })
+          continue
+        }
+
         try {
           const quantity = pipelineQuantity.get(pipeline) ?? 1
 
@@ -624,10 +627,11 @@ export async function POST(req: NextRequest) {
 
       const created = sdResults.filter(r => r.status === "created").length
       const existing = sdResults.filter(r => r.status === "existing").length
+      const deferred = sdResults.filter(r => r.status === "deferred").length
       steps.push({
         step: "service_deliveries",
         status: "done",
-        detail: `${created} created, ${existing} existing, ${sdResults.length} total from bundled_pipelines`,
+        detail: `${created} created, ${existing} existing${deferred ? `, ${deferred} deferred (formation lifecycle-gated)` : ""}, ${sdResults.length} total from bundled_pipelines`,
       })
     } else {
       steps.push({ step: "service_deliveries", status: "skipped", detail: "No bundled_pipelines on offer" })
