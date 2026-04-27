@@ -293,6 +293,26 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     service_name: sd.service_name ?? sd.service_type ?? null,
   }))
 
+  // SS-4 applications for this account (EIN pipeline card)
+  const { data: ss4Data } = await supabaseAdmin
+    .from('ss4_applications')
+    .select('id, token, account_id, company_name, status, signed_at, pdf_signed_drive_id')
+    .eq('account_id', params.id)
+    .order('created_at', { ascending: false })
+  const ss4Applications = (ss4Data ?? []) as Array<{
+    id: string; token: string; account_id: string; company_name: string
+    status: string; signed_at: string | null; pdf_signed_drive_id: string | null
+  }>
+
+  // Raw SDs for SS4PipelineCard (needs id, service_type, stage, status, account_id)
+  const ss4ServiceDeliveries = (servicesResult.data ?? []).map(sd => ({
+    id: sd.id,
+    service_type: sd.service_type ?? '',
+    stage: sd.stage ?? null,
+    status: sd.status,
+    account_id: sd.account_id,
+  }))
+
   return (
     <div className="p-6 lg:p-8">
       <AccountDetail
@@ -312,6 +332,8 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         serviceDeliveriesRaw={serviceDeliveriesRaw}
         allWizards={allWizardEntries}
         bankReferrals={bankReferrals}
+        ss4Applications={ss4Applications}
+        ss4ServiceDeliveries={ss4ServiceDeliveries}
       />
     </div>
   )

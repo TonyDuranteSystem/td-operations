@@ -18,6 +18,7 @@ import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/docum
 import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/generate-oa-dialog'
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
+import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
@@ -164,6 +165,22 @@ interface AccountDetailProps {
     slug: string
     label: string
     clicked_at: string | null
+  }>
+  ss4Applications?: Array<{
+    id: string
+    token: string
+    account_id: string
+    company_name: string
+    status: string
+    signed_at: string | null
+    pdf_signed_drive_id: string | null
+  }>
+  ss4ServiceDeliveries?: Array<{
+    id: string
+    service_type: string
+    stage: string | null
+    status: string
+    account_id: string | null
   }>
 }
 
@@ -433,7 +450,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [] }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [] }: AccountDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('panoramica')
   const [showOADialog, setShowOADialog] = useState(false)
@@ -574,6 +591,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         onGenerateLease={() => setShowLeaseDialog(true)}
         onGenerateSS4={() => setShowSS4Dialog(true)}
       />
+
+      {/* SS-4 / EIN Application Pipeline Card */}
+      {ss4Applications.length > 0 && (
+        <SS4PipelineCard
+          ss4Applications={ss4Applications}
+          serviceDeliveries={ss4ServiceDeliveries}
+          accounts={[{ id: account.id, company_name: account.company_name, ein: account.ein_number ?? null }]}
+          contactId={primaryContact?.id ?? ''}
+        />
+      )}
 
       {/* Generate Document Dialogs */}
       <GenerateOADialog

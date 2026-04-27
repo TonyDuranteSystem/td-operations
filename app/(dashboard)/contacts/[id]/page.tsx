@@ -1,5 +1,4 @@
 import { createClient } from '@/lib/supabase/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
@@ -160,21 +159,6 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     status: string; data: Record<string, unknown> | null; created_at: string; updated_at: string
   }>
 
-  // SS-4 applications for linked accounts
-  let ss4Applications: Array<{
-    id: string; token: string; account_id: string; company_name: string
-    status: string; signed_at: string | null; pdf_signed_drive_id: string | null
-  }> = []
-  if (accountIds.length > 0) {
-    // Use supabaseAdmin — ss4_applications has no staff RLS policy
-    const { data: ss4Data } = await supabaseAdmin
-      .from('ss4_applications')
-      .select('id, token, account_id, company_name, status, signed_at, pdf_signed_drive_id')
-      .in('account_id', accountIds)
-      .order('created_at', { ascending: false })
-    ss4Applications = (ss4Data ?? []) as typeof ss4Applications
-  }
-
   const conversations = (conversationsResult.data ?? []) as ConversationEntry[]
 
   // Portal auth status
@@ -211,7 +195,6 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         offers={offers}
         pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}
-        ss4Applications={ss4Applications}
       />
     </div>
   )
