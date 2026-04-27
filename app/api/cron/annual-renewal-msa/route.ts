@@ -74,7 +74,8 @@ export async function GET(req: NextRequest) {
         .select("id, token, status")
         .eq("account_id", acct.id)
         .eq("contract_type", "renewal")
-        .like("effective_date", `${year}-%`)
+        .gte("effective_date", `${year}-01-01`)
+        .lt("effective_date", `${year + 1}-01-01`)
         .limit(1)
         .maybeSingle()
 
