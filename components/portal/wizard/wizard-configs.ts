@@ -23,19 +23,48 @@ const OWNER_FIELDS: FieldConfig[] = [
 ]
 
 // ─── MEMBER FIELDS (shared for MMLLC formation/onboarding) ──
+// Supports both individual persons and company entities.
+// Conditional fields use field-relative keys (evaluated per-member in wizard-client.tsx).
 
 export const MEMBER_FIELDS: FieldConfig[] = [
-  { name: 'member_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
-  { name: 'member_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
-  { name: 'member_email', label: 'Email', type: 'email', required: true },
+  // ── Member type selector (always shown) ──
+  { name: 'member_type', label: 'Member Type', labelIt: 'Tipo Membro', type: 'select', required: true, options: [
+    { value: 'individual', label: 'Individual Person', labelIt: 'Persona Fisica' },
+    { value: 'company', label: 'Company / Entity', labelIt: 'Società / Entità' },
+  ]},
+
+  // ── Individual person fields (shown when member_type = 'individual') ──
+  { name: 'member_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_email', label: 'Email', type: 'email', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_nationality', label: 'Nationality', labelIt: 'Nazionalità', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: false, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_zip', label: 'ZIP Code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' } },
+
+  // ── Ownership % (always shown — applies to both types) ──
   { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true },
-  { name: 'member_dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true },
-  { name: 'member_nationality', label: 'Nationality', labelIt: 'Nazionalità', type: 'country', required: true },
-  { name: 'member_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true },
-  { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true },
-  { name: 'member_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: false },
-  { name: 'member_zip', label: 'ZIP Code', labelIt: 'CAP', type: 'text', required: true },
-  { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true },
+
+  // ── Company entity fields (shown when member_type = 'company') ──
+  { name: 'member_company_name', label: 'Company Legal Name', labelIt: 'Ragione Sociale', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_ein', label: 'Company EIN (if US)', labelIt: 'EIN Società (se USA)', type: 'text', required: false, format: 'ein', conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_street', label: 'Company Street Address', labelIt: 'Indirizzo Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_city', label: 'Company City', labelIt: 'Città Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_state', label: 'Company State/Province', labelIt: 'Stato Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_zip', label: 'Company ZIP Code', labelIt: 'CAP Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_country', label: 'Company Country', labelIt: 'Paese Società', type: 'country', required: true, conditional: { field: 'member_type', value: 'company' } },
+  // Representative — the person who acts on behalf of the company
+  { name: 'member_rep_name', label: 'Representative Full Name', labelIt: 'Nome Rappresentante', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_email', label: 'Representative Email', labelIt: 'Email Rappresentante', type: 'email', required: true, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_phone', label: 'Representative Phone', labelIt: 'Telefono Rappresentante', type: 'tel', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_street', label: 'Representative Street Address', labelIt: 'Indirizzo Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_city', label: 'Representative City', labelIt: 'Città Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_state', label: 'Representative State/Province', labelIt: 'Stato Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_zip', label: 'Representative ZIP', labelIt: 'CAP Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_country', label: 'Representative Country', labelIt: 'Paese Rappresentante', type: 'country', required: false, conditional: { field: 'member_type', value: 'company' } },
 ]
 
 // ─── FORMATION ─────────────────────────────────────────────

@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
+import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 
 interface FormationPayload {
   token: string
@@ -310,9 +311,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   }
 
   // ─── 2b. CREATE / UPDATE CONTACTS FOR ADDITIONAL MMLLC MEMBERS ───
-  const additionalMembers = Array.isArray(submitted.additional_members)
-    ? (submitted.additional_members as Array<Record<string, unknown>>)
-    : []
+  const additionalMembers = extractMembersFromWizardData(submitted as Record<string, unknown>)
 
   if (additionalMembers.length > 0 && accountId) {
     const primaryMemberIndex = typeof submitted.primary_member_index === 'number'
@@ -337,7 +336,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       const m = additionalMembers[i]
       const isPrimary = primaryMemberIndex === i + 1
       try {
-        const ownershipPct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : null
+        const ownershipPct = m.member_ownership_pct
 
         if (m.member_type === 'company') {
           // ── Company member: representative gets portal access, company gets members row ──
@@ -542,7 +541,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // Set owner's ownership_pct = 100 - sum(additional members' pcts)
     if (p.contact_id && accountId) {
       const additionalPctSum = additionalMembers.reduce((sum, m) => {
-        const pct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : 0
+        const pct = m.member_ownership_pct ?? 0
         return sum + (isNaN(pct) ? 0 : pct)
       }, 0)
       const ownerPct = Math.max(0, Math.round((100 - additionalPctSum) * 100) / 100)
@@ -585,12 +584,17 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // Portal invite reminder for all MMLLC members (after LLC is formed, not now)
     if (additionalMembers.length > 0 && accountId) {
       const memberNames = additionalMembers.map((m, i) =>
-        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
+        m.member_type === 'company'
+          ? (m.member_company_name ?? `Company Member ${i + 1}`)
+          : ([m.member_first_name, m.member_last_name].filter(Boolean).join(' ') || `Member ${i + 1}`)
       ).join(', ')
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from('tasks').insert({
         task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
-        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} — ${m.member_email || 'no email'}`).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
+        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => {
+          if (m.member_type === 'company') return `• ${m.member_company_name ?? 'Company'} (rep: ${m.member_rep_email ?? 'no email'})`
+          return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
+        }).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
         assigned_to: 'Luca',
         priority: 'Low',
         category: 'Formation',
