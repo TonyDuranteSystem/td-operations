@@ -121,7 +121,7 @@ const APPLY = process.argv.includes('--apply')
             $10, $11, false, $12,
             now(), now()
           )
-          ON CONFLICT (account_id, contact_id) DO NOTHING
+          ON CONFLICT (account_id, contact_id) WHERE contact_id IS NOT NULL DO NOTHING
         `, [
           account.id,
           fullName,
