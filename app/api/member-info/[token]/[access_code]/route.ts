@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
+  is_signer?: boolean
   full_name?: string
   company_name?: string
   ein?: string
@@ -81,6 +82,15 @@ export async function POST(
     )
   }
 
+  // 4b. Validate exactly one SS-4 signer
+  const signerCount = members.filter(m => m.is_signer === true).length
+  if (signerCount !== 1) {
+    return NextResponse.json(
+      { error: 'Please select exactly one member as the SS-4 Responsible Party.' },
+      { status: 400 },
+    )
+  }
+
   const now = new Date().toISOString()
   const accountId = request.account_id
 
@@ -104,7 +114,7 @@ export async function POST(
     phone: m.phone?.trim() || null,
     ownership_pct: parseFloat(String(m.ownership_pct || 0)),
     is_primary: idx === 0,
-    is_signer: idx === 0,
+    is_signer: m.is_signer === true,
     address_street: m.address_street?.trim() || null,
     address_city: m.address_city?.trim() || null,
     address_state: m.address_state?.trim() || null,
