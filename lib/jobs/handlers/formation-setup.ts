@@ -336,20 +336,17 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     for (let i = 0; i < additionalMembers.length; i++) {
       const m = additionalMembers[i]
       const isPrimary = primaryMemberIndex === i + 1
-      const isCompanyMember = m.member_type === 'company'
-
       try {
         const ownershipPct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : null
 
-        if (isCompanyMember) {
+        if (m.member_type === 'company') {
           // ── Company member: representative gets portal access, company gets members row ──
           const repEmail = m.member_rep_email ? String(m.member_rep_email).toLowerCase().trim() : null
           const repName = m.member_rep_name ? String(m.member_rep_name).trim() : null
           const companyName = m.member_company_name ? String(m.member_company_name).trim() : `Company Member ${i + 1}`
 
           // Write company row to members table
-          // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
-          await (supabaseAdmin as any).from('members').upsert(
+          await supabaseAdmin.from('members').upsert(
             {
               account_id: accountId,
               member_type: 'company',
@@ -362,6 +359,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               address_country: m.member_company_country ? String(m.member_company_country) : null,
               ownership_pct: ownershipPct,
               is_primary: false,
+              is_signer: false,
               representative_name: repName,
               representative_email: repEmail,
               representative_address_street: m.member_rep_address_street ? String(m.member_rep_address_street) : null,
@@ -370,7 +368,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               representative_address_zip: m.member_rep_address_zip ? String(m.member_rep_address_zip) : null,
               representative_address_country: m.member_rep_address_country ? String(m.member_rep_address_country) : null,
               updated_at: now,
-            } as Record<string, unknown>,
+            },
             { onConflict: 'account_id,company_name' }
           )
 
@@ -465,8 +463,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             }
 
             // Write individual row to members table
-            // eslint-disable-next-line no-restricted-syntax -- members table
-            await (supabaseAdmin as any).from('members').upsert(
+            await supabaseAdmin.from('members').upsert(
               {
                 account_id: accountId,
                 member_type: 'individual',
@@ -479,9 +476,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
                 address_country: m.member_country ? String(m.member_country) : null,
                 ownership_pct: ownershipPct,
                 is_primary: isPrimary,
+                is_signer: false,
                 contact_id: membContactId,
                 updated_at: now,
-              } as Record<string, unknown>,
+              },
               { onConflict: 'account_id,contact_id' }
             )
 
@@ -560,8 +558,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         const ownerLast = submitted.owner_last_name ? String(submitted.owner_last_name) : null
         const ownerFullName = [ownerFirst, ownerLast].filter(Boolean).join(' ') || null
         const ownerEmail = submitted.owner_email ? String(submitted.owner_email).toLowerCase().trim() : null
-        // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
-        await (supabaseAdmin as any).from('members').upsert(
+        await supabaseAdmin.from('members').upsert(
           {
             account_id: accountId,
             member_type: 'individual',
@@ -574,9 +571,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             address_country: submitted.owner_country ? String(submitted.owner_country) : null,
             ownership_pct: ownerPct,
             is_primary: primaryMemberIndex === 0,
+            is_signer: false,
             contact_id: p.contact_id,
             updated_at: now,
-          } as Record<string, unknown>,
+          },
           { onConflict: 'account_id,contact_id' }
         )
         result.steps.push(step('owner_members_row', 'ok', `Owner written to members table (${ownerPct}%)`))
