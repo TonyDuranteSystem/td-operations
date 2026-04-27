@@ -7,6 +7,7 @@ import { advanceStage, createSD } from '@/lib/operations/service-delivery'
 import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { enqueueJob } from '@/lib/jobs/queue'
+import { APP_BASE_URL } from '@/lib/config'
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
     // Validate account exists
     const { data: account, error: accErr } = await supabaseAdmin
       .from('accounts')
-      .select('id, company_name, ein_number, portal_tier')
+      .select('id, company_name, ein_number, portal_tier, entity_type')
       .eq('id', account_id)
       .single()
 
@@ -139,7 +140,90 @@ export async function POST(req: NextRequest) {
       actor: 'crm-admin',
     })
 
-    // 6. Log everything
+    // 6. MMLLC: create member info request + send portal message to primary member
+    let memberInfoRequestId: string | null = null
+    let memberInfoFormUrl: string | null = null
+
+    const isMMLC = account.entity_type === 'Multi Member LLC'
+    if (isMMLC) {
+      try {
+        // Check for existing pending request (idempotent)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: existingReq } = await (supabaseAdmin as any)
+          .from('member_info_requests')
+          .select('id, token, access_code')
+          .eq('account_id', account_id)
+          .eq('status', 'pending')
+          .maybeSingle() as { data: { id: string; token: string; access_code: string } | null }
+
+        let reqToken: string
+        let reqCode: string
+
+        if (existingReq) {
+          memberInfoRequestId = existingReq.id
+          reqToken = existingReq.token
+          reqCode = existingReq.access_code
+        } else {
+          // Get existing members for pre-population
+          const { data: existingMembers } = await supabaseAdmin
+            .from('members')
+            .select('member_type, full_name, company_name, email, phone, ownership_pct, is_primary')
+            .eq('account_id', account_id)
+            .order('is_primary', { ascending: false })
+
+          const { data: primaryMember } = await supabaseAdmin
+            .from('members')
+            .select('contact_id')
+            .eq('account_id', account_id)
+            .eq('is_primary', true)
+            .maybeSingle()
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: createdReq } = await (supabaseAdmin as any)
+            .from('member_info_requests')
+            .insert({
+              account_id,
+              contact_id: primaryMember?.contact_id || formationSD.contact_id || null,
+              status: 'pending',
+              company_name: account.company_name,
+              entity_type: account.entity_type,
+              pre_populated_data: existingMembers?.length
+                ? { members: existingMembers.map(m => ({ ...m, ownership_pct: m.ownership_pct ? String(m.ownership_pct) : '' })) }
+                : null,
+            })
+            .select('id, token, access_code')
+            .single() as { data: { id: string; token: string; access_code: string } | null }
+
+          if (createdReq) {
+            memberInfoRequestId = createdReq.id
+            reqToken = createdReq.token
+            reqCode = createdReq.access_code
+          } else {
+            throw new Error('Failed to create member_info_request')
+          }
+        }
+
+        memberInfoFormUrl = `${APP_BASE_URL}/member-info/${reqToken}/${reqCode}`
+
+        // Send portal message to primary contact
+        const primaryContact = formationSD.contact_id
+        if (primaryContact) {
+          const msgBody = `Great news! The EIN for ${account.company_name} has been issued (${normalizedEIN}).\n\nTo proceed with opening your business bank account, we need the complete information for all LLC members.\n\nPlease fill out this short form:\n${memberInfoFormUrl}\n\nOnce submitted, we will update your account and guide you through the next steps.`
+          await supabaseAdmin.from('portal_messages').insert({
+            account_id,
+            contact_id: primaryContact,
+            sender_type: 'admin',
+            sender_id: 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631',
+            message: msgBody,
+          })
+        }
+      } catch (mmllcErr) {
+        console.error('[record-ein-received] MMLLC member info flow failed:', mmllcErr)
+        // Non-fatal — EIN recording and tier advance already succeeded
+      }
+    }
+
+    // 7. Log everything
     await supabaseAdmin.from('action_log').insert({
       action_type: 'record_ein_received',
       table_name: 'accounts',
@@ -156,6 +240,7 @@ export async function POST(req: NextRequest) {
         previous_tier: previousTier,
         welcome_package_job_id: welcomeJob.id,
         sd_advance_success: advanceResult.success,
+        member_info_request_id: memberInfoRequestId,
         source: 'crm-button',
       },
     })
@@ -171,6 +256,7 @@ export async function POST(req: NextRequest) {
       sd_stage: sdStage,
       banking_sd_id: bankingSdId,
       welcome_package_job_id: welcomeJob.id,
+      member_info_form_url: memberInfoFormUrl,
     })
   } catch (err) {
     console.error('Record EIN received error:', err)
