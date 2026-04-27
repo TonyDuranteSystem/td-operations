@@ -28,6 +28,7 @@ import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateOnboardingData, normalizeEIN } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
+import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 
 interface OnboardingPayload {
@@ -998,6 +999,39 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           }
         } catch (e) {
           result.steps.push(step(`tax_return:${tc.year}`, "error", e instanceof Error ? e.message : String(e)))
+        }
+
+        // Current year only: also create a Tax Return SD so staff can track it
+        // from day one. Previous year SD is created by activate-service at
+        // payment (Tax Return in bundled_pipelines); current year is not in the
+        // offer, so no other path creates it.
+        if (tc.year === currentYear && account_id && company_name) {
+          try {
+            const sdServiceName = `Tax Return - ${company_name} ${currentYear}`
+            const { data: existingSD } = await supabaseAdmin
+              .from("service_deliveries")
+              .select("id")
+              .eq("account_id", account_id)
+              .eq("service_type", "Tax Return")
+              .eq("service_name", sdServiceName)
+              .maybeSingle()
+
+            if (existingSD) {
+              result.steps.push(step(`tax_sd:${currentYear}`, "skipped", `SD already exists: ${existingSD.id}`))
+            } else {
+              await createSD({
+                service_type: "Tax Return",
+                service_name: sdServiceName,
+                account_id,
+                contact_id: contact_id || undefined,
+                target_stage: "1st Installment Paid",
+                notes: `Auto-created by onboarding wizard (${currentYear} return not yet filed)`,
+              })
+              result.steps.push(step(`tax_sd:${currentYear}`, "ok", `Created SD: ${sdServiceName}`))
+            }
+          } catch (e) {
+            result.steps.push(step(`tax_sd:${currentYear}`, "error", e instanceof Error ? e.message : String(e)))
+          }
         }
       } else {
         result.steps.push(step(`tax_return:${tc.year}`, "skipped", `Client says: ${submitted[tc.field] || "N/A"}`))
