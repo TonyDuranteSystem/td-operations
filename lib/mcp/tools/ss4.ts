@@ -333,8 +333,8 @@ Note: signed records (status='signed') cannot be updated.`,
           return { content: [{ type: "text" as const, text: `Error: SS-4 not found for this account: ${fetchErr?.message || "no data"}` }] }
         }
 
-        if (ss4.status === "signed") {
-          return { content: [{ type: "text" as const, text: `Error: SS-4 for ${ss4.company_name} is already signed — it cannot be modified.` }] }
+        if (ss4.status === "signed" || ss4.status === "submitted") {
+          return { content: [{ type: "text" as const, text: `Error: SS-4 for ${ss4.company_name} has status '${ss4.status}' — it cannot be modified after signing/submission.` }] }
         }
 
         const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
