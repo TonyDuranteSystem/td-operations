@@ -1,22 +1,21 @@
 /**
  * CRON: Annual Installment Invoice Generator + Auto-Send
  *
- * Runs monthly (1st of each month). Checks if it's January or June
- * and creates CRM invoices + auto-sends them for ALL active Client accounts.
- *
- * January 1: 1st Installment
- * - SMLLC: $1,000 | MMLLC: $1,250
- * - Post-September rule: skip if formation_date after Sep 1 of previous year
+ * Runs monthly (1st of each month). Only acts in June (2nd installment).
+ * The 1st installment invoice is now created by the offer-signed webhook when
+ * the client signs their annual renewal MSA (contract_type='renewal').
  *
  * June 1: 2nd Installment
  * - SMLLC: $1,000 | MMLLC: $1,250
- * - Post-September first-year clients: this is their FIRST payment
+ * - Guard: only creates invoice if the renewal MSA for the current year is signed
+ *   (skips if the client hasn't signed yet — MSA signing creates 1st installment;
+ *   an unsigned MSA means the client hasn't renewed and the 2nd invoice is premature)
  *
  * On payment detection (via check-wire-payments cron or Whop webhook):
  * - 1st installment paid -> create 4 recurring SDs (CMRA, RA, AR, Tax Return)
  * - 2nd installment paid -> lift tax return gate (ready to send to India)
  *
- * Auto-sends: Creates CRM invoice (with items) → generates PDF → emails client → syncs to QB.
+ * Auto-sends: Creates CRM invoice (with items) → generates PDF → emails client.
  * Creates a summary task for team visibility.
  *
  * Schedule: 1st of every month via Vercel Cron
@@ -40,22 +39,21 @@ export async function GET(req: NextRequest) {
   const month = now.getMonth() + 1 // 1-12
   const year = now.getFullYear()
 
-  // Only run in January or June
-  if (month !== 1 && month !== 6) {
-    return NextResponse.json({ ok: true, message: `Month ${month} — no installments due. Skipping.` })
+  // Only run in June (2nd installment). January 1st installment is now
+  // triggered by the renewal MSA signing via offer-signed webhook.
+  if (month !== 6) {
+    return NextResponse.json({ ok: true, message: `Month ${month} — annual-installments cron only runs in June. Skipping.` })
   }
 
-  const installmentNumber = month === 1 ? 1 : 2
-  const installmentLabel = month === 1 ? "1st Installment" : "2nd Installment"
-  const dueDate = `${year}-${month === 1 ? "01" : "06"}-01`
-  // issueDate previously stamped on the manual payments INSERT (now via createTDInvoice
-  // which uses today's date). Removed to satisfy no-unused-vars.
+  const installmentNumber = 2
+  const installmentLabel = "2nd Installment"
+  const dueDate = `${year}-06-01`
 
   try {
     // Get all active Client accounts
     const { data: accounts, error } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, entity_type, formation_date, account_type, installment_1_amount, installment_2_amount, status")
+      .select("id, company_name, entity_type, formation_date, account_type, installment_2_amount, status")
       .eq("status", "Active")
       .eq("account_type", "Client")
       .or("is_test.is.null,is_test.eq.false")
@@ -68,31 +66,31 @@ export async function GET(req: NextRequest) {
     const results: Array<{ company: string; action: string; detail: string; paymentId?: string }> = []
 
     for (const acct of accounts) {
-      // Post-September rule: skip 1st installment for first-year clients formed after Sep 1
-      if (installmentNumber === 1 && acct.formation_date) {
-        const formDate = new Date(acct.formation_date)
-        const formYear = formDate.getFullYear()
-        const formMonth = formDate.getMonth() + 1
+      // Guard: only create 2nd installment if the renewal MSA for this year is signed.
+      // If the client hasn't signed yet, the 1st installment doesn't exist either —
+      // creating a 2nd invoice would be incorrect and confusing.
+      const { data: renewalOffer } = await supabaseAdmin
+        .from("offers")
+        .select("id, status")
+        .eq("account_id", acct.id)
+        .eq("contract_type", "renewal")
+        .like("effective_date", `${year}-%`)
+        .in("status", ["signed", "completed"])
+        .limit(1)
+        .maybeSingle()
 
-        // If formed after Sep 1 of the PREVIOUS year, skip January
-        if (formYear === year - 1 && formMonth >= 9) {
-          results.push({
-            company: acct.company_name,
-            action: "skipped",
-            detail: `Post-September rule: formed ${acct.formation_date}, skip Jan ${year}`,
-          })
-          continue
-        }
+      if (!renewalOffer) {
+        results.push({
+          company: acct.company_name,
+          action: "skipped",
+          detail: `No signed renewal MSA for ${year} — skipping 2nd installment`,
+        })
+        continue
       }
 
       // Determine amount
       const entityUpper = (acct.entity_type || "").toUpperCase()
-      let amount: number
-      if (installmentNumber === 1) {
-        amount = acct.installment_1_amount || (entityUpper.includes("MULTI") || entityUpper.includes("MMLLC") ? 1250 : 1000)
-      } else {
-        amount = acct.installment_2_amount || (entityUpper.includes("MULTI") || entityUpper.includes("MMLLC") ? 1250 : 1000)
-      }
+      const amount: number = acct.installment_2_amount || (entityUpper.includes("MULTI") || entityUpper.includes("MMLLC") ? 1250 : 1000)
 
       // Idempotency key — prevents the same installment being invoiced twice
       // (cron re-run, retry, concurrent fire). createTDInvoice will return the
@@ -118,7 +116,7 @@ export async function GET(req: NextRequest) {
       }
 
       const description = `${installmentLabel} ${year} — LLC Annual Management`
-      const installmentLabelEnum = installmentNumber === 1 ? "Installment 1 (Jan)" : "Installment 2 (Jun)"
+      const installmentLabelEnum = "Installment 2 (Jun)"
 
       try {
         const invoice = await createTDInvoice({
@@ -242,7 +240,7 @@ export async function GET(req: NextRequest) {
         priority: "High",
         category: "Payment",
         status: failedCount > 0 ? "To Do" : "Done",
-        due_date: `${year}-${month === 1 ? "01" : "06"}-15`,
+        due_date: `${year}-06-15`,
         created_by: "System",
       })
 
