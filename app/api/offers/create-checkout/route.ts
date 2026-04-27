@@ -73,6 +73,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // If currency wasn't detected from service prices, check cost_summary totals
+    if (currency === "eur" && total > 0) {
+      for (const group of (Array.isArray(offer.cost_summary) ? offer.cost_summary : [])) {
+        const groupTotal = String((group as Record<string, unknown>)?.total || "")
+        if (/\$|usd/i.test(groupTotal)) { currency = "usd"; break }
+        for (const item of ((group as Record<string, unknown[]>)?.items || []) as Array<Record<string, unknown>>) {
+          if (/\$|usd/i.test(String(item?.price || ""))) { currency = "usd"; break }
+        }
+      }
+    }
+
     // Include pre-conditions from cost_summary (e.g. unpaid taxes, filing fees)
     const costSummary = Array.isArray(offer.cost_summary) ? offer.cost_summary : []
     for (const group of costSummary) {
