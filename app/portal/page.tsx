@@ -189,14 +189,25 @@ export default async function PortalDashboardPage() {
       wizardSubmitted = !!wp
     }
 
+    // Pending actions for clients who have a portal account but no active
+    // account yet (e.g. onboarding tier waiting for wizard review).
+    const noAccountActionItems = await getPortalActionItems(undefined, contactId || undefined)
+
     return (
-      <WelcomeDashboard
-        tier={authTier}
-        firstName={firstName}
-        offerData={offerData}
-        locale={locale}
-        wizardSubmitted={wizardSubmitted}
-      />
+      <>
+        {noAccountActionItems.items.length > 0 && (
+          <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
+            <ActionItems data={noAccountActionItems} locale={locale} />
+          </div>
+        )}
+        <WelcomeDashboard
+          tier={authTier}
+          firstName={firstName}
+          offerData={offerData}
+          locale={locale}
+          wizardSubmitted={wizardSubmitted}
+        />
+      </>
     )
   }
 

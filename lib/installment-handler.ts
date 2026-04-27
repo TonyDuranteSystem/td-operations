@@ -330,16 +330,10 @@ export async function onSecondInstallmentPaid(
   }
 
   // ─── 2. Advance Tax Return SD if at "Awaiting 2nd Payment" ───
-  //
-  // NOTE: target stage "Ready for Filing" is NOT in the Tax Return
-  // pipeline_stages (canonical next stage is "Preparation" stage_order=5).
-  // Repo-wide grep shows "Ready for Filing" is written here but read
-  // nowhere — it's a silent drift left from an older Tax Return pipeline
-  // vocabulary. Kept as a raw `dbWrite` (P1.3-compliant, not P1.6-routed)
-  // so P1.6 does not silently change the stage value on live data.
-  // Follow-up: reconcile Tax Return stage vocabulary under a dedicated
-  // dev_task before routing this advance through advanceStageIfAt (which
-  // would throw on the invalid target).
+  // 2nd installment paid = staff signal to send client data to India team.
+  // Advance to "Preparation" (stage_order=5) so the SD reflects that the
+  // India team has been engaged. Staff will forward data manually for 2026;
+  // automated forwarding is a 2027 build.
   try {
     const { data: taxSd } = await supabaseAdmin
       .from("service_deliveries")
@@ -355,14 +349,14 @@ export async function onSecondInstallmentPaid(
         supabaseAdmin
           .from("service_deliveries")
           .update({
-            stage: "Ready for Filing",
+            stage: "Preparation",
             updated_at: new Date().toISOString(),
           })
           .eq("id", taxSd.id),
         "service_deliveries.update"
       )
 
-      steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Ready for Filing` })
+      steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Preparation` })
     } else if (taxSd) {
       steps.push({ step: "tax_sd_advance", status: "skipped", detail: `SD at "${taxSd.stage}", not awaiting payment` })
     }

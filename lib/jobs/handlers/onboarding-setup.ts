@@ -922,10 +922,16 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     const previousYear = currentYear - 1
     const deadlineMonth = returnType === "MMLLC" ? "03" : "04"
 
-    // Only create tax return for previous year — current year is still in progress,
-    // nothing to file yet. Current year returns are created by the annual installment handler.
+    // Create tax_returns records for each year the client hasn't yet filed.
+    // Previous year: typically the main case (onboarding in 2026 → file 2025 return).
+    // Current year: onboarding clients with an existing company may also need the
+    // current year return if they haven't filed it (possible when onboarding mid-year
+    // before they've filed). The Tax Return SD is created when the first installment
+    // is paid (see installment-handler.ts onFirstInstallmentPaid); this block only
+    // seeds the tax_returns record so staff can track it from day one.
     const taxChecks = [
       { year: previousYear, field: "tax_return_previous_year_filed", label: "Previous year" },
+      { year: currentYear, field: "tax_return_current_year_filed", label: "Current year" },
     ]
 
     // Check if tax return is bundled (included) in the client's offer
@@ -971,7 +977,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             result.steps.push(step(`tax_return:${tc.year}`, "skipped", `Already exists: ${existingTR.id}`))
           } else {
             const deadline = `${tc.year + 1}-${deadlineMonth}-15`
-            const isBundled = taxReturnIncludedInOffer && tc.year === previousYear
+            const isBundled = taxReturnIncludedInOffer
             const { error: trErr } = await supabaseAdmin
               .from("tax_returns")
               .insert({
