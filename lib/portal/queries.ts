@@ -10,12 +10,14 @@ import type { PortalAccount, PortalService } from '@/lib/types'
 export async function getPortalAccounts(contactId: string): Promise<PortalAccount[]> {
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
-    .select('account_id, role')
+    .select('account_id, role, is_primary')
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return []
 
   const accountIds = links.map(l => l.account_id)
+  const primaryIds = new Set(links.filter(l => l.is_primary).map(l => l.account_id))
+
   const { data: accounts } = await supabaseAdmin
     .from('accounts')
     .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, account_type, portal_tier')
@@ -25,7 +27,15 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
     .in('status', ['Active', 'Suspended'])
     .order('company_name')
 
-  return (accounts ?? []) as PortalAccount[]
+  // Primary account first, then alphabetical
+  const sorted = (accounts ?? []).sort((a, b) => {
+    const ap = primaryIds.has(a.id) ? 0 : 1
+    const bp = primaryIds.has(b.id) ? 0 : 1
+    if (ap !== bp) return ap - bp
+    return a.company_name.localeCompare(b.company_name)
+  })
+
+  return sorted as PortalAccount[]
 }
 
 /**

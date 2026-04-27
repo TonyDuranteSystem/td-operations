@@ -23,11 +23,16 @@ export default async function MemberDetailPage({ params }: { params: { memberId:
 
   if (!selectedAccountId) redirect('/portal')
 
-  // Find the requested member by member_id (members.id UUID, or contact_id for legacy accounts)
-  const members = await getPortalMembers(selectedAccountId)
-  const member = members.find(m => m.member_id === params.memberId)
+  // Search across all the user's accounts so the detail page works regardless
+  // of which account is currently "selected" in the portal overview.
+  // Security: only accounts belonging to the logged-in contact are searched.
+  let member = null
+  for (const account of accounts) {
+    const members = await getPortalMembers(account.id)
+    const found = members.find(m => m.member_id === params.memberId)
+    if (found) { member = found; break }
+  }
 
-  // Security: only members of the logged-in user's account can be viewed
   if (!member) notFound()
 
   function formatDate(d: string | null) {
