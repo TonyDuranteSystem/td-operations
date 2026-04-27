@@ -60,7 +60,7 @@ export default async function PortalSignSS4Page() {
   // Find the SS-4 for this account (most recent)
   const { data: ss4 } = await supabaseAdmin
     .from("ss4_applications")
-    .select("token, access_code, status, company_name, language")
+    .select("token, access_code, status, company_name, language, contact_id, responsible_party_name")
     .eq("account_id", selectedAccountId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -72,6 +72,19 @@ export default async function PortalSignSS4Page() {
         <div className="text-center space-y-2">
           <p className="text-zinc-500 text-lg">No SS-4 application found.</p>
           <p className="text-zinc-400 text-sm">Your EIN application will appear here once it has been generated.</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Only the designated responsible party can sign. contact_id=null means legacy SS-4
+  // created before this field was added — show to everyone for backwards compatibility.
+  if (ss4.contact_id && ss4.contact_id !== contactId) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <div className="text-center space-y-2">
+          <p className="text-zinc-500 text-lg">This document is signed by {ss4.responsible_party_name}.</p>
+          <p className="text-zinc-400 text-sm">Only the designated responsible party can sign the SS-4 (EIN Application).</p>
         </div>
       </div>
     )
