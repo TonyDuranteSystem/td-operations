@@ -80,6 +80,26 @@ export async function POST(
       .single()
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // MM5: individual members with a contact must also get account_contacts for portal access
+    if (insert.member_type === "individual" && insert.contact_id) {
+      const { error: acError } = await supabaseAdmin
+        .from("account_contacts")
+        .upsert(
+          {
+            account_id: params.id,
+            contact_id: insert.contact_id as string,
+            role: "Member",
+            ownership_pct: (insert.ownership_pct as number | null) ?? null,
+            is_primary: (insert.is_primary as boolean) ?? false,
+          },
+          { onConflict: "account_id,contact_id" }
+        )
+      if (acError) {
+        console.error("[members POST] account_contacts upsert failed:", acError.message)
+      }
+    }
+
     return NextResponse.json({ data }, { status: 201 })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })

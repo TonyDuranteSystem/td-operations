@@ -496,9 +496,9 @@ export default async function PortalDashboardPage() {
                         ? <Building2 className="h-4 w-4 text-zinc-400" />
                         : <User className="h-4 w-4 text-zinc-400" />
                       }
-                      {m.contact_id ? (
+                      {m.member_id ? (
                         <Link
-                          href={`/portal/members/${m.contact_id}`}
+                          href={`/portal/members/${m.member_id}`}
                           className="text-sm font-medium text-blue-700 hover:underline flex items-center gap-1"
                         >
                           {displayName}
