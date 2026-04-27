@@ -112,27 +112,15 @@ export async function POST(req: NextRequest) {
       bankingSdId = existingBankingSd.id
     }
 
-    // 3. Advance Company Formation SD: current → "EIN Received" → "Post-Formation + Banking"
-    const einReceivedResult = await advanceStage({
+    // 3. Advance Company Formation SD directly to "Post-Formation + Banking"
+    const advanceResult = await advanceStage({
       delivery_id: formationSD.id,
-      target_stage: 'EIN Received',
+      target_stage: 'Post-Formation + Banking',
       actor: 'crm-admin',
       notes: `EIN recorded: ${normalizedEIN}`,
     })
 
-    let sdStage = einReceivedResult.success ? 'EIN Received' : (previousStage ?? 'unknown')
-
-    if (einReceivedResult.success) {
-      const postFormationResult = await advanceStage({
-        delivery_id: formationSD.id,
-        target_stage: 'Post-Formation + Banking',
-        actor: 'crm-admin',
-        notes: 'Auto-advanced after EIN received',
-      })
-      if (postFormationResult.success) {
-        sdStage = 'Post-Formation + Banking'
-      }
-    }
+    const sdStage = advanceResult.success ? 'Post-Formation + Banking' : (previousStage ?? 'unknown')
 
     // 4. Enqueue welcome package job explicitly (handler deduplicates via welcome_package_status)
     const welcomeJob = await enqueueJob({
@@ -167,7 +155,7 @@ export async function POST(req: NextRequest) {
         new_stage: sdStage,
         previous_tier: previousTier,
         welcome_package_job_id: welcomeJob.id,
-        sd_advance_ein_received: einReceivedResult.success,
+        sd_advance_success: advanceResult.success,
         source: 'crm-button',
       },
     })
