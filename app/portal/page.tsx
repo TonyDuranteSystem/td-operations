@@ -481,22 +481,32 @@ export default async function PortalDashboardPage() {
               {t('dashboard.members', locale)} ({members.length})
             </h2>
             <div className="space-y-3">
-              {members.map((m, i) => (
+              {members.map((m, i) => {
+                const isCompany = m.member_type === 'company'
+                const displayName = isCompany
+                  ? (m.company_name ?? m.first_name)
+                  : `${m.first_name} ${m.last_name}`.trim()
+                const repLine = isCompany && m.representative_name ? `Rep: ${m.representative_name}` : null
+
+                return (
                 <div key={i} className="rounded-lg border p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-zinc-400" />
+                      {isCompany
+                        ? <Building2 className="h-4 w-4 text-zinc-400" />
+                        : <User className="h-4 w-4 text-zinc-400" />
+                      }
                       {m.contact_id ? (
                         <Link
                           href={`/portal/members/${m.contact_id}`}
                           className="text-sm font-medium text-blue-700 hover:underline flex items-center gap-1"
                         >
-                          {m.first_name} {m.last_name}
+                          {displayName}
                           {m.is_primary && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-500 font-normal">Primary</span>}
                           <ChevronRight className="h-3 w-3 opacity-50" />
                         </Link>
                       ) : (
-                        <span className="text-sm font-medium text-zinc-900">{m.first_name} {m.last_name}</span>
+                        <span className="text-sm font-medium text-zinc-900">{displayName}</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
@@ -506,6 +516,9 @@ export default async function PortalDashboardPage() {
                       )}
                     </div>
                   </div>
+                  {repLine && (
+                    <div className="text-xs text-zinc-500 pl-6">{repLine}</div>
+                  )}
                   {m.email && (
                     <div className="flex items-center gap-2 text-xs text-zinc-500">
                       <Mail className="h-3.5 w-3.5" />
@@ -519,7 +532,8 @@ export default async function PortalDashboardPage() {
                     </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
