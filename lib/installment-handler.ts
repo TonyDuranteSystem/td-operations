@@ -330,10 +330,8 @@ export async function onSecondInstallmentPaid(
   }
 
   // ─── 2. Advance Tax Return SD if at "Awaiting 2nd Payment" ───
-  // 2nd installment paid = staff signal to send client data to India team.
-  // Advance to "Preparation" (stage_order=5) so the SD reflects that the
-  // India team has been engaged. Staff will forward data manually for 2026;
-  // automated forwarding is a 2027 build.
+  // 2nd installment paid = green light to send client data to India team.
+  // Advance to "Sent to be filed" (stage_order=5).
   try {
     const { data: taxSd } = await supabaseAdmin
       .from("service_deliveries")
@@ -349,14 +347,14 @@ export async function onSecondInstallmentPaid(
         supabaseAdmin
           .from("service_deliveries")
           .update({
-            stage: "Preparation",
+            stage: "Sent to be filed",
             updated_at: new Date().toISOString(),
           })
           .eq("id", taxSd.id),
         "service_deliveries.update"
       )
 
-      steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Preparation` })
+      steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Sent to be filed` })
     } else if (taxSd) {
       steps.push({ step: "tax_sd_advance", status: "skipped", detail: `SD at "${taxSd.stage}", not awaiting payment` })
     }
