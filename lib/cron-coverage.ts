@@ -29,6 +29,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/overdue-payments-report": "0 9 * * *",
   "/api/cron/portal-issues": "0 */1 * * *",
   "/api/cron/email-monitor": "*/5 * * * *",
+  "/api/cron/annual-renewal-msa": "0 9 1 1 *",
   "/api/cron/annual-installments": "0 10 1 * *",
   "/api/cron/deadline-reminders": "0 8 * * *",
   "/api/cron/wizard-reminders": "17 9 * * *",

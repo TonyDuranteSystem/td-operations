@@ -314,16 +314,9 @@ export function registerPortalTools(server: McpServer) {
       createdSDs.push("EIN (completed)")
     }
 
-    if (!isOneTime && !existingSDTypes.has("Annual Renewal")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "Annual Renewal",
-        service_name: `Annual Renewal -- ${account.company_name}`,
-        status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
-        notes: "Legacy onboard",
-      })
-      createdSDs.push("Annual Renewal (active)")
-    }
+    // Annual Renewal SD intentionally NOT created here — the annual renewal
+    // flow is MSA signing (January cron creates renewal offer; signing triggers
+    // first installment invoice). No SD tracks the renewal itself.
 
     if (!isOneTime && !existingSDTypes.has("CMRA Mailing Address")) {
       // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/

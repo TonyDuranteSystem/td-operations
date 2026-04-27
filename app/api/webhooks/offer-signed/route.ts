@@ -40,6 +40,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Offer not signed" }, { status: 403 })
     }
 
+    // ─── RENEWAL BRANCH ───
+    // Renewal MSA signing triggers the 1st installment invoice directly.
+    // No pending_activation, no activate-service — the account is already active.
+    if (offer.contract_type === "renewal") {
+      return handleRenewalSigned({ offer, offer_token })
+    }
+
     // Check if pending_activation already exists
     const { data: existing } = await supabase
       .from("pending_activations")
@@ -419,6 +426,104 @@ export async function POST(req: NextRequest) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error("[offer-signed] Error:", msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+}
+
+// ─── Renewal MSA signing handler ────────────────────────────────────────────
+// Called when a client signs their annual renewal MSA (contract_type='renewal').
+// Creates the 1st installment invoice immediately at signing. No pending_activation
+// is created — the account is already active and no formation/onboarding setup is needed.
+async function handleRenewalSigned({
+  offer,
+  offer_token,
+}: {
+  offer: Record<string, unknown>
+  offer_token: string
+}): Promise<NextResponse> {
+  try {
+    if (!offer.account_id) {
+      console.error("[offer-signed/renewal] No account_id on renewal offer:", offer_token)
+      return NextResponse.json({ error: "Renewal offer has no account_id" }, { status: 400 })
+    }
+
+    const year = new Date().getFullYear()
+    const idempotencyKey = `renewal-1st:${offer.account_id}:${year}`
+
+    // Idempotency — skip if first installment for this year was already created
+    const { data: existingInvoice } = await supabase
+      .from("payments")
+      .select("id, invoice_number")
+      .eq("idempotency_key", idempotencyKey)
+      .limit(1)
+      .maybeSingle()
+
+    if (existingInvoice) {
+      console.warn(`[offer-signed/renewal] 1st installment already exists: ${existingInvoice.invoice_number}`)
+      return NextResponse.json({ ok: true, renewal: true, invoice: existingInvoice.invoice_number, idempotent: true })
+    }
+
+    // Get installment amounts from account
+    const { data: account } = await supabase
+      .from("accounts")
+      .select("id, company_name, installment_1_amount, installment_2_amount, entity_type")
+      .eq("id", offer.account_id as string)
+      .single()
+
+    if (!account) {
+      return NextResponse.json({ error: "Account not found for renewal offer" }, { status: 404 })
+    }
+
+    const entityUpper = (account.entity_type || "").toUpperCase()
+    const amount = account.installment_1_amount
+      || (entityUpper.includes("MULTI") || entityUpper.includes("MMLLC") ? 1250 : 1000)
+
+    // Get primary contact for the invoice
+    const { data: contactLink } = await supabase
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", account.id)
+      .limit(1)
+      .maybeSingle()
+
+    const invoiceResult = await createTDInvoice({
+      account_id: account.id,
+      contact_id: contactLink?.contact_id || null,
+      line_items: [{
+        description: `1st Installment ${year} — LLC Annual Management`,
+        unit_price: amount,
+        quantity: 1,
+      }],
+      currency: "USD",
+      due_date: `${year}-01-31`,
+      message: `First installment ${year} — LLC Annual Management.\nPlease remit payment by wire transfer.`,
+      idempotency_key: idempotencyKey,
+      installment: "Installment 1 (Jan)",
+    })
+
+    // Log
+    await supabase.from("action_log").insert({
+      action_type: "offer_signed",
+      table_name: "payments",
+      record_id: invoiceResult.paymentId,
+      account_id: account.id,
+      summary: `Renewal MSA signed: ${offer.client_name} — 1st installment ${year} invoice ${invoiceResult.invoiceNumber} created ($${amount})`,
+      details: { offer_token, year, invoice_number: invoiceResult.invoiceNumber, amount, idempotency_key: idempotencyKey },
+    })
+
+    console.warn(`[offer-signed/renewal] Invoice ${invoiceResult.invoiceNumber} created for ${account.company_name} (${year} 1st installment)`)
+
+    return NextResponse.json({
+      ok: true,
+      renewal: true,
+      invoice_number: invoiceResult.invoiceNumber,
+      payment_id: invoiceResult.paymentId,
+      amount,
+      year,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error("[offer-signed/renewal] Error:", msg)
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

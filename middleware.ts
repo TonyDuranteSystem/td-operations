@@ -52,6 +52,9 @@ const PUBLIC_PREFIXES = [
   '/contract-template',
   '/ss4',
   '/sign-document',
+  // Legacy MMLLC member info collection form (token+code URL auth)
+  '/member-info',
+  '/api/member-info',
   // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session
   // and 302s the client to the checkout URL. Token-gated, no Supabase auth.
   '/pay',

@@ -19,6 +19,7 @@ import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
+import { RenewalBanner } from '@/components/portal/renewal-banner'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
@@ -367,7 +368,7 @@ export default async function PortalDashboardPage() {
   }
 
   // Fetch all data in parallel
-  const [account, services, deadlines, payments, taxReturns, members, actionItems, profileBanner] = await Promise.all([
+  const [account, services, deadlines, payments, taxReturns, members, actionItems, profileBanner, renewalOffer] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
@@ -376,6 +377,17 @@ export default async function PortalDashboardPage() {
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
     contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
+    // Unsigned renewal MSA for active clients — shown as a banner until signed
+    supabaseAdmin
+      .from('offers')
+      .select('token')
+      .eq('account_id', selectedAccountId)
+      .eq('contract_type', 'renewal')
+      .not('status', 'in', '("signed","completed","expired")')
+      .like('effective_date', `${new Date().getFullYear()}-%`)
+      .limit(1)
+      .maybeSingle()
+      .then(r => r.data ?? null),
   ])
   // Partner-bank referrals — separate await because the generated Supabase
   // types don't yet cover bank_referrals/bank_referral_clicks. The helper
@@ -404,6 +416,11 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Renewal MSA banner — shown until the annual agreement is signed */}
+      {renewalOffer && (
+        <RenewalBanner token={renewalOffer.token} locale={locale} />
+      )}
 
       {/* Relay Wire guide announcement — dismissible per device via localStorage */}
       <GuideAnnouncementBanner locale={locale} />

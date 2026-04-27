@@ -37,6 +37,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/annual-renewal-msa",
+      "schedule": "0 9 1 1 *"
+    },
+    {
       "path": "/api/cron/annual-installments",
       "schedule": "0 10 1 * *"
     },
