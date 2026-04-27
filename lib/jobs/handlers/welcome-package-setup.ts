@@ -118,8 +118,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       let membersJson: Record<string, unknown>[] | null = null
       if (isMMLC) {
         // Read from members table: individual rows use full_name, company rows use company_name
-        // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
-        const { data: membersRows } = await (supabaseAdmin as any)
+        const { data: membersRows } = await supabaseAdmin
           .from("members")
           .select("member_type, full_name, company_name, email, ownership_pct")
           .eq("account_id", p.account_id)

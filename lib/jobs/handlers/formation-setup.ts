@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
+import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 
 interface FormationPayload {
   token: string
@@ -310,9 +311,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   }
 
   // ─── 2b. CREATE / UPDATE CONTACTS FOR ADDITIONAL MMLLC MEMBERS ───
-  const additionalMembers = Array.isArray(submitted.additional_members)
-    ? (submitted.additional_members as Array<Record<string, unknown>>)
-    : []
+  const additionalMembers = extractMembersFromWizardData(submitted as Record<string, unknown>)
 
   if (additionalMembers.length > 0 && accountId) {
     const primaryMemberIndex = typeof submitted.primary_member_index === 'number'
@@ -336,20 +335,17 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     for (let i = 0; i < additionalMembers.length; i++) {
       const m = additionalMembers[i]
       const isPrimary = primaryMemberIndex === i + 1
-      const isCompanyMember = m.member_type === 'company'
-
       try {
-        const ownershipPct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : null
+        const ownershipPct = m.member_ownership_pct
 
-        if (isCompanyMember) {
+        if (m.member_type === 'company') {
           // ── Company member: representative gets portal access, company gets members row ──
           const repEmail = m.member_rep_email ? String(m.member_rep_email).toLowerCase().trim() : null
           const repName = m.member_rep_name ? String(m.member_rep_name).trim() : null
           const companyName = m.member_company_name ? String(m.member_company_name).trim() : `Company Member ${i + 1}`
 
           // Write company row to members table
-          // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
-          await (supabaseAdmin as any).from('members').upsert(
+          await supabaseAdmin.from('members').upsert(
             {
               account_id: accountId,
               member_type: 'company',
@@ -362,6 +358,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               address_country: m.member_company_country ? String(m.member_company_country) : null,
               ownership_pct: ownershipPct,
               is_primary: false,
+              is_signer: false,
               representative_name: repName,
               representative_email: repEmail,
               representative_address_street: m.member_rep_address_street ? String(m.member_rep_address_street) : null,
@@ -370,7 +367,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               representative_address_zip: m.member_rep_address_zip ? String(m.member_rep_address_zip) : null,
               representative_address_country: m.member_rep_address_country ? String(m.member_rep_address_country) : null,
               updated_at: now,
-            } as Record<string, unknown>,
+            },
             { onConflict: 'account_id,company_name' }
           )
 
@@ -465,8 +462,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             }
 
             // Write individual row to members table
-            // eslint-disable-next-line no-restricted-syntax -- members table
-            await (supabaseAdmin as any).from('members').upsert(
+            await supabaseAdmin.from('members').upsert(
               {
                 account_id: accountId,
                 member_type: 'individual',
@@ -479,9 +475,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
                 address_country: m.member_country ? String(m.member_country) : null,
                 ownership_pct: ownershipPct,
                 is_primary: isPrimary,
+                is_signer: false,
                 contact_id: membContactId,
                 updated_at: now,
-              } as Record<string, unknown>,
+              },
               { onConflict: 'account_id,contact_id' }
             )
 
@@ -544,7 +541,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // Set owner's ownership_pct = 100 - sum(additional members' pcts)
     if (p.contact_id && accountId) {
       const additionalPctSum = additionalMembers.reduce((sum, m) => {
-        const pct = m.member_ownership_pct ? parseFloat(String(m.member_ownership_pct)) : 0
+        const pct = m.member_ownership_pct ?? 0
         return sum + (isNaN(pct) ? 0 : pct)
       }, 0)
       const ownerPct = Math.max(0, Math.round((100 - additionalPctSum) * 100) / 100)
@@ -560,8 +557,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         const ownerLast = submitted.owner_last_name ? String(submitted.owner_last_name) : null
         const ownerFullName = [ownerFirst, ownerLast].filter(Boolean).join(' ') || null
         const ownerEmail = submitted.owner_email ? String(submitted.owner_email).toLowerCase().trim() : null
-        // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- members table not yet in generated types
-        await (supabaseAdmin as any).from('members').upsert(
+        await supabaseAdmin.from('members').upsert(
           {
             account_id: accountId,
             member_type: 'individual',
@@ -574,9 +570,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             address_country: submitted.owner_country ? String(submitted.owner_country) : null,
             ownership_pct: ownerPct,
             is_primary: primaryMemberIndex === 0,
+            is_signer: false,
             contact_id: p.contact_id,
             updated_at: now,
-          } as Record<string, unknown>,
+          },
           { onConflict: 'account_id,contact_id' }
         )
         result.steps.push(step('owner_members_row', 'ok', `Owner written to members table (${ownerPct}%)`))
@@ -587,12 +584,17 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     // Portal invite reminder for all MMLLC members (after LLC is formed, not now)
     if (additionalMembers.length > 0 && accountId) {
       const memberNames = additionalMembers.map((m, i) =>
-        [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || `Member ${i + 1}`
+        m.member_type === 'company'
+          ? (m.member_company_name ?? `Company Member ${i + 1}`)
+          : ([m.member_first_name, m.member_last_name].filter(Boolean).join(' ') || `Member ${i + 1}`)
       ).join(', ')
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from('tasks').insert({
         task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
-        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => `• ${[m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ')} — ${m.member_email || 'no email'}`).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
+        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => {
+          if (m.member_type === 'company') return `• ${m.member_company_name ?? 'Company'} (rep: ${m.member_rep_email ?? 'no email'})`
+          return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
+        }).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
         assigned_to: 'Luca',
         priority: 'Low',
         category: 'Formation',

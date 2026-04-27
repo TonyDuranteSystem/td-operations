@@ -382,16 +382,28 @@ export function WizardClient({
                 )}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {MEMBER_FIELDS.map(field => (
-                  <div key={`${idx}_${field.name}`} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
-                    <WizardField
-                      field={field}
-                      value={formData[`member_${idx}_${field.name}`] ?? ''}
-                      onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
-                      locale={locale}
-                    />
-                  </div>
-                ))}
+                {MEMBER_FIELDS
+                  .filter(field => {
+                    if (!field.conditional) return true
+                    // Evaluate conditional relative to this member's own member_type field.
+                    // Default to 'individual' when unset so individual fields show on first render.
+                    const memberTypeKey = `member_${idx}_${field.conditional.field}`
+                    const memberTypeVal = formData[memberTypeKey]
+                    const resolved = (memberTypeVal === undefined || memberTypeVal === null || memberTypeVal === '')
+                      ? 'individual'
+                      : String(memberTypeVal)
+                    return resolved === field.conditional.value
+                  })
+                  .map(field => (
+                    <div key={`${idx}_${field.name}`} className={field.type === 'select' || field.type === 'textarea' ? 'md:col-span-2' : ''}>
+                      <WizardField
+                        field={field}
+                        value={formData[`member_${idx}_${field.name}`] ?? ''}
+                        onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
+                        locale={locale}
+                      />
+                    </div>
+                  ))}
               </div>
             </div>
           ))}
@@ -400,6 +412,8 @@ export function WizardClient({
             onClick={() => {
               setMemberCount(c => c + 1)
               handleFieldChange('member_count', memberCount + 1)
+              // Pre-set new member type to individual so individual fields show immediately
+              handleFieldChange(`member_${memberCount}_member_type`, 'individual')
             }}
             className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
           >

@@ -91,35 +91,107 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         const state = STATE_MAP[(account.state_of_formation || "").toUpperCase().trim()] || account.state_of_formation
 
         // ─── 4. FETCH CONTACT (responsible party) ───
+        // Primary source: members table. Fallback: account_contacts (legacy accounts with 0 members rows).
         let contactId = params.contact_id
         if (!contactId) {
-          const { data: links } = await supabaseAdmin
-            .from("account_contacts")
-            .select("contact_id, role, contacts(id, full_name, email)")
+          const { data: membersRows } = await supabaseAdmin
+            .from("members")
+            .select("id, member_type, full_name, company_name, email, representative_name, representative_email, contact_id, is_primary, is_signer")
             .eq("account_id", params.account_id)
+            .order("is_signer", { ascending: false })
+            .order("is_primary", { ascending: false })
 
-          if (!links?.length) {
-            return { content: [{ type: "text" as const, text: `Error: No contacts linked to account "${account.company_name}". Link a contact first.` }] }
+          if (membersRows && membersRows.length > 0) {
+            // For MMLLC with multiple members: auto-select if exactly one is_signer=true,
+            // otherwise require explicit contact_id selection.
+            if (entityType === "MMLLC" && membersRows.length > 1) {
+              const signers = membersRows.filter(m => m.is_signer)
+              if (signers.length !== 1) {
+                const memberList = await Promise.all(membersRows.map(async (m, i) => {
+                  if (m.member_type === "company") {
+                    let repContactId = m.contact_id
+                    if (!repContactId && m.representative_email) {
+                      const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+                      repContactId = repC?.id ?? null
+                    }
+                    const repInfo = m.representative_name ? ` (rep: ${m.representative_name})` : ""
+                    const signerFlag = m.is_signer ? " ✓ signer" : ""
+                    return `  ${i + 1}. [Company] ${m.company_name || "Unknown"}${repInfo}${signerFlag} — contact_id: ${repContactId || "no contact"}`
+                  }
+                  const signerFlag = m.is_signer ? " ✓ signer" : ""
+                  return `  ${i + 1}. ${m.full_name || "Unknown"}${signerFlag} — contact_id: ${m.contact_id || "no contact"}`
+                }))
+
+                const hint = signers.length === 0
+                  ? `Tip: set is_signer=true on the intended responsible party via the CRM Members card, then re-run to auto-select.`
+                  : `Warning: ${signers.length} members have is_signer=true. Set exactly one as the signer, then re-run.`
+
+                return { content: [{ type: "text" as const, text: [
+                  `This is a Multi-Member LLC with ${membersRows.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
+                  ``,
+                  `Members:`,
+                  ...memberList,
+                  ``,
+                  hint,
+                  `Or re-run ss4_create with the contact_id of the chosen member.`,
+                ].join("\n") }] }
+              }
+
+              // Exactly one is_signer=true — auto-select
+              const signer = signers[0]
+              if (signer.member_type === "company") {
+                if (!signer.contact_id && signer.representative_email) {
+                  const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", signer.representative_email).maybeSingle()
+                  contactId = repC?.id ?? signer.contact_id
+                } else {
+                  contactId = signer.contact_id
+                }
+              } else {
+                contactId = signer.contact_id
+              }
+            } else {
+              // Single member or SMLLC: use first row
+              const m = membersRows[0]
+              if (m.member_type === "company" && m.representative_email) {
+                const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+                contactId = repC?.id ?? m.contact_id
+              } else {
+                contactId = m.contact_id
+              }
+            }
+          } else {
+            // Legacy fallback: account_contacts
+            const { data: links } = await supabaseAdmin
+              .from("account_contacts")
+              .select("contact_id, role, contacts(id, full_name, email)")
+              .eq("account_id", params.account_id)
+
+            if (!links?.length) {
+              return { content: [{ type: "text" as const, text: `Error: No contacts linked to account "${account.company_name}". Link a contact first.` }] }
+            }
+
+            if (entityType === "MMLLC" && links.length > 1) {
+              const memberList = links.map((l, i) => {
+                const c = l.contacts as unknown as { id: string; full_name: string; email: string } | null
+                return `  ${i + 1}. ${c?.full_name || "Unknown"} (${(l as unknown as { role: string }).role || "Member"}) — contact_id: ${l.contact_id}`
+              }).join("\n")
+
+              return { content: [{ type: "text" as const, text: [
+                `This is a Multi-Member LLC with ${links.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
+                ``,
+                `Members:`,
+                memberList,
+                ``,
+                `Re-run ss4_create with the contact_id of the chosen member.`,
+              ].join("\n") }] }
+            }
+
+            contactId = links[0].contact_id
           }
+        }
 
-          // For MMLLC with multiple members: require explicit contact_id selection
-          if (entityType === "MMLLC" && links.length > 1) {
-            const memberList = links.map((l, i) => {
-              const c = l.contacts as unknown as { id: string; full_name: string; email: string } | null
-              return `  ${i + 1}. ${c?.full_name || "Unknown"} (${(l as unknown as { role: string }).role || "Member"}) — contact_id: ${l.contact_id}`
-            }).join("\n")
-
-            return { content: [{ type: "text" as const, text: [
-              `This is a Multi-Member LLC with ${links.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
-              ``,
-              `Members:`,
-              memberList,
-              ``,
-              `Re-run ss4_create with the contact_id of the chosen member.`,
-            ].join("\n") }] }
-          }
-
-          contactId = links[0].contact_id
+        if (!contactId) {
+          return { content: [{ type: "text" as const, text: `Error: Could not resolve responsible party contact for "${account.company_name}". Link a contact or specify contact_id.` }] }
         }
 
         const { data: contact, error: ctErr } = await supabaseAdmin
@@ -133,16 +205,25 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         }
 
         // ─── 5. DETERMINE MEMBER COUNT ───
+        // Primary source: members table. Fallback: account_contacts (legacy).
         let memberCount = params.member_count
         if (!memberCount) {
           if (entityType === "SMLLC") {
             memberCount = 1
           } else {
-            const { count } = await supabaseAdmin
-              .from("account_contacts")
+            const { count: membersCount } = await supabaseAdmin
+              .from("members")
               .select("*", { count: "exact", head: true })
               .eq("account_id", params.account_id)
-            memberCount = count || 2
+            if (membersCount && membersCount > 0) {
+              memberCount = membersCount
+            } else {
+              const { count: acCount } = await supabaseAdmin
+                .from("account_contacts")
+                .select("*", { count: "exact", head: true })
+                .eq("account_id", params.account_id)
+              memberCount = acCount || 2
+            }
           }
         }
 
@@ -209,6 +290,120 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
               ``,
               `The client will see this in their portal Sign Documents page.`,
             ].join("\n"),
+          }],
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    }
+  )
+
+  // ───────────────────────────────────────────────────────────
+  // ss4_update
+  // ───────────────────────────────────────────────────────────
+  server.tool(
+    "ss4_update",
+    `Update fields on an existing SS-4 application. If the record is at 'awaiting_signature', updating any content field resets it to 'draft' so the client sees the corrected version before re-signing.
+
+Use cases:
+- Correct responsible party (new contact_id + name/ITIN/phone)
+- Fix member_count
+- Add county_and_state or trade_name
+- Promote draft → awaiting_signature (pass status='awaiting_signature' explicitly)
+- Reset to draft after a signing error
+
+Note: signed records (status='signed') cannot be updated.`,
+    {
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      contact_id: z.string().uuid().optional().describe("New responsible party contact UUID"),
+      member_count: z.number().optional().describe("Corrected member count"),
+      county_and_state: z.string().optional().describe("County and state of principal business address"),
+      trade_name: z.string().optional().describe("Trade name / DBA (if any)"),
+      status: z.enum(["draft", "awaiting_signature"]).optional().describe("Explicitly set status (omit to let the tool auto-manage)"),
+    },
+    async (params) => {
+      try {
+        const { data: ss4, error: fetchErr } = await supabaseAdmin
+          .from("ss4_applications")
+          .select("id, token, status, company_name, access_code")
+          .eq("account_id", params.account_id)
+          .maybeSingle()
+
+        if (fetchErr || !ss4) {
+          return { content: [{ type: "text" as const, text: `Error: SS-4 not found for this account: ${fetchErr?.message || "no data"}` }] }
+        }
+
+        if (ss4.status === "signed" || ss4.status === "submitted") {
+          return { content: [{ type: "text" as const, text: `Error: SS-4 for ${ss4.company_name} has status '${ss4.status}' — it cannot be modified after signing/submission.` }] }
+        }
+
+        const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+
+        // Resolve new responsible party if contact_id provided
+        if (params.contact_id) {
+          const { data: contact, error: ctErr } = await supabaseAdmin
+            .from("contacts")
+            .select("id, full_name, itin_number, phone")
+            .eq("id", params.contact_id)
+            .single()
+
+          if (ctErr || !contact) {
+            return { content: [{ type: "text" as const, text: `Error: Contact not found: ${ctErr?.message || "no data"}` }] }
+          }
+
+          updates.contact_id = params.contact_id
+          updates.responsible_party_name = contact.full_name
+          updates.responsible_party_itin = contact.itin_number || null
+          updates.responsible_party_phone = contact.phone || null
+        }
+
+        if (params.member_count !== undefined) updates.member_count = params.member_count
+        if (params.county_and_state !== undefined) updates.county_and_state = params.county_and_state
+        if (params.trade_name !== undefined) updates.trade_name = params.trade_name
+
+        const contentFieldsChanged = Object.keys(updates).some(k => k !== "updated_at" && k !== "status")
+
+        // Status logic: explicit override wins; otherwise reset to draft if content changed while awaiting_signature
+        if (params.status) {
+          updates.status = params.status
+        } else if (contentFieldsChanged && ss4.status === "awaiting_signature") {
+          updates.status = "draft"
+        }
+
+        const { error: updateErr } = await supabaseAdmin
+          .from("ss4_applications")
+          .update(updates)
+          .eq("id", ss4.id)
+
+        if (updateErr) {
+          return { content: [{ type: "text" as const, text: `Error updating SS-4: ${updateErr.message}` }] }
+        }
+
+        await logAction({
+          action_type: "update",
+          table_name: "ss4_applications",
+          record_id: ss4.id,
+          account_id: params.account_id,
+          summary: `Updated SS-4 for ${ss4.company_name} — fields: ${Object.keys(updates).filter(k => k !== "updated_at").join(", ")}`,
+        })
+
+        const newStatus = (updates.status as string | undefined) || ss4.status
+        const previewUrl = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`
+        const resetNote = updates.status === "draft" && ss4.status === "awaiting_signature"
+          ? "\n⚠️  Status reset to draft — content was changed while record was awaiting_signature."
+          : ""
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `SS-4 updated for ${ss4.company_name}`,
+              `Status: ${newStatus}`,
+              `Fields updated: ${Object.keys(updates).filter(k => k !== "updated_at" && k !== "status").join(", ") || "none"}`,
+              resetNote,
+              ``,
+              `Admin Preview: ${previewUrl}`,
+            ].filter(Boolean).join("\n"),
           }],
         }
       } catch (err) {

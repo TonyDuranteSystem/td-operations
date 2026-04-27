@@ -5393,6 +5393,111 @@ export type Database = {
         }
         Relationships: []
       }
+      members: {
+        Row: {
+          account_id: string
+          address_city: string | null
+          address_country: string | null
+          address_state: string | null
+          address_street: string | null
+          address_zip: string | null
+          company_name: string | null
+          contact_id: string | null
+          created_at: string | null
+          ein: string | null
+          email: string | null
+          full_name: string | null
+          id: string
+          is_primary: boolean | null
+          is_signer: boolean
+          member_type: string
+          ownership_pct: number | null
+          phone: string | null
+          representative_address_city: string | null
+          representative_address_country: string | null
+          representative_address_state: string | null
+          representative_address_street: string | null
+          representative_address_zip: string | null
+          representative_email: string | null
+          representative_name: string | null
+          representative_phone: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          account_id: string
+          address_city?: string | null
+          address_country?: string | null
+          address_state?: string | null
+          address_street?: string | null
+          address_zip?: string | null
+          company_name?: string | null
+          contact_id?: string | null
+          created_at?: string | null
+          ein?: string | null
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          is_primary?: boolean | null
+          is_signer?: boolean
+          member_type: string
+          ownership_pct?: number | null
+          phone?: string | null
+          representative_address_city?: string | null
+          representative_address_country?: string | null
+          representative_address_state?: string | null
+          representative_address_street?: string | null
+          representative_address_zip?: string | null
+          representative_email?: string | null
+          representative_name?: string | null
+          representative_phone?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          account_id?: string
+          address_city?: string | null
+          address_country?: string | null
+          address_state?: string | null
+          address_street?: string | null
+          address_zip?: string | null
+          company_name?: string | null
+          contact_id?: string | null
+          created_at?: string | null
+          ein?: string | null
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          is_primary?: boolean | null
+          is_signer?: boolean
+          member_type?: string
+          ownership_pct?: number | null
+          phone?: string | null
+          representative_address_city?: string | null
+          representative_address_country?: string | null
+          representative_address_state?: string | null
+          representative_address_street?: string | null
+          representative_address_zip?: string | null
+          representative_email?: string | null
+          representative_name?: string | null
+          representative_phone?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "members_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       message_actions: {
         Row: {
           account_id: string | null

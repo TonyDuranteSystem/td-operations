@@ -65,6 +65,89 @@ export async function getPortalAccountDetail(accountId: string) {
 }
 
 export async function getPortalMembers(accountId: string) {
+  // Primary source: members table (populated for accounts formed/onboarded after April 2026)
+  const { data: membersRows } = await supabaseAdmin
+    .from('members')
+    .select('id, member_type, full_name, company_name, ein, email, phone, ownership_pct, is_primary, contact_id, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_country, representative_address_street, representative_address_city, representative_address_state, representative_address_country')
+    .eq('account_id', accountId)
+    .order('is_primary', { ascending: false })
+
+  if (membersRows && membersRows.length > 0) {
+    // Batch-fetch contacts for individual members to get first/last name split + personal details
+    const contactIds = membersRows
+      .filter(m => m.member_type === 'individual' && m.contact_id)
+      .map(m => m.contact_id!)
+
+    let contactMap: Record<string, {
+      first_name: string | null; last_name: string | null
+      citizenship: string | null; date_of_birth: string | null
+      address_line1: string | null; address_city: string | null; address_state: string | null; address_country: string | null
+    }> = {}
+
+    if (contactIds.length > 0) {
+      const { data: contacts } = await supabaseAdmin
+        .from('contacts')
+        .select('id, first_name, last_name, citizenship, date_of_birth, address_line1, address_city, address_state, address_country')
+        .in('id', contactIds)
+      contactMap = Object.fromEntries((contacts ?? []).map(c => [c.id, c]))
+    }
+
+    return membersRows.map(m => {
+      if (m.member_type === 'company') {
+        return {
+          member_id: m.id,
+          member_type: 'company' as const,
+          contact_id: m.contact_id,
+          role: 'Member',
+          ownership_pct: m.ownership_pct,
+          is_primary: m.is_primary ?? false,
+          first_name: m.company_name ?? '',
+          last_name: '',
+          email: m.representative_email,
+          phone: m.representative_phone,
+          citizenship: null,
+          date_of_birth: null,
+          address_line1: m.representative_address_street ?? m.address_street ?? null,
+          address_city: m.representative_address_city ?? m.address_city ?? null,
+          address_state: m.representative_address_state ?? m.address_state ?? null,
+          address_country: m.representative_address_country ?? m.address_country ?? null,
+          company_name: m.company_name,
+          ein: m.ein,
+          representative_name: m.representative_name,
+          representative_email: m.representative_email,
+          representative_phone: m.representative_phone,
+        }
+      }
+
+      const contact = m.contact_id ? (contactMap[m.contact_id] ?? null) : null
+      const nameParts = (m.full_name ?? '').split(' ')
+      return {
+        member_id: m.id,
+        member_type: 'individual' as const,
+        contact_id: m.contact_id,
+        role: 'Member',
+        ownership_pct: m.ownership_pct,
+        is_primary: m.is_primary ?? false,
+        first_name: contact?.first_name ?? nameParts[0] ?? '',
+        last_name: contact?.last_name ?? nameParts.slice(1).join(' ') ?? '',
+        email: m.email,
+        phone: m.phone,
+        citizenship: contact?.citizenship ?? null,
+        date_of_birth: contact?.date_of_birth ?? null,
+        address_line1: contact?.address_line1 ?? m.address_street ?? null,
+        address_city: contact?.address_city ?? m.address_city ?? null,
+        address_state: contact?.address_state ?? m.address_state ?? null,
+        address_country: contact?.address_country ?? m.address_country ?? null,
+        company_name: null,
+        ein: null,
+        representative_name: null,
+        representative_email: null,
+        representative_phone: null,
+      }
+    })
+  }
+
+  // Fallback: account_contacts for legacy accounts with no members rows
   const { data } = await supabaseAdmin
     .from('account_contacts')
     .select('role, ownership_pct, is_primary, contacts(id, first_name, last_name, email, phone, citizenship, date_of_birth, address_line1, address_city, address_state, address_country)')
@@ -77,6 +160,8 @@ export async function getPortalMembers(accountId: string) {
       address_line1: string | null; address_city: string | null; address_state: string | null; address_country: string | null
     } | null
     return {
+      member_id: c?.id ?? null,
+      member_type: 'individual' as const,
       contact_id: c?.id ?? null,
       role: d.role,
       ownership_pct: d.ownership_pct,
@@ -91,6 +176,11 @@ export async function getPortalMembers(accountId: string) {
       address_city: c?.address_city ?? null,
       address_state: c?.address_state ?? null,
       address_country: c?.address_country ?? null,
+      company_name: null,
+      ein: null,
+      representative_name: null,
+      representative_email: null,
+      representative_phone: null,
     }
   })
 }
