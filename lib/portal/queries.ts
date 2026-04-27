@@ -10,12 +10,14 @@ import type { PortalAccount, PortalService } from '@/lib/types'
 export async function getPortalAccounts(contactId: string): Promise<PortalAccount[]> {
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
-    .select('account_id, role')
+    .select('account_id, role, is_primary')
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return []
 
   const accountIds = links.map(l => l.account_id)
+  const primaryIds = new Set(links.filter(l => l.is_primary).map(l => l.account_id))
+
   const { data: accounts } = await supabaseAdmin
     .from('accounts')
     .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, account_type, portal_tier')
@@ -25,7 +27,15 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
     .in('status', ['Active', 'Suspended'])
     .order('company_name')
 
-  return (accounts ?? []) as PortalAccount[]
+  // Primary account first, then alphabetical
+  const sorted = (accounts ?? []).sort((a, b) => {
+    const ap = primaryIds.has(a.id) ? 0 : 1
+    const bp = primaryIds.has(b.id) ? 0 : 1
+    if (ap !== bp) return ap - bp
+    return a.company_name.localeCompare(b.company_name)
+  })
+
+  return sorted as PortalAccount[]
 }
 
 /**
@@ -72,8 +82,10 @@ export async function getPortalMembers(accountId: string) {
     .eq('account_id', accountId)
     .order('is_primary', { ascending: false })
 
-  if (membersRows && membersRows.length > 0) {
-    // Batch-fetch contacts for individual members to get first/last name split + personal details
+  if (!membersRows || membersRows.length === 0) return []
+
+  // Batch-fetch contacts for individual members to get first/last name split + personal details
+  {
     const contactIds = membersRows
       .filter(m => m.member_type === 'individual' && m.contact_id)
       .map(m => m.contact_id!)
@@ -146,43 +158,6 @@ export async function getPortalMembers(accountId: string) {
       }
     })
   }
-
-  // Fallback: account_contacts for legacy accounts with no members rows
-  const { data } = await supabaseAdmin
-    .from('account_contacts')
-    .select('role, ownership_pct, is_primary, contacts(id, first_name, last_name, email, phone, citizenship, date_of_birth, address_line1, address_city, address_state, address_country)')
-    .eq('account_id', accountId)
-
-  return (data ?? []).map(d => {
-    const c = d.contacts as unknown as {
-      id: string; first_name: string; last_name: string; email: string | null; phone: string | null
-      citizenship: string | null; date_of_birth: string | null
-      address_line1: string | null; address_city: string | null; address_state: string | null; address_country: string | null
-    } | null
-    return {
-      member_id: c?.id ?? null,
-      member_type: 'individual' as const,
-      contact_id: c?.id ?? null,
-      role: d.role,
-      ownership_pct: d.ownership_pct,
-      is_primary: d.is_primary ?? false,
-      first_name: c?.first_name ?? '',
-      last_name: c?.last_name ?? '',
-      email: c?.email ?? null,
-      phone: c?.phone ?? null,
-      citizenship: c?.citizenship ?? null,
-      date_of_birth: c?.date_of_birth ?? null,
-      address_line1: c?.address_line1 ?? null,
-      address_city: c?.address_city ?? null,
-      address_state: c?.address_state ?? null,
-      address_country: c?.address_country ?? null,
-      company_name: null,
-      ein: null,
-      representative_name: null,
-      representative_email: null,
-      representative_phone: null,
-    }
-  })
 }
 
 export async function getPortalServices(accountId: string): Promise<PortalService[]> {

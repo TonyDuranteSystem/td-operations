@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -828,6 +828,321 @@ function InstallmentBadge({ match, onInvoice }: { match: Payment | null; onInvoi
   )
 }
 
+/* ── Members Section (MMLLC only) ────────────────────────── */
+
+type CrmMember = {
+  id: string
+  member_type: string
+  full_name: string | null
+  company_name: string | null
+  email: string | null
+  phone: string | null
+  ein: string | null
+  ownership_pct: number | null
+  is_primary: boolean | null
+  is_signer: boolean
+  contact_id: string | null
+  representative_name: string | null
+  representative_email: string | null
+  representative_phone: string | null
+}
+
+function MembersSection({ accountId, accountCompanyName }: { accountId: string; accountCompanyName: string }) {
+  const [members, setMembers] = useState<CrmMember[]>([])
+  const [loading, setLoading] = useState(true)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState<Partial<CrmMember>>({})
+  const [saving, setSaving] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [addType, setAddType] = useState<'individual' | 'company'>('individual')
+  const [addDraft, setAddDraft] = useState<Record<string, string | number | null>>({})
+  const [adding, setAdding] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CrmMember | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    fetch(`/api/accounts/${accountId}/members`)
+      .then(async r => {
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Failed to load members')
+        setMembers(d.data ?? [])
+      })
+      .catch(() => toast.error('Failed to load members'))
+      .finally(() => setLoading(false))
+  }, [accountId])
+
+  const displayName = (m: CrmMember) =>
+    m.member_type === 'company' ? (m.company_name ?? '—') : (m.full_name ?? '—')
+
+  const handleEdit = (m: CrmMember) => {
+    setEditingId(m.id)
+    setEditDraft({ ...m })
+  }
+
+  const handleSave = async () => {
+    if (!editingId) return
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/accounts/${accountId}/members`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_id: editingId, ...editDraft }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to save')
+      setMembers(prev => prev.map(m => m.id === editingId ? (data.data as CrmMember) : m))
+      setEditingId(null)
+      toast.success('Member updated')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleAdd = async () => {
+    setAdding(true)
+    try {
+      const body = addType === 'company'
+        ? { member_type: 'company', member_company_name: addDraft.company_name, ...addDraft }
+        : { member_type: 'individual', ...addDraft }
+      const res = await fetch(`/api/accounts/${accountId}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to add member')
+      setMembers(prev => [...prev, data.data as CrmMember])
+      setShowAddForm(false)
+      setAddDraft({})
+      toast.success('Member added')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add member')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return { success: false, error: 'No member selected' }
+    try {
+      const res = await fetch(`/api/accounts/${accountId}/members`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_id: deleteTarget.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to remove member')
+      setMembers(prev => prev.filter(m => m.id !== deleteTarget.id))
+      return { success: true, message: `${displayName(deleteTarget)} removed` }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to remove' }
+    }
+  }
+
+  const inputCls = 'w-full px-2.5 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500'
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg border p-5">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading members...
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+          Members ({members.length})
+        </h3>
+        <button
+          onClick={() => { setShowAddForm(!showAddForm); setAddDraft({}) }}
+          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add Member
+        </button>
+      </div>
+
+      {/* Add form */}
+      {showAddForm && (
+        <div className="p-3 bg-zinc-50 rounded-lg border space-y-3">
+          <div className="flex gap-2">
+            {(['individual', 'company'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => { setAddType(t); setAddDraft({}) }}
+                className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors capitalize ${addType === t ? (t === 'company' ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-blue-100 text-blue-700 border-blue-200') : 'bg-white text-zinc-500 border-zinc-200'}`}
+              >{t}</button>
+            ))}
+          </div>
+          {addType === 'individual' ? (
+            <div className="grid grid-cols-2 gap-2">
+              <input placeholder="Full name *" className={inputCls} value={String(addDraft.full_name ?? '')} onChange={e => setAddDraft(d => ({ ...d, full_name: e.target.value }))} />
+              <input placeholder="Email" className={inputCls} value={String(addDraft.email ?? '')} onChange={e => setAddDraft(d => ({ ...d, email: e.target.value }))} />
+              <input placeholder="Phone" className={inputCls} value={String(addDraft.phone ?? '')} onChange={e => setAddDraft(d => ({ ...d, phone: e.target.value }))} />
+              <input placeholder="Ownership %" type="number" min={0} max={100} className={inputCls} value={addDraft.ownership_pct ?? ''} onChange={e => setAddDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <input placeholder="Company name *" className={inputCls} value={String(addDraft.company_name ?? '')} onChange={e => setAddDraft(d => ({ ...d, company_name: e.target.value }))} />
+              <input placeholder="EIN (optional)" className={inputCls} value={String(addDraft.ein ?? '')} onChange={e => setAddDraft(d => ({ ...d, ein: e.target.value }))} />
+              <input placeholder="Representative name" className={inputCls} value={String(addDraft.representative_name ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_name: e.target.value }))} />
+              <input placeholder="Representative email" className={inputCls} value={String(addDraft.representative_email ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_email: e.target.value }))} />
+              <input placeholder="Representative phone" className={inputCls} value={String(addDraft.representative_phone ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_phone: e.target.value }))} />
+              <input placeholder="Ownership %" type="number" min={0} max={100} className={inputCls} value={addDraft.ownership_pct ?? ''} onChange={e => setAddDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button onClick={handleAdd} disabled={adding} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              {adding ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+              Add
+            </button>
+            <button onClick={() => { setShowAddForm(false); setAddDraft({}) }} className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {members.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No members on file</p>
+      ) : (
+        <div className="space-y-3">
+          {members.map(m => (
+            <div key={m.id} className="pb-3 border-b last:border-b-0 last:pb-0">
+              {editingId !== m.id ? (
+                /* ── Display row ── */
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${m.member_type === 'company' ? 'bg-violet-100' : 'bg-blue-100'}`}>
+                      {m.member_type === 'company'
+                        ? <Building2 className="h-3 w-3 text-violet-600" />
+                        : <User className="h-3 w-3 text-blue-600" />}
+                    </div>
+                    {m.contact_id ? (
+                      <Link href={`/contacts/${m.contact_id}`} className="font-medium text-sm text-blue-600 hover:underline">{displayName(m)}</Link>
+                    ) : (
+                      <span className="font-medium text-sm">{displayName(m)}</span>
+                    )}
+                    <div className="flex gap-1">
+                      {m.is_primary && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 font-medium">Primary</span>}
+                      {m.is_signer && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Signer</span>}
+                      {m.ownership_pct != null && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">{m.ownership_pct}%</span>}
+                    </div>
+                    <div className="ml-auto flex gap-0.5">
+                      <button onClick={() => handleEdit(m)} className="p-1 rounded hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition-colors" title="Edit member">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => setDeleteTarget(m)} className="p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors" title="Remove member">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  {m.member_type === 'individual' && (m.email || m.phone) && (
+                    <p className="text-xs text-muted-foreground pl-8">{[m.email, m.phone].filter(Boolean).join(' · ')}</p>
+                  )}
+                  {m.member_type === 'company' && m.representative_name && (
+                    <p className="text-xs text-muted-foreground pl-8">
+                      Rep: {m.representative_name}{m.representative_email ? ` · ${m.representative_email}` : ''}{m.representative_phone ? ` · ${m.representative_phone}` : ''}
+                    </p>
+                  )}
+                  {m.ein && <p className="text-xs text-muted-foreground pl-8">EIN: {m.ein}</p>}
+                </div>
+              ) : (
+                /* ── Edit row ── */
+                <div className="space-y-3 p-3 bg-zinc-50 rounded-lg">
+                  {m.member_type === 'individual' ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Full Name</p>
+                        <input className={inputCls} value={String(editDraft.full_name ?? '')} onChange={e => setEditDraft(d => ({ ...d, full_name: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Email</p>
+                        <input className={inputCls} value={String(editDraft.email ?? '')} onChange={e => setEditDraft(d => ({ ...d, email: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Phone</p>
+                        <input className={inputCls} value={String(editDraft.phone ?? '')} onChange={e => setEditDraft(d => ({ ...d, phone: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Ownership %</p>
+                        <input type="number" min={0} max={100} className={inputCls} value={editDraft.ownership_pct ?? ''} onChange={e => setEditDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Company Name</p>
+                        <input className={inputCls} value={String(editDraft.company_name ?? '')} onChange={e => setEditDraft(d => ({ ...d, company_name: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">EIN</p>
+                        <input className={inputCls} value={String(editDraft.ein ?? '')} onChange={e => setEditDraft(d => ({ ...d, ein: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep Name</p>
+                        <input className={inputCls} value={String(editDraft.representative_name ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_name: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep Email</p>
+                        <input className={inputCls} value={String(editDraft.representative_email ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_email: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep Phone</p>
+                        <input className={inputCls} value={String(editDraft.representative_phone ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_phone: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Ownership %</p>
+                        <input type="number" min={0} max={100} className={inputCls} value={editDraft.ownership_pct ?? ''} onChange={e => setEditDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-4 text-sm">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={editDraft.is_primary ?? false} onChange={e => setEditDraft(d => ({ ...d, is_primary: e.target.checked }))} className="rounded border-zinc-300" />
+                      Primary
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={editDraft.is_signer ?? false} onChange={e => setEditDraft(d => ({ ...d, is_signer: e.target.checked }))} className="rounded border-zinc-300" />
+                      SS-4 Signer
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                      {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      Save
+                    </button>
+                    <button onClick={() => setEditingId(null)} className="px-3 py-1.5 text-xs border rounded-md hover:bg-zinc-50">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ConfirmDestructiveDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Remove Member"
+        description={deleteTarget ? `Remove ${displayName(deleteTarget)} from ${accountCompanyName}?` : undefined}
+        severity="red"
+        staticPreview={deleteTarget ? {
+          affected: { member: 1 },
+          items: [{ label: displayName(deleteTarget), details: [deleteTarget.member_type, deleteTarget.ownership_pct != null ? `${deleteTarget.ownership_pct}% ownership` : ''].filter(Boolean) }],
+          warnings: ['Only the membership entry is removed — the contact record itself is not deleted.'],
+        } : undefined}
+        confirmLabel="Remove"
+        onConfirm={handleDeleteConfirm}
+      />
+    </div>
+  )
+}
+
 /* ── Panoramica Tab ───────────────────────────────────── */
 
 function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void }) {
@@ -947,6 +1262,11 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
         account={account}
         makeContactSaver={makeContactSaver}
       />
+
+      {/* Members — Multi Member LLC only */}
+      {account.entity_type === 'Multi Member LLC' && (
+        <MembersSection accountId={account.id} accountCompanyName={account.company_name} />
+      )}
 
       {/* Notes */}
       <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
