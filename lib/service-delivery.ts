@@ -141,7 +141,7 @@ export async function advanceServiceDelivery(
   const stageHistory = Array.isArray(delivery.stage_history) ? [...delivery.stage_history, historyEntry] : [historyEntry]
 
   // 6. Update delivery
-  const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed" || targetStage.stage_name === "Filing Complete"
+  const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
   await dbWrite(
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     supabaseAdmin
