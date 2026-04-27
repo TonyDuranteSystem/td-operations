@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
     // Get all active Client accounts
     const { data: accounts, error } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, entity_type, formation_date, account_type, installment_2_amount, status")
+      .select("id, company_name, entity_type, account_type, installment_2_amount, status")
       .eq("status", "Active")
       .eq("account_type", "Client")
       .or("is_test.is.null,is_test.eq.false")
@@ -164,7 +164,7 @@ export async function GET(req: NextRequest) {
     const skipped = results.filter(r => r.action === "skipped")
     const sendResults: Array<{ company: string; sent: boolean; error?: string }> = []
 
-    if (created.length > 0) {
+    if (created.length > 0 || skipped.length > 0) {
       // Build the internal URL for sending
       const baseUrl = process.env.VERCEL_URL
         ? `https://${process.env.VERCEL_URL}`
@@ -223,24 +223,24 @@ export async function GET(req: NextRequest) {
 
       const taskDescription = [
         `${installmentLabel} ${year}: ${created.length} invoices created.`,
-        `Auto-sent: ${sentCount} | Manual send needed: ${failedCount}`,
-        `Skipped (post-September): ${skipped.length}`,
-        "",
-        "Invoices:",
+        created.length > 0 ? `Auto-sent: ${sentCount} | Manual send needed: ${failedCount}` : "",
+        skipped.length > 0 ? `\n⚠️ Skipped — no signed renewal MSA (${skipped.length} accounts need follow-up):` : "",
+        ...skipped.map(r => `- ${r.company}`),
+        created.length > 0 ? "\nInvoices:" : "",
         ...created.map(r => {
           const sendStatus = sendResults.find(s => s.company === r.company)
           return `- ${r.company}: ${r.detail} ${sendStatus?.sent ? '✓ Sent' : '⏳ Needs manual send'}`
         }),
-      ].join("\n")
+      ].filter(Boolean).join("\n")
 
       // eslint-disable-next-line no-restricted-syntax -- billing-cron summary task insert; pre-existing pattern
       await supabaseAdmin.from("tasks").insert({
-        task_title: `[BILLING] ${installmentLabel} ${year} — ${created.length} invoices (${sentCount} auto-sent)`,
+        task_title: `[BILLING] ${installmentLabel} ${year} — ${created.length} invoices${skipped.length > 0 ? ` | ⚠️ ${skipped.length} unsigned` : ""}`,
         description: taskDescription,
         assigned_to: "Luca",
-        priority: "High",
+        priority: skipped.length > 0 ? "High" : "Normal",
         category: "Payment",
-        status: failedCount > 0 ? "To Do" : "Done",
+        status: (failedCount > 0 || skipped.length > 0) ? "To Do" : "Done",
         due_date: `${year}-06-15`,
         created_by: "System",
       })
@@ -251,13 +251,11 @@ export async function GET(req: NextRequest) {
         const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">
 <h2>[BILLING] ${installmentLabel} ${year}</h2>
 <p><strong>${created.length}</strong> invoices created. <strong>${sentCount}</strong> auto-sent. <strong>${failedCount}</strong> need manual send.</p>
-<p><strong>${skipped.length}</strong> skipped (post-September rule).</p>
-<h3>Invoices:</h3>
-<ul>${created.map(r => {
+${skipped.length > 0 ? `<p style="color:#dc2626">⚠️ <strong>${skipped.length}</strong> accounts skipped — no signed renewal MSA (follow up required): ${skipped.map(r => r.company).join(", ")}</p>` : ""}
+${created.length > 0 ? `<h3>Invoices:</h3><ul>${created.map(r => {
   const s = sendResults.find(sr => sr.company === r.company)
   return `<li>${r.company} — ${r.detail} ${s?.sent ? '✅' : '⏳'}</li>`
-}).join("")}</ul>
-${skipped.length > 0 ? `<h3>Skipped:</h3><ul>${skipped.map(r => `<li>${r.company} — ${r.detail}</li>`).join("")}</ul>` : ""}
+}).join("")}</ul>` : ""}
 </div>`
 
         const billingSubject = `[BILLING] ${installmentLabel} ${year} -- ${created.length} invoices (${sentCount} sent)`
