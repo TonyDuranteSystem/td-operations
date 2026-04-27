@@ -96,44 +96,68 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         if (!contactId) {
           const { data: membersRows } = await supabaseAdmin
             .from("members")
-            .select("id, member_type, full_name, company_name, email, representative_name, representative_email, contact_id, is_primary")
+            .select("id, member_type, full_name, company_name, email, representative_name, representative_email, contact_id, is_primary, is_signer")
             .eq("account_id", params.account_id)
+            .order("is_signer", { ascending: false })
             .order("is_primary", { ascending: false })
 
           if (membersRows && membersRows.length > 0) {
-            // For MMLLC with multiple members: require explicit contact_id selection
+            // For MMLLC with multiple members: auto-select if exactly one is_signer=true,
+            // otherwise require explicit contact_id selection.
             if (entityType === "MMLLC" && membersRows.length > 1) {
-              const memberList = await Promise.all(membersRows.map(async (m, i) => {
-                if (m.member_type === "company") {
-                  // Resolve representative contact_id by email
-                  let repContactId = m.contact_id
-                  if (!repContactId && m.representative_email) {
-                    const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
-                    repContactId = repC?.id ?? null
+              const signers = membersRows.filter(m => m.is_signer)
+              if (signers.length !== 1) {
+                const memberList = await Promise.all(membersRows.map(async (m, i) => {
+                  if (m.member_type === "company") {
+                    let repContactId = m.contact_id
+                    if (!repContactId && m.representative_email) {
+                      const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+                      repContactId = repC?.id ?? null
+                    }
+                    const repInfo = m.representative_name ? ` (rep: ${m.representative_name})` : ""
+                    const signerFlag = m.is_signer ? " ✓ signer" : ""
+                    return `  ${i + 1}. [Company] ${m.company_name || "Unknown"}${repInfo}${signerFlag} — contact_id: ${repContactId || "no contact"}`
                   }
-                  const repInfo = m.representative_name ? ` (rep: ${m.representative_name})` : ""
-                  return `  ${i + 1}. [Company] ${m.company_name || "Unknown"}${repInfo} — contact_id: ${repContactId || "no contact"}`
+                  const signerFlag = m.is_signer ? " ✓ signer" : ""
+                  return `  ${i + 1}. ${m.full_name || "Unknown"}${signerFlag} — contact_id: ${m.contact_id || "no contact"}`
+                }))
+
+                const hint = signers.length === 0
+                  ? `Tip: set is_signer=true on the intended responsible party via the CRM Members card, then re-run to auto-select.`
+                  : `Warning: ${signers.length} members have is_signer=true. Set exactly one as the signer, then re-run.`
+
+                return { content: [{ type: "text" as const, text: [
+                  `This is a Multi-Member LLC with ${membersRows.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
+                  ``,
+                  `Members:`,
+                  ...memberList,
+                  ``,
+                  hint,
+                  `Or re-run ss4_create with the contact_id of the chosen member.`,
+                ].join("\n") }] }
+              }
+
+              // Exactly one is_signer=true — auto-select
+              const signer = signers[0]
+              if (signer.member_type === "company") {
+                if (!signer.contact_id && signer.representative_email) {
+                  const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", signer.representative_email).maybeSingle()
+                  contactId = repC?.id ?? signer.contact_id
+                } else {
+                  contactId = signer.contact_id
                 }
-                return `  ${i + 1}. ${m.full_name || "Unknown"} — contact_id: ${m.contact_id || "no contact"}`
-              }))
-
-              return { content: [{ type: "text" as const, text: [
-                `This is a Multi-Member LLC with ${membersRows.length} members. Please specify which member will sign the SS-4 as the responsible party.`,
-                ``,
-                `Members:`,
-                ...memberList,
-                ``,
-                `Re-run ss4_create with the contact_id of the chosen member.`,
-              ].join("\n") }] }
-            }
-
-            // Single member or SMLLC: use first row
-            const m = membersRows[0]
-            if (m.member_type === "company" && m.representative_email) {
-              const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
-              contactId = repC?.id ?? m.contact_id
+              } else {
+                contactId = signer.contact_id
+              }
             } else {
-              contactId = m.contact_id
+              // Single member or SMLLC: use first row
+              const m = membersRows[0]
+              if (m.member_type === "company" && m.representative_email) {
+                const { data: repC } = await supabaseAdmin.from("contacts").select("id").eq("email", m.representative_email).maybeSingle()
+                contactId = repC?.id ?? m.contact_id
+              } else {
+                contactId = m.contact_id
+              }
             }
           } else {
             // Legacy fallback: account_contacts
