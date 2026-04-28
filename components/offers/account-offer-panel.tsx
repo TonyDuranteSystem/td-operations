@@ -57,6 +57,7 @@ export function AccountOfferPanel({
 
   const hasOffer = !!offer
   const isOfferDraft = hasOffer && offer.status === 'draft'
+  const isOfferClosed = hasOffer && (offer.status === 'expired' || offer.status === 'completed')
   // APP_BASE_URL is passed from server or falls back to production
   const appBaseUrl = 'https://app.tonydurante.us'
 
@@ -220,6 +221,25 @@ export function AccountOfferPanel({
                     </span>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Create New Offer (when current offer is completed/expired) */}
+            {isOfferClosed && (
+              <div className="pt-1 pb-1">
+                <button
+                  onClick={() => {
+                    if (!clientEmail) {
+                      toast.error('Account needs a contact with an email before creating an offer')
+                      return
+                    }
+                    setShowCreateOffer(true)
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <FileText className="h-4 w-4" />
+                  Create New Offer
+                </button>
               </div>
             )}
 
