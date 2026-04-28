@@ -322,38 +322,38 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
   result.steps.push(step("status_update", "ok", `welcome_package_status → ${wpStatus}`))
 
-  // ─── 9. CREATE TASK: Review & Send Welcome Email ───
+  // ─── 9. NOTIFY CLIENT via portal message + push ───
   try {
-    const { data: existingTask } = await supabaseAdmin
-      .from("tasks")
-      .select("id")
-      .eq("task_title", `Review & send welcome email — ${account.company_name}`)
-      .eq("account_id", p.account_id)
-      .maybeSingle()
+    const isIt = lang === "it"
+    const greeting = isIt
+      ? `Ottima notizia! Il codice fiscale americano (EIN) per ${account.company_name} è stato emesso: ${account.ein_number}.`
+      : `Great news! The EIN for ${account.company_name} has been issued: ${account.ein_number}.`
+    const body = isIt
+      ? `Puoi ora avviare la procedura per aprire il conto bancario aziendale. Accedi al portale per iniziare il processo di apertura del conto e, se applicabile, per firmare il tuo Accordo Operativo e il contratto di domiciliazione.`
+      : `You can now start the process to open your business bank account. Log in to your portal to begin the banking wizard and, where applicable, sign your Operating Agreement and lease.`
+    const message = `${greeting}\n\n${body}`
 
-    if (!existingTask) {
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      await supabaseAdmin.from("tasks").insert({
-        task_title: `Review & send welcome email — ${account.company_name}`,
-        description: [
-          `Welcome package prepared for ${account.company_name}.`,
-          ``,
-          `Use welcome_package_prepare(account_id="${p.account_id}") to see all links and the email draft.`,
-          `Then use gmail_send to send the email with EIN letter + Articles as attachments.`,
-        ].join("\n"),
-        assigned_to: "Luca",
-        priority: "High",
-        category: "Formation",
-        status: "To Do",
-        account_id: p.account_id,
-        created_by: "System",
-      })
-      result.steps.push(step("review_task", "ok", "Task created: review & send welcome email"))
-    } else {
-      result.steps.push(step("review_task", "skipped", "Already exists"))
-    }
+    await supabaseAdmin.from("portal_messages").insert({
+      account_id: p.account_id,
+      contact_id: contact.id,
+      sender_type: "admin",
+      sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+      message,
+    })
+
+    const { createPortalNotification } = await import("@/lib/portal/notifications")
+    await createPortalNotification({
+      account_id: p.account_id,
+      contact_id: contact.id,
+      type: "ein_received",
+      title: isIt ? "EIN emesso — banking disponibile" : "EIN issued — banking available",
+      body: isIt ? `EIN: ${account.ein_number}` : `EIN: ${account.ein_number}`,
+      link: "/portal/banking",
+    })
+
+    result.steps.push(step("notify_client", "ok", `Portal message sent to ${contact.email}`))
   } catch (e) {
-    result.steps.push(step("review_task", "error", e instanceof Error ? e.message : String(e)))
+    result.steps.push(step("notify_client", "error", e instanceof Error ? e.message : String(e)))
   }
 
   // Summary
