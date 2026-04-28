@@ -22,7 +22,7 @@ interface LeadFixture {
 
 let leadFixture: LeadFixture | null = null
 let accountExists = true
-let duplicateOffer: { token: string; status: string } | null = null
+let duplicateOffer: { token: string; status: string; contract_type?: string | null } | null = null
 let tokenCollision = false
 let insertSucceeds = true
 
@@ -80,9 +80,9 @@ vi.mock("@/lib/supabase-admin", () => ({
         Object.assign(chain, {
           select: vi.fn((cols: string) => {
             // generateUniqueToken selects just "token" by exact match on token.
-            // Duplicate check selects "token, status" filtered by lead/account.
+            // Duplicate check selects "token, status, contract_type" filtered by lead/account.
             if (cols === "token") isTokenCheck = true
-            else if (cols === "token, status") isDupCheck = true
+            else if (cols === "token, status, contract_type") isDupCheck = true
             return chain
           }),
           insert: vi.fn((payload: Record<string, unknown>) => {
@@ -106,6 +106,7 @@ vi.mock("@/lib/supabase-admin", () => ({
             return chain
           }),
           not: vi.fn(() => chain),
+          neq: vi.fn(() => chain),
           limit: vi.fn(() => chain),
           single: vi.fn(() => {
             if (pendingInsert) {

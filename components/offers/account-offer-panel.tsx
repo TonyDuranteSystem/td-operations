@@ -57,7 +57,7 @@ export function AccountOfferPanel({
 
   const hasOffer = !!offer
   const isOfferDraft = hasOffer && offer.status === 'draft'
-  const isOfferClosed = hasOffer && (offer.status === 'expired' || offer.status === 'completed')
+  const isOfferClosed = hasOffer && (offer.status === 'expired' || offer.status === 'completed' || offer.contract_type === 'renewal')
   // APP_BASE_URL is passed from server or falls back to production
   const appBaseUrl = 'https://app.tonydurante.us'
 

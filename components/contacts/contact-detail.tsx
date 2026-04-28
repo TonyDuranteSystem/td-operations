@@ -1203,7 +1203,7 @@ function OfferStatusCard({
 
   const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
   const primaryActivation = pendingActivations[0] ?? null
-  const isOfferClosed = primaryOffer && (primaryOffer.status === 'expired' || primaryOffer.status === 'completed')
+  const isOfferClosed = primaryOffer && (primaryOffer.status === 'expired' || primaryOffer.status === 'completed' || primaryOffer.contract_type === 'renewal')
   const canCreateOffer = !primaryOffer || !!isOfferClosed
 
   const handleCreateOffer = () => {
