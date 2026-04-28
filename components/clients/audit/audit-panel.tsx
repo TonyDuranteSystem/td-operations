@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   User, Building2, Calendar, DollarSign, Briefcase, FileText,
   Flag, CheckCircle2, AlertCircle, ExternalLink, Loader2,
   Globe, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Users,
+  Users, Search, UserPlus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -406,6 +406,16 @@ export function AuditPanel({
 
   // ── Contact edits ──
   const [contactEdits, setContactEdits] = useState<Record<string, Partial<ContactRow>>>({})
+  const [localContacts, setLocalContacts] = useState<ContactRow[]>(account.contacts)
+
+  // ── Contact search / link / create ──
+  const [contactSearch, setContactSearch] = useState('')
+  const [contactResults, setContactResults] = useState<ContactRow[]>([])
+  const [contactSearching, setContactSearching] = useState(false)
+  const [showCreateContact, setShowCreateContact] = useState(false)
+  const [linkingContact, setLinkingContact] = useState(false)
+  const [newContact, setNewContact] = useState({ full_name: '', email: '', phone: '', language: '', citizenship: '' })
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Services human confirmation ──
   const [services, setServices] = useState<Record<string, ServiceChoice>>(
@@ -454,6 +464,65 @@ export function AuditPanel({
     }))
   }
 
+  function handleContactSearchChange(q: string) {
+    setContactSearch(q)
+    if (searchDebounce.current) clearTimeout(searchDebounce.current)
+    if (q.length < 2) { setContactResults([]); return }
+    searchDebounce.current = setTimeout(async () => {
+      setContactSearching(true)
+      try {
+        const res = await fetch(`/api/clients/audit/${account.id}/contacts?q=${encodeURIComponent(q)}`)
+        const d = await res.json()
+        setContactResults(d.contacts ?? [])
+      } finally {
+        setContactSearching(false)
+      }
+    }, 300)
+  }
+
+  async function handleLinkContact(contactId: string) {
+    setLinkingContact(true)
+    try {
+      const res = await fetch(`/api/clients/audit/${account.id}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: contactId }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Failed to link contact')
+      setLocalContacts(prev => [...prev, d.contact])
+      setContactSearch('')
+      setContactResults([])
+      toast.success(`Linked ${d.contact.full_name}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to link contact')
+    } finally {
+      setLinkingContact(false)
+    }
+  }
+
+  async function handleCreateContact() {
+    if (!newContact.full_name.trim()) { toast.error('Full name is required'); return }
+    setLinkingContact(true)
+    try {
+      const res = await fetch(`/api/clients/audit/${account.id}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newContact),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Failed to create contact')
+      setLocalContacts(prev => [...prev, d.contact])
+      setNewContact({ full_name: '', email: '', phone: '', language: '', citizenship: '' })
+      setShowCreateContact(false)
+      toast.success(`Created and linked ${d.contact.full_name}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create contact')
+    } finally {
+      setLinkingContact(false)
+    }
+  }
+
   function getSdsForService(serviceType: string): ServiceDeliveryRow[] {
     if (!dbData) return []
     return dbData.service_deliveries.filter(sd => sd.service_type === serviceType)
@@ -474,7 +543,7 @@ export function AuditPanel({
   async function handleSave() {
     setSaving(true)
     try {
-      const contactsPayload = account.contacts
+      const contactsPayload = localContacts
         .filter(c => contactEdits[c.id])
         .map(c => ({
           id: c.id,
@@ -624,20 +693,22 @@ export function AuditPanel({
 
         {/* S1 — Contact(s) */}
         <Section
-          icon={account.contacts.length > 1 ? Users : User}
-          title={account.contacts.length > 1 ? `Contacts (${account.contacts.length})` : 'Contact'}
+          icon={localContacts.length > 1 ? Users : User}
+          title={localContacts.length > 1 ? `Contacts (${localContacts.length})` : 'Contact'}
           badge={account.entity_type?.includes('Multi') || account.entity_type?.includes('MMLLC') ? 'MMLLC' : undefined}
           done={sectionsDone['contacts']}
           onToggleDone={() => toggleSection('contacts')}
         >
-          {account.contacts.length === 0 && (
-            <p className="text-sm text-amber-600 flex items-center gap-1">
-              <AlertCircle className="h-3.5 w-3.5" /> No contacts linked to this account
-            </p>
+          {localContacts.length === 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-amber-600 flex items-center gap-1.5">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" /> No contacts linked — search to link or create one
+              </p>
+            </div>
           )}
-          {account.contacts.map((c, idx) => (
+          {localContacts.map((c, idx) => (
             <div key={c.id} className={cn('space-y-3', idx > 0 && 'pt-3 border-t')}>
-              {account.contacts.length > 1 && (
+              {localContacts.length > 1 && (
                 <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Contact {idx + 1}</p>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -674,6 +745,83 @@ export function AuditPanel({
               </div>
             </div>
           ))}
+
+          {/* Contact search / link / create */}
+          <div className={cn('pt-3 space-y-2', localContacts.length > 0 && 'border-t')}>
+            <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
+              {localContacts.length === 0 ? 'Link or create contact' : 'Add another contact'}
+            </p>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Search by name, email, or phone…"
+                value={contactSearch}
+                onChange={e => handleContactSearchChange(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {contactSearching && <Loader2 className="absolute right-2.5 top-2.5 h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            </div>
+
+            {contactResults.length > 0 && (
+              <div className="border rounded-md divide-y overflow-hidden">
+                {contactResults.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => handleLinkContact(r.id)}
+                    disabled={linkingContact || localContacts.some(c => c.id === r.id)}
+                    className="w-full text-left px-3 py-2 hover:bg-blue-50 disabled:opacity-50 flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <p className="text-sm font-medium">{r.full_name}</p>
+                      {r.email && <p className="text-xs text-zinc-500">{r.email}</p>}
+                      {r.phone && <p className="text-xs text-zinc-500">{r.phone}</p>}
+                    </div>
+                    {localContacts.some(c => c.id === r.id)
+                      ? <span className="text-xs text-zinc-400">Already linked</span>
+                      : <span className="text-xs text-blue-600 font-medium">Link</span>
+                    }
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={() => setShowCreateContact(v => !v)}
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-800"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              {showCreateContact ? 'Cancel new contact' : 'Create new contact'}
+            </button>
+
+            {showCreateContact && (
+              <div className="border rounded-md p-3 space-y-2 bg-zinc-50">
+                <div className="grid grid-cols-2 gap-2">
+                  {(['full_name', 'email', 'phone', 'language', 'citizenship'] as const).map(f => (
+                    <div key={f} className={f === 'full_name' ? 'col-span-2' : ''}>
+                      <label className="text-xs font-medium text-zinc-500 capitalize">{f.replace('_', ' ')}</label>
+                      <input
+                        type="text"
+                        value={newContact[f]}
+                        onChange={e => setNewContact(prev => ({ ...prev, [f]: e.target.value }))}
+                        className="w-full mt-0.5 px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder={f === 'full_name' ? 'Required' : ''}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={handleCreateContact}
+                  disabled={linkingContact || !newContact.full_name.trim()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {linkingContact ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserPlus className="h-3 w-3" />}
+                  Create & link
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Members (for MMLLC) */}
           {!dbLoading && (dbData?.members.length ?? 0) > 0 && (
             <div className="pt-2 border-t">
