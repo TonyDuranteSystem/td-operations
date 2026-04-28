@@ -8,6 +8,7 @@ interface BankReferral {
   slug: string
   label: string
   apply_url: string
+  rep_email: string | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -112,6 +113,9 @@ export function BankReferralsAdmin() {
                   {r.apply_url}
                   <ExternalLink className="h-3 w-3 shrink-0" />
                 </a>
+                {r.rep_email && (
+                  <p className="text-xs text-zinc-400 mt-0.5">Rep: {r.rep_email}</p>
+                )}
               </div>
               <button
                 type="button"
@@ -148,6 +152,7 @@ export function BankReferralsAdmin() {
 function AddBankDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [label, setLabel] = useState('')
   const [applyUrl, setApplyUrl] = useState('')
+  const [repEmail, setRepEmail] = useState('')
   const [saving, setSaving] = useState(false)
 
   const submit = async () => {
@@ -160,7 +165,11 @@ function AddBankDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
       const res = await fetch('/api/crm/bank-referrals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: label.trim(), apply_url: applyUrl.trim() }),
+        body: JSON.stringify({
+          label: label.trim(),
+          apply_url: applyUrl.trim(),
+          rep_email: repEmail.trim() || null,
+        }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'create failed')
@@ -200,6 +209,19 @@ function AddBankDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
             />
             <p className="text-xs text-muted-foreground mt-1">
               The URL clients are redirected to. Include your partner/referral code if any.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Rep email <span className="text-zinc-400 font-normal">(optional)</span></label>
+            <input
+              type="email"
+              value={repEmail}
+              onChange={e => setRepEmail(e.target.value)}
+              placeholder="rep@bank.com"
+              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              If set, an email is sent to this address the first time each client clicks the link.
             </p>
           </div>
         </div>

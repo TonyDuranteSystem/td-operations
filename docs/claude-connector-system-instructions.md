@@ -94,6 +94,7 @@ DATA COLLECTION:
 COMMUNICATION:
 - Official documents: gmail_send (email only -- rule M1)
 - Day-to-day with portal clients: portal_chat_send (staff -> client via portal chat)
+  ⚠️ portal_chat_send does NOT send any email to the client — it writes directly to DB. The client only sees the message if they actively open the portal. If the action is urgent, ALWAYS follow up with a gmail_send to notify them to check the portal. Dev task eabf304c tracks building auto email notification.
 - Day-to-day without portal: gmail_send or WhatsApp (manual, outside system)
 - Team-to-team (internal): portal_team_send (internal thread, only visible to staff). NEVER use portal_chat_send for team-only messages -- clients can see those.
 

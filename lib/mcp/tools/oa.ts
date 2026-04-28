@@ -56,7 +56,8 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         ownership_pct: z.number().describe("Ownership percentage (e.g. 99, 1)"),
         initial_contribution: z.string().optional().describe("Initial contribution (e.g. '$99.00'). Default: '$0.00'"),
       })).optional().describe("Members array for MMLLC. Required when entity_type=MMLLC. Must total 100%."),
-      effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
+      effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today). Cannot be more than 60 days in the past."),
+      force_recreate: z.boolean().optional().describe("If true, delete the existing OA (and any MMLLC signatures) and create a fresh one. Requires confirmation — use only when the client needs a new OA with an updated effective date."),
       formation_date: z.string().optional().describe("Date LLC was formed YYYY-MM-DD (pulls from account if available)"),
       ein_number: z.string().optional().describe("EIN (pulls from account if available)"),
       business_purpose: z.string().optional().describe("Business purpose (default: 'any and all lawful business activities')"),
@@ -129,18 +130,35 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
           return { content: [{ type: "text" as const, text: `❌ Contact not found: ${contactErr?.message || "no data"}` }] }
         }
 
-        // ─── 3. CHECK DUPLICATE ───
+        // ─── 3. VALIDATE EFFECTIVE DATE (60-day cap) ───
+        const today = new Date().toISOString().slice(0, 10)
+        const effectiveDate = params.effective_date || today
+        const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        if (effectiveDate < cutoff) {
+          return { content: [{ type: "text" as const, text: `❌ effective_date cannot be more than 60 days in the past. Earliest allowed: ${cutoff}` }] }
+        }
+
+        // ─── 4. CHECK DUPLICATE ───
         const { data: existing } = await supabaseAdmin
           .from("oa_agreements")
           .select("id, token, status")
           .eq("account_id", params.account_id)
           .limit(1)
 
-        if (existing?.length) {
-          return { content: [{ type: "text" as const, text: `⚠️ OA already exists for ${account.company_name} (token: ${existing[0].token}, status: ${existing[0].status}). Use oa_get to view it.` }] }
+        if (existing?.length && !params.force_recreate) {
+          return { content: [{ type: "text" as const, text: `⚠️ OA already exists for ${account.company_name} (token: ${existing[0].token}, status: ${existing[0].status}). Use oa_get to view it, or pass force_recreate=true to delete it and create a new one.` }] }
         }
 
-        // ─── 4. BUILD TOKEN ───
+        // ─── 5. FORCE RECREATE: delete existing OA ───
+        if (existing?.length && params.force_recreate) {
+          await supabaseAdmin.from("oa_signatures").delete().eq("oa_id", existing[0].id)
+          const { error: delErr } = await supabaseAdmin.from("oa_agreements").delete().eq("id", existing[0].id)
+          if (delErr) {
+            return { content: [{ type: "text" as const, text: `❌ Failed to delete existing OA: ${delErr.message}` }] }
+          }
+        }
+
+        // ─── 6. BUILD TOKEN ───
         const companySlug = account.company_name
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, "-")
@@ -148,14 +166,12 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         const year = new Date().getFullYear()
         const token = `${companySlug}-oa-${year}`
 
-        // ─── 5. BUILD DATES ───
-        const today = new Date().toISOString().slice(0, 10)
-        const effectiveDate = params.effective_date || today
+        // ─── 7. BUILD DATES ───
         const formationDate = params.formation_date || account.formation_date || today
         const ein = params.ein_number || account.ein_number || null
         const managerName = params.manager_name || contact.full_name
 
-        // ─── 6. BUILD MEMBERS JSON (for MMLLC) ───
+        // ─── 8. BUILD MEMBERS JSON (for MMLLC) ───
         const membersJson = entityType === "MMLLC" && params.members
           ? params.members.map(m => ({
               name: m.name,
@@ -166,7 +182,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             }))
           : null
 
-        // ─── 7. INSERT ───
+        // ─── 9. INSERT ───
         const totalSigners = entityType === "MMLLC" && params.members ? params.members.length : 1
 
         const { data: oa, error: insertErr } = await supabaseAdmin

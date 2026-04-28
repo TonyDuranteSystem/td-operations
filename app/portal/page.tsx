@@ -20,6 +20,8 @@ import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed
 import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { RenewalBanner } from '@/components/portal/renewal-banner'
+import { MemberInfoBanner } from '@/components/portal/member-info-banner'
+import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
 
@@ -377,18 +379,27 @@ export default async function PortalDashboardPage() {
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
     contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
-    // Unsigned renewal MSA for active clients — shown as a banner until signed
-    supabaseAdmin
-      .from('offers')
+    // Unsigned annual agreement for active clients — shown as a banner until signed
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
+      .from('annual_agreements')
       .select('token')
       .eq('account_id', selectedAccountId)
-      .eq('contract_type', 'renewal')
+      .eq('agreement_year', new Date().getUTCFullYear())
       .not('status', 'in', '("signed","completed","expired")')
-      .like('effective_date', `${new Date().getFullYear()}-%`)
       .limit(1)
       .maybeSingle()
-      .then(r => r.data ?? null),
+      .then((r: { data: { token: string } | null }) => r.data ?? null) as Promise<{ token: string } | null>,
   ])
+  // Pending member info request — separate to avoid TypeScript tuple depth limit
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: pendingMemberInfoRequest } = await (supabaseAdmin as any)
+    .from('member_info_requests')
+    .select('token, access_code')
+    .eq('account_id', selectedAccountId)
+    .eq('status', 'pending')
+    .limit(1)
+    .maybeSingle() as { data: { token: string; access_code: string } | null }
   // Partner-bank referrals — separate await because the generated Supabase
   // types don't yet cover bank_referrals/bank_referral_clicks. The helper
   // in lib/bank-referrals.ts swallows errors so a missing schema in any
@@ -416,6 +427,14 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Member info banner — urgent, shown for MMLLC clients with a pending member info request */}
+      {pendingMemberInfoRequest && (
+        <MemberInfoBanner
+          formUrl={`${APP_BASE_URL}/member-info/${pendingMemberInfoRequest.token}/${pendingMemberInfoRequest.access_code}`}
+          locale={locale}
+        />
+      )}
 
       {/* Renewal MSA banner — shown until the annual agreement is signed */}
       {renewalOffer && (

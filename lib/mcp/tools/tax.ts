@@ -1173,10 +1173,11 @@ export function registerTaxTools(server: McpServer) {
           .maybeSingle()
 
         if (sd) {
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           await supabaseAdmin
             .from("service_deliveries")
             .update({
-              stage: "Preparation - Sent to Accountant",
+              stage: "Sent to be filed",
               updated_at: new Date().toISOString(),
             })
             .eq("id", sd.id)
@@ -1204,7 +1205,7 @@ export function registerTaxTools(server: McpServer) {
           "",
           `📝 CRM Updates:`,
           `   • tax_returns: status → "Sent to India", india_status → "Sent - Pending"`,
-          sd ? `   • Service delivery: stage → "Preparation - Sent to Accountant"` : `   • No active service delivery found`,
+          sd ? `   • Service delivery: stage → "Sent to be filed"` : `   • No active service delivery found`,
           "",
           missing.length > 0 ? `⚠️ Missing (sent anyway): ${missing.join(", ")}` : "",
         ].filter(Boolean)

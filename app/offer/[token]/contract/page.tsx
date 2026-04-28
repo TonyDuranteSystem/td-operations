@@ -216,9 +216,30 @@ export default function ContractPage() {
 
   async function loadOffer() {
     try {
-      const { data, error: err } = await supabasePublic.from('offers').select('*').eq('token', token).single()
-      if (err || !data) { setError('Offer not found.'); setLoading(false); return }
-      const o = data as Offer
+      let rawData: any = null
+      const { data: offerData, error: offerErr } = await supabasePublic.from('offers').select('*').eq('token', token).single()
+      if (!offerErr && offerData) {
+        rawData = offerData
+      } else {
+        // Fallback: check annual_agreements (new table for renewal contracts)
+        const { data: agData } = await supabasePublic
+          .from('annual_agreements')
+          .select('token, client_name, client_email, language, effective_date, services, cost_summary, payment_type, status, agreement_year')
+          .eq('token', token)
+          .single()
+        if (agData) {
+          rawData = {
+            ...agData,
+            contract_type: 'renewal',
+            installment_currency: 'USD',
+            currency: 'USD',
+            cost_summary: agData.cost_summary || [],
+            services: agData.services || [],
+          }
+        }
+      }
+      if (!rawData) { setError('Offer not found.'); setLoading(false); return }
+      const o = rawData as Offer
       // Safeguard: parse JSONB fields that may be stored as strings
       const jsonFields = ['issues', 'immediate_actions', 'strategy', 'services', 'additional_services', 'cost_summary', 'recurring_costs', 'future_developments', 'next_steps', 'payment_links'] as const
       for (const f of jsonFields) {

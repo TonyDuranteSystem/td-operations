@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
-import { createPortalNotification } from '@/lib/portal/notifications'
+import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
@@ -163,6 +163,11 @@ export async function POST(request: NextRequest) {
       title: 'New message from Tony Durante Team',
       body: (message || '').trim().slice(0, 100),
       link: '/portal/chat',
+    }).catch(() => {})
+    notifyClientOfAdminMessage({
+      account_id: account_id || null,
+      contact_id: resolvedContactId || null,
+      messagePreview: (message || '').trim(),
     }).catch(() => {})
   }
 

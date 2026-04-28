@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
+import { ensureBankDetails, type BankDetails } from './bank-defaults'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -25,11 +26,18 @@ interface RenewalAgreementProps {
 
 export default function RenewalAgreement({ offer, token }: RenewalAgreementProps) {
   const [signing, setSigning] = useState(false)
+  const [signed, setSigned] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Enter your name, email, and sign below.')
   const [statusType, setStatusType] = useState<'info' | 'error' | 'success'>('info')
   const [ready, setReady] = useState(false)
   const [name, setName] = useState(offer.client_name || '')
   const [email, setEmail] = useState(offer.client_email || '')
+  const [paymentState, setPaymentState] = useState<{
+    invoiceNumber: string
+    bankDetails: BankDetails
+    stripeUrl: string | null
+    stripeLabel: string | null
+  } | null>(null)
   const nameRef = useRef(name)
   const emailRef = useRef(email)
   useEffect(() => { nameRef.current = name }, [name])
@@ -38,6 +46,7 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
   const sigRef = useRef<HTMLCanvasElement>(null)
   const sigPadRef = useRef<any>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const pdfBlobRef = useRef<Blob | null>(null)
 
   // Extract installment data from cost_summary
   // Use installment_currency to format amounts correctly (fallback to raw strings for pre-fix offers)
@@ -130,11 +139,6 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         wrap.innerHTML = `<img src="${dataUrl}" style="height:120px;display:block">`
       }
 
-      // Hide action bar
-      const actionBar = document.getElementById('renewal-action-bar')
-      if (actionBar) actionBar.style.display = 'none'
-      document.querySelectorAll('.contract-clear-btn').forEach(b => (b as HTMLElement).style.display = 'none')
-
       // Generate PDF
       const opt = {
         margin: [0.5, 0.6, 0.7, 0.6] as [number, number, number, number],
@@ -146,6 +150,7 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const pdfBlob = await (html2pdf() as any).set(opt).from(bodyRef.current).outputPdf('blob')
+      pdfBlobRef.current = pdfBlob
 
       // Upload PDF
       setStatusMsg('Uploading signed agreement...')
@@ -166,23 +171,56 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         status: 'signed',
       })
 
-      // Update offer status
+      // Update annual agreement status
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed' }).eq('token', token)
+          const { error: pErr } = await supabasePublic
+            .from('annual_agreements')
+            .update({ status: 'signed', signed_at: new Date().toISOString() })
+            .eq('token', token)
           if (!pErr) break
         } catch { /* retry */ }
       }
 
-      // Notify webhook
+      // Notify webhook — read response to get invoice number
+      setStatusMsg('Processing...')
+      let invoiceNumber = ''
       try {
-        await fetch('/api/webhooks/offer-signed', {
+        const webhookRes = await fetch('/api/webhooks/agreement-signed', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offer_token: token })
+          body: JSON.stringify({ agreement_token: token })
         })
+        if (webhookRes.ok) {
+          const wData = await webhookRes.json()
+          invoiceNumber = wData.invoice_number || ''
+        }
       } catch (e) {
         console.warn('[renewal-agreement] Failed to notify offer-signed webhook:', e)
+      }
+
+      // Build bank details — renewals are USD → Relay
+      const bankDetails = ensureBankDetails(undefined, offer.cost_summary as unknown[])
+      const amountStr = (offer.cost_summary as Array<{ total?: string }>)?.[0]?.total || ''
+      if (amountStr) bankDetails.amount = amountStr
+      if (invoiceNumber) bankDetails.reference = `${invoiceNumber} - ${name}`
+
+      // Try Stripe checkout
+      let stripeUrl: string | null = null
+      let stripeLabel: string | null = null
+      try {
+        const checkoutRes = await fetch('/api/offers/create-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        })
+        if (checkoutRes.ok) {
+          const cd = await checkoutRes.json()
+          stripeUrl = cd.checkoutUrl || null
+          stripeLabel = cd.label || null
+        }
+      } catch (e) {
+        console.warn('[renewal-agreement] Stripe checkout unavailable:', e)
       }
 
       // Send postMessage for portal iframe embedding
@@ -190,21 +228,19 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         window.parent.postMessage({ type: 'contract-signed', token }, '*')
       }
 
-      setStatusMsg('Agreement signed and submitted successfully!')
-      setStatusType('success')
+      setSigned(true)
+      setPaymentState({ invoiceNumber, bankDetails, stripeUrl, stripeLabel })
 
     } catch (e: any) {
       setSigning(false)
       setStatusMsg('Error: ' + e.message + '. Please try again.')
       setStatusType('error')
-      const actionBar = document.getElementById('renewal-action-bar')
-      if (actionBar) actionBar.style.display = 'block'
     }
   }
 
   return (
     <>
-      <div id="renewal-contract-body" ref={bodyRef}>
+      <div id="renewal-contract-body" ref={bodyRef} style={signed ? { display: 'none' } : undefined}>
         {/* HEADER */}
         <div className="contract-header">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -282,16 +318,198 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         </div>
       </div>
 
-      {/* ACTION BAR */}
-      <div className="contract-action-bar" id="renewal-action-bar">
-        <button className="contract-btn contract-btn-sign" onClick={signAgreement} disabled={!ready || signing}>
-          {signing ? 'Generating PDF...' : 'Sign & Accept Agreement'}
-        </button>
-        <div className={`contract-status-msg ${statusType === 'error' ? 'contract-error-msg' : statusType === 'success' ? 'contract-success-msg' : ''}`}>
-          {statusMsg}
+      {/* ACTION BAR — hidden after signing */}
+      {!signed && (
+        <div className="contract-action-bar" id="renewal-action-bar">
+          <button className="contract-btn contract-btn-sign" onClick={signAgreement} disabled={!ready || signing}>
+            {signing ? 'Processing...' : 'Sign & Accept Agreement'}
+          </button>
+          <div className={`contract-status-msg ${statusType === 'error' ? 'contract-error-msg' : statusType === 'success' ? 'contract-success-msg' : ''}`}>
+            {statusMsg}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* PAYMENT PANEL — shown after signing */}
+      {signed && paymentState && (
+        <RenewalPaymentPanel
+          invoiceNumber={paymentState.invoiceNumber}
+          bankDetails={paymentState.bankDetails}
+          stripeUrl={paymentState.stripeUrl}
+          stripeLabel={paymentState.stripeLabel}
+          token={token}
+          pdfBlob={pdfBlobRef.current}
+          offerToken={offer.token}
+        />
+      )}
     </>
+  )
+}
+
+// ─── Payment Panel shown after renewal is signed ─────────────────────────────
+function RenewalPaymentPanel({
+  invoiceNumber,
+  bankDetails,
+  stripeUrl,
+  stripeLabel,
+  token,
+  pdfBlob,
+  offerToken,
+}: {
+  invoiceNumber: string
+  bankDetails: BankDetails
+  stripeUrl: string | null
+  stripeLabel: string | null
+  token: string
+  pdfBlob: Blob | null
+  offerToken: string
+}) {
+  const [showBank, setShowBank] = useState(false)
+  const [receiptFile, setReceiptFile] = useState<File | null>(null)
+  const [receiptUploading, setReceiptUploading] = useState(false)
+  const [receiptDone, setReceiptDone] = useState(false)
+  const [receiptError, setReceiptError] = useState('')
+
+  async function uploadReceipt() {
+    if (!receiptFile) return
+    setReceiptUploading(true)
+    setReceiptError('')
+    try {
+      const ext = receiptFile.name.split('.').pop() || 'pdf'
+      const path = `${token}/wire-receipt-${Date.now()}.${ext}`
+      const res = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
+        method: 'POST',
+        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
+        body: receiptFile,
+      })
+      if (!res.ok) throw new Error('Upload failed')
+      await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offerToken)
+      setReceiptDone(true)
+    } catch (e: unknown) {
+      setReceiptError(e instanceof Error ? e.message : 'Upload failed')
+      setReceiptUploading(false)
+    }
+  }
+
+  async function downloadPdf() {
+    try {
+      let blob = pdfBlob
+      if (!blob) {
+        const { data } = await supabasePublic.storage.from('signed-contracts').list(token)
+        const pdfFile = data?.sort((a, b) => b.name.localeCompare(a.name))[0]
+        if (pdfFile) {
+          const { data: downloaded } = await supabasePublic.storage.from('signed-contracts').download(`${token}/${pdfFile.name}`)
+          if (downloaded) blob = downloaded
+        }
+      }
+      if (!blob) { alert('PDF not available. Please contact support.'); return }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Tony_Durante_Annual_Agreement_${token}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch { alert('Download failed. Please contact support.') }
+  }
+
+  return (
+    <div className="contract-success-panel">
+      <div className="contract-success-icon">&#10004;</div>
+      <h2>Agreement Signed!</h2>
+      <p style={{ fontSize: '12pt', marginBottom: 28 }}>
+        Your annual agreement is confirmed. Choose how you&apos;d like to pay the first installment.
+      </p>
+
+      {!showBank && (
+        <div id="payment-choice">
+          {stripeUrl && (
+            <>
+              <a href={stripeUrl} className="ps-choice-btn ps-choice-card" target="_blank" rel="noopener noreferrer">
+                <span className="ps-choice-icon">&#128179;</span>
+                <span className="ps-choice-label">Pay by Card</span>
+                <span className="ps-choice-price">{stripeLabel || ''}</span>
+                <span className="ps-choice-badge">+5%</span>
+              </a>
+              <div className="post-sign-divider"><span>or</span></div>
+            </>
+          )}
+          <button className="ps-choice-btn ps-choice-bank" type="button" onClick={() => setShowBank(true)}>
+            <span className="ps-choice-icon">&#127974;</span>
+            <span className="ps-choice-label">Pay by Wire Transfer</span>
+            <span className="ps-choice-price">{bankDetails.amount || ''}</span>
+          </button>
+        </div>
+      )}
+
+      {showBank && (
+        <div className="post-sign-option">
+          <div className="post-sign-option-label">&#127974; Pay by Wire Transfer</div>
+          {bankDetails.amount && <div className="post-sign-bank-amount">{bankDetails.amount}</div>}
+          <div className="contract-bank-details-box">
+            <h3>Bank Transfer Details</h3>
+            {bankDetails.beneficiary && <div className="contract-bank-row"><span className="contract-bank-label">Beneficiary</span><span className="contract-bank-value">{bankDetails.beneficiary}</span></div>}
+            {bankDetails.account_number && <div className="contract-bank-row"><span className="contract-bank-label">Account Number</span><span className="contract-bank-value">{bankDetails.account_number}</span></div>}
+            {bankDetails.routing_number && <div className="contract-bank-row"><span className="contract-bank-label">Routing Number</span><span className="contract-bank-value">{bankDetails.routing_number}</span></div>}
+            {bankDetails.iban && <div className="contract-bank-row"><span className="contract-bank-label">IBAN</span><span className="contract-bank-value">{bankDetails.iban}</span></div>}
+            {bankDetails.bic && <div className="contract-bank-row"><span className="contract-bank-label">BIC/SWIFT</span><span className="contract-bank-value">{bankDetails.bic}</span></div>}
+            {bankDetails.bank_name && <div className="contract-bank-row"><span className="contract-bank-label">Bank</span><span className="contract-bank-value">{bankDetails.bank_name}</span></div>}
+            {bankDetails.reference && <div className="contract-bank-ref">Reference: {bankDetails.reference}</div>}
+          </div>
+
+          <div className="contract-receipt-upload">
+            <h3 style={{ fontSize: '11pt', marginBottom: 8 }}>Upload Wire Receipt</h3>
+            <p style={{ fontSize: '9.5pt', color: 'var(--c-muted)', marginBottom: 12 }}>
+              Upload your wire transfer receipt so we can confirm your payment.
+            </p>
+            {!receiptDone ? (
+              <>
+                <div
+                  className="contract-receipt-drop"
+                  onClick={() => document.getElementById('renewal-receipt-input')?.click()}
+                >
+                  <input
+                    id="renewal-receipt-input"
+                    type="file"
+                    accept="image/*,.pdf"
+                    style={{ display: 'none' }}
+                    onChange={e => setReceiptFile(e.target.files?.[0] || null)}
+                  />
+                  <p style={{ color: receiptFile ? 'var(--c-green)' : undefined }}>
+                    {receiptFile ? receiptFile.name : 'Click to upload receipt (image or PDF)'}
+                  </p>
+                </div>
+                <button
+                  className="contract-receipt-btn"
+                  disabled={!receiptFile || receiptUploading}
+                  onClick={uploadReceipt}
+                >
+                  {receiptUploading ? 'Uploading...' : 'Submit Receipt'}
+                </button>
+                {receiptError && (
+                  <div style={{ fontSize: '9pt', color: 'var(--c-red)', marginTop: 8 }}>{receiptError}</div>
+                )}
+              </>
+            ) : (
+              <div style={{ fontSize: '9pt', color: 'var(--c-green)', fontWeight: 600, marginTop: 8 }}>
+                Receipt uploaded! We&apos;ll confirm your payment shortly.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #d4e8d4' }}>
+        <button
+          style={{ padding: '10px 32px', fontSize: 14, fontWeight: 600, background: '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontFamily: 'Georgia,serif' }}
+          onClick={downloadPdf}
+        >
+          Download Signed PDF
+        </button>
+      </div>
+      <p style={{ fontSize: '9.5pt', color: 'var(--c-muted)', marginTop: 24 }}>
+        After payment is confirmed, your services will be activated for {invoiceNumber ? `invoice ${invoiceNumber}` : 'this year'}.
+      </p>
+    </div>
   )
 }
 

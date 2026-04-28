@@ -246,17 +246,20 @@ export async function POST(request: NextRequest) {
         acctLines.push('Lease: signed (detected from Drive)')
       }
 
-      // Renewal MSA
-      const { data: existingMSA } = await supabaseAdmin.from('offers')
-        .select('id, token, status').eq('account_id', acct.id).eq('contract_type', 'renewal').maybeSingle()
+      // Annual Agreement
+      const year = new Date().getUTCFullYear()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingMSA } = await (supabaseAdmin as any).from('annual_agreements')
+        .select('id, token, status').eq('account_id', acct.id).eq('agreement_year', year).maybeSingle() as { data: { id: string; token: string; status: string } | null }
       if (!existingMSA && acct.installment_1_amount) {
         const slug = acct.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-        const year = new Date().getFullYear()
         const today = new Date().toISOString().slice(0, 10)
-        const { data: newMSA } = await supabaseAdmin.from('offers').insert({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: newMSA } = await (supabaseAdmin as any).from('annual_agreements').insert({
           token: `renewal-${slug}-${year}`, account_id: acct.id,
+          agreement_year: year,
           client_name: contact.full_name, client_email: contact.email,
-          language: lang, contract_type: 'renewal',
+          language: lang,
           payment_type: 'bank_transfer', status: 'draft', offer_date: today,
           effective_date: `${year}-01-01`,
           bundled_pipelines: ['CMRA Mailing Address', 'State RA Renewal', 'State Annual Report', 'Tax Return'],
@@ -265,7 +268,7 @@ export async function POST(request: NextRequest) {
             { label: 'First Installment (January)', items: [{ name: 'Annual Management', price: `$${acct.installment_1_amount?.toLocaleString() || '1,000'}` }], total: `$${acct.installment_1_amount?.toLocaleString() || '1,000'}` },
             { label: 'Second Installment (June)', items: [{ name: 'Annual Management', price: `$${acct.installment_2_amount?.toLocaleString() || '1,000'}` }], total: `$${acct.installment_2_amount?.toLocaleString() || '1,000'}` },
           ],
-        }).select('id, token').single()
+        }).select('id, token').single() as { data: { id: string; token: string } | null }
         acctLines.push(newMSA ? `MSA: auto-created (draft, ${newMSA.token})` : 'MSA: creation failed')
       } else if (existingMSA) {
         acctLines.push(`MSA: exists (${existingMSA.status})`)

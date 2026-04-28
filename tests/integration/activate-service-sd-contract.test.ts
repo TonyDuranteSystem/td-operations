@@ -266,10 +266,10 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
       resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
       "utf-8",
     )
-    // The SD block must check for onboarding BEFORE the pipelines.length
+    // The SD block must check for formation/onboarding BEFORE the pipelines.length
     // branch, and emit a "skipped" step for observability.
     const onboardingSkipPattern =
-      /if \(contractType === "onboarding"\)\s*\{[\s\S]{0,400}?step:\s*"service_deliveries",[\s\S]{0,100}?status:\s*"skipped"/
+      /if \(contractType === "formation" \|\| contractType === "onboarding"\)\s*\{[\s\S]{0,400}?step:\s*"service_deliveries",[\s\S]{0,100}?status:\s*"skipped"/
     expect(source).toMatch(onboardingSkipPattern)
   })
 })

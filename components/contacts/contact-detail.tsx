@@ -22,8 +22,8 @@ import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
+import { CreateOfferDialog } from '@/components/offers/create-offer-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
-import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
 import { EditableField } from '@/components/accounts/editable-field'
@@ -224,16 +224,6 @@ interface WizardProgressRecord {
   updated_at: string
 }
 
-interface SS4ApplicationRecord {
-  id: string
-  token: string
-  account_id: string
-  company_name: string
-  status: string
-  signed_at: string | null
-  pdf_signed_drive_id: string | null
-}
-
 interface ContactDetailProps {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -247,7 +237,6 @@ interface ContactDetailProps {
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
-  ss4Applications: SS4ApplicationRecord[]
 }
 
 // ─── Main Component ───
@@ -264,7 +253,6 @@ export function ContactDetail({
   offers = [],
   pendingActivations = [],
   wizardProgress = [],
-  ss4Applications = [],
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
@@ -425,8 +413,6 @@ export function ContactDetail({
           offers={offers}
           pendingActivations={pendingActivations}
           wizardProgress={wizardProgress}
-          ss4Applications={ss4Applications}
-          serviceDeliveries={serviceDeliveries}
         />
       )}
       {activeTab === 'services' && (
@@ -474,8 +460,6 @@ function OverviewTab({
   offers,
   pendingActivations,
   wizardProgress,
-  ss4Applications,
-  serviceDeliveries,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -484,8 +468,6 @@ function OverviewTab({
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
-  ss4Applications: SS4ApplicationRecord[]
-  serviceDeliveries: ServiceDelivery[]
 }) {
   const [note, setNote] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -666,7 +648,13 @@ function OverviewTab({
       </div>
 
       {/* Offer Status Card */}
-      <OfferStatusCard offers={offers} pendingActivations={pendingActivations} />
+      <OfferStatusCard
+        offers={offers}
+        pendingActivations={pendingActivations}
+        accounts={accounts}
+        contactName={contact.full_name ?? ''}
+        contactEmail={contact.email ?? ''}
+      />
 
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactHasDriveFolder={!!contact.gdrive_folder_url} />
@@ -678,13 +666,6 @@ function OverviewTab({
         contactId={contact.id}
       />
 
-      {/* SS-4 / EIN Application Pipeline Card */}
-      <SS4PipelineCard
-        ss4Applications={ss4Applications}
-        serviceDeliveries={serviceDeliveries}
-        accounts={accounts}
-        contactId={contact.id}
-      />
     </div>
   )
 }
@@ -1207,19 +1188,73 @@ function JourneyTracker({
 function OfferStatusCard({
   offers,
   pendingActivations,
+  accounts,
+  contactName,
+  contactEmail,
 }: {
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
+  accounts: LinkedAccount[]
+  contactName: string
+  contactEmail: string
 }) {
+  const [showCreateOffer, setShowCreateOffer] = useState(false)
+  const [selectedAccountId, setSelectedAccountId] = useState<string>(accounts[0]?.id ?? '')
+
   const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
   const primaryActivation = pendingActivations[0] ?? null
+  const isOfferClosed = primaryOffer && (primaryOffer.status === 'expired' || primaryOffer.status === 'completed' || primaryOffer.contract_type === 'renewal')
+  const canCreateOffer = !primaryOffer || !!isOfferClosed
+
+  const handleCreateOffer = () => {
+    if (!contactEmail) {
+      toast.error('Contact needs an email before creating an offer')
+      return
+    }
+    if (!selectedAccountId) {
+      toast.error('Contact must be linked to an account before creating an offer')
+      return
+    }
+    setShowCreateOffer(true)
+  }
 
   if (!primaryOffer) {
     return (
-      <div className="bg-white rounded-lg border p-5 space-y-2">
-        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Offer</h3>
-        <p className="text-sm text-muted-foreground">No offer found</p>
-      </div>
+      <>
+        <div className="bg-white rounded-lg border p-5 space-y-3">
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Offer</h3>
+          {accounts.length > 1 && (
+            <select
+              value={selectedAccountId}
+              onChange={e => setSelectedAccountId(e.target.value)}
+              className="text-sm border rounded-md px-2 py-1.5 w-full"
+            >
+              {accounts.map(a => (
+                <option key={a.id} value={a.id}>{a.company_name}</option>
+              ))}
+            </select>
+          )}
+          <div className="text-center py-2">
+            <p className="text-sm text-muted-foreground mb-3">No offer found</p>
+            {accounts.length > 0 && (
+              <button
+                onClick={handleCreateOffer}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              >
+                <FileText className="h-4 w-4" />
+                Create Offer
+              </button>
+            )}
+          </div>
+        </div>
+        <CreateOfferDialog
+          open={showCreateOffer}
+          onClose={() => setShowCreateOffer(false)}
+          accountId={selectedAccountId}
+          clientName={accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName}
+          clientEmail={contactEmail}
+        />
+      </>
     )
   }
 
@@ -1312,6 +1347,38 @@ function OfferStatusCard({
         Created {formatDate(primaryOffer.created_at.split('T')[0])}
         {primaryOffer.viewed_at && ` · Viewed ${formatDate(primaryOffer.viewed_at.split('T')[0])}`}
       </div>
+
+      {/* Create new offer when current one is closed */}
+      {canCreateOffer && accounts.length > 0 && (
+        <div className="border-t pt-3 space-y-2">
+          {accounts.length > 1 && (
+            <select
+              value={selectedAccountId}
+              onChange={e => setSelectedAccountId(e.target.value)}
+              className="text-sm border rounded-md px-2 py-1.5 w-full"
+            >
+              {accounts.map(a => (
+                <option key={a.id} value={a.id}>{a.company_name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={handleCreateOffer}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          >
+            <FileText className="h-4 w-4" />
+            Create New Offer
+          </button>
+        </div>
+      )}
+
+      <CreateOfferDialog
+        open={showCreateOffer}
+        onClose={() => setShowCreateOffer(false)}
+        accountId={selectedAccountId}
+        clientName={accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName}
+        clientEmail={contactEmail}
+      />
     </div>
   )
 }

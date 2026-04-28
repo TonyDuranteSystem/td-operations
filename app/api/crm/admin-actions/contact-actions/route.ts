@@ -22,7 +22,9 @@ import { upgradePortalTier } from "@/lib/portal/auto-create"
 import { createSD } from "@/lib/operations/service-delivery"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
+import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { enqueueJob } from "@/lib/jobs/queue"
 import {
   type AdminAddedName,
   classifyNameSource,
@@ -267,7 +269,7 @@ export async function POST(req: NextRequest) {
             "Extension Requested": "Extension Requested",
             "Extension Filed": "Extension Filed",
             "Data Received": "Data Received",
-            "Preparation - Sent to India": "Sent to India",
+            "Sent to be filed": "Sent to India",
             "TR Completed": "TR Completed - Awaiting Signature",
             "TR Filed": "TR Filed",
           }
@@ -749,11 +751,105 @@ export async function POST(req: NextRequest) {
           einSideEffects.push("Banking Fintech SD already exists — skipped")
         }
 
+        // 3c. Enqueue welcome package job (creates OA, Lease, banking forms, review task)
+        try {
+          const wpJob = await enqueueJob({
+            job_type: 'welcome_package_prepare',
+            payload: { account_id: accountId },
+            priority: 5,
+            account_id: accountId,
+            created_by: 'crm-enter-ein',
+          })
+          einSideEffects.push(`Welcome package job enqueued: ${wpJob.id}`)
+        } catch (e) {
+          einSideEffects.push(`Welcome package job enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
+        }
+
         // 4. Sync portal tier to active across contact + account + auth
         const tierResult = await upgradePortalTier(accountId, "active")
         einSideEffects.push(`Portal tier → active (prev: ${tierResult.previousTier ?? "unknown"}, success: ${tierResult.success})`)
 
-        // 5. Log
+        // 5. MMLLC: create member info request + send portal message to primary member
+        const { data: acctForMmllc } = await supabaseAdmin
+          .from("accounts")
+          .select("entity_type, company_name")
+          .eq("id", accountId)
+          .single()
+
+        if (acctForMmllc?.entity_type === "Multi Member LLC") {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: existingReq } = await (supabaseAdmin as any)
+              .from("member_info_requests")
+              .select("id, token, access_code")
+              .eq("account_id", accountId)
+              .eq("status", "pending")
+              .maybeSingle() as { data: { id: string; token: string; access_code: string } | null }
+
+            let reqToken: string
+            let reqCode: string
+
+            if (existingReq) {
+              reqToken = existingReq.token
+              reqCode = existingReq.access_code
+              einSideEffects.push("Member info request already exists — skipped creation")
+            } else {
+              const { data: existingMembers } = await supabaseAdmin
+                .from("members")
+                .select("member_type, full_name, company_name, email, phone, ownership_pct, is_primary")
+                .eq("account_id", accountId)
+                .order("is_primary", { ascending: false })
+
+              const { data: primaryMember } = await supabaseAdmin
+                .from("members")
+                .select("contact_id")
+                .eq("account_id", accountId)
+                .eq("is_primary", true)
+                .maybeSingle()
+
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const { data: createdReq } = await (supabaseAdmin as any)
+                .from("member_info_requests")
+                .insert({
+                  account_id: accountId,
+                  contact_id: primaryMember?.contact_id || contact_id || null,
+                  status: "pending",
+                  company_name: acctForMmllc.company_name,
+                  entity_type: acctForMmllc.entity_type,
+                  pre_populated_data: existingMembers?.length
+                    ? { members: existingMembers.map(m => ({ ...m, ownership_pct: m.ownership_pct ? String(m.ownership_pct) : "" })) }
+                    : null,
+                })
+                .select("id, token, access_code")
+                .single() as { data: { id: string; token: string; access_code: string } | null }
+
+              if (!createdReq) throw new Error("Failed to create member_info_request")
+              reqToken = createdReq.token
+              reqCode = createdReq.access_code
+              einSideEffects.push("Member info request created")
+            }
+
+            const formUrl = `${APP_BASE_URL}/member-info/${reqToken}/${reqCode}`
+            const msgRecipient = contact_id || null
+
+            if (msgRecipient) {
+              await supabaseAdmin.from("portal_messages").insert({
+                account_id: accountId,
+                contact_id: msgRecipient,
+                sender_type: "admin",
+                sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+                message: `Great news! The EIN for ${acctForMmllc.company_name} has been issued (${einFormatted}).\n\nTo proceed with opening your business bank account, we need the complete information for all LLC members.\n\nPlease fill out this short form:\n${formUrl}\n\nOnce submitted, we will update your account and guide you through the next steps.`,
+              })
+              einSideEffects.push("Portal message sent to primary contact with member info form link")
+            } else {
+              einSideEffects.push("Portal message skipped — no contact_id available")
+            }
+          } catch (mmllcErr) {
+            einSideEffects.push(`MMLLC member info flow failed: ${mmllcErr instanceof Error ? mmllcErr.message : String(mmllcErr)}`)
+          }
+        }
+
+        // 6. Log
         await supabaseAdmin.from("action_log").insert({
           actor: "crm-admin",
           action_type: "enter_ein",

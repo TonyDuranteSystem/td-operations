@@ -602,14 +602,14 @@ export async function getPortalActionItems(
       .in('status', ['sent', 'viewed', 'awaiting_signature'])
       .limit(5),
 
-    // 6. Unsigned Annual MSA (renewal offers not yet signed)
-    supabaseAdmin
-      .from('offers')
+    // 6. Unsigned Annual MSA (annual agreements not yet signed)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
+      .from('annual_agreements')
       .select('id, token, status, created_at')
       .eq('account_id', accountId)
-      .eq('contract_type', 'renewal')
       .in('status', ['draft', 'sent', 'viewed'])
-      .limit(5),
+      .limit(5) as Promise<{ data: Array<{ id: string; token: string; status: string; created_at: string }> | null }>,
 
     // 7. Pending tax returns (data not yet collected from client).
     // Excludes rows already "Data Received" / past-data-receipt states and

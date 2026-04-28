@@ -1,5 +1,4 @@
 import { createClient } from '@/lib/supabase/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
@@ -31,6 +30,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       .from('service_deliveries')
       .select('id, service_name, service_type, pipeline, stage, status, assigned_to, account_id, contact_id, start_date, updated_at')
       .eq('contact_id', params.id)
+      .is('account_id', null)
       .order('updated_at', { ascending: false }),
     // Conversations
     supabase
@@ -89,18 +89,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   })
 
 
-  // Also fetch SDs from linked accounts + invoices
+  // Fetch invoices and other data for linked accounts
   const accountIds = accounts.map(a => a.id)
-  let accountSds: ServiceDelivery[] = []
-  if (accountIds.length > 0) {
-    const { data: accSdsData } = await supabase
-      .from('service_deliveries')
-      .select('id, service_name, service_type, pipeline, stage, status, assigned_to, account_id, contact_id, start_date, updated_at')
-      .in('account_id', accountIds)
-      .order('updated_at', { ascending: false })
-
-    accountSds = (accSdsData ?? []) as ServiceDelivery[]
-  }
 
   // Fetch invoices: contact-direct + via linked accounts
   const invoiceFields = 'id, description, amount, total, amount_currency, status, invoice_status, invoice_number, payment_method, paid_date, due_date, installment, amount_paid, amount_due, account_id, contact_id, portal_invoice_id, accounts:account_id(company_name)'
@@ -127,13 +117,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   }
   const invoices = Array.from(allInvoicesMap.values())
 
-  // Merge SDs (contact-direct + account-linked), deduplicate by id
-  const contactSds = (sdsResult.data ?? []) as ServiceDelivery[]
-  const allSdsMap = new Map<string, ServiceDelivery>()
-  for (const sd of [...contactSds, ...accountSds]) {
-    if (!allSdsMap.has(sd.id)) allSdsMap.set(sd.id, sd)
-  }
-  const serviceDeliveries = Array.from(allSdsMap.values())
+  const serviceDeliveries = (sdsResult.data ?? []) as ServiceDelivery[]
 
   // Documents: merge contact-direct + account-linked (same pattern as SDs and invoices)
   type DocRecord = {
@@ -175,21 +159,6 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     status: string; data: Record<string, unknown> | null; created_at: string; updated_at: string
   }>
 
-  // SS-4 applications for linked accounts
-  let ss4Applications: Array<{
-    id: string; token: string; account_id: string; company_name: string
-    status: string; signed_at: string | null; pdf_signed_drive_id: string | null
-  }> = []
-  if (accountIds.length > 0) {
-    // Use supabaseAdmin — ss4_applications has no staff RLS policy
-    const { data: ss4Data } = await supabaseAdmin
-      .from('ss4_applications')
-      .select('id, token, account_id, company_name, status, signed_at, pdf_signed_drive_id')
-      .in('account_id', accountIds)
-      .order('created_at', { ascending: false })
-    ss4Applications = (ss4Data ?? []) as typeof ss4Applications
-  }
-
   const conversations = (conversationsResult.data ?? []) as ConversationEntry[]
 
   // Portal auth status
@@ -226,7 +195,6 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         offers={offers}
         pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}
-        ss4Applications={ss4Applications}
       />
     </div>
   )

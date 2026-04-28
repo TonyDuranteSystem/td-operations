@@ -7,15 +7,14 @@
  *
  * Flow:
  *   1. January 1 cron fires
- *   2. For each active Client account → create renewal offer (draft)
+ *   2. For each active Client account → create annual_agreements record (draft)
  *   3. Client sees portal banner → clicks "Review & Sign"
- *   4. Client signs → offer-signed webhook fires
- *   5. Webhook (contract_type='renewal' branch) creates 1st installment invoice
- *   6. June cron creates 2nd installment invoice (if renewal MSA is signed)
+ *   4. Client signs → agreement-signed webhook fires
+ *   5. Webhook creates 1st installment invoice
+ *   6. June cron creates 2nd installment invoice (if annual agreement is signed)
  *
- * Idempotency: skips accounts that already have a renewal offer for the
- * current year (checked by account_id + contract_type='renewal' + effective_date
- * starting with the current year).
+ * Idempotency: skips accounts that already have an annual_agreements record
+ * for the current year (checked by account_id + agreement_year).
  *
  * Guard: skips accounts with no installment_1_amount — creates a staff alert task.
  *
@@ -68,22 +67,22 @@ export async function GET(req: NextRequest) {
         continue
       }
 
-      // Idempotency: check if renewal offer already exists for this year
-      const { data: existingOffer } = await supabaseAdmin
-        .from("offers")
+      // Idempotency: check if annual agreement already exists for this year
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingAgreement } = await (supabaseAdmin as any)
+        .from("annual_agreements")
         .select("id, token, status")
         .eq("account_id", acct.id)
-        .eq("contract_type", "renewal")
-        .like("effective_date", `${year}-%`)
+        .eq("agreement_year", year)
         .limit(1)
-        .maybeSingle()
+        .maybeSingle() as { data: { id: string; token: string; status: string } | null }
 
-      if (existingOffer) {
+      if (existingAgreement) {
         results.push({
           company: acct.company_name,
           action: "exists",
-          detail: `Renewal offer already exists (${existingOffer.status}, token: ${existingOffer.token})`,
-          offerId: existingOffer.id,
+          detail: `Annual agreement already exists (${existingAgreement.status}, token: ${existingAgreement.token})`,
+          offerId: existingAgreement.id,
         })
         continue
       }
@@ -108,15 +107,16 @@ export async function GET(req: NextRequest) {
       const totalAmount = (acct.installment_1_amount || 0) + (acct.installment_2_amount || 0)
 
       try {
-        const { data: newOffer, error: offerErr } = await supabaseAdmin
-          .from("offers")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: newAgreement, error: agErr } = await (supabaseAdmin as any)
+          .from("annual_agreements")
           .insert({
             token,
             account_id: acct.id,
+            agreement_year: year,
             client_name: contact.full_name,
             client_email: contact.email,
             language: "en",
-            contract_type: "renewal",
             payment_type: "bank_transfer",
             status: "draft",
             offer_date: today,
@@ -141,10 +141,10 @@ export async function GET(req: NextRequest) {
             ],
           })
           .select("id, token")
-          .single()
+          .single() as { data: { id: string; token: string } | null; error: { message: string } | null }
 
-        if (offerErr || !newOffer) {
-          results.push({ company: acct.company_name, action: "error", detail: offerErr?.message || "Insert returned no data" })
+        if (agErr || !newAgreement) {
+          results.push({ company: acct.company_name, action: "error", detail: agErr?.message || "Insert returned no data" })
           continue
         }
 
@@ -161,14 +161,14 @@ export async function GET(req: NextRequest) {
 
         await supabaseAdmin.from("action_log").insert({
           action_type: "create",
-          table_name: "offers",
-          record_id: newOffer.id,
+          table_name: "annual_agreements",
+          record_id: newAgreement.id,
           account_id: acct.id,
-          summary: `Auto-created renewal MSA ${year} for ${acct.company_name} (token: ${newOffer.token})`,
-          details: { token: newOffer.token, year, trigger: "annual-renewal-msa-cron" } as unknown as Json,
+          summary: `Auto-created annual agreement ${year} for ${acct.company_name} (token: ${newAgreement.token})`,
+          details: { token: newAgreement.token, year, trigger: "annual-renewal-msa-cron" } as unknown as Json,
         })
 
-        results.push({ company: acct.company_name, action: "created", detail: `token: ${newOffer.token}`, offerId: newOffer.id })
+        results.push({ company: acct.company_name, action: "created", detail: `token: ${newAgreement.token}`, offerId: newAgreement.id })
       } catch (e) {
         results.push({ company: acct.company_name, action: "error", detail: e instanceof Error ? e.message : String(e) })
       }

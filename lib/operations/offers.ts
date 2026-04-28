@@ -336,12 +336,14 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       }
     }
 
-    // 4. Duplicate check — block active offers (not expired/completed)
+    // 4. Duplicate check — block active non-renewal offers (not expired/completed/renewal)
+    // renewal offers are pre-migration artifacts; annual renewals now live in annual_agreements
     if (params.lead_id || params.account_id) {
       const dupQuery = supabaseAdmin
         .from("offers")
-        .select("token, status")
+        .select("token, status, contract_type")
         .not("status", "in", '("expired","completed")')
+        .neq("contract_type", "renewal")
         .limit(1)
       if (params.lead_id) dupQuery.eq("lead_id", params.lead_id)
       else if (params.account_id) dupQuery.eq("account_id", params.account_id)

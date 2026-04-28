@@ -89,15 +89,15 @@ export default async function PortalSignPage() {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    // Annual renewal MSA — offers with contract_type='renewal' linked to this account
-    supabaseAdmin
-      .from('offers')
-      .select('token, status, client_name, effective_date')
+    // Annual renewal MSA — annual_agreements linked to this account
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
+      .from('annual_agreements')
+      .select('token, status, client_name, agreement_year')
       .eq('account_id', selectedAccountId)
-      .eq('contract_type', 'renewal')
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle(),
+      .maybeSingle() as Promise<{ data: { token: string; status: string; client_name: string | null; agreement_year: number | null } | null }>,
     // Form 8832 — C-Corp election
     supabaseAdmin
       .from('form_8832_applications')
@@ -120,14 +120,14 @@ export default async function PortalSignPage() {
   if (msaResult.data) {
     const msa = msaResult.data
     const isSigned = msa.status === 'signed' || msa.status === 'completed'
-    const year = msa.effective_date ? new Date(msa.effective_date).getFullYear() : new Date().getFullYear()
+    const year = (msa as any).agreement_year ?? new Date().getUTCFullYear()
     documents.push({
       type: 'msa',
       status: isSigned ? 'signed' : 'awaiting',
       href: '/portal/sign/msa',
       companyName: msa.client_name,
       contractYear: year,
-      signedAt: isSigned ? msa.effective_date : undefined,
+      signedAt: undefined,
     })
   }
 

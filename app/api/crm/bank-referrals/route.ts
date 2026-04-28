@@ -32,7 +32,7 @@ export async function GET() {
 
   const { data, error } = await sb
     .from('bank_referrals')
-    .select('slug, label, apply_url, enabled, created_at, updated_at')
+    .select('slug, label, apply_url, rep_email, enabled, created_at, updated_at')
     .order('label', { ascending: true })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ referrals: data ?? [] })
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   const auth = await requireAdmin()
   if (auth) return auth
 
-  const body = await req.json().catch(() => null) as { label?: string; apply_url?: string; slug?: string } | null
+  const body = await req.json().catch(() => null) as { label?: string; apply_url?: string; slug?: string; rep_email?: string | null } | null
   if (!body?.label || !body?.apply_url) {
     return NextResponse.json({ error: 'label and apply_url required' }, { status: 400 })
   }
@@ -64,6 +64,7 @@ export async function POST(req: Request) {
       slug,
       label: body.label.trim(),
       apply_url: body.apply_url.trim(),
+      rep_email: body.rep_email?.trim() || null,
       enabled: true,
     })
     .select()

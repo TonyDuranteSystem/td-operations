@@ -93,20 +93,34 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
     return { error: `State "${account.state_of_formation}" not supported for OA. Supported: ${OA_SUPPORTED_STATES.join(", ")}` }
   }
 
+  // Validate effective_date 60-day cap
+  const today = new Date().toISOString().slice(0, 10)
+  const effectiveDate = (params.effective_date as string) || today
+  const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  if (effectiveDate < cutoff) {
+    return { error: `Effective date cannot be more than 60 days in the past. Earliest allowed: ${cutoff}` }
+  }
+
   // Check duplicate
   const { data: existing } = await supabaseAdmin
     .from("oa_agreements")
-    .select("id, token, status")
+    .select("id, token, status, effective_date")
     .eq("account_id", accountId)
     .limit(1)
 
-  if (existing?.length) {
-    return { exists: true, token: existing[0].token, status: existing[0].status }
+  if (existing?.length && !params.force_recreate) {
+    return { exists: true, token: existing[0].token, status: existing[0].status, effective_date: existing[0].effective_date }
+  }
+
+  // force_recreate: delete existing OA (and MMLLC signatures) before recreating
+  if (existing?.length && params.force_recreate) {
+    await supabaseAdmin.from("oa_signatures").delete().eq("oa_id", existing[0].id)
+    const { error: delErr } = await supabaseAdmin.from("oa_agreements").delete().eq("id", existing[0].id)
+    if (delErr) return { error: `Failed to delete existing OA: ${delErr.message}` }
   }
 
   const year = new Date().getFullYear()
   const token = `${slugify(account.company_name)}-oa-${year}`
-  const today = new Date().toISOString().slice(0, 10)
 
   // For MMLLC, auto-build members from account_contacts
   let membersJson = null
@@ -146,7 +160,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       member_address: contact.residency || null,
       member_email: contact.email || null,
       members: membersJson,
-      effective_date: (params.effective_date as string) || today,
+      effective_date: effectiveDate,
       business_purpose: "any and all lawful business activities",
       initial_contribution: "$0.00",
       fiscal_year_end: "December 31",
@@ -428,7 +442,7 @@ export async function POST(request: Request) {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
         const result = await generateOA(account_id, params)
         if ("error" in result) return NextResponse.json({ error: result.error }, { status: 400 })
-        if ("exists" in result) return NextResponse.json({ error: `OA already exists (token: ${result.token}, status: ${result.status})`, exists: true, token: result.token, status: result.status }, { status: 409 })
+        if ("exists" in result) return NextResponse.json({ error: `OA already exists (token: ${result.token}, status: ${result.status})`, exists: true, token: result.token, status: result.status, effective_date: (result as Record<string, unknown>).effective_date }, { status: 409 })
         return NextResponse.json(result)
       }
 
