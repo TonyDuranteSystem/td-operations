@@ -21,6 +21,14 @@ export async function POST(request: NextRequest) {
   if (!message_text?.trim()) return NextResponse.json({ error: 'message_text required' }, { status: 400 })
   if (!title?.trim()) return NextResponse.json({ error: 'title required' }, { status: 400 })
 
+  // Valid values for the approved_responses.service_type enum
+  const VALID_SERVICE_TYPES = new Set([
+    'Banking Fintech', 'Banking Physical', 'Client Offboarding', 'Client Onboarding',
+    'CMRA', 'Company Closure', 'Company Formation', 'EIN Application', 'ITIN',
+    'Public Notary', 'Shipping', 'State Annual Report', 'State RA Renewal',
+    'Support', 'Tax Return',
+  ])
+
   // Detect service_type from the account's first active service
   let serviceType: string | null = null
   let language: string | null = null
@@ -33,7 +41,9 @@ export async function POST(request: NextRequest) {
       .eq('status', 'active')
       .limit(1)
       .maybeSingle()
-    serviceType = svc?.service_type ?? null
+    const raw = svc?.service_type ?? null
+    // Only pass values the enum actually accepts — discard anything that doesn't match
+    serviceType = raw && VALID_SERVICE_TYPES.has(raw) ? raw : null
 
     // Language from primary contact
     const { data: primaryAc } = await supabaseAdmin
