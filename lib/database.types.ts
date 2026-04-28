@@ -136,7 +136,14 @@ export type Database = {
           services_bundle: string[] | null
           setup_fee_amount: number | null
           setup_fee_currency: Database["public"]["Enums"]["currency"] | null
+          setup_fee_date: string | null
+          setup_fee_invoice: string | null
           setup_fee_paid_date: string | null
+          onboarding_date: string | null
+          audit_reviewed_at: string | null
+          audit_flag: boolean | null
+          audit_reviewed_by: string | null
+          audit_sections: Json | null
           state_of_formation: string | null
           status: Database["public"]["Enums"]["account_status"] | null
           updated_at: string | null
@@ -201,7 +208,14 @@ export type Database = {
           services_bundle?: string[] | null
           setup_fee_amount?: number | null
           setup_fee_currency?: Database["public"]["Enums"]["currency"] | null
+          setup_fee_date?: string | null
+          setup_fee_invoice?: string | null
           setup_fee_paid_date?: string | null
+          onboarding_date?: string | null
+          audit_reviewed_at?: string | null
+          audit_flag?: boolean | null
+          audit_reviewed_by?: string | null
+          audit_sections?: Json | null
           state_of_formation?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
@@ -266,7 +280,14 @@ export type Database = {
           services_bundle?: string[] | null
           setup_fee_amount?: number | null
           setup_fee_currency?: Database["public"]["Enums"]["currency"] | null
+          setup_fee_date?: string | null
+          setup_fee_invoice?: string | null
           setup_fee_paid_date?: string | null
+          onboarding_date?: string | null
+          audit_reviewed_at?: string | null
+          audit_flag?: boolean | null
+          audit_reviewed_by?: string | null
+          audit_sections?: Json | null
           state_of_formation?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
@@ -2882,6 +2903,7 @@ export type Database = {
           hubspot_id: string | null
           id: string
           is_test: boolean | null
+          itin: string | null
           itin_issue_date: string | null
           itin_number: string | null
           itin_renewal_date: string | null
@@ -2930,6 +2952,7 @@ export type Database = {
           hubspot_id?: string | null
           id?: string
           is_test?: boolean | null
+          itin?: string | null
           itin_issue_date?: string | null
           itin_number?: string | null
           itin_renewal_date?: string | null
@@ -2978,6 +3001,7 @@ export type Database = {
           hubspot_id?: string | null
           id?: string
           is_test?: boolean | null
+          itin?: string | null
           itin_issue_date?: string | null
           itin_number?: string | null
           itin_renewal_date?: string | null
