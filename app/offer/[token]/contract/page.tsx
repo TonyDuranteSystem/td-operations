@@ -824,6 +824,16 @@ export default function ContractPage() {
     )
   }
 
+  // Company Closure agreement — standalone agreement for LLC dissolution
+  if ((offer as any).contract_type === 'closure') {
+    return (
+      <>
+        <ContractStyles />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="closure" />
+      </>
+    )
+  }
+
   // Onboarding agreement — MSA+SOW for existing LLC clients (no formation timeline)
   if ((offer as any).contract_type === 'onboarding') {
     return (

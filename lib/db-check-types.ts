@@ -11,7 +11,7 @@ export type AccountsAccountType = "Client" | "One-Time" | "Partner"
 export type AccountsPaymentGateway = "whop" | "stripe" | "paypal"
 
 /** accounts.portal_tier — CHECK constraint */
-export type AccountsPortalTier = "lead" | "onboarding" | "active" | "suspended" | "inactive"
+export type AccountsPortalTier = "lead" | "formation" | "onboarding" | "active" | "suspended" | "inactive"
 
 /** ai_delegations.status — CHECK constraint */
 export type AiDelegationsStatus = "analyzing" | "analyzed" | "approved" | "executing" | "completed" | "rejected" | "failed"
@@ -33,6 +33,9 @@ export type AiNotificationsPriority = "urgent" | "normal" | "low"
 
 /** ai_notifications.status — CHECK constraint */
 export type AiNotificationsStatus = "pending" | "pushed" | "read" | "dismissed"
+
+/** annual_agreements.status — CHECK constraint */
+export type AnnualAgreementsStatus = "draft" | "signed" | "completed" | "expired"
 
 /** bank_transactions.category — CHECK constraint */
 export type BankTransactionsCategory = "income" | "cogs" | "expense" | "distribution" | "fee" | "conversion" | "refund" | "uncategorized"
@@ -95,7 +98,7 @@ export type ContactsGender = "M" | "F"
 export type ContactsPortalRole = "client" | "partner"
 
 /** contacts.portal_tier — CHECK constraint */
-export type ContactsPortalTier = "lead" | "onboarding" | "active"
+export type ContactsPortalTier = "lead" | "formation" | "onboarding" | "active"
 
 /** contacts.referrer_type — CHECK constraint */
 export type ContactsReferrerType = "client" | "partner"
@@ -141,6 +144,12 @@ export type JobQueueStatus = "pending" | "processing" | "completed" | "completed
 
 /** lease_agreements.status — CHECK constraint */
 export type LeaseAgreementsStatus = "draft" | "sent" | "viewed" | "signed"
+
+/** member_info_requests.status — CHECK constraint */
+export type MemberInfoRequestsStatus = "pending" | "submitted" | "expired"
+
+/** members.member_type — CHECK constraint */
+export type MembersMemberType = "individual" | "company"
 
 /** message_actions.action_type — CHECK constraint */
 export type MessageActionsActionType = "action_needed" | "in_progress" | "waiting_on_client" | "done"

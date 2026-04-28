@@ -76,6 +76,7 @@ export function GenerateOADialog({
 
         if (res.status === 409) {
           setExistingOA({ token: data.token, status: data.status, effective_date: data.effective_date })
+          setRecreatDate(effectiveDate)
           return
         }
 

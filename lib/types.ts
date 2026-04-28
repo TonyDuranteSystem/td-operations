@@ -105,6 +105,14 @@ export interface Account {
   installment_2_amount: number | null
   installment_2_currency: string | null
   communication_email: string | null
+  onboarding_date: string | null
+  setup_fee_amount: number | null
+  setup_fee_invoice: string | null
+  setup_fee_date: string | null
+  audit_reviewed_at: string | null
+  audit_flag: boolean | null
+  audit_reviewed_by: string | null
+  audit_sections: Record<string, boolean> | null
   created_at: string
   updated_at: string
 }
@@ -122,6 +130,7 @@ export interface Contact {
   preferred_channel: string | null
   citizenship: string | null
   residency: string | null
+  itin: string | null
   itin_number: string | null
   itin_issue_date: string | null
   passport_on_file: boolean | null
