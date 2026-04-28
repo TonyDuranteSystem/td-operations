@@ -107,13 +107,15 @@ export default async function DashboardLayout({
     showAiAgent = (aiSetting?.value as Record<string, unknown> | null)?.enabled_for_team === true
   }
 
+  const isSandbox = process.env.SANDBOX_MODE === '1'
+
   return (
     <Providers>
       <SandboxBanner />
       <SwRegister />
       <RealtimeNotifications />
       <DashboardPullToRefresh />
-      <div className="flex h-screen">
+      <div className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>
         <Sidebar
           user={user}
           isAdmin={admin}
