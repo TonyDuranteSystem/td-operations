@@ -91,7 +91,7 @@ export async function GET(
         const ownerName = contact.full_name
         const bankLabel = (ref.label as string) || slug
 
-        const subject = `New ${bankLabel} application — ${companyName}`
+        const subject = `[TEST EMAIL] New ${bankLabel} application — ${companyName}`
         const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
 
         const html = `
@@ -100,6 +100,7 @@ export async function GET(
               <h1 style="color: white; margin: 0; font-size: 18px;">New ${bankLabel} Application</h1>
             </div>
             <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
+              <p style="margin: 0 0 8px; color: #dc2626; font-weight: 600;">⚠️ TEST EMAIL — please ignore</p>
               <p style="margin: 0 0 8px;">A new client has just clicked the ${bankLabel} application link via Tony Durante's portal.</p>
               <table style="border-collapse: collapse; margin-top: 16px; width: 100%;">
                 <tr>
