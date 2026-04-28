@@ -15,7 +15,7 @@ import { gmailPost } from "@/lib/gmail"
 import { generateInvoicePdf, type InvoicePdfInput } from "@/lib/pdf/invoice-pdf"
 import { syncInvoiceToQB } from "@/lib/qb-sync"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
-import { buildInvoiceEmail, buildPortalInvoiceUrl } from "@/lib/email/invoice-email"
+import { buildInvoiceEmail } from "@/lib/email/invoice-email"
 import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
 
 // TD LLC company info
@@ -217,10 +217,8 @@ export async function sendTDInvoice(
     currencySymbol: csym,
     currency,
     payToken,
-    // Portal audience gets NO bank details in the email per R092.
     bankDetails: audience === "no_portal" ? bankDetails : null,
     message: payment.message,
-    portalInvoiceUrl: audience === "portal" ? buildPortalInvoiceUrl(paymentId) : undefined,
   })
 
   const boundary = `boundary_${Date.now()}`

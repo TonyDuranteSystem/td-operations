@@ -2,8 +2,6 @@ import { describe, it, expect } from "vitest"
 import {
   buildInvoiceEmail,
   buildPayUrl,
-  buildPortalInvoiceUrl,
-  buildPortalReceiptsUrl,
   generatePayToken,
 } from "@/lib/email/invoice-email"
 
@@ -44,18 +42,6 @@ describe("URL builders", () => {
     const u = buildPayUrl("abc123")
     expect(u.endsWith("/pay/abc123")).toBe(true)
   })
-
-  it("buildPortalInvoiceUrl embeds the payment ID", () => {
-    const u = buildPortalInvoiceUrl("payment-uuid-xyz")
-    expect(u).toContain("/portal/invoices")
-    expect(u).toContain("payment-uuid-xyz")
-  })
-
-  it("buildPortalReceiptsUrl points at the paid view", () => {
-    const u = buildPortalReceiptsUrl()
-    expect(u).toContain("/portal/invoices")
-    expect(u).toContain("paid")
-  })
 })
 
 describe("buildInvoiceEmail — subjects", () => {
@@ -84,7 +70,8 @@ describe("buildInvoiceEmail — subjects", () => {
 describe("buildInvoiceEmail — portal audience (Client with active portal)", () => {
   it("initial invoice shows portal CTA, does NOT expose payToken or bank details", () => {
     const { html } = buildInvoiceEmail({ ...baseInput, purpose: "initial", audience: "portal" })
-    expect(html).toContain("Log in to your portal")
+    expect(html).toContain("log in to your portal")
+    expect(html).toContain("Expenses section")
     expect(html).not.toContain("Pay with Card")
     expect(html).not.toContain(baseInput.payToken)
     expect(html).not.toContain(baseInput.bankDetails.accountNumber)
@@ -93,20 +80,20 @@ describe("buildInvoiceEmail — portal audience (Client with active portal)", ()
 
   it("reminder also uses portal CTA with no bank details", () => {
     const { html } = buildInvoiceEmail({ ...baseInput, purpose: "reminder", audience: "portal" })
-    expect(html).toContain("Log in to your portal")
+    expect(html).toContain("log in to your portal")
     expect(html).not.toContain(baseInput.bankDetails.accountNumber)
   })
 
-  it("receipt links to the paid-invoices archive in the portal", () => {
+  it("receipt tells client the invoice is marked paid", () => {
     const { html } = buildInvoiceEmail({ ...baseInput, purpose: "receipt", audience: "portal" })
-    expect(html).toContain("paid")
+    expect(html).toContain("marked as paid")
     expect(html).toContain("Thank you")
   })
 
   it("credit note does NOT include a payment CTA", () => {
     const { html } = buildInvoiceEmail({ ...baseInput, purpose: "credit", audience: "portal" })
     expect(html).not.toContain("Pay with Card")
-    expect(html).not.toContain("Log in to your portal to review")
+    expect(html).not.toContain("log in to your portal")
   })
 })
 
@@ -117,7 +104,7 @@ describe("buildInvoiceEmail — no_portal audience (One-Time customers)", () => 
     expect(html).toContain(`/pay/${baseInput.payToken}`)
     expect(html).toContain(baseInput.bankDetails.accountNumber)
     expect(html).toContain(baseInput.bankDetails.routingNumber)
-    expect(html).not.toContain("Log in to your portal")
+    expect(html).not.toContain("log in to your portal")
   })
 
   it("reminder includes the same Pay with Card + bank details", () => {

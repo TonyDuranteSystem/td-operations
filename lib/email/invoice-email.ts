@@ -18,7 +18,7 @@
  */
 
 import { randomBytes } from "crypto"
-import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
+import { APP_BASE_URL } from "@/lib/config"
 
 export type InvoiceEmailPurpose = "initial" | "reminder" | "credit" | "receipt"
 export type InvoiceEmailAudience = "portal" | "no_portal"
@@ -54,9 +54,6 @@ export interface InvoiceEmailInput {
    *  neutral "notes" block between the invoice table and the payment CTA. */
   message?: string | null
 
-  /** Deep link for portal audiences. When purpose='receipt', points at the
-   *  paid-archive page instead of the open-invoice page. */
-  portalInvoiceUrl?: string
 }
 
 export interface InvoiceEmailOutput {
@@ -74,15 +71,6 @@ export function buildPayUrl(payToken: string): string {
   return `${APP_BASE_URL}/pay/${payToken}`
 }
 
-/** Build the portal deep-link to an invoice (open or paid). */
-export function buildPortalInvoiceUrl(paymentId: string): string {
-  return `${PORTAL_BASE_URL}/portal/invoices#td-${paymentId}`
-}
-
-/** Build the paid-archive deep link. */
-export function buildPortalReceiptsUrl(): string {
-  return `${PORTAL_BASE_URL}/portal/invoices?view=paid`
-}
 
 function subjectFor(input: InvoiceEmailInput): string {
   const n = input.invoiceNumber
@@ -177,21 +165,16 @@ function bankDetailsBlock(bd: InvoiceEmailInput["bankDetails"]): string {
   </div>`
 }
 
-function ctaPortalOpen(portalInvoiceUrl: string): string {
-  return `<div style="text-align:center;margin:28px 0;">
-    <a href="${portalInvoiceUrl}"
-       style="display:inline-block;padding:14px 28px;background:#2563eb;color:white;text-decoration:none;border-radius:8px;font-weight:bold;font-size:15px;">
-      Log in to your portal to review &amp; pay
-    </a>
+function ctaPortalOpen(): string {
+  return `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin:28px 0;">
+    <p style="margin:0;font-size:14px;color:#1e40af;font-weight:600;">To pay this invoice, log in to your portal.</p>
+    <p style="margin:6px 0 0;font-size:13px;color:#3b82f6;">Go to the Expenses section and click the Pay button next to this invoice.</p>
   </div>`
 }
 
-function ctaPortalReceipt(portalReceiptsUrl: string): string {
-  return `<div style="text-align:center;margin:28px 0;">
-    <a href="${portalReceiptsUrl}"
-       style="display:inline-block;padding:12px 24px;background:#059669;color:white;text-decoration:none;border-radius:8px;font-weight:bold;font-size:14px;">
-      View paid invoices in your portal
-    </a>
+function ctaPortalReceipt(): string {
+  return `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:28px 0;">
+    <p style="margin:0;font-size:14px;color:#15803d;font-weight:600;">This invoice is marked as paid in your portal.</p>
   </div>`
 }
 
@@ -256,14 +239,13 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
   let paymentPath = ""
   if (!isReceipt && !isCredit) {
     if (isPortal) {
-      const portalUrl = input.portalInvoiceUrl ?? buildPortalReceiptsUrl()
-      paymentPath = ctaPortalOpen(portalUrl)
+      paymentPath = ctaPortalOpen()
     } else {
       const payUrl = input.payToken ? buildPayUrl(input.payToken) : null
       paymentPath = (payUrl ? ctaNoPortalOpen(payUrl) : "") + bankDetailsBlock(input.bankDetails ?? null)
     }
   } else if (isReceipt && isPortal) {
-    paymentPath = ctaPortalReceipt(buildPortalReceiptsUrl())
+    paymentPath = ctaPortalReceipt()
   }
 
   // Closing line
