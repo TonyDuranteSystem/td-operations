@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getRenewalGuard } from '@/app/api/cron/annual-renewal-msa/route'
+import { getRenewalGuard } from '@/lib/billing/renewal-guard'
 
 describe('getRenewalGuard', () => {
   const YEAR = 2026
