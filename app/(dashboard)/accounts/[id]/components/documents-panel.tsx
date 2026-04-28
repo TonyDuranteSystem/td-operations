@@ -267,6 +267,18 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                       </button>
                     )}
 
+                    {/* Recreate button for OA */}
+                    {doc.key === 'oa' && doc.onGenerate && (
+                      <button
+                        onClick={doc.onGenerate}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
+                        title="Recreate OA"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Recreate
+                      </button>
+                    )}
+
                     {/* Preview link */}
                     {doc.data.token && (
                       <a
