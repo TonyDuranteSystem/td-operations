@@ -107,9 +107,16 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   if (existingOa?.length) {
     result.steps.push(step("oa", "skipped", `Already exists: ${existingOa[0].token} (${existingOa[0].status})`))
   } else {
-    const state = (account.state_of_formation || "").toUpperCase()
+    const STATE_MAP: Record<string, string> = {
+      "NEW MEXICO": "NM", "NM": "NM",
+      "WYOMING": "WY", "WY": "WY",
+      "FLORIDA": "FL", "FL": "FL",
+      "DELAWARE": "DE", "DE": "DE",
+    }
+    const rawState = (account.state_of_formation || "").toUpperCase().trim()
+    const state = STATE_MAP[rawState] || rawState
     if (!OA_SUPPORTED_STATES.includes(state as typeof OA_SUPPORTED_STATES[number])) {
-      result.steps.push(step("oa", "skipped", `State "${state}" not supported`))
+      result.steps.push(step("oa", "skipped", `State "${account.state_of_formation}" not supported`))
     } else {
       // Use entity_type from accounts table (set at account creation from contract)
       const entityType = (account.entity_type as string | null) === "MMLLC" ? "MMLLC" : "SMLLC"

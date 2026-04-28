@@ -404,8 +404,13 @@ ${members.map(m => `${m.name}: ${m.initial_contribution} (${m.ownership_pct}% in
 
 // ─── Main template generator ─────────────────────────────────
 
+const STATE_NAME_TO_CODE: Record<string, string> = {
+  "NEW MEXICO": "NM", "WYOMING": "WY", "FLORIDA": "FL", "DELAWARE": "DE",
+}
+
 export function generateOASections(data: OAData): OASection[] {
-  const state = data.state_of_formation.toUpperCase()
+  const raw = data.state_of_formation.toUpperCase()
+  const state = STATE_NAME_TO_CODE[raw] || raw
   const stateName = STATE_FULL_NAME[state] || data.state_of_formation
   const isMMLLC = data.entity_type === "MMLLC"
 
