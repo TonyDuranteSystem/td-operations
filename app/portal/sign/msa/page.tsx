@@ -56,15 +56,15 @@ export default async function PortalSignMSAPage() {
     )
   }
 
-  // Find the renewal MSA offer for this account (most recent)
-  const { data: msa } = await supabaseAdmin
-    .from('offers')
-    .select('token, access_code, status, client_name, language, effective_date')
+  // Find the annual agreement for this account (most recent)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: msa } = await (supabaseAdmin as any)
+    .from('annual_agreements')
+    .select('token, status, client_name, language, agreement_year')
     .eq('account_id', selectedAccountId)
-    .eq('contract_type', 'renewal')
     .order('created_at', { ascending: false })
     .limit(1)
-    .maybeSingle()
+    .maybeSingle() as { data: { token: string; status: string; client_name: string | null; language: string | null; agreement_year: number | null } | null }
 
   if (!msa) {
     return (
@@ -77,10 +77,10 @@ export default async function PortalSignMSAPage() {
     )
   }
 
-  // Construct URL — the offer contract page with portal=true
+  // Construct URL — the annual agreement contract page with portal=true
   const msaUrl = `${APP_BASE_URL}/offer/${msa.token}/contract?portal=true`
   const isSigned = msa.status === 'signed' || msa.status === 'completed'
-  const year = msa.effective_date ? new Date(msa.effective_date).getUTCFullYear() : new Date().getUTCFullYear()
+  const year = msa.agreement_year ?? new Date().getUTCFullYear()
 
   return (
     <PortalMSAClient

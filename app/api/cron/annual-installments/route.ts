@@ -66,25 +66,24 @@ export async function GET(req: NextRequest) {
     const results: Array<{ company: string; action: string; detail: string; paymentId?: string }> = []
 
     for (const acct of accounts) {
-      // Guard: only create 2nd installment if the renewal MSA for this year is signed.
+      // Guard: only create 2nd installment if the annual agreement for this year is signed.
       // If the client hasn't signed yet, the 1st installment doesn't exist either —
       // creating a 2nd invoice would be incorrect and confusing.
-      const { data: renewalOffer } = await supabaseAdmin
-        .from("offers")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: signedAgreement } = await (supabaseAdmin as any)
+        .from("annual_agreements")
         .select("id, status")
         .eq("account_id", acct.id)
-        .eq("contract_type", "renewal")
-        .gte("effective_date", `${year}-01-01`)
-        .lt("effective_date", `${year + 1}-01-01`)
+        .eq("agreement_year", year)
         .in("status", ["signed", "completed"])
         .limit(1)
-        .maybeSingle()
+        .maybeSingle() as { data: { id: string; status: string } | null }
 
-      if (!renewalOffer) {
+      if (!signedAgreement) {
         results.push({
           company: acct.company_name,
           action: "skipped",
-          detail: `No signed renewal MSA for ${year} — skipping 2nd installment`,
+          detail: `No signed annual agreement for ${year} — skipping 2nd installment`,
         })
         continue
       }

@@ -171,10 +171,13 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
         status: 'signed',
       })
 
-      // Update offer status
+      // Update annual agreement status
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed' }).eq('token', token)
+          const { error: pErr } = await supabasePublic
+            .from('annual_agreements')
+            .update({ status: 'signed', signed_at: new Date().toISOString() })
+            .eq('token', token)
           if (!pErr) break
         } catch { /* retry */ }
       }
@@ -183,10 +186,10 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
       setStatusMsg('Processing...')
       let invoiceNumber = ''
       try {
-        const webhookRes = await fetch('/api/webhooks/offer-signed', {
+        const webhookRes = await fetch('/api/webhooks/agreement-signed', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offer_token: token })
+          body: JSON.stringify({ agreement_token: token })
         })
         if (webhookRes.ok) {
           const wData = await webhookRes.json()

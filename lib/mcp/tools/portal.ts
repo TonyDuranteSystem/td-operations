@@ -244,9 +244,11 @@ export function registerPortalTools(server: McpServer) {
       }
       lines.push(`Lease: ${leaseStatus}`)
 
-      // RENEWAL MSA
-      const { data: existingMSA } = await supabaseAdmin.from("offers")
-        .select("id, token, status").eq("account_id", account.id).eq("contract_type", "renewal").maybeSingle()
+      // ANNUAL AGREEMENT
+      const agreementYear = new Date().getUTCFullYear()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingMSA } = await (supabaseAdmin as any).from("annual_agreements")
+        .select("id, token, status").eq("account_id", account.id).eq("agreement_year", agreementYear).maybeSingle() as { data: { id: string; token: string; status: string } | null }
 
       msaStatus = ""
       if (existingMSA) {
@@ -254,34 +256,34 @@ export function registerPortalTools(server: McpServer) {
         if (existingMSA.status !== "signed" && existingMSA.status !== "completed") pendingDocs.push("Contratto Annuale")
       } else if (account.installment_1_amount) {
         const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-        const year = new Date().getFullYear()
-        const token = `renewal-${companySlug}-${year}`
+        const token = `renewal-${companySlug}-${agreementYear}`
         const today = new Date().toISOString().slice(0, 10)
-        const { data: newMSA, error: msaError } = await supabaseAdmin.from("offers").insert({
-          token, account_id: account.id, client_name: contact.full_name,
-          client_email: contact.email, language: lang, contract_type: "renewal",
-          payment_type: "bank_transfer", status: "draft", offer_date: today,
-          effective_date: `${year}-01-01`,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: newMSA, error: msaError } = await (supabaseAdmin as any).from("annual_agreements").insert({
+          token, account_id: account.id, agreement_year: agreementYear,
+          client_name: contact.full_name, client_email: contact.email,
+          language: lang, payment_type: "bank_transfer", status: "draft", offer_date: today,
+          effective_date: `${agreementYear}-01-01`,
           bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
           services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
           cost_summary: [
             { label: "First Installment (January)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
             { label: "Second Installment (June)", items: [{ name: "Annual Management", price: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` },
           ],
-        }).select("id, token").single()
+        }).select("id, token").single() as { data: { id: string; token: string } | null; error: { message: string; code: string } | null }
         if (newMSA) {
           msaStatus = `AUTO-CREATED (draft, token: ${newMSA.token})`
           pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
-          logAction({ action_type: "create", table_name: "offers", record_id: newMSA.id, account_id: account.id, summary: `Auto-created renewal MSA for ${account.company_name} (legacy onboard)` })
+          logAction({ action_type: "create", table_name: "annual_agreements", record_id: newMSA.id, account_id: account.id, summary: `Auto-created annual agreement for ${account.company_name} (legacy onboard)` })
         } else {
           msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
-          flags.push(`ERROR: Renewal MSA creation failed${msaError ? ` — ${msaError.message}` : ""}`)
+          flags.push(`ERROR: Annual Agreement creation failed${msaError ? ` — ${msaError.message}` : ""}`)
         }
       } else {
         msaStatus = "SKIPPED -- no installment amounts on account"
-        flags.push("FLAG: Missing installment amounts -- cannot create Renewal MSA. Set installment_1_amount and installment_2_amount on account first.")
+        flags.push("FLAG: Missing installment amounts -- cannot create Annual Agreement. Set installment_1_amount and installment_2_amount on account first.")
       }
-      lines.push(`Renewal MSA: ${msaStatus}`)
+      lines.push(`Annual Agreement: ${msaStatus}`)
     }
 
     // ─── AUTO-CREATE SERVICE DELIVERIES ───

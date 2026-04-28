@@ -379,17 +379,17 @@ export default async function PortalDashboardPage() {
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
     contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
-    // Unsigned renewal MSA for active clients — shown as a banner until signed
-    supabaseAdmin
-      .from('offers')
+    // Unsigned annual agreement for active clients — shown as a banner until signed
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
+      .from('annual_agreements')
       .select('token')
       .eq('account_id', selectedAccountId)
-      .eq('contract_type', 'renewal')
+      .eq('agreement_year', new Date().getUTCFullYear())
       .not('status', 'in', '("signed","completed","expired")')
-      .like('effective_date', `${new Date().getFullYear()}-%`)
       .limit(1)
       .maybeSingle()
-      .then(r => r.data ?? null),
+      .then((r: { data: { token: string } | null }) => r.data ?? null) as Promise<{ token: string } | null>,
   ])
   // Pending member info request — separate to avoid TypeScript tuple depth limit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
