@@ -20,7 +20,7 @@ function esc(v: string) {
 interface StandaloneServiceAgreementProps {
   offer: Offer
   token: string
-  contractType?: 'tax_return' | 'itin'
+  contractType?: 'tax_return' | 'itin' | 'closure'
 }
 
 // Service-specific content based on contract type — exported for inline addon rendering
@@ -108,6 +108,46 @@ export const SERVICE_CONTENT = {
     },
     signatureText: 'By signing below, I confirm that I have read and agree to the terms of this ITIN Application Service Agreement. I acknowledge my responsibility to provide accurate and complete personal information for the application.',
     successNote: 'Once payment is received, we will begin preparing your ITIN application immediately.',
+  },
+  closure: {
+    title: 'Company Closure Service Agreement',
+    shortTitle: 'Company Closure Service Agreement',
+    pdfPrefix: 'Closure_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to manage the complete closure of the Client\'s LLC on their behalf. This includes:',
+      items: [
+        'Filing of Articles of Dissolution (or equivalent) with the Secretary of State of the state where the LLC was formed;',
+        'Notification to the IRS to close the LLC\'s EIN (Employer Identification Number) account;',
+        'Cancellation of the registered agent service upon receipt of the official closure document from the Secretary of State;',
+        'Delivery of the official state closure document to the Client by email.',
+      ],
+      closing: 'This Agreement covers the closure of one (1) LLC only. Any additional entities require a separate agreement.',
+    },
+    procedure: {
+      intro: 'The company closure process follows these steps:',
+      steps: [
+        { title: 'Step 1 — Secretary of State Filing', desc: 'The Service Provider files the Articles of Dissolution (or equivalent document) with the Secretary of State of the state of formation. State processing times vary, typically 2–8 weeks. The LLC remains legally active until the state confirms dissolution.' },
+        { title: 'Step 2 — EIN Closure at the IRS', desc: 'Once the state confirms dissolution, the Service Provider sends a written notification to the IRS requesting closure of the LLC\'s EIN account. Note: the EIN number itself is not deleted — the IRS account associated with it is closed.' },
+        { title: 'Step 3 — Registered Agent Cancellation', desc: 'Upon receipt of the official closure document from the Secretary of State, the Service Provider cancels the registered agent service and delivers the official closure document to the Client by email.' },
+      ],
+    },
+    commitments: [
+      'File the dissolution paperwork with the Secretary of State within a reasonable timeframe after receiving the Client\'s signed authorization;',
+      'Notify the IRS to close the EIN account upon confirmation of state dissolution;',
+      'Cancel the registered agent service once the official closure document is received from the state;',
+      'Deliver the official state closure document to the Client by email upon receipt.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Confirm the LLC has no outstanding debts, liabilities, or pending legal matters', rest: ' before authorizing the closure. The Service Provider is not responsible for resolving any existing obligations of the LLC;' },
+        { bold: 'Ensure all LLC bank and payment processor accounts are closed', rest: ' or transferred before or during the closure process;' },
+        { bold: 'Acknowledge that the closure process is irreversible', rest: ' once the state filing is submitted. The LLC will be legally dissolved and will cease to exist as a legal entity;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Company Closure Service Agreement. I authorize Tony Durante LLC to proceed with the dissolution of my LLC and acknowledge that this process is irreversible once the state filing is submitted.',
+    successNote: 'Once payment is received, we will begin the closure process. You will receive the official closure documents from the Secretary of State by email.',
   },
 } as const
 
