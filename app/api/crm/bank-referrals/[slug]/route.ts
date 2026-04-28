@@ -24,7 +24,7 @@ export async function PATCH(
   const auth = await requireAdmin()
   if (auth) return auth
 
-  const body = await req.json().catch(() => null) as { label?: string; apply_url?: string; enabled?: boolean } | null
+  const body = await req.json().catch(() => null) as { label?: string; apply_url?: string; enabled?: boolean; rep_email?: string | null } | null
   if (!body) return NextResponse.json({ error: 'invalid body' }, { status: 400 })
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -39,6 +39,7 @@ export async function PATCH(
     patch.apply_url = body.apply_url.trim()
   }
   if (typeof body.enabled === 'boolean') patch.enabled = body.enabled
+  if ('rep_email' in body) patch.rep_email = body.rep_email?.trim() || null
 
   const { data, error } = await sb
     .from('bank_referrals')
