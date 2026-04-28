@@ -6,9 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 /**
  * POST /api/portal/chat/save-template
  * Saves an admin chat reply as an approved response template.
- * Auto-detects service_type from the account's active services and
- * language from the primary contact. The caller provides the title
- * (pre-filled from first line of message, editable by the admin).
+ * Deduplicates on first 80 chars of response_text.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -17,56 +15,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const { message_text, title, account_id, contact_id } = await request.json()
+  const { message_text, title } = await request.json()
   if (!message_text?.trim()) return NextResponse.json({ error: 'message_text required' }, { status: 400 })
   if (!title?.trim()) return NextResponse.json({ error: 'title required' }, { status: 400 })
-
-  // Valid values for the approved_responses.service_type enum
-  const VALID_SERVICE_TYPES = new Set([
-    'Banking Fintech', 'Banking Physical', 'Client Offboarding', 'Client Onboarding',
-    'CMRA', 'Company Closure', 'Company Formation', 'EIN Application', 'ITIN',
-    'Public Notary', 'Shipping', 'State Annual Report', 'State RA Renewal',
-    'Support', 'Tax Return',
-  ])
-
-  // Detect service_type from the account's first active service
-  let serviceType: string | null = null
-  let language: string | null = null
-
-  if (account_id) {
-    const { data: svc } = await supabaseAdmin
-      .from('service_deliveries')
-      .select('service_type')
-      .eq('account_id', account_id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle()
-    const raw = svc?.service_type ?? null
-    // Only pass values the enum actually accepts — discard anything that doesn't match
-    serviceType = raw && VALID_SERVICE_TYPES.has(raw) ? raw : null
-
-    // Language from primary contact
-    const { data: primaryAc } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contacts(language)')
-      .eq('account_id', account_id)
-      .eq('is_primary', true)
-      .limit(1)
-      .maybeSingle()
-    const lang = (primaryAc?.contacts as { language?: string | null } | null)?.language
-    language = lang ?? null
-  } else if (contact_id) {
-    const { data: contact } = await supabaseAdmin
-      .from('contacts')
-      .select('language')
-      .eq('id', contact_id)
-      .single()
-    language = contact?.language ?? null
-  }
-
-  // Normalize language to match approved_responses convention
-  if (language === 'it') language = 'Italian'
-  if (language === 'en') language = 'English'
 
   // Check for a near-duplicate (same first 80 chars of response_text)
   const fingerprint = message_text.trim().slice(0, 80)
@@ -87,8 +38,6 @@ export async function POST(request: NextRequest) {
       title: title.trim(),
       response_text: message_text.trim(),
       category: 'Chat Response',
-      service_type: serviceType as never,
-      language,
       usage_count: 0,
     })
     .select('id, title')
