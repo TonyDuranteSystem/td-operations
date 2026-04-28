@@ -42,6 +42,7 @@ export function decideInvoiceAtSigning(
   if (!params.total_amount || params.total_amount <= 0) {
     return { create: false, reason: "zero_amount" }
   }
+  if (params.contract_type === "renewal") return { create: false, reason: "renewal" }
   return { create: true, reason: null }
 }
 
