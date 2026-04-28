@@ -80,7 +80,7 @@ export default async function PortalSignMSAPage() {
   // Construct URL — the offer contract page with portal=true
   const msaUrl = `${APP_BASE_URL}/offer/${msa.token}/contract?portal=true`
   const isSigned = msa.status === 'signed' || msa.status === 'completed'
-  const year = msa.effective_date ? new Date(msa.effective_date).getFullYear() : new Date().getFullYear()
+  const year = msa.effective_date ? new Date(msa.effective_date).getUTCFullYear() : new Date().getUTCFullYear()
 
   return (
     <PortalMSAClient

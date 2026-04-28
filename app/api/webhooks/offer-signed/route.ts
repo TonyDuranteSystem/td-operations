@@ -501,17 +501,25 @@ async function handleRenewalSigned({
       installment: "Installment 1 (Jan)",
     })
 
+    // Auto-send the invoice so the client sees "Pay Invoice" in the portal immediately
+    let sent = false
+    try {
+      const { autoSendInvoices } = await import("@/lib/invoice-auto-send")
+      const sendResults = await autoSendInvoices([invoiceResult.paymentId])
+      sent = sendResults[0]?.success ?? false
+    } catch { /* non-blocking — invoice exists, manual send fallback */ }
+
     // Log
     await supabase.from("action_log").insert({
       action_type: "offer_signed",
       table_name: "payments",
       record_id: invoiceResult.paymentId,
       account_id: account.id,
-      summary: `Renewal MSA signed: ${offer.client_name} — 1st installment ${year} invoice ${invoiceResult.invoiceNumber} created ($${amount})`,
-      details: { offer_token, year, invoice_number: invoiceResult.invoiceNumber, amount, idempotency_key: idempotencyKey },
+      summary: `Renewal MSA signed: ${offer.client_name} — 1st installment ${year} invoice ${invoiceResult.invoiceNumber} created ($${amount})${sent ? " and sent" : " (send pending)"}`,
+      details: { offer_token, year, invoice_number: invoiceResult.invoiceNumber, amount, idempotency_key: idempotencyKey, sent },
     })
 
-    console.warn(`[offer-signed/renewal] Invoice ${invoiceResult.invoiceNumber} created for ${account.company_name} (${year} 1st installment)`)
+    console.warn(`[offer-signed/renewal] Invoice ${invoiceResult.invoiceNumber} created${sent ? " and sent" : " (send pending)"} for ${account.company_name} (${year} 1st installment)`)
 
     return NextResponse.json({
       ok: true,
@@ -520,6 +528,7 @@ async function handleRenewalSigned({
       payment_id: invoiceResult.paymentId,
       amount,
       year,
+      sent,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
