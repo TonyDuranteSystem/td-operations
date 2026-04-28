@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
-/* eslint-disable no-restricted-syntax */
+/* eslint-disable no-restricted-syntax, @typescript-eslint/no-explicit-any */
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const { services, reviewed_by, audit_sections } = await req.json()
 
-  const { error } = await supabaseAdmin
+  const { error } = await (supabaseAdmin as any)
     .from('accounts')
     .update({
       audit_reviewed_at: new Date().toISOString(),
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const { section, confirmed, audit_sections } = await req.json()
 
-  const { error } = await supabaseAdmin
+  const { error } = await (supabaseAdmin as any)
     .from('accounts')
     .update({ audit_sections: audit_sections ?? {} })
     .eq('id', params.id)
@@ -45,4 +45,4 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   return NextResponse.json({ ok: true, section, confirmed })
 }
-/* eslint-enable no-restricted-syntax */
+/* eslint-enable no-restricted-syntax, @typescript-eslint/no-explicit-any */

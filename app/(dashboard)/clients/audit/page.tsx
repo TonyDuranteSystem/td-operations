@@ -4,7 +4,8 @@ import { AuditShell } from '@/components/clients/audit/audit-shell'
 export const dynamic = 'force-dynamic'
 
 export default async function ClientAuditPage() {
-  const { data: accounts, error: accErr } = await supabaseAdmin
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: accounts, error: accErr } = await (supabaseAdmin as any)
     .from('accounts')
     .select(`
       id,

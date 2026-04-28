@@ -30,7 +30,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .order('due_date', { ascending: false })
       .limit(20),
 
-    supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
       .from('accounts')
       .select('portal_account, portal_tier, entity_type, audit_sections')
       .eq('id', id)
