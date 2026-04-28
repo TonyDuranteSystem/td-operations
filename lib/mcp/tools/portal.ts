@@ -61,7 +61,7 @@ export function registerPortalTools(server: McpServer) {
   async function processAccountForTransition(
     account: {
       id: string; company_name: string; entity_type: string | null; state_of_formation: string | null
-      ein_number: string | null; formation_date: string | null; status: string; physical_address: string | null
+      ein_number: string | null; formation_date: string | null; onboarding_date: string | null; status: string; physical_address: string | null
       drive_folder_id: string | null; portal_account: boolean | null; portal_tier: string | null
       services_bundle: string[] | null; account_type: string | null
       installment_1_amount: number | null; installment_2_amount: number | null; notes: string | null
@@ -255,29 +255,45 @@ export function registerPortalTools(server: McpServer) {
         msaStatus = `Exists (${existingMSA.status}, token: ${existingMSA.token})`
         if (existingMSA.status !== "signed" && existingMSA.status !== "completed") pendingDocs.push("Contratto Annuale")
       } else if (account.installment_1_amount) {
-        const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-        const token = `renewal-${companySlug}-${agreementYear}`
-        const today = new Date().toISOString().slice(0, 10)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: newMSA, error: msaError } = await (supabaseAdmin as any).from("annual_agreements").insert({
-          token, account_id: account.id, agreement_year: agreementYear,
-          client_name: contact.full_name, client_email: contact.email,
-          language: lang, payment_type: "bank_transfer", status: "draft", offer_date: today,
-          effective_date: `${agreementYear}-01-01`,
-          bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
-          services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
-          cost_summary: [
-            { label: "First Installment (January)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
-            { label: "Second Installment (June)", items: [{ name: "Annual Management", price: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` },
-          ],
-        }).select("id, token").single() as { data: { id: string; token: string } | null; error: { message: string; code: string } | null }
-        if (newMSA) {
-          msaStatus = `AUTO-CREATED (draft, token: ${newMSA.token})`
-          pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
-          logAction({ action_type: "create", table_name: "annual_agreements", record_id: newMSA.id, account_id: account.id, summary: `Auto-created annual agreement for ${account.company_name} (legacy onboard)` })
+        // Year 1 guard + September rule (P5/C4 KB rules)
+        const tdStartDate = account.onboarding_date || account.formation_date
+        const tdStartYear = tdStartDate ? new Date(tdStartDate).getUTCFullYear() : null
+        const tdStartMonth = tdStartDate ? new Date(tdStartDate).getUTCMonth() + 1 : null
+
+        if (tdStartYear === agreementYear) {
+          msaStatus = `SKIPPED — Year 1 client (onboarding: ${tdStartDate})`
         } else {
-          msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
-          flags.push(`ERROR: Annual Agreement creation failed${msaError ? ` — ${msaError.message}` : ""}`)
+          const skipJanuary = tdStartYear === agreementYear - 1 && tdStartMonth !== null && tdStartMonth >= 9
+          const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+          const token = `renewal-${companySlug}-${agreementYear}`
+          const today = new Date().toISOString().slice(0, 10)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: newMSA, error: msaError } = await (supabaseAdmin as any).from("annual_agreements").insert({
+            token, account_id: account.id, agreement_year: agreementYear,
+            client_name: contact.full_name, client_email: contact.email,
+            language: lang, payment_type: "bank_transfer", status: "draft", offer_date: today,
+            effective_date: `${agreementYear}-01-01`,
+            skip_january: skipJanuary,
+            bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
+            services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
+            cost_summary: skipJanuary
+              ? [
+                  { label: "First Installment (June)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
+                  { label: "Second Installment (June — Year 3+)", items: [{ name: "Annual Management", price: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` },
+                ]
+              : [
+                  { label: "First Installment (January)", items: [{ name: "Annual Management", price: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_1_amount?.toLocaleString() || "1,000"}` },
+                  { label: "Second Installment (June)", items: [{ name: "Annual Management", price: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` }], total: `$${account.installment_2_amount?.toLocaleString() || "1,000"}` },
+                ],
+          }).select("id, token").single() as { data: { id: string; token: string } | null; error: { message: string; code: string } | null }
+          if (newMSA) {
+            msaStatus = `AUTO-CREATED${skipJanuary ? " (Sep-rule, skip January)" : ""} (draft, token: ${newMSA.token})`
+            pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
+            logAction({ action_type: "create", table_name: "annual_agreements", record_id: newMSA.id, account_id: account.id, summary: `Auto-created annual agreement for ${account.company_name} (legacy onboard)` })
+          } else {
+            msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
+            flags.push(`ERROR: Annual Agreement creation failed${msaError ? ` — ${msaError.message}` : ""}`)
+          }
         }
       } else {
         msaStatus = "SKIPPED -- no installment amounts on account"
@@ -646,11 +662,12 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
 
         const allAccountIds = (allAccountLinks ?? []).map(l => l.account_id)
 
-        const { data: allAccounts } = await supabaseAdmin
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: allAccounts } = await (supabaseAdmin as any)
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
           .in("id", allAccountIds)
-          .eq("status", "Active")
+          .eq("status", "Active") as { data: Parameters<typeof processAccountForTransition>[0][] | null }
 
         const activeAccounts = allAccounts ?? []
 
@@ -872,11 +889,12 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
               .eq("contact_id", contact.id)
             const allContactAccountIds = (allContactAccountLinks ?? []).map(l => l.account_id)
 
-            const { data: activeAccounts } = await supabaseAdmin
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: activeAccounts } = await (supabaseAdmin as any)
               .from("accounts")
-              .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+              .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
               .in("id", allContactAccountIds)
-              .eq("status", "Active")
+              .eq("status", "Active") as { data: Parameters<typeof processAccountForTransition>[0][] | null }
 
             if (!activeAccounts?.length) {
               perAccountResults.push({

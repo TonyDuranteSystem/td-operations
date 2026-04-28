@@ -44,12 +44,20 @@ export async function GET(req: NextRequest) {
 
   try {
     // All active Client accounts (exclude test accounts)
-    const { data: accounts, error: acctErr } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: accounts, error: acctErr } = await (supabaseAdmin as any)
       .from("accounts")
-      .select("id, company_name, entity_type, installment_1_amount, installment_2_amount, portal_tier")
+      .select("id, company_name, entity_type, installment_1_amount, installment_2_amount, portal_tier, onboarding_date, formation_date")
       .eq("status", "Active")
       .eq("account_type", "Client")
-      .or("is_test.is.null,is_test.eq.false")
+      .or("is_test.is.null,is_test.eq.false") as {
+        data: Array<{
+          id: string; company_name: string; entity_type: string | null
+          installment_1_amount: number | null; installment_2_amount: number | null
+          portal_tier: string | null; onboarding_date: string | null; formation_date: string | null
+        }> | null
+        error: { message: string } | null
+      }
 
     if (acctErr) throw new Error(acctErr.message)
     if (!accounts || accounts.length === 0) {
@@ -66,6 +74,21 @@ export async function GET(req: NextRequest) {
         results.push({ company: acct.company_name, action: "skipped_no_amount", detail: "installment_1_amount not set" })
         continue
       }
+
+      // Year 1 guard + September rule
+      // Use onboarding_date (MSA signed date) as canonical TD start; fall back to formation_date
+      const tdStartDate = acct.onboarding_date || acct.formation_date
+      const tdStartYear = tdStartDate ? new Date(tdStartDate).getUTCFullYear() : null
+      const tdStartMonth = tdStartDate ? new Date(tdStartDate).getUTCMonth() + 1 : null
+
+      if (tdStartYear === year) {
+        // Year 1: setup fee covers through Dec 31 of their first year — no renewal yet
+        results.push({ company: acct.company_name, action: "skipped_year1", detail: `Year 1 client (onboarding: ${tdStartDate}) — renewal starts next year` })
+        continue
+      }
+
+      // Sep–Dec of previous year → skip January installment (P5 September rule)
+      const skipJanuary = tdStartYear === year - 1 && tdStartMonth !== null && tdStartMonth >= 9
 
       // Idempotency: check if annual agreement already exists for this year
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -121,24 +144,38 @@ export async function GET(req: NextRequest) {
             status: "draft",
             offer_date: today,
             effective_date: `${year}-01-01`,
+            skip_january: skipJanuary,
             bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
             services: [{
               name: "Annual LLC Management",
               price: totalAmount,
               description: "Annual management: RA, Annual Report, CMRA, Tax Return, Client Portal",
             }],
-            cost_summary: [
-              {
-                label: "First Installment (January)",
-                items: [{ name: "Annual Management", price: `$${acct.installment_1_amount?.toLocaleString()}` }],
-                total: `$${acct.installment_1_amount?.toLocaleString()}`,
-              },
-              {
-                label: "Second Installment (June)",
-                items: [{ name: "Annual Management", price: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}` }],
-                total: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}`,
-              },
-            ],
+            cost_summary: skipJanuary
+              ? [
+                  {
+                    label: "First Installment (June)",
+                    items: [{ name: "Annual Management", price: `$${acct.installment_1_amount?.toLocaleString()}` }],
+                    total: `$${acct.installment_1_amount?.toLocaleString()}`,
+                  },
+                  {
+                    label: "Second Installment (June — Year 3+)",
+                    items: [{ name: "Annual Management", price: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}` }],
+                    total: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}`,
+                  },
+                ]
+              : [
+                  {
+                    label: "First Installment (January)",
+                    items: [{ name: "Annual Management", price: `$${acct.installment_1_amount?.toLocaleString()}` }],
+                    total: `$${acct.installment_1_amount?.toLocaleString()}`,
+                  },
+                  {
+                    label: "Second Installment (June)",
+                    items: [{ name: "Annual Management", price: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}` }],
+                    total: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}`,
+                  },
+                ],
           })
           .select("id, token")
           .single() as { data: { id: string; token: string } | null; error: { message: string } | null }
