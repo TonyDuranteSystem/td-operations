@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, CheckCircle2, ExternalLink, RefreshCw, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -44,6 +44,16 @@ export function GenerateOADialog({
   // Recreate flow: shown when a 409 is returned (OA already exists)
   const [existingOA, setExistingOA] = useState<{ token: string; status: string; effective_date?: string } | null>(null)
   const [recreateDate, setRecreatDate] = useState(todayISO())
+
+  useEffect(() => {
+    if (open) {
+      setResult(null)
+      setExistingOA(null)
+      setRecreatDate(todayISO())
+      setEffectiveDate(todayISO())
+      setManagerName(contactName)
+    }
+  }, [open, contactName])
 
   if (!open) return null
 
