@@ -24,6 +24,7 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { enqueueJob } from "@/lib/jobs/queue"
 import {
   type AdminAddedName,
   classifyNameSource,
@@ -748,6 +749,20 @@ export async function POST(req: NextRequest) {
           }
         } else {
           einSideEffects.push("Banking Fintech SD already exists — skipped")
+        }
+
+        // 3c. Enqueue welcome package job (creates OA, Lease, banking forms, review task)
+        try {
+          const wpJob = await enqueueJob({
+            job_type: 'welcome_package_prepare',
+            payload: { account_id: accountId },
+            priority: 5,
+            account_id: accountId,
+            created_by: 'crm-enter-ein',
+          })
+          einSideEffects.push(`Welcome package job enqueued: ${wpJob.id}`)
+        } catch (e) {
+          einSideEffects.push(`Welcome package job enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
         }
 
         // 4. Sync portal tier to active across contact + account + auth
