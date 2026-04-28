@@ -66,6 +66,12 @@ function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
+// Parse YYYY-MM-DD without timezone shift and format as "April 28, 2026"
+function formatEffectiveDate(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(year, month - 1, day).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+}
+
 // --- Main Page -------------------------------------------
 export default function OperatingAgreementCodePage() {
   return (
@@ -659,7 +665,7 @@ function OperatingAgreementCodeContent() {
         {/* Preamble */}
         <p style={{ fontStyle: 'italic' }}>
           This Operating Agreement (&ldquo;Agreement&rdquo;) of {oa.company_name} (the &ldquo;Company&rdquo;) is entered into
-          and effective as of {today()}, by {preambleSigners}.
+          and effective as of {formatEffectiveDate(oa.effective_date)}, by {preambleSigners}.
         </p>
 
         <hr style={{ border: 'none', borderTop: '1px solid #ddd', margin: '24px 0' }} />
