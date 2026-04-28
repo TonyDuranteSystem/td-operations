@@ -18,21 +18,21 @@ export type Database = {
         Row: {
           account_id: string
           contact_id: string
-          is_primary: boolean | null
+          is_primary: boolean
           ownership_pct: number | null
           role: string | null
         }
         Insert: {
           account_id: string
           contact_id: string
-          is_primary?: boolean | null
+          is_primary?: boolean
           ownership_pct?: number | null
           role?: string | null
         }
         Update: {
           account_id?: string
           contact_id?: string
-          is_primary?: boolean | null
+          is_primary?: boolean
           ownership_pct?: number | null
           role?: string | null
         }
@@ -86,6 +86,8 @@ export type Database = {
           account_type: string | null
           airtable_id: string | null
           annual_report_due_date: string | null
+          audit_flag: boolean
+          audit_reviewed_at: string | null
           bank_details: Json | null
           cancellation_date: string | null
           cancellation_requested: boolean | null
@@ -117,6 +119,7 @@ export type Database = {
           kb_folder_path: string | null
           lead_source: string | null
           notes: string | null
+          onboarding_date: string | null
           partner_id: string | null
           payment_gateway: string | null
           payment_link: string | null
@@ -139,11 +142,6 @@ export type Database = {
           setup_fee_date: string | null
           setup_fee_invoice: string | null
           setup_fee_paid_date: string | null
-          onboarding_date: string | null
-          audit_reviewed_at: string | null
-          audit_flag: boolean | null
-          audit_reviewed_by: string | null
-          audit_sections: Json | null
           state_of_formation: string | null
           status: Database["public"]["Enums"]["account_status"] | null
           updated_at: string | null
@@ -154,6 +152,8 @@ export type Database = {
           account_type?: string | null
           airtable_id?: string | null
           annual_report_due_date?: string | null
+          audit_flag?: boolean
+          audit_reviewed_at?: string | null
           bank_details?: Json | null
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
@@ -189,6 +189,7 @@ export type Database = {
           kb_folder_path?: string | null
           lead_source?: string | null
           notes?: string | null
+          onboarding_date?: string | null
           partner_id?: string | null
           payment_gateway?: string | null
           payment_link?: string | null
@@ -211,11 +212,6 @@ export type Database = {
           setup_fee_date?: string | null
           setup_fee_invoice?: string | null
           setup_fee_paid_date?: string | null
-          onboarding_date?: string | null
-          audit_reviewed_at?: string | null
-          audit_flag?: boolean | null
-          audit_reviewed_by?: string | null
-          audit_sections?: Json | null
           state_of_formation?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
@@ -226,6 +222,8 @@ export type Database = {
           account_type?: string | null
           airtable_id?: string | null
           annual_report_due_date?: string | null
+          audit_flag?: boolean
+          audit_reviewed_at?: string | null
           bank_details?: Json | null
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
@@ -261,6 +259,7 @@ export type Database = {
           kb_folder_path?: string | null
           lead_source?: string | null
           notes?: string | null
+          onboarding_date?: string | null
           partner_id?: string | null
           payment_gateway?: string | null
           payment_link?: string | null
@@ -283,11 +282,6 @@ export type Database = {
           setup_fee_date?: string | null
           setup_fee_invoice?: string | null
           setup_fee_paid_date?: string | null
-          onboarding_date?: string | null
-          audit_reviewed_at?: string | null
-          audit_flag?: boolean | null
-          audit_reviewed_by?: string | null
-          audit_sections?: Json | null
           state_of_formation?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
@@ -856,6 +850,98 @@ export type Database = {
         }
         Relationships: []
       }
+      annual_agreements: {
+        Row: {
+          account_id: string
+          agreement_year: number
+          bundled_pipelines: string[] | null
+          client_email: string | null
+          client_name: string | null
+          cost_summary: Json | null
+          created_at: string
+          effective_date: string | null
+          id: string
+          language: string | null
+          offer_date: string | null
+          payment_type: string | null
+          services: Json | null
+          signed_at: string | null
+          skip_january: boolean
+          status: string
+          token: string
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          agreement_year: number
+          bundled_pipelines?: string[] | null
+          client_email?: string | null
+          client_name?: string | null
+          cost_summary?: Json | null
+          created_at?: string
+          effective_date?: string | null
+          id?: string
+          language?: string | null
+          offer_date?: string | null
+          payment_type?: string | null
+          services?: Json | null
+          signed_at?: string | null
+          skip_january?: boolean
+          status?: string
+          token: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          agreement_year?: number
+          bundled_pipelines?: string[] | null
+          client_email?: string | null
+          client_name?: string | null
+          cost_summary?: Json | null
+          created_at?: string
+          effective_date?: string | null
+          id?: string
+          language?: string | null
+          offer_date?: string | null
+          payment_type?: string | null
+          services?: Json | null
+          signed_at?: string | null
+          skip_january?: boolean
+          status?: string
+          token?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "annual_agreements_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "annual_agreements_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "annual_agreements_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "annual_agreements_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+        ]
+      }
       app_settings: {
         Row: {
           key: string
@@ -1002,6 +1088,7 @@ export type Database = {
           created_at: string
           enabled: boolean
           label: string
+          rep_email: string | null
           slug: string
           updated_at: string
         }
@@ -1010,6 +1097,7 @@ export type Database = {
           created_at?: string
           enabled?: boolean
           label: string
+          rep_email?: string | null
           slug: string
           updated_at?: string
         }
@@ -1018,6 +1106,7 @@ export type Database = {
           created_at?: string
           enabled?: boolean
           label?: string
+          rep_email?: string | null
           slug?: string
           updated_at?: string
         }
@@ -5417,6 +5506,97 @@ export type Database = {
         }
         Relationships: []
       }
+      member_info_requests: {
+        Row: {
+          access_code: string
+          account_id: string
+          company_name: string | null
+          contact_id: string | null
+          created_at: string
+          entity_type: string | null
+          id: string
+          pre_populated_data: Json | null
+          status: string
+          submitted_at: string | null
+          submitted_data: Json | null
+          token: string
+          updated_at: string
+        }
+        Insert: {
+          access_code?: string
+          account_id: string
+          company_name?: string | null
+          contact_id?: string | null
+          created_at?: string
+          entity_type?: string | null
+          id?: string
+          pre_populated_data?: Json | null
+          status?: string
+          submitted_at?: string | null
+          submitted_data?: Json | null
+          token?: string
+          updated_at?: string
+        }
+        Update: {
+          access_code?: string
+          account_id?: string
+          company_name?: string | null
+          contact_id?: string | null
+          created_at?: string
+          entity_type?: string | null
+          id?: string
+          pre_populated_data?: Json | null
+          status?: string
+          submitted_at?: string | null
+          submitted_data?: Json | null
+          token?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "member_info_requests_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_info_requests_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_info_requests_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "member_info_requests_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "member_info_requests_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_info_requests_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       members: {
         Row: {
           account_id: string
@@ -5514,11 +5694,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "members_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
             foreignKeyName: "members_contact_id_fkey"
             columns: ["contact_id"]
             isOneToOne: false
             referencedRelation: "contacts"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "members_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
         ]
       }
@@ -6357,6 +6565,7 @@ export type Database = {
           currency: string | null
           deal_id: string | null
           effective_date: string | null
+          entity_type: string | null
           expires_at: string | null
           future_developments: Json | null
           id: string
@@ -6407,6 +6616,7 @@ export type Database = {
           currency?: string | null
           deal_id?: string | null
           effective_date?: string | null
+          entity_type?: string | null
           expires_at?: string | null
           future_developments?: Json | null
           id?: string
@@ -6457,6 +6667,7 @@ export type Database = {
           currency?: string | null
           deal_id?: string | null
           effective_date?: string | null
+          entity_type?: string | null
           expires_at?: string | null
           future_developments?: Json | null
           id?: string
@@ -8092,6 +8303,7 @@ export type Database = {
           pipeline: string | null
           slug: string | null
           sort_order: number | null
+          supports_quantity: boolean
           updated_at: string | null
         }
         Insert: {
@@ -8108,6 +8320,7 @@ export type Database = {
           pipeline?: string | null
           slug?: string | null
           sort_order?: number | null
+          supports_quantity?: boolean
           updated_at?: string | null
         }
         Update: {
@@ -8124,6 +8337,7 @@ export type Database = {
           pipeline?: string | null
           slug?: string | null
           sort_order?: number | null
+          supports_quantity?: boolean
           updated_at?: string | null
         }
         Relationships: []
