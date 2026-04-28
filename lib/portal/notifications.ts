@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
+import { PORTAL_BASE_URL } from '@/lib/config'
 
 // Email digest is handled by /api/cron/portal-digest (every 5 min)
 // All notification types are eligible for digest emails.
@@ -192,6 +193,115 @@ async function _sendNotificationEmailToContact(contactId: string, title: string,
     await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
   } catch (err) {
     console.error('Notification email to contact failed:', err)
+  }
+}
+
+// Throttle: 1 email per conversation per 5 minutes (avoids spam when admin sends multiple messages)
+const recentClientNotifications = new Map<string, number>()
+
+/**
+ * Send an email to the client when an admin sends a portal chat message.
+ * Throttled: max 1 email per conversation per 5 minutes.
+ * Called by the API route and the portal_chat_send MCP tool.
+ */
+export async function notifyClientOfAdminMessage({
+  account_id,
+  contact_id,
+  messagePreview,
+}: {
+  account_id?: string | null
+  contact_id?: string | null
+  messagePreview: string
+}): Promise<void> {
+  const throttleKey = account_id || contact_id
+  if (!throttleKey) return
+
+  const lastSent = recentClientNotifications.get(throttleKey) ?? 0
+  if (Date.now() - lastSent < 5 * 60 * 1000) return
+  recentClientNotifications.set(throttleKey, Date.now())
+
+  // Resolve contact: email, name, language
+  let email: string | null = null
+  let firstName: string | null = null
+  let language = 'en'
+
+  if (contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('email, full_name, language')
+      .eq('id', contact_id)
+      .single()
+    email = contact?.email ?? null
+    firstName = contact?.full_name?.split(' ')[0] ?? null
+    language = contact?.language ?? 'en'
+  } else if (account_id) {
+    const { data: link } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contacts(email, full_name, language)')
+      .eq('account_id', account_id)
+      .limit(1)
+      .maybeSingle()
+    const contact = (link?.contacts as { email: string; full_name: string; language: string } | null)
+    email = contact?.email ?? null
+    firstName = contact?.full_name?.split(' ')[0] ?? null
+    language = contact?.language ?? 'en'
+  }
+
+  if (!email) return
+
+  const isIt = language === 'it'
+  const greeting = firstName ? (isIt ? `Ciao ${firstName},` : `Hi ${firstName},`) : (isIt ? 'Ciao,' : 'Hi,')
+  const subject = isIt ? 'Nuovo messaggio dal team Tony Durante' : 'New message from the Tony Durante team'
+  const bodyText = isIt
+    ? 'Hai ricevuto un nuovo messaggio dal nostro team. Accedi al portale per leggerlo e rispondere.'
+    : 'You have a new message from our team. Log in to your portal to read and reply.'
+  const ctaLabel = isIt ? 'Vai al Portale' : 'Go to Portal'
+  const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
+
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const preview = escHtml(messagePreview.slice(0, 200) || '…')
+  const portalChatUrl = `${PORTAL_BASE_URL}/portal/chat`
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:#0A3161;padding:20px;border-radius:12px 12px 0 0;">
+        <img src="https://app.tonydurante.us/images/logo.jpg" alt="Tony Durante LLC" style="height:40px;" />
+      </div>
+      <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px;">
+        <p style="margin:0 0 16px;">${greeting}</p>
+        <p style="margin:0 0 16px;">${bodyText}</p>
+        <div style="background:#f4f4f5;padding:16px;border-radius:8px;margin-bottom:24px;border-left:3px solid #0A3161;">
+          <p style="margin:0;color:#27272a;font-size:14px;white-space:pre-wrap;">${preview}</p>
+        </div>
+        <a href="${portalChatUrl}" style="display:inline-block;padding:12px 28px;background:#0A3161;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-family:Georgia,serif;">
+          ${ctaLabel}
+        </a>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">${footerText}</p>
+      </div>
+    </div>
+  `
+
+  try {
+    const { gmailPost } = await import('@/lib/gmail')
+    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+    const boundary = `boundary_${Date.now()}`
+    const raw = [
+      `From: Tony Durante LLC <support@tonydurante.us>`,
+      `To: ${email}`,
+      `Subject: ${encodedSubject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      `Content-Type: text/html; charset=UTF-8`,
+      `Content-Transfer-Encoding: base64`,
+      '',
+      Buffer.from(html).toString('base64'),
+      `--${boundary}--`,
+    ].join('\r\n')
+    await gmailPost('/messages/send', { raw: Buffer.from(raw).toString('base64url') })
+  } catch (err) {
+    console.error('[notifyClientOfAdminMessage] Email failed:', err)
   }
 }
 

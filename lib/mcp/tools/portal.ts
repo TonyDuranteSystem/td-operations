@@ -1907,6 +1907,22 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
           summary: `Portal chat message sent: "${msgText.substring(0, 80)}${msgText.length > 80 ? "..." : ""}"`,
         })
 
+        // In-app notification + email to client (fire-and-forget)
+        const { createPortalNotification, notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
+        createPortalNotification({
+          account_id: account_id || undefined,
+          contact_id: contact_id || undefined,
+          type: "chat",
+          title: "New message from Tony Durante Team",
+          body: msgText.slice(0, 100),
+          link: "/portal/chat",
+        }).catch(() => {})
+        notifyClientOfAdminMessage({
+          account_id: account_id || null,
+          contact_id: contact_id || null,
+          messagePreview: msgText,
+        }).catch(() => {})
+
         // Identify recipient for confirmation
         let recipientName = ""
         if (account_id) {
