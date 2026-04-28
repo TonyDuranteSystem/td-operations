@@ -26,6 +26,17 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import type { Json } from "@/lib/database.types"
 
+/** Pure function: determine Year 1 skip and September rule for a given TD start date and renewal year. */
+export function getRenewalGuard(tdStartDate: string | null, renewalYear: number): { skipAccount: boolean; skipJanuary: boolean } {
+  if (!tdStartDate) return { skipAccount: false, skipJanuary: false }
+  const d = new Date(tdStartDate)
+  const startYear = d.getUTCFullYear()
+  const startMonth = d.getUTCMonth() + 1
+  if (startYear === renewalYear) return { skipAccount: true, skipJanuary: false }
+  const skipJanuary = startYear === renewalYear - 1 && startMonth >= 9
+  return { skipAccount: false, skipJanuary }
+}
+
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
 
@@ -38,7 +49,10 @@ export async function GET(req: NextRequest) {
   const month = now.getMonth() + 1
   const year = now.getFullYear()
 
-  if (month !== 1) {
+  const isSandbox = process.env.SANDBOX_MODE === "1"
+  const forceRun = isSandbox && req.nextUrl.searchParams.get("force") === "1"
+
+  if (month !== 1 && !forceRun) {
     return NextResponse.json({ ok: true, message: `Month ${month} — renewal MSA cron only runs in January. Skipping.` })
   }
 
@@ -75,20 +89,16 @@ export async function GET(req: NextRequest) {
         continue
       }
 
-      // Year 1 guard + September rule
+      // Year 1 guard + September rule (P5/C4 KB rules)
       // Use onboarding_date (MSA signed date) as canonical TD start; fall back to formation_date
       const tdStartDate = acct.onboarding_date || acct.formation_date
-      const tdStartYear = tdStartDate ? new Date(tdStartDate).getUTCFullYear() : null
-      const tdStartMonth = tdStartDate ? new Date(tdStartDate).getUTCMonth() + 1 : null
+      const { skipAccount, skipJanuary } = getRenewalGuard(tdStartDate, year)
 
-      if (tdStartYear === year) {
+      if (skipAccount) {
         // Year 1: setup fee covers through Dec 31 of their first year — no renewal yet
         results.push({ company: acct.company_name, action: "skipped_year1", detail: `Year 1 client (onboarding: ${tdStartDate}) — renewal starts next year` })
         continue
       }
-
-      // Sep–Dec of previous year → skip January installment (P5 September rule)
-      const skipJanuary = tdStartYear === year - 1 && tdStartMonth !== null && tdStartMonth >= 9
 
       // Idempotency: check if annual agreement already exists for this year
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
