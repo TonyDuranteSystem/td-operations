@@ -44,7 +44,7 @@ export default async function ClientAuditPage() {
 
   const { data: accountContacts } = await supabaseAdmin
     .from('account_contacts')
-    .select('account_id, contact:contacts(id, full_name, email, phone, language, citizenship, itin, portal_tier)')
+    .select('account_id, contact:contacts(id, full_name, email, phone, language, citizenship, itin, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country)')
     .in('account_id', accountIds)
 
   // Build contact map — all contacts per account
@@ -52,6 +52,12 @@ export default async function ClientAuditPage() {
     id: string; full_name: string; email: string | null; phone: string | null
     language: string | null; citizenship: string | null; itin: string | null
     portal_tier: string | null
+    date_of_birth: string | null; passport_number: string | null
+    passport_expiry_date: string | null; passport_on_file: boolean | null
+    kyc_status: string | null
+    address_line1: string | null; address_city: string | null
+    address_state: string | null; address_zip: string | null
+    address_country: string | null
   }[]> = {}
 
   for (const row of accountContacts ?? []) {

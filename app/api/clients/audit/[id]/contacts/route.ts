@@ -11,7 +11,7 @@ export async function GET(req: NextRequest, { params: _params }: { params: { id:
   const pattern = `%${q}%`
   const { data } = await supabaseAdmin
     .from('contacts')
-    .select('id, full_name, email, phone, language, citizenship, itin, portal_tier')
+    .select('id, full_name, email, phone, language, citizenship, itin, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
     .or(`full_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern}`)
     .limit(10)
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     const { data: contact } = await supabaseAdmin
       .from('contacts')
-      .select('id, full_name, email, phone, language, citizenship, itin, portal_tier')
+      .select('id, full_name, email, phone, language, citizenship, itin, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
       .eq('id', body.contact_id)
       .single()
     return NextResponse.json({ ok: true, contact })
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         language: body.language ?? null,
         citizenship: body.citizenship ?? null,
       })
-      .select('id, full_name, email, phone, language, citizenship, itin, portal_tier')
+      .select('id, full_name, email, phone, language, citizenship, itin, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
       .single()
     if (createErr) return NextResponse.json({ error: createErr.message }, { status: 500 })
 

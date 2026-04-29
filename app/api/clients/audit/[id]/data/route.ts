@@ -41,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
     supabaseAdmin
       .from('members')
-      .select('id, full_name, email, phone, ownership_pct, member_type, is_primary, is_signer, address_street, address_city, address_state, address_country, contact_id')
+      .select('id, full_name, company_name, ein, email, phone, ownership_pct, member_type, is_primary, is_signer, address_street, address_city, address_state, address_zip, address_country, contact_id, representative_name, representative_email, representative_phone, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country')
       .eq('account_id', id)
       .order('is_primary', { ascending: false }),
 
@@ -67,9 +67,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const { data: contactRows } = linkedContactIds.length > 0
     ? await supabaseAdmin
         .from('contacts')
-        .select('id, full_name, email, portal_tier')
+        .select('id, full_name, email, phone, language, citizenship, itin, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
         .in('id', linkedContactIds)
-    : { data: [] as Array<{ id: string; full_name: string | null; email: string | null; portal_tier: string | null }> }
+    : { data: [] as Array<{
+        id: string; full_name: string | null; email: string | null; phone: string | null
+        language: string | null; citizenship: string | null; itin: string | null; portal_tier: string | null
+        date_of_birth: string | null; passport_number: string | null; passport_expiry_date: string | null
+        passport_on_file: boolean | null; kyc_status: string | null
+        address_line1: string | null; address_city: string | null; address_state: string | null
+        address_zip: string | null; address_country: string | null
+      }> }
 
   // Use the explicitly-fetched contacts (Step 2 above) instead of the
   // unreliable PostgREST embed.
@@ -77,7 +84,21 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     id: c.id as string,
     full_name: (c.full_name ?? '') as string,
     email: (c.email ?? '') as string,
+    phone: (c.phone ?? null) as string | null,
+    language: (c.language ?? null) as string | null,
+    citizenship: (c.citizenship ?? null) as string | null,
+    itin: (c.itin ?? null) as string | null,
     portal_tier: c.portal_tier as string | null,
+    date_of_birth: (c.date_of_birth ?? null) as string | null,
+    passport_number: (c.passport_number ?? null) as string | null,
+    passport_expiry_date: (c.passport_expiry_date ?? null) as string | null,
+    passport_on_file: (c.passport_on_file ?? null) as boolean | null,
+    kyc_status: (c.kyc_status ?? null) as string | null,
+    address_line1: (c.address_line1 ?? null) as string | null,
+    address_city: (c.address_city ?? null) as string | null,
+    address_state: (c.address_state ?? null) as string | null,
+    address_zip: (c.address_zip ?? null) as string | null,
+    address_country: (c.address_country ?? null) as string | null,
   }))
 
   // Helper: in the deployed runtime, supabase-js listUsers strips
