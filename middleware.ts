@@ -24,8 +24,6 @@ const PUBLIC_PREFIXES = [
   // Liveness probe for post-deploy smoke (P2.7 — plan §4 line 576).
   // No auth: anything that gates liveness behind auth is not a liveness probe.
   '/api/health',
-  // TEMPORARY debug endpoint for audit panel — requires API_SECRET_TOKEN, will be removed
-  '/api/admin/audit-debug',
   '/api/workflows',
   '/api/jobs',
   '/api/track',
