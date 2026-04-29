@@ -80,16 +80,27 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     portal_tier: c.portal_tier as string | null,
   }))
 
+  // Helper: in the deployed runtime, supabase-js listUsers strips
+  // banned_until from the User object — only getUserById returns it.
+  // Verified via /api/admin/audit-debug 2026-04-29.
+  async function readBannedUntil(userId: string): Promise<string | null> {
+    const { data } = await supabaseAdmin.auth.admin.getUserById(userId)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ((data?.user as any)?.banned_until as string | null) ?? null
+  }
+
   const authUserMap: Record<string, boolean> = {}
   const authBannedMap: Record<string, boolean> = {}
   for (const c of contacts) {
     if (!c?.email) continue
     const user = await findAuthUserByEmail(c.email)
     authUserMap[c.email] = !!user
-    // banned_until is set when the user is banned; null/undefined = not banned
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const banned = !!(user as any)?.banned_until && new Date((user as any).banned_until) > new Date()
-    authBannedMap[c.email] = banned
+    if (user) {
+      const bannedUntil = await readBannedUntil(user.id)
+      authBannedMap[c.email] = !!bannedUntil && new Date(bannedUntil) > new Date()
+    } else {
+      authBannedMap[c.email] = false
+    }
   }
 
   // Same for members
@@ -98,9 +109,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     if (!m.email || authUserMap[m.email] !== undefined) continue
     const user = await findAuthUserByEmail(m.email)
     authUserMap[m.email] = !!user
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const banned = !!(user as any)?.banned_until && new Date((user as any).banned_until) > new Date()
-    authBannedMap[m.email] = banned
+    if (user) {
+      const bannedUntil = await readBannedUntil(user.id)
+      authBannedMap[m.email] = !!bannedUntil && new Date(bannedUntil) > new Date()
+    } else {
+      authBannedMap[m.email] = false
+    }
   }
 
   return NextResponse.json({
