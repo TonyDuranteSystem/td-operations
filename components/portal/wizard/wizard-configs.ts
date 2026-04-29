@@ -501,7 +501,7 @@ export const BANKING_PAYSET_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'monthly_volume', label: 'Expected Monthly Volume (EUR)', labelIt: 'Volume Mensile Previsto (EUR)', type: 'number', required: true },
     { name: 'proof_of_address', label: 'Proof of Address (utility bill or bank statement)', labelIt: 'Prova di Residenza (bolletta o estratto conto)', type: 'file', required: true },
     { name: 'business_bank_statement', label: 'Business Bank Statement (last 3 months)', labelIt: 'Estratto Conto Aziendale (ultimi 3 mesi)', type: 'file', required: true },
-    { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate', labelIt: 'Confermo che le informazioni sono corrette', type: 'checkbox', required: true },
+    { name: 'disclaimer_accepted', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true, hint: 'I confirm that all information provided is accurate and complete.', hintIt: 'Confermo che tutte le informazioni fornite sono accurate e complete.' },
   ],
 }
 
@@ -537,7 +537,7 @@ export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
     ]},
     { name: 'passport_image', label: 'Passport Photo (JPG, all 4 corners visible)', labelIt: 'Foto Passaporto (JPG, 4 angoli visibili)', type: 'file', required: true },
     { name: 'proof_of_address', label: 'Proof of Address', labelIt: 'Prova di Residenza', type: 'file', required: true },
-    { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate', labelIt: 'Confermo che le informazioni sono corrette', type: 'checkbox', required: true },
+    { name: 'disclaimer_accepted', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true, hint: 'I confirm that all information provided is accurate and complete.', hintIt: 'Confermo che tutte le informazioni fornite sono accurate e complete.' },
   ],
   partner: [
     { name: 'partner_first_name', label: 'Partner First Name', labelIt: 'Nome Socio', type: 'text', required: true },

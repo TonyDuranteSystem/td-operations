@@ -396,28 +396,28 @@ function MemberCard({ member, index, total, isSigner, onSelectSigner, onChange, 
             <Field label="EIN" value={member.ein} onChange={v => onChange(member.id, 'ein', v)} placeholder="XX-XXXXXXX" />
             <Field label="Ownership %" type="number" required value={member.ownership_pct} onChange={v => onChange(member.id, 'ownership_pct', v)} min="0" max="100" step="0.01" />
             <div className="mi-section-label">Company Address</div>
-            <Field label="Street" value={member.address_street} onChange={v => onChange(member.id, 'address_street', v)} />
+            <Field label="Street" required value={member.address_street} onChange={v => onChange(member.id, 'address_street', v)} />
             <div className="mi-fields-row">
-              <Field label="City" value={member.address_city} onChange={v => onChange(member.id, 'address_city', v)} />
-              <Field label="State" value={member.address_state} onChange={v => onChange(member.id, 'address_state', v)} />
+              <Field label="City" required value={member.address_city} onChange={v => onChange(member.id, 'address_city', v)} />
+              <Field label="State" required value={member.address_state} onChange={v => onChange(member.id, 'address_state', v)} />
             </div>
             <div className="mi-fields-row">
-              <Field label="ZIP" value={member.address_zip} onChange={v => onChange(member.id, 'address_zip', v)} />
-              <Field label="Country" value={member.address_country} onChange={v => onChange(member.id, 'address_country', v)} />
+              <Field label="ZIP" required value={member.address_zip} onChange={v => onChange(member.id, 'address_zip', v)} />
+              <Field label="Country" required value={member.address_country} onChange={v => onChange(member.id, 'address_country', v)} />
             </div>
             <div className="mi-section-label">Representative (person acting on behalf of the company)</div>
             <Field label="Representative Name" required value={member.representative_name} onChange={v => onChange(member.id, 'representative_name', v)} />
             <Field label="Representative Email" type="email" required value={member.representative_email} onChange={v => onChange(member.id, 'representative_email', v)} />
             <Field label="Representative Phone" type="tel" value={member.representative_phone} onChange={v => onChange(member.id, 'representative_phone', v)} />
             <div className="mi-section-label">Representative Address</div>
-            <Field label="Street" value={member.representative_address_street} onChange={v => onChange(member.id, 'representative_address_street', v)} />
+            <Field label="Street" required value={member.representative_address_street} onChange={v => onChange(member.id, 'representative_address_street', v)} />
             <div className="mi-fields-row">
-              <Field label="City" value={member.representative_address_city} onChange={v => onChange(member.id, 'representative_address_city', v)} />
-              <Field label="State" value={member.representative_address_state} onChange={v => onChange(member.id, 'representative_address_state', v)} />
+              <Field label="City" required value={member.representative_address_city} onChange={v => onChange(member.id, 'representative_address_city', v)} />
+              <Field label="State" required value={member.representative_address_state} onChange={v => onChange(member.id, 'representative_address_state', v)} />
             </div>
             <div className="mi-fields-row">
-              <Field label="ZIP" value={member.representative_address_zip} onChange={v => onChange(member.id, 'representative_address_zip', v)} />
-              <Field label="Country" value={member.representative_address_country} onChange={v => onChange(member.id, 'representative_address_country', v)} />
+              <Field label="ZIP" required value={member.representative_address_zip} onChange={v => onChange(member.id, 'representative_address_zip', v)} />
+              <Field label="Country" required value={member.representative_address_country} onChange={v => onChange(member.id, 'representative_address_country', v)} />
             </div>
           </>
         )}

@@ -116,7 +116,7 @@ export function WizardClient({
       }
       if (field.required) {
         const val = formData[field.name]
-        if (val === undefined || val === null || val === '' || (typeof val === 'string' && !val.trim())) return false
+        if (val === undefined || val === null || val === false || val === '' || (typeof val === 'string' && !val.trim())) return false
       }
     }
     return true
