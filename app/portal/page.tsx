@@ -413,7 +413,7 @@ export default async function PortalDashboardPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: annData } = await (supabaseAdmin as any)
       .from('portal_announcements')
-      .select('id, title, message, type, dismissible')
+      .select('id, title, message, title_en, message_en, type, dismissible')
       .eq('active', true)
       .order('created_at', { ascending: false })
     portalAnnouncements = (annData ?? []) as PortalAnnouncement[]
@@ -460,7 +460,7 @@ export default async function PortalDashboardPage() {
       <GuideAnnouncementBanner locale={locale} />
 
       {/* DB-backed portal announcements — managed from CRM Config → Announcements */}
-      <AnnouncementBanners announcements={portalAnnouncements} />
+      <AnnouncementBanners announcements={portalAnnouncements} locale={locale} />
 
       {/* Profile completion banner — shown for standalone tax-return clients
           with missing contact fields (phone, address, DOB, citizenship). The

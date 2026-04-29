@@ -29,6 +29,8 @@ export async function PATCH(
   const body = await request.json().catch(() => null) as {
     title?: string
     message?: string
+    title_en?: string | null
+    message_en?: string | null
     type?: string
     active?: boolean
     dismissible?: boolean
@@ -38,6 +40,8 @@ export async function PATCH(
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (typeof body.title === 'string' && body.title.trim()) patch.title = body.title.trim()
   if (typeof body.message === 'string' && body.message.trim()) patch.message = body.message.trim()
+  if ('title_en' in body) patch.title_en = body.title_en?.trim() || null
+  if ('message_en' in body) patch.message_en = body.message_en?.trim() || null
   if (typeof body.active === 'boolean') patch.active = body.active
   if (typeof body.dismissible === 'boolean') patch.dismissible = body.dismissible
   if (typeof body.type === 'string' && ['info', 'warning', 'success'].includes(body.type)) {
@@ -48,7 +52,7 @@ export async function PATCH(
     .from('portal_announcements')
     .update(patch)
     .eq('id', params.id)
-    .select('id, title, message, type, active, dismissible, created_at, updated_at')
+    .select('id, title, message, title_en, message_en, type, active, dismissible, created_at, updated_at')
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
