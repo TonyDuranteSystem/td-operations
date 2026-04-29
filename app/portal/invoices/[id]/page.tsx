@@ -100,7 +100,11 @@ export default function InvoiceDetailPage() {
     setDownloading(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoiceId}/pdf`)
-      if (!res.ok) throw new Error('Failed to generate PDF')
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') || ''
+        const d = ct.includes('json') ? await res.json().catch(() => ({})) : {}
+        throw new Error(d.error || `Failed to generate PDF (${res.status})`)
+      }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -109,8 +113,8 @@ export default function InvoiceDetailPage() {
       a.click()
       URL.revokeObjectURL(url)
       toast.success('PDF downloaded')
-    } catch {
-      toast.error('Failed to download PDF')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to download PDF')
     } finally {
       setDownloading(false)
     }

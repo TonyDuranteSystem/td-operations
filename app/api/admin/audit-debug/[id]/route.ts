@@ -54,16 +54,31 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const authUserMap: Record<string, boolean> = {}
   const authBannedMap: Record<string, boolean> = {}
-  const authUserDetails: Record<string, { id: string; banned_until: string | null }> = {}
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const authUserDetails: Record<string, any> = {}
   for (const c of contacts) {
     if (!c?.email) continue
     const user = await findAuthUserByEmail(c.email)
     authUserMap[c.email] = !!user
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bannedUntil = (user as any)?.banned_until ?? null
+    const bannedUntilFromList = (user as any)?.banned_until ?? null
+    // Compare against getUserById, which may return different shape
+    let getByIdResult = null
+    if (user) {
+      const { data: byId } = await supabaseAdmin.auth.admin.getUserById(user.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getByIdResult = byId?.user ? { banned_until: (byId.user as any).banned_until ?? null, all_keys: Object.keys(byId.user) } : null
+    }
+    const bannedUntil = bannedUntilFromList || getByIdResult?.banned_until || null
     const banned = !!bannedUntil && new Date(bannedUntil) > new Date()
     authBannedMap[c.email] = banned
-    if (user) authUserDetails[c.email] = { id: user.id, banned_until: bannedUntil }
+    if (user) authUserDetails[c.email] = {
+      id: user.id,
+      banned_until_from_listUsers: bannedUntilFromList,
+      banned_until_from_getUserById: getByIdResult?.banned_until ?? null,
+      list_user_keys: Object.keys(user),
+      get_by_id_keys: getByIdResult?.all_keys ?? null,
+    }
   }
 
   // Diagnostics — what env / key is the runtime using?

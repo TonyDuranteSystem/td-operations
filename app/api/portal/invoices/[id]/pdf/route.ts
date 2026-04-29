@@ -4,6 +4,7 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
 import { invoiceLabels, type InvoiceLang } from '@/lib/portal/invoice-labels'
+import { sanitizePdfLine } from '@/lib/pdf/sanitize'
 
 /**
  * GET /api/portal/invoices/[id]/pdf — Generate and stream invoice PDF
@@ -118,14 +119,14 @@ export async function GET(
   }
 
   // Header — Company name (to the right of logo if present)
-  page.drawText(account?.company_name ?? 'Invoice', {
+  page.drawText(sanitizePdfLine(account?.company_name ?? 'Invoice'), {
     x: companyNameX, y, size: 20, font: helveticaBold, color: blue,
   })
 
   // Company details under company name
   let detailY = y - 16
   if (account?.physical_address) {
-    page.drawText(account.physical_address, { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
+    page.drawText(sanitizePdfLine(account.physical_address), { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
     detailY -= 11
   }
   const companyMeta = [
@@ -133,7 +134,7 @@ export async function GET(
     account?.ein_number && `EIN: ${account.ein_number}`,
   ].filter(Boolean).join('  |  ')
   if (companyMeta) {
-    page.drawText(companyMeta, { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
+    page.drawText(sanitizePdfLine(companyMeta), { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
   }
 
   // Invoice number + status — right side
@@ -168,11 +169,11 @@ export async function GET(
   page.drawText(L.billTo, { x: 50, y, size: 9, font: helveticaBold, color: gray })
   y -= 16
   if (customer) {
-    page.drawText(customer.name, { x: 50, y, size: 11, font: helveticaBold, color: black })
+    page.drawText(sanitizePdfLine(customer.name), { x: 50, y, size: 11, font: helveticaBold, color: black })
     y -= 14
-    if (customer.email) { page.drawText(customer.email, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
-    if (customer.address) { page.drawText(customer.address, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
-    if (customer.vat_number) { page.drawText(`VAT: ${customer.vat_number}`, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
+    if (customer.email) { page.drawText(sanitizePdfLine(customer.email), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
+    if (customer.address) { page.drawText(sanitizePdfLine(customer.address), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
+    if (customer.vat_number) { page.drawText(sanitizePdfLine(`VAT: ${customer.vat_number}`), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
   }
 
   // Check if any items have tax
@@ -192,7 +193,7 @@ export async function GET(
   // Table rows (descriptions are NEVER translated)
   y -= 22
   for (const item of (items ?? [])) {
-    const desc = item.description.length > 50 ? item.description.slice(0, 50) + '...' : item.description
+    const desc = sanitizePdfLine(item.description.length > 50 ? item.description.slice(0, 50) + '...' : item.description)
     page.drawText(desc, { x: 55, y, size: 9, font: helvetica, color: black })
     page.drawText(String(item.quantity), { x: 305, y, size: 9, font: helvetica, color: black })
     page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 340, y, size: 9, font: helvetica, color: black })
@@ -247,19 +248,24 @@ export async function GET(
     y -= 40
     page.drawText(L.paymentTerms, { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
-    const words = invoice.message.split(' ')
-    let line = ''
-    for (const word of words) {
-      const test = line ? `${line} ${word}` : word
-      if (helvetica.widthOfTextAtSize(test, 9) > 490) {
-        page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
-        y -= 13
-        line = word
-      } else {
-        line = test
+    // Split on newlines first so \n chars never reach drawText (not in WinAnsiEncoding)
+    const paragraphs = invoice.message.split(/\r?\n/)
+    for (const para of paragraphs) {
+      const safePara = sanitizePdfLine(para)
+      if (!safePara.trim()) { y -= 6; continue } // blank line → small gap
+      const words = safePara.split(/\s+/).filter(Boolean)
+      let line = ''
+      for (const word of words) {
+        const test = line ? `${line} ${word}` : word
+        if (helvetica.widthOfTextAtSize(test, 9) > 490) {
+          if (line) { page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black }); y -= 13 }
+          line = word
+        } else {
+          line = test
+        }
       }
+      if (line) { page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black }); y -= 13 }
     }
-    if (line) page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
   }
 
   // Bank details — use invoice's selected bank account, fallback to show_on_invoice default
@@ -284,7 +290,7 @@ export async function GET(
 
   if (bankAccount) {
     y -= 30
-    page.drawText(`${L.bankDetails} — ${bankAccount.label}`, { x: 50, y, size: 9, font: helveticaBold, color: gray })
+    page.drawText(sanitizePdfLine(`${L.bankDetails} - ${bankAccount.label}`), { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
     // Bank field labels are translated, but values (IBAN, numbers, names) are NOT
     const bankFields: [string, unknown][] = [
@@ -297,11 +303,13 @@ export async function GET(
     ]
     for (const [label, value] of bankFields) {
       if (value) {
-        const fullText = `${label}: ${value}`
+        const safeValue = sanitizePdfLine(String(value))
+        const safeLabel = sanitizePdfLine(String(label))
+        const fullText = `${safeLabel}: ${safeValue}`
         if (helvetica.widthOfTextAtSize(fullText, 8) > 490) {
-          page.drawText(`${label}:`, { x: 50, y, size: 8, font: helvetica, color: gray })
+          page.drawText(`${safeLabel}:`, { x: 50, y, size: 8, font: helvetica, color: gray })
           y -= 11
-          page.drawText(String(value), { x: 50, y, size: 8, font: helvetica, color: black })
+          page.drawText(safeValue, { x: 50, y, size: 8, font: helvetica, color: black })
           y -= 12
         } else {
           page.drawText(fullText, { x: 50, y, size: 8, font: helvetica, color: black })
@@ -310,19 +318,23 @@ export async function GET(
       }
     }
     if (bankAccount.notes) {
-      const noteWords = String(bankAccount.notes).split(' ')
-      let noteLine = ''
-      for (const word of noteWords) {
-        const test = noteLine ? `${noteLine} ${word}` : word
-        if (helvetica.widthOfTextAtSize(test, 8) > 490) {
-          page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray })
-          y -= 11
-          noteLine = word
-        } else {
-          noteLine = test
+      const noteParagraphs = String(bankAccount.notes).split(/\r?\n/)
+      for (const para of noteParagraphs) {
+        const safePara = sanitizePdfLine(para)
+        if (!safePara.trim()) { y -= 4; continue }
+        const noteWords = safePara.split(/\s+/).filter(Boolean)
+        let noteLine = ''
+        for (const word of noteWords) {
+          const test = noteLine ? `${noteLine} ${word}` : word
+          if (helvetica.widthOfTextAtSize(test, 8) > 490) {
+            if (noteLine) { page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 11 }
+            noteLine = word
+          } else {
+            noteLine = test
+          }
         }
+        if (noteLine) { page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 12 }
       }
-      if (noteLine) { page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 12 }
     }
   }
 
