@@ -7634,6 +7634,45 @@ export type Database = {
         }
         Relationships: []
       }
+      portal_announcements: {
+        Row: {
+          active: boolean
+          created_at: string
+          dismissible: boolean
+          id: string
+          message: string
+          message_en: string | null
+          title: string
+          title_en: string | null
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          dismissible?: boolean
+          id?: string
+          message: string
+          message_en?: string | null
+          title: string
+          title_en?: string | null
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          dismissible?: boolean
+          id?: string
+          message?: string
+          message_en?: string | null
+          title?: string
+          title_en?: string | null
+          type?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       portal_audit_log: {
         Row: {
           account_id: string | null

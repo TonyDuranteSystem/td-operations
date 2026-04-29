@@ -1250,7 +1250,7 @@ export function AuditPanel({
             <div className="space-y-3">
               {/* Per-contact portal status */}
               {dbData.contacts_with_tier.map(c => {
-                const banned = c.email ? dbData.auth_banned_map[c.email] : false
+                const banned = !!(c.email && dbData.auth_banned_map?.[c.email])
                 return (
                   <div key={c.id} className="flex items-center gap-3 text-sm">
                     <div className="flex-1 min-w-0">
@@ -1290,8 +1290,8 @@ export function AuditPanel({
               {(() => {
                 // Determine current state from auth-user banned map (not tier)
                 const contactsWithAuth = dbData.contacts_with_tier.filter(c => c.email && dbData.auth_user_map[c.email])
-                const allBanned = contactsWithAuth.length > 0 && contactsWithAuth.every(c => dbData.auth_banned_map[c.email!])
-                const anyCanLogIn = contactsWithAuth.some(c => !dbData.auth_banned_map[c.email!])
+                const allBanned = contactsWithAuth.length > 0 && contactsWithAuth.every(c => !!dbData.auth_banned_map?.[c.email!])
+                const anyCanLogIn = contactsWithAuth.some(c => !dbData.auth_banned_map?.[c.email!])
                 const noContacts = dbData.contacts_with_tier.length === 0
                 // For accounts with no contacts, fall back to account.portal_tier as the activity indicator
                 const showDeactivate = anyCanLogIn || (noContacts && portalTierLocal === 'active')
