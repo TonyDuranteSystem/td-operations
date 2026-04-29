@@ -55,9 +55,33 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (user) authUserDetails[c.email] = { id: user.id, banned_until: bannedUntil }
   }
 
+  // Diagnostics — what env / key is the runtime using?
+  const envSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? null
+  const expectedRef = process.env.EXPECTED_SUPABASE_REF ?? null
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
+  const keyPrefix = serviceKey.slice(0, 12)
+  const keyLen = serviceKey.length
+
+  // Try the same query without any embed — maybe RLS / relation issue
+  const directRes = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id, contact_id, role')
+    .eq('account_id', id)
+
+  // Count all account_contacts rows visible to service role
+  const { count: totalLinks } = await supabaseAdmin
+    .from('account_contacts')
+    .select('*', { count: 'exact', head: true })
+
   return NextResponse.json({
     debug: 'audit-data-mirror',
     timestamp: new Date().toISOString(),
+    runtime: {
+      NEXT_PUBLIC_SUPABASE_URL: envSupabaseUrl,
+      EXPECTED_SUPABASE_REF: expectedRef,
+      SUPABASE_SERVICE_ROLE_KEY_prefix: keyPrefix,
+      SUPABASE_SERVICE_ROLE_KEY_length: keyLen,
+    },
     account: accountRes.data,
     contacts_with_tier: contacts,
     auth_user_map: authUserMap,
@@ -65,5 +89,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     auth_user_details: authUserDetails,
     raw_contacts_res: contactsRes.data,
     raw_contacts_error: contactsRes.error,
+    direct_account_contacts_query: directRes.data,
+    direct_query_error: directRes.error,
+    total_account_contacts_rows_visible: totalLinks,
   })
 }
