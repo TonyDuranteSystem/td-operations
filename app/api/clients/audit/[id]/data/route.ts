@@ -62,10 +62,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   } | null).filter(Boolean)
 
   const authUserMap: Record<string, boolean> = {}
+  const authBannedMap: Record<string, boolean> = {}
   for (const c of contacts) {
     if (!c?.email) continue
     const user = await findAuthUserByEmail(c.email)
     authUserMap[c.email] = !!user
+    // banned_until is set when the user is banned; null/undefined = not banned
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const banned = !!(user as any)?.banned_until && new Date((user as any).banned_until) > new Date()
+    authBannedMap[c.email] = banned
   }
 
   // Same for members
@@ -74,6 +79,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     if (!m.email || authUserMap[m.email] !== undefined) continue
     const user = await findAuthUserByEmail(m.email)
     authUserMap[m.email] = !!user
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const banned = !!(user as any)?.banned_until && new Date((user as any).banned_until) > new Date()
+    authBannedMap[m.email] = banned
   }
 
   return NextResponse.json({
@@ -88,6 +96,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     members: members,
     annual_agreements: agreementsRes.data ?? [],
     auth_user_map: authUserMap,
+    auth_banned_map: authBannedMap,
     contacts_with_tier: contacts,
   })
 }
