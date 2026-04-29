@@ -101,13 +101,21 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     address_country: (c.address_country ?? null) as string | null,
   }))
 
-  // Helper: in the deployed runtime, supabase-js listUsers strips
-  // banned_until from the User object — only getUserById returns it.
-  // Verified via /api/admin/audit-debug 2026-04-29.
+  // Read banned_until via a Postgres RPC that selects directly from
+  // auth.users — the Supabase auth admin API (listUsers AND getUserById)
+  // is inconsistent in the deployed runtime: it returns banned_until for
+  // some users and strips it for others, even though the DB row is correct.
+  // The RPC is SECURITY DEFINER so it can read auth.users via service role.
   async function readBannedUntil(userId: string): Promise<string | null> {
-    const { data } = await supabaseAdmin.auth.admin.getUserById(userId)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return ((data?.user as any)?.banned_until as string | null) ?? null
+    const { data, error } = await (supabaseAdmin as any).rpc('get_auth_user_banned_until', { p_user_id: userId })
+    if (error) {
+      // Fallback: try getUserById in case the RPC isn't deployed yet
+      const { data: byId } = await supabaseAdmin.auth.admin.getUserById(userId)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return ((byId?.user as any)?.banned_until as string | null) ?? null
+    }
+    return (data as string | null) ?? null
   }
 
   const authUserMap: Record<string, boolean> = {}
