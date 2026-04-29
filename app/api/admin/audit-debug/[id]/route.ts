@@ -32,14 +32,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .single(),
     supabaseAdmin
       .from('account_contacts')
-      .select('contact_id, role, contacts(id, full_name, email, portal_tier)')
+      .select('contact_id, role')
       .eq('account_id', id),
   ])
 
-  // Mirror the data route logic exactly
-  const contacts = (contactsRes.data ?? []).map(r => r.contacts as unknown as {
-    id: string; full_name: string; email: string; portal_tier: string | null
-  } | null).filter(Boolean)
+  // Two-step contact fetch (matches new data route)
+  const linkedContactIds = (contactsRes.data ?? []).map(r => r.contact_id).filter(Boolean) as string[]
+  const { data: contactRows } = linkedContactIds.length > 0
+    ? await supabaseAdmin
+        .from('contacts')
+        .select('id, full_name, email, portal_tier')
+        .in('id', linkedContactIds)
+    : { data: [] as Array<{ id: string; full_name: string | null; email: string | null; portal_tier: string | null }> }
+
+  const contacts = (contactRows ?? []).map(c => ({
+    id: c.id as string,
+    full_name: (c.full_name ?? '') as string,
+    email: (c.email ?? '') as string,
+    portal_tier: c.portal_tier as string | null,
+  }))
 
   const authUserMap: Record<string, boolean> = {}
   const authBannedMap: Record<string, boolean> = {}
