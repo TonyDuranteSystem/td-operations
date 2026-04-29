@@ -32,10 +32,9 @@ function AnnouncementDialog({
   onClose: () => void
   onSave: (data: Partial<AnnouncementRow>) => Promise<void>
 }) {
-  const [title, setTitle] = useState(row?.title ?? '')
-  const [message, setMessage] = useState(row?.message ?? '')
-  const [titleEn, setTitleEn] = useState(row?.title_en ?? '')
-  const [messageEn, setMessageEn] = useState(row?.message_en ?? '')
+  // Prefill from the English fields (what clients actually see) falling back to primary
+  const [title, setTitle] = useState(row?.title_en ?? row?.title ?? '')
+  const [message, setMessage] = useState(row?.message_en ?? row?.message ?? '')
   const [type, setType] = useState<'info' | 'warning' | 'success'>(row?.type ?? 'info')
   const [dismissible, setDismissible] = useState(row?.dismissible !== false)
   const [active, setActive] = useState(row?.active !== false)
@@ -44,15 +43,16 @@ function AnnouncementDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!title.trim() || !message.trim()) { setError('Italian title and message are required.'); return }
+    if (!title.trim() || !message.trim()) { setError('Title and message are required.'); return }
     setSaving(true)
     setError('')
     try {
+      // Write to both fields: title/message satisfies NOT NULL, title_en/message_en is what the banner displays
       await onSave({
-        title,
-        message,
-        title_en: titleEn.trim() || null,
-        message_en: messageEn.trim() || null,
+        title: title.trim(),
+        message: message.trim(),
+        title_en: title.trim(),
+        message_en: message.trim(),
         type,
         dismissible,
         active,
@@ -75,35 +75,17 @@ function AnnouncementDialog({
       >
         <h2 className="text-lg font-semibold">{row ? 'Edit Announcement' : 'New Announcement'}</h2>
 
-        {/* Italian (primary) */}
         <div className="space-y-3">
-          <p className="text-xs font-semibold uppercase text-zinc-400 tracking-wider">🇮🇹 Italian (primary)</p>
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1">Title</label>
             <input value={title} onChange={e => setTitle(e.target.value)} className={fieldCls}
-              placeholder="Relay: bonifici internazionali" />
+              placeholder="e.g. Relay: International Wire Transfers" />
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1">Message</label>
-            <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3}
+            <textarea value={message} onChange={e => setMessage(e.target.value)} rows={4}
               className={`${fieldCls} resize-none`}
-              placeholder="Testo del messaggio in italiano..." />
-          </div>
-        </div>
-
-        {/* English (optional) */}
-        <div className="space-y-3 pt-1 border-t border-zinc-100">
-          <p className="text-xs font-semibold uppercase text-zinc-400 tracking-wider pt-1">🇺🇸 English (shown to English-language clients)</p>
-          <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1">Title <span className="text-zinc-400 font-normal">(optional)</span></label>
-            <input value={titleEn} onChange={e => setTitleEn(e.target.value)} className={fieldCls}
-              placeholder="Relay: international wire transfer" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1">Message <span className="text-zinc-400 font-normal">(optional — falls back to Italian if blank)</span></label>
-            <textarea value={messageEn} onChange={e => setMessageEn(e.target.value)} rows={3}
-              className={`${fieldCls} resize-none`}
-              placeholder="Message text in English..." />
+              placeholder="Message text shown to all portal clients..." />
           </div>
         </div>
 
@@ -200,7 +182,7 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-zinc-500">
-          Banners shown to all portal clients. Italian is shown by default; English is shown to English-language clients.
+          Banners shown to all portal clients on their dashboard.
         </p>
         <button onClick={() => setDialog('new')}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-zinc-900 text-white rounded-lg hover:bg-zinc-700">
@@ -220,7 +202,6 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
             <thead className="bg-zinc-50 text-left text-xs uppercase text-zinc-500">
               <tr>
                 <th className="px-4 py-2 font-medium">Title</th>
-                <th className="px-4 py-2 font-medium">EN</th>
                 <th className="px-4 py-2 font-medium">Type</th>
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Created</th>
@@ -231,13 +212,8 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
               {rows.map(row => (
                 <tr key={row.id} className={row.active ? '' : 'opacity-50'}>
                   <td className="px-4 py-3">
-                    <p className="font-medium text-zinc-900">{row.title}</p>
-                    <p className="text-xs text-zinc-500 mt-0.5 max-w-xs truncate">{row.message}</p>
-                  </td>
-                  <td className="px-4 py-3 text-xs">
-                    {row.title_en
-                      ? <span className="inline-flex px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓</span>
-                      : <span className="text-zinc-300">—</span>}
+                    <p className="font-medium text-zinc-900">{row.title_en ?? row.title}</p>
+                    <p className="text-xs text-zinc-500 mt-0.5 max-w-xs truncate">{row.message_en ?? row.message}</p>
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_BADGE[row.type] ?? TYPE_BADGE.info}`}>
