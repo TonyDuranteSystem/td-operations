@@ -52,16 +52,33 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .eq('account_id', id)
       .order('agreement_year', { ascending: false }),
 
+    // Two-step contact fetch (avoid PostgREST embed inference, which silently
+    // returned empty rows in the deployed Vercel runtime even though the FK
+    // resolves correctly in psql and the JS client locally — see audit-debug
+    // diagnostic 2026-04-29). Step 1: get contact_ids linked to the account.
     supabaseAdmin
       .from('account_contacts')
-      .select('contact_id, role, contacts(id, full_name, email, portal_tier)')
+      .select('contact_id, role')
       .eq('account_id', id),
   ])
 
-  // Check auth users for each contact email
-  const contacts = (contactsRes.data ?? []).map(r => r.contacts as unknown as {
-    id: string; full_name: string; email: string; portal_tier: string | null
-  } | null).filter(Boolean)
+  // Step 2: fetch the contacts themselves by id
+  const linkedContactIds = (contactsRes.data ?? []).map(r => r.contact_id).filter(Boolean) as string[]
+  const { data: contactRows } = linkedContactIds.length > 0
+    ? await supabaseAdmin
+        .from('contacts')
+        .select('id, full_name, email, portal_tier')
+        .in('id', linkedContactIds)
+    : { data: [] as Array<{ id: string; full_name: string | null; email: string | null; portal_tier: string | null }> }
+
+  // Use the explicitly-fetched contacts (Step 2 above) instead of the
+  // unreliable PostgREST embed.
+  const contacts = (contactRows ?? []).map(c => ({
+    id: c.id as string,
+    full_name: (c.full_name ?? '') as string,
+    email: (c.email ?? '') as string,
+    portal_tier: c.portal_tier as string | null,
+  }))
 
   const authUserMap: Record<string, boolean> = {}
   const authBannedMap: Record<string, boolean> = {}
