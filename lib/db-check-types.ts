@@ -211,6 +211,9 @@ export type PendingActivationsConfirmationMode = "supervised" | "auto"
 /** pending_activations.status — CHECK constraint */
 export type PendingActivationsStatus = "awaiting_payment" | "payment_confirmed" | "activated" | "expired" | "cancelled"
 
+/** portal_announcements.type — CHECK constraint */
+export type PortalAnnouncementsType = "info" | "warning" | "success"
+
 /** portal_issues.status — CHECK constraint */
 export type PortalIssuesStatus = "open" | "resolved" | "dismissed"
 
