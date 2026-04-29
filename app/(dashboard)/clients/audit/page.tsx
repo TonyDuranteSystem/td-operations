@@ -16,6 +16,7 @@ export default async function ClientAuditPage() {
       formation_date,
       onboarding_date,
       ein_number,
+      filing_id,
       state_of_formation,
       physical_address,
       notes,
