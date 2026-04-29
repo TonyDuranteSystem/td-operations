@@ -16,7 +16,9 @@ import { type AccountRow, type ContactRow } from './audit-shell'
 
 type MemberRow = {
   id: string
-  full_name: string
+  full_name: string | null
+  company_name: string | null
+  ein: string | null
   email: string | null
   phone: string | null
   ownership_pct: number | null
@@ -26,8 +28,17 @@ type MemberRow = {
   address_street: string | null
   address_city: string | null
   address_state: string | null
+  address_zip: string | null
   address_country: string | null
   contact_id: string | null
+  representative_name: string | null
+  representative_email: string | null
+  representative_phone: string | null
+  representative_address_street: string | null
+  representative_address_city: string | null
+  representative_address_state: string | null
+  representative_address_zip: string | null
+  representative_address_country: string | null
 }
 
 type AnnualAgreementRow = {
@@ -750,45 +761,153 @@ export function AuditPanel({
               </p>
             </div>
           )}
-          {localContacts.map((c, idx) => (
-            <div key={c.id} className={cn('space-y-3', idx > 0 && 'pt-3 border-t')}>
-              {localContacts.length > 1 && (
-                <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Contact {idx + 1}</p>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                <Field
-                  label="Full name"
-                  value={getContactValue(c, 'full_name')}
-                  onChange={v => setContactValue(c.id, 'full_name', v)}
-                />
-                <Field
-                  label="Email"
-                  value={getContactValue(c, 'email')}
-                  onChange={v => setContactValue(c.id, 'email', v)}
-                />
-                <Field
-                  label="Phone"
-                  value={getContactValue(c, 'phone')}
-                  onChange={v => setContactValue(c.id, 'phone', v)}
-                />
-                <Field
-                  label="Language"
-                  value={getContactValue(c, 'language')}
-                  onChange={v => setContactValue(c.id, 'language', v)}
-                />
-                <Field
-                  label="Citizenship"
-                  value={getContactValue(c, 'citizenship')}
-                  onChange={v => setContactValue(c.id, 'citizenship', v)}
-                />
-                <Field
-                  label="ITIN"
-                  value={getContactValue(c, 'itin')}
-                  onChange={v => setContactValue(c.id, 'itin', v)}
-                />
+          {localContacts.map((c, idx) => {
+            // Compute missing fields for the audit indicator
+            const missing: string[] = []
+            if (!getContactValue(c, 'email')) missing.push('email')
+            if (!getContactValue(c, 'phone')) missing.push('phone')
+            if (!getContactValue(c, 'date_of_birth')) missing.push('DOB')
+            if (!getContactValue(c, 'citizenship')) missing.push('citizenship')
+            if (!getContactValue(c, 'passport_number')) missing.push('passport')
+            if (!getContactValue(c, 'address_line1')) missing.push('address')
+            return (
+              <div key={c.id} className={cn('space-y-3', idx > 0 && 'pt-3 border-t')}>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  {localContacts.length > 1 ? (
+                    <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Contact {idx + 1}</p>
+                  ) : <span />}
+                  {missing.length > 0 ? (
+                    <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded inline-flex items-center gap-1.5">
+                      <AlertCircle className="h-3 w-3" />
+                      Missing: {missing.join(', ')}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded inline-flex items-center gap-1.5">
+                      <CheckCircle2 className="h-3 w-3" />
+                      All required fields present
+                    </span>
+                  )}
+                </div>
+
+                {/* Identity */}
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wide mb-1.5">Identity</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field
+                      label="Full name"
+                      value={getContactValue(c, 'full_name')}
+                      onChange={v => setContactValue(c.id, 'full_name', v)}
+                    />
+                    <Field
+                      label="Date of birth"
+                      type="date"
+                      value={getContactValue(c, 'date_of_birth')}
+                      onChange={v => setContactValue(c.id, 'date_of_birth', v)}
+                    />
+                    <Field
+                      label="Citizenship"
+                      value={getContactValue(c, 'citizenship')}
+                      onChange={v => setContactValue(c.id, 'citizenship', v)}
+                    />
+                    <Field
+                      label="Language"
+                      value={getContactValue(c, 'language')}
+                      onChange={v => setContactValue(c.id, 'language', v)}
+                    />
+                  </div>
+                </div>
+
+                {/* Contact channels */}
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wide mb-1.5">Contact</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field
+                      label="Email"
+                      value={getContactValue(c, 'email')}
+                      onChange={v => setContactValue(c.id, 'email', v)}
+                    />
+                    <Field
+                      label="Phone"
+                      value={getContactValue(c, 'phone')}
+                      onChange={v => setContactValue(c.id, 'phone', v)}
+                    />
+                  </div>
+                </div>
+
+                {/* Documents */}
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wide mb-1.5">Documents</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field
+                      label="Passport number"
+                      value={getContactValue(c, 'passport_number')}
+                      onChange={v => setContactValue(c.id, 'passport_number', v)}
+                    />
+                    <Field
+                      label="Passport expiry"
+                      type="date"
+                      value={getContactValue(c, 'passport_expiry_date')}
+                      onChange={v => setContactValue(c.id, 'passport_expiry_date', v)}
+                    />
+                    <Field
+                      label="ITIN"
+                      value={getContactValue(c, 'itin')}
+                      onChange={v => setContactValue(c.id, 'itin', v)}
+                    />
+                    <div className="flex items-end gap-3 text-xs">
+                      <span className={cn(
+                        'px-2 py-1 rounded',
+                        c.passport_on_file
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-zinc-100 text-zinc-500'
+                      )}>
+                        Passport on file: {c.passport_on_file ? 'yes' : 'no'}
+                      </span>
+                      {c.kyc_status && (
+                        <span className="px-2 py-1 rounded bg-zinc-100 text-zinc-700">
+                          KYC: {c.kyc_status}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Address */}
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-wide mb-1.5">Address</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <Field
+                        label="Street address"
+                        value={getContactValue(c, 'address_line1')}
+                        onChange={v => setContactValue(c.id, 'address_line1', v)}
+                      />
+                    </div>
+                    <Field
+                      label="City"
+                      value={getContactValue(c, 'address_city')}
+                      onChange={v => setContactValue(c.id, 'address_city', v)}
+                    />
+                    <Field
+                      label="State / Province"
+                      value={getContactValue(c, 'address_state')}
+                      onChange={v => setContactValue(c.id, 'address_state', v)}
+                    />
+                    <Field
+                      label="ZIP / Postal"
+                      value={getContactValue(c, 'address_zip')}
+                      onChange={v => setContactValue(c.id, 'address_zip', v)}
+                    />
+                    <Field
+                      label="Country"
+                      value={getContactValue(c, 'address_country')}
+                      onChange={v => setContactValue(c.id, 'address_country', v)}
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
 
           {/* Contact search / link / create */}
           <div className={cn('pt-3 space-y-2', localContacts.length > 0 && 'border-t')}>
@@ -868,21 +987,107 @@ export function AuditPanel({
 
           {/* Members (for MMLLC) */}
           {!dbLoading && (dbData?.members.length ?? 0) > 0 && (
-            <div className="pt-2 border-t">
-              <p className="text-xs text-zinc-500 font-medium uppercase tracking-wide mb-1.5">
+            <div className="pt-3 border-t">
+              <p className="text-xs text-zinc-500 font-medium uppercase tracking-wide mb-2">
                 Members table ({dbData!.members.length})
               </p>
-              <div className="space-y-1">
-                {dbData!.members.map(m => (
-                  <div key={m.id} className="flex items-center gap-2 text-xs">
-                    <span className={cn('px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600', m.is_primary && 'bg-blue-100 text-blue-700')}>
-                      {m.is_primary ? 'Primary' : m.member_type ?? 'Member'}
-                    </span>
-                    <span className="font-medium">{m.full_name}</span>
-                    {m.ownership_pct != null && <span className="text-zinc-400">{m.ownership_pct}%</span>}
-                    {m.email && <span className="text-zinc-500">{m.email}</span>}
-                  </div>
-                ))}
+              <div className="space-y-3">
+                {dbData!.members.map(m => {
+                  const isCompanyMember = m.member_type?.toLowerCase().includes('company') || !!m.company_name
+                  const memberMissing: string[] = []
+                  if (!m.full_name && !m.company_name) memberMissing.push('name')
+                  if (!m.email) memberMissing.push('email')
+                  if (m.ownership_pct == null) memberMissing.push('ownership %')
+                  if (!m.address_street) memberMissing.push('street')
+                  if (!m.address_city) memberMissing.push('city')
+                  if (!m.address_state) memberMissing.push('state')
+                  if (!m.address_zip) memberMissing.push('ZIP')
+                  if (!m.address_country) memberMissing.push('country')
+                  if (isCompanyMember) {
+                    if (!m.ein) memberMissing.push('EIN')
+                    if (!m.representative_name) memberMissing.push('representative')
+                  }
+                  return (
+                    <div key={m.id} className="border rounded-md p-3 space-y-2 bg-zinc-50/50">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={cn(
+                            'text-xs px-2 py-0.5 rounded',
+                            m.is_primary ? 'bg-blue-100 text-blue-700' : 'bg-zinc-100 text-zinc-600'
+                          )}>
+                            {m.is_primary ? 'Primary' : m.member_type ?? 'Member'}
+                          </span>
+                          {m.is_signer && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">Signer</span>
+                          )}
+                          {isCompanyMember && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">Company</span>
+                          )}
+                          <span className="font-medium text-sm">
+                            {m.company_name || m.full_name || '(no name)'}
+                          </span>
+                          {m.ownership_pct != null && (
+                            <span className="text-xs text-zinc-500">{m.ownership_pct}%</span>
+                          )}
+                        </div>
+                        {memberMissing.length > 0 ? (
+                          <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded inline-flex items-center gap-1.5">
+                            <AlertCircle className="h-3 w-3" />
+                            Missing: {memberMissing.join(', ')}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded inline-flex items-center gap-1.5">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Complete
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        {isCompanyMember && (
+                          <>
+                            <div><span className="text-zinc-400">Company:</span> {m.company_name ?? <em className="text-amber-600">missing</em>}</div>
+                            <div><span className="text-zinc-400">EIN:</span> {m.ein ?? <em className="text-amber-600">missing</em>}</div>
+                          </>
+                        )}
+                        {!isCompanyMember && (
+                          <div className="col-span-2"><span className="text-zinc-400">Name:</span> {m.full_name ?? <em className="text-amber-600">missing</em>}</div>
+                        )}
+                        <div><span className="text-zinc-400">Email:</span> {m.email ?? <em className="text-amber-600">missing</em>}</div>
+                        <div><span className="text-zinc-400">Phone:</span> {m.phone ?? <em className="text-zinc-400">—</em>}</div>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-zinc-400 uppercase tracking-wide mb-0.5">Address</p>
+                        <div className="text-xs grid grid-cols-2 gap-x-3 gap-y-0.5">
+                          <div className="col-span-2">
+                            <span className="text-zinc-400">Street:</span> {m.address_street ?? <em className="text-amber-600">missing</em>}
+                          </div>
+                          <div><span className="text-zinc-400">City:</span> {m.address_city ?? <em className="text-amber-600">missing</em>}</div>
+                          <div><span className="text-zinc-400">State:</span> {m.address_state ?? <em className="text-amber-600">missing</em>}</div>
+                          <div><span className="text-zinc-400">ZIP:</span> {m.address_zip ?? <em className="text-amber-600">missing</em>}</div>
+                          <div><span className="text-zinc-400">Country:</span> {m.address_country ?? <em className="text-amber-600">missing</em>}</div>
+                        </div>
+                      </div>
+
+                      {isCompanyMember && (
+                        <div>
+                          <p className="text-xs text-zinc-400 uppercase tracking-wide mb-0.5">Representative</p>
+                          <div className="text-xs grid grid-cols-2 gap-x-3 gap-y-0.5">
+                            <div><span className="text-zinc-400">Name:</span> {m.representative_name ?? <em className="text-amber-600">missing</em>}</div>
+                            <div><span className="text-zinc-400">Email:</span> {m.representative_email ?? <em className="text-amber-600">missing</em>}</div>
+                            <div><span className="text-zinc-400">Phone:</span> {m.representative_phone ?? <em className="text-zinc-400">—</em>}</div>
+                            <div className="col-span-2">
+                              <span className="text-zinc-400">Address:</span>{' '}
+                              {[m.representative_address_street, m.representative_address_city, m.representative_address_state, m.representative_address_zip, m.representative_address_country]
+                                .filter(Boolean).join(', ') || <em className="text-amber-600">missing</em>}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

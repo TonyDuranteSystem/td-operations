@@ -15,6 +15,16 @@ export type ContactRow = {
   citizenship: string | null
   itin: string | null
   portal_tier: string | null
+  date_of_birth: string | null
+  passport_number: string | null
+  passport_expiry_date: string | null
+  passport_on_file: boolean | null
+  kyc_status: string | null
+  address_line1: string | null
+  address_city: string | null
+  address_state: string | null
+  address_zip: string | null
+  address_country: string | null
 }
 
 export type AccountRow = {
