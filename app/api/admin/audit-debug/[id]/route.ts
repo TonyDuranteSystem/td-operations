@@ -67,6 +67,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       directDbError = e instanceof Error ? e.message : String(e)
     }
 
+    // Try the RPC the data route now uses
+    let rpcBannedUntil: string | null = null
+    let rpcError: string | null = null
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: rpcData, error: rpcErr } = await (supabaseAdmin as any).rpc('get_auth_user_banned_until', { p_user_id: user.id })
+      rpcBannedUntil = (rpcData as string | null) ?? null
+      rpcError = rpcErr?.message ?? null
+    } catch (e) {
+      rpcError = e instanceof Error ? e.message : String(e)
+    }
+
     perContact.push({
       contact_email: c.email,
       contact_full_name: c.full_name,
@@ -79,6 +91,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       banned_until_from_get_by_id: bannedUntilRaw,
       banned_until_from_direct_db: directDbBannedUntil,
       direct_db_error: directDbError,
+      banned_until_from_rpc: rpcBannedUntil,
+      rpc_error: rpcError,
       now: new Date(nowMs).toISOString(),
       banned_until_in_future: computedBanned,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
