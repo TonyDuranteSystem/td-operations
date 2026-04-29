@@ -7,6 +7,8 @@ export interface PortalAnnouncement {
   id: string
   title: string
   message: string
+  title_en: string | null
+  message_en: string | null
   type: 'info' | 'warning' | 'success'
   dismissible: boolean
 }
@@ -35,7 +37,7 @@ const TYPE_STYLES = {
   },
 }
 
-function SingleBanner({ ann }: { ann: PortalAnnouncement }) {
+function SingleBanner({ ann, locale }: { ann: PortalAnnouncement; locale: 'en' | 'it' }) {
   const [visible, setVisible] = useState(!ann.dismissible)
 
   useEffect(() => {
@@ -64,14 +66,18 @@ function SingleBanner({ ann }: { ann: PortalAnnouncement }) {
 
   const s = TYPE_STYLES[ann.type] ?? TYPE_STYLES.info
 
+  // Use English copy if client is English and English version exists; otherwise Italian
+  const displayTitle = locale === 'en' && ann.title_en ? ann.title_en : ann.title
+  const displayMessage = locale === 'en' && ann.message_en ? ann.message_en : ann.message
+
   return (
     <div className={`flex items-start gap-3 border rounded-xl px-4 py-3 ${s.container}`}>
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${s.icon}`}>
         <Megaphone className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className={`text-sm font-semibold ${s.title}`}>{ann.title}</p>
-        <p className={`text-xs mt-0.5 whitespace-pre-line ${s.body}`}>{ann.message}</p>
+        <p className={`text-sm font-semibold ${s.title}`}>{displayTitle}</p>
+        <p className={`text-xs mt-0.5 whitespace-pre-line ${s.body}`}>{displayMessage}</p>
       </div>
       {ann.dismissible && (
         <button
@@ -86,12 +92,18 @@ function SingleBanner({ ann }: { ann: PortalAnnouncement }) {
   )
 }
 
-export function AnnouncementBanners({ announcements }: { announcements: PortalAnnouncement[] }) {
+export function AnnouncementBanners({
+  announcements,
+  locale,
+}: {
+  announcements: PortalAnnouncement[]
+  locale: 'en' | 'it'
+}) {
   if (!announcements.length) return null
   return (
     <div className="space-y-2">
       {announcements.map(ann => (
-        <SingleBanner key={ann.id} ann={ann} />
+        <SingleBanner key={ann.id} ann={ann} locale={locale} />
       ))}
     </div>
   )

@@ -72,7 +72,7 @@ async function fetchAnnouncements(): Promise<AnnouncementRow[]> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabaseAdmin as any)
       .from('portal_announcements')
-      .select('id, title, message, type, active, dismissible, created_at, updated_at')
+      .select('id, title, message, title_en, message_en, type, active, dismissible, created_at, updated_at')
       .order('created_at', { ascending: false })
     return (data ?? []) as AnnouncementRow[]
   } catch {

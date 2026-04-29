@@ -12,7 +12,7 @@ export async function GET() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabaseAdmin as any)
       .from('portal_announcements')
-      .select('id, title, message, type, dismissible')
+      .select('id, title, message, title_en, message_en, type, dismissible')
       .eq('active', true)
       .order('created_at', { ascending: false })
 

@@ -26,7 +26,7 @@ export async function GET() {
   try {
     const { data, error } = await sb
       .from('portal_announcements')
-      .select('id, title, message, type, active, dismissible, created_at, updated_at')
+      .select('id, title, message, title_en, message_en, type, active, dismissible, created_at, updated_at')
       .order('created_at', { ascending: false })
 
     if (error) return NextResponse.json({ announcements: [] })
@@ -47,6 +47,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null) as {
     title?: string
     message?: string
+    title_en?: string | null
+    message_en?: string | null
     type?: string
     dismissible?: boolean
     active?: boolean
@@ -64,11 +66,13 @@ export async function POST(request: NextRequest) {
     .insert({
       title: body.title.trim(),
       message: body.message.trim(),
+      title_en: body.title_en?.trim() || null,
+      message_en: body.message_en?.trim() || null,
       type,
       dismissible: body.dismissible !== false,
       active: body.active !== false,
     })
-    .select('id, title, message, type, active, dismissible, created_at, updated_at')
+    .select('id, title, message, title_en, message_en, type, active, dismissible, created_at, updated_at')
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
