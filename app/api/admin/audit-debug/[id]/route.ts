@@ -55,6 +55,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const nowMs = Date.now()
     const bannedUntilMs = bannedUntilRaw ? new Date(bannedUntilRaw).getTime() : null
     const computedBanned = !!bannedUntilRaw && bannedUntilMs! > nowMs
+    // Try direct SQL read via auth schema
+    let directDbBannedUntil: string | null = null
+    let directDbError: string | null = null
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: dbRow, error: dbErr } = await (supabaseAdmin as any).schema('auth').from('users').select('banned_until').eq('id', user.id).maybeSingle()
+      directDbBannedUntil = dbRow?.banned_until ?? null
+      directDbError = dbErr?.message ?? null
+    } catch (e) {
+      directDbError = e instanceof Error ? e.message : String(e)
+    }
+
     perContact.push({
       contact_email: c.email,
       contact_full_name: c.full_name,
@@ -64,7 +76,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       find_user_keys_has_banned_until: 'banned_until' in (user as any),
       get_by_id_user_id: byIdData?.user?.id ?? null,
       get_by_id_error: byIdErr?.message ?? null,
-      banned_until_raw: bannedUntilRaw,
+      banned_until_from_get_by_id: bannedUntilRaw,
+      banned_until_from_direct_db: directDbBannedUntil,
+      direct_db_error: directDbError,
       now: new Date(nowMs).toISOString(),
       banned_until_in_future: computedBanned,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
