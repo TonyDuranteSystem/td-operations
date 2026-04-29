@@ -10,7 +10,7 @@
  */
 
 import Link from "next/link"
-import { Settings, FileText, Workflow, ListTodo } from "lucide-react"
+import { Settings, FileText, Workflow, ListTodo, Megaphone } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { SOPEditButton, type SOPRow } from "./sop-edit-dialog"
 import {
@@ -18,6 +18,7 @@ import {
   type PipelineStageRow,
 } from "./pipeline-stage-edit-dialog"
 import { DevTaskEditButton, type DevTaskRow } from "./dev-task-edit-dialog"
+import { AnnouncementsTab, type AnnouncementRow } from "./announcement-manager"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -40,10 +41,10 @@ const SERVICE_TYPES = [
   "Support",
 ]
 
-type Tab = "sops" | "pipeline" | "dev-tasks"
+type Tab = "sops" | "pipeline" | "dev-tasks" | "announcements"
 
 function isTab(v: string | undefined): v is Tab {
-  return v === "sops" || v === "pipeline" || v === "dev-tasks"
+  return v === "sops" || v === "pipeline" || v === "dev-tasks" || v === "announcements"
 }
 
 async function fetchSOPs(): Promise<SOPRow[]> {
@@ -64,6 +65,19 @@ async function fetchPipelineStages(): Promise<PipelineStageRow[]> {
     .order("service_type", { ascending: true })
     .order("stage_order", { ascending: true })
   return (data ?? []) as PipelineStageRow[]
+}
+
+async function fetchAnnouncements(): Promise<AnnouncementRow[]> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabaseAdmin as any)
+      .from('portal_announcements')
+      .select('id, title, message, type, active, dismissible, created_at, updated_at')
+      .order('created_at', { ascending: false })
+    return (data ?? []) as AnnouncementRow[]
+  } catch {
+    return []
+  }
 }
 
 async function fetchDevTasks(statusFilter: string | undefined): Promise<DevTaskRow[]> {
@@ -119,10 +133,11 @@ export default async function ConfigPage({
   // Fetch all three in parallel. Each table is small (17 / 56 / ≤100 rows);
   // fetching all three lets the tab nav show live counts without a second
   // round-trip.
-  const [sops, pipeline, devTasks] = await Promise.all([
+  const [sops, pipeline, devTasks, announcements] = await Promise.all([
     fetchSOPs(),
     fetchPipelineStages(),
     fetchDevTasks(sp.dev_status),
+    fetchAnnouncements(),
   ])
 
   return (
@@ -142,11 +157,13 @@ export default async function ConfigPage({
         <TabLink href="/config?tab=sops" active={tab === "sops"} icon={FileText} label="SOPs" count={sops.length} />
         <TabLink href="/config?tab=pipeline" active={tab === "pipeline"} icon={Workflow} label="Pipeline Stages" count={pipeline.length} />
         <TabLink href="/config?tab=dev-tasks" active={tab === "dev-tasks"} icon={ListTodo} label="Dev Tasks" count={devTasks.length} />
+        <TabLink href="/config?tab=announcements" active={tab === "announcements"} icon={Megaphone} label="Announcements" count={announcements.length} />
       </nav>
 
       {tab === "sops" && <SOPsTab rows={sops} />}
       {tab === "pipeline" && <PipelineTab rows={pipeline} />}
       {tab === "dev-tasks" && <DevTasksTab rows={devTasks} activeStatus={sp.dev_status ?? "open"} />}
+      {tab === "announcements" && <AnnouncementsTab initialRows={announcements} />}
     </div>
   )
 }
