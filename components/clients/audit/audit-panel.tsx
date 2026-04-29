@@ -543,8 +543,8 @@ export function AuditPanel({
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Failed to update portal access')
 
-      // Re-fetch data so the UI reflects the new banned state
-      const dataRes = await fetch(`/api/clients/audit/${account.id}/data`)
+      // Re-fetch data so the UI reflects the new banned state — bypass any cache
+      const dataRes = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
       const fresh: AccountData = await dataRes.json()
       setDbData(fresh)
       setPortalTierLocal(fresh.portal_tier ?? null)
