@@ -21,6 +21,7 @@ import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { RenewalBanner } from '@/components/portal/renewal-banner'
 import { MemberInfoBanner } from '@/components/portal/member-info-banner'
+import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
@@ -406,6 +407,20 @@ export default async function PortalDashboardPage() {
   // environment just renders an empty "Partner Banks" section.
   const bankReferrals = await getBankReferralsForAccount(selectedAccountId)
 
+  // Fetch active portal announcements — graceful fallback if table missing
+  let portalAnnouncements: PortalAnnouncement[] = []
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: annData } = await (supabaseAdmin as any)
+      .from('portal_announcements')
+      .select('id, title, message, type, dismissible')
+      .eq('active', true)
+      .order('created_at', { ascending: false })
+    portalAnnouncements = (annData ?? []) as PortalAnnouncement[]
+  } catch {
+    // table doesn't exist yet — no banners shown
+  }
+
   if (!account) {
     return (
       <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto text-center py-20">
@@ -443,6 +458,9 @@ export default async function PortalDashboardPage() {
 
       {/* Relay Wire guide announcement — dismissible per device via localStorage */}
       <GuideAnnouncementBanner locale={locale} />
+
+      {/* DB-backed portal announcements — managed from CRM Config → Announcements */}
+      <AnnouncementBanners announcements={portalAnnouncements} />
 
       {/* Profile completion banner — shown for standalone tax-return clients
           with missing contact fields (phone, address, DOB, citizenship). The
