@@ -111,6 +111,7 @@ type AccountData = {
   members: MemberRow[]
   annual_agreements: AnnualAgreementRow[]
   auth_user_map: Record<string, boolean>
+  auth_banned_map: Record<string, boolean>
   contacts_with_tier: ContactWithTier[]
 }
 
@@ -527,22 +528,37 @@ export function AuditPanel({
     }
   }
 
-  async function handlePortalAccessToggle(action: 'activate' | 'deactivate') {
+  async function handlePortalAccessToggle(action: 'activate' | 'deactivate', force = false) {
     const confirmMsg = action === 'deactivate'
-      ? 'Deactivate portal access? Tier will be downgraded to "lead"; auth user is preserved. Contacts with other active accounts keep their access.'
-      : 'Activate portal access? Tier will be set to "active".'
+      ? 'Block portal login? The auth user(s) for the linked contact(s) will be banned (sign-in disabled). Tier values, services, invoices, and documents are preserved exactly as they are. Contacts who also have access to other active accounts will be SKIPPED unless you confirm again.'
+      : 'Restore portal login? The auth user(s) for the linked contact(s) will be un-banned. Their existing tier and data are unchanged.'
     if (!confirm(confirmMsg)) return
     setPortalToggling(true)
     try {
       const res = await fetch(`/api/clients/audit/${account.id}/portal-access`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, actor: reviewer }),
+        body: JSON.stringify({ action, actor: reviewer, force }),
       })
       const d = await res.json()
       if (!res.ok) throw new Error(d.error || 'Failed to update portal access')
-      setPortalTierLocal(d.newTier)
-      toast.success(action === 'activate' ? 'Portal access activated' : 'Portal access deactivated')
+
+      // Re-fetch data so the UI reflects the new banned state
+      const dataRes = await fetch(`/api/clients/audit/${account.id}/data`)
+      const fresh: AccountData = await dataRes.json()
+      setDbData(fresh)
+      setPortalTierLocal(fresh.portal_tier ?? null)
+
+      const skipped = d.skippedMultiAccount ?? []
+      if (skipped.length > 0) {
+        const proceed = confirm(`Skipped ${skipped.length} contact(s) with access to other active accounts:\n\n${skipped.join('\n')}\n\nForce-block them anyway? (will block login to ALL their accounts)`)
+        if (proceed) {
+          await handlePortalAccessToggle(action, true)
+          return
+        }
+      }
+
+      toast.success(action === 'activate' ? 'Portal login restored' : 'Portal login blocked')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed')
     } finally {
@@ -1233,72 +1249,99 @@ export function AuditPanel({
           {!dbLoading && dbData && (
             <div className="space-y-3">
               {/* Per-contact portal status */}
-              {dbData.contacts_with_tier.map(c => (
-                <div key={c.id} className="flex items-center gap-3 text-sm">
-                  <div className="flex-1 min-w-0">
-                    <span className="font-medium">{c.full_name}</span>
-                    {c.email && <span className="text-xs text-zinc-400 ml-2">{c.email}</span>}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0 text-xs">
-                    {c.email && (
+              {dbData.contacts_with_tier.map(c => {
+                const banned = c.email ? dbData.auth_banned_map[c.email] : false
+                return (
+                  <div key={c.id} className="flex items-center gap-3 text-sm">
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium">{c.full_name}</span>
+                      {c.email && <span className="text-xs text-zinc-400 ml-2">{c.email}</span>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 text-xs">
+                      {c.email && dbData.auth_user_map[c.email] && (
+                        <span className={cn(
+                          'px-1.5 py-0.5 rounded',
+                          banned
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-emerald-100 text-emerald-700'
+                        )}>
+                          {banned ? '⛔ Login blocked' : '✓ Can log in'}
+                        </span>
+                      )}
+                      {c.email && !dbData.auth_user_map[c.email] && (
+                        <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500">No auth user</span>
+                      )}
                       <span className={cn(
-                        'px-1.5 py-0.5 rounded',
-                        dbData.auth_user_map[c.email]
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-zinc-100 text-zinc-500'
+                        'px-1.5 py-0.5 rounded capitalize',
+                        c.portal_tier === 'active' ? 'bg-blue-100 text-blue-700' :
+                        c.portal_tier === 'onboarding' ? 'bg-purple-100 text-purple-700' :
+                        c.portal_tier === 'formation' ? 'bg-orange-100 text-orange-700' :
+                        c.portal_tier === 'lead' ? 'bg-zinc-100 text-zinc-600' :
+                        'bg-zinc-100 text-zinc-400'
                       )}>
-                        {dbData.auth_user_map[c.email] ? '✓ Auth user' : 'No login'}
+                        {c.portal_tier ?? 'no tier'}
                       </span>
-                    )}
-                    <span className={cn(
-                      'px-1.5 py-0.5 rounded capitalize',
-                      c.portal_tier === 'active' ? 'bg-blue-100 text-blue-700' :
-                      c.portal_tier === 'onboarding' ? 'bg-purple-100 text-purple-700' :
-                      c.portal_tier === 'formation' ? 'bg-orange-100 text-orange-700' :
-                      c.portal_tier === 'lead' ? 'bg-zinc-100 text-zinc-600' :
-                      'bg-zinc-100 text-zinc-400'
-                    )}>
-                      {c.portal_tier ?? 'no tier'}
-                    </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
 
-              {/* Activate / Deactivate portal access */}
-              <div className="pt-2 border-t flex items-center justify-between gap-3">
-                <div className="text-xs">
-                  <span className="text-zinc-500 font-medium uppercase tracking-wide">Account portal tier:</span>{' '}
-                  <span className={cn(
-                    'px-1.5 py-0.5 rounded capitalize',
-                    portalTierLocal === 'active' ? 'bg-blue-100 text-blue-700' :
-                    portalTierLocal === 'onboarding' ? 'bg-purple-100 text-purple-700' :
-                    portalTierLocal === 'formation' ? 'bg-orange-100 text-orange-700' :
-                    portalTierLocal === 'lead' ? 'bg-zinc-100 text-zinc-600' :
-                    'bg-zinc-100 text-zinc-400'
-                  )}>
-                    {portalTierLocal ?? 'no tier'}
-                  </span>
-                </div>
-                {portalTierLocal === 'active' ? (
-                  <button
-                    onClick={() => handlePortalAccessToggle('deactivate')}
-                    disabled={portalToggling}
-                    className="px-3 py-1.5 text-xs font-medium border border-red-200 text-red-700 rounded-md hover:bg-red-50 disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {portalToggling ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertCircle className="h-3 w-3" />}
-                    Deactivate Portal Access
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handlePortalAccessToggle('activate')}
-                    disabled={portalToggling}
-                    className="px-3 py-1.5 text-xs font-medium border border-emerald-200 text-emerald-700 rounded-md hover:bg-emerald-50 disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {portalToggling ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-                    Activate Portal Access
-                  </button>
-                )}
-              </div>
+              {/* Block / Restore portal login */}
+              {(() => {
+                // Determine current state from auth-user banned map (not tier)
+                const contactsWithAuth = dbData.contacts_with_tier.filter(c => c.email && dbData.auth_user_map[c.email])
+                const allBanned = contactsWithAuth.length > 0 && contactsWithAuth.every(c => dbData.auth_banned_map[c.email!])
+                const anyCanLogIn = contactsWithAuth.some(c => !dbData.auth_banned_map[c.email!])
+                const noContacts = dbData.contacts_with_tier.length === 0
+                // For accounts with no contacts, fall back to account.portal_tier as the activity indicator
+                const showDeactivate = anyCanLogIn || (noContacts && portalTierLocal === 'active')
+                const showActivate = (allBanned && contactsWithAuth.length > 0) || (noContacts && portalTierLocal !== 'active')
+
+                return (
+                  <div className="pt-2 border-t flex items-center justify-between gap-3">
+                    <div className="text-xs space-y-0.5">
+                      <div>
+                        <span className="text-zinc-500 font-medium uppercase tracking-wide">Account tier:</span>{' '}
+                        <span className={cn(
+                          'px-1.5 py-0.5 rounded capitalize',
+                          portalTierLocal === 'active' ? 'bg-blue-100 text-blue-700' :
+                          portalTierLocal === 'onboarding' ? 'bg-purple-100 text-purple-700' :
+                          portalTierLocal === 'formation' ? 'bg-orange-100 text-orange-700' :
+                          portalTierLocal === 'lead' ? 'bg-zinc-100 text-zinc-600' :
+                          'bg-zinc-100 text-zinc-400'
+                        )}>
+                          {portalTierLocal ?? 'no tier'}
+                        </span>
+                        <span className="text-zinc-400 ml-2">(unchanged by toggle)</span>
+                      </div>
+                      {!noContacts && (
+                        <div className="text-zinc-500">
+                          {anyCanLogIn ? 'At least one contact can currently log in' : allBanned ? 'All contacts blocked from login' : 'No auth users to evaluate'}
+                        </div>
+                      )}
+                    </div>
+                    {showDeactivate ? (
+                      <button
+                        onClick={() => handlePortalAccessToggle('deactivate')}
+                        disabled={portalToggling}
+                        className="px-3 py-1.5 text-xs font-medium border border-red-200 text-red-700 rounded-md hover:bg-red-50 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {portalToggling ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertCircle className="h-3 w-3" />}
+                        Block Portal Login
+                      </button>
+                    ) : showActivate ? (
+                      <button
+                        onClick={() => handlePortalAccessToggle('activate')}
+                        disabled={portalToggling}
+                        className="px-3 py-1.5 text-xs font-medium border border-emerald-200 text-emerald-700 rounded-md hover:bg-emerald-50 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {portalToggling ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                        Restore Portal Login
+                      </button>
+                    ) : null}
+                  </div>
+                )
+              })()}
 
               {/* What they see */}
               <div className="pt-2 border-t">
