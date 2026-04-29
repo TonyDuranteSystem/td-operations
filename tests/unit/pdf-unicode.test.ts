@@ -16,6 +16,7 @@
 import { describe, it, expect } from "vitest"
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import { embedUnicodeFonts } from "@/lib/pdf/unicode-fonts"
+import { sanitizePdfLine } from "@/lib/pdf/sanitize"
 
 // All test characters come directly from dev_task 208d20be's acceptance
 // criteria. DejaVu Sans 2.37 covers the first six; 中 and ع are CJK/Arabic
@@ -103,6 +104,72 @@ describe("lib/pdf/unicode-fonts", () => {
       expect(() =>
         page.drawText(foreignStreet, { x: 50, y: 480, size: 10, font: regular, color: rgb(0, 0, 0) })
       ).not.toThrow()
+    })
+  })
+
+  describe("sanitizePdfLine", () => {
+    it("passes plain ASCII unchanged", () => {
+      expect(sanitizePdfLine("Hello World 123!")).toBe("Hello World 123!")
+    })
+
+    it("replaces en-dash, em-dash, and minus sign with hyphen", () => {
+      expect(sanitizePdfLine("a–b")).toBe("a-b")   // en-dash
+      expect(sanitizePdfLine("a—b")).toBe("a-b")   // em-dash
+      expect(sanitizePdfLine("a−b")).toBe("a-b")   // minus sign
+    })
+
+    it("replaces curly quotes with straight equivalents", () => {
+      expect(sanitizePdfLine("‘hello’")).toBe("'hello'")
+      expect(sanitizePdfLine("“hello”")).toBe('"hello"')
+    })
+
+    it("replaces ellipsis with three dots", () => {
+      expect(sanitizePdfLine("wait…")).toBe("wait...")
+    })
+
+    it("strips newlines and other control characters", () => {
+      expect(sanitizePdfLine("line1\nline2")).toBe("line1line2")
+      expect(sanitizePdfLine("tab\there")).toBe("tabhere")
+      expect(sanitizePdfLine("null\x00byte")).toBe("nullbyte")
+    })
+
+    it("strips characters outside Latin-1 (CJK, emoji, etc.)", () => {
+      expect(sanitizePdfLine("hello中文world")).toBe("helloworld")
+      expect(sanitizePdfLine("smile😀")).toBe("smile")
+    })
+
+    it("preserves all printable Latin-1 characters (0x20–0xFF)", () => {
+      const latin1 = "abcABC !éüñß"  // e-acute, u-umlaut, n-tilde, sharp-s
+      expect(sanitizePdfLine(latin1)).toBe(latin1)
+    })
+
+    it("handles the Bcom LLC invoice message (the real-world crash case)", () => {
+      const raw = "domestic transfers details \n\nBeneficiary Name: Bcom LLC\nAccount Number: 123456"
+      const result = sanitizePdfLine(raw)
+      expect(result).not.toContain("\n")
+      expect(result).toContain("Bcom LLC")
+    })
+
+    it("handles empty string without throwing", () => {
+      expect(sanitizePdfLine("")).toBe("")
+    })
+
+    it("produces output that pdf-lib Helvetica can render without throwing", async () => {
+      const pdf = await PDFDocument.create()
+      const page = pdf.addPage([595, 842])
+      const helvetica = await pdf.embedFont(StandardFonts.Helvetica)
+
+      const inputs = [
+        "Professional Services – March 2026",   // en-dash in description
+        "Bank: Column N.A.\nABA: 121145433",          // newline in notes
+        "“Apple Inc.” — Invoice",       // curly quotes + em-dash
+      ]
+      for (const input of inputs) {
+        const safe = sanitizePdfLine(input)
+        expect(() =>
+          page.drawText(safe, { x: 50, y: 400, size: 9, font: helvetica, color: rgb(0, 0, 0) })
+        ).not.toThrow()
+      }
     })
   })
 
