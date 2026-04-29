@@ -391,6 +391,7 @@ export function AuditPanel({
   const [entityType, setEntityType] = useState(account.entity_type ?? '')
   const [stateOfFormation, setStateOfFormation] = useState(account.state_of_formation ?? '')
   const [ein, setEin] = useState(account.ein_number ?? '')
+  const [filingId, setFilingId] = useState(account.filing_id ?? '')
   const [address, setAddress] = useState(account.physical_address ?? '')
   const [formationDate, setFormationDate] = useState(account.formation_date ?? '')
   const [onboardingDate, setOnboardingDate] = useState(account.onboarding_date ?? '')
@@ -438,6 +439,8 @@ export function AuditPanel({
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [showPostConfirm, setShowPostConfirm] = useState(false)
+  const [portalToggling, setPortalToggling] = useState(false)
+  const [portalTierLocal, setPortalTierLocal] = useState<string | null>(null)
 
   useEffect(() => {
     setDbLoading(true)
@@ -446,6 +449,7 @@ export function AuditPanel({
       .then((d: AccountData) => {
         setDbData(d)
         if (d.audit_sections) setSectionsDone(d.audit_sections)
+        setPortalTierLocal(d.portal_tier ?? null)
       })
       .catch(() => setDbData(null))
       .finally(() => setDbLoading(false))
@@ -523,6 +527,29 @@ export function AuditPanel({
     }
   }
 
+  async function handlePortalAccessToggle(action: 'activate' | 'deactivate') {
+    const confirmMsg = action === 'deactivate'
+      ? 'Deactivate portal access? Tier will be downgraded to "lead"; auth user is preserved. Contacts with other active accounts keep their access.'
+      : 'Activate portal access? Tier will be set to "active".'
+    if (!confirm(confirmMsg)) return
+    setPortalToggling(true)
+    try {
+      const res = await fetch(`/api/clients/audit/${account.id}/portal-access`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, actor: reviewer }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error || 'Failed to update portal access')
+      setPortalTierLocal(d.newTier)
+      toast.success(action === 'activate' ? 'Portal access activated' : 'Portal access deactivated')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed')
+    } finally {
+      setPortalToggling(false)
+    }
+  }
+
   function getSdsForService(serviceType: string): ServiceDeliveryRow[] {
     if (!dbData) return []
     return dbData.service_deliveries.filter(sd => sd.service_type === serviceType)
@@ -559,6 +586,7 @@ export function AuditPanel({
             entity_type: entityType || null,
             state_of_formation: stateOfFormation || null,
             ein_number: ein || null,
+            filing_id: filingId || null,
             physical_address: address || null,
             formation_date: formationDate || null,
             onboarding_date: onboardingDate || null,
@@ -886,6 +914,12 @@ export function AuditPanel({
               value={ein}
               onChange={setEin}
               hint={`DB: ${account.ein_number ?? '—'}`}
+            />
+            <Field
+              label="State Filing ID"
+              value={filingId}
+              onChange={setFilingId}
+              hint={`From Articles of Organization · DB: ${account.filing_id ?? '—'}`}
             />
             <div className="col-span-2">
               <Field
@@ -1230,11 +1264,47 @@ export function AuditPanel({
                 </div>
               ))}
 
+              {/* Activate / Deactivate portal access */}
+              <div className="pt-2 border-t flex items-center justify-between gap-3">
+                <div className="text-xs">
+                  <span className="text-zinc-500 font-medium uppercase tracking-wide">Account portal tier:</span>{' '}
+                  <span className={cn(
+                    'px-1.5 py-0.5 rounded capitalize',
+                    portalTierLocal === 'active' ? 'bg-blue-100 text-blue-700' :
+                    portalTierLocal === 'onboarding' ? 'bg-purple-100 text-purple-700' :
+                    portalTierLocal === 'formation' ? 'bg-orange-100 text-orange-700' :
+                    portalTierLocal === 'lead' ? 'bg-zinc-100 text-zinc-600' :
+                    'bg-zinc-100 text-zinc-400'
+                  )}>
+                    {portalTierLocal ?? 'no tier'}
+                  </span>
+                </div>
+                {portalTierLocal === 'active' ? (
+                  <button
+                    onClick={() => handlePortalAccessToggle('deactivate')}
+                    disabled={portalToggling}
+                    className="px-3 py-1.5 text-xs font-medium border border-red-200 text-red-700 rounded-md hover:bg-red-50 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {portalToggling ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertCircle className="h-3 w-3" />}
+                    Deactivate Portal Access
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handlePortalAccessToggle('activate')}
+                    disabled={portalToggling}
+                    className="px-3 py-1.5 text-xs font-medium border border-emerald-200 text-emerald-700 rounded-md hover:bg-emerald-50 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {portalToggling ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                    Activate Portal Access
+                  </button>
+                )}
+              </div>
+
               {/* What they see */}
               <div className="pt-2 border-t">
                 <p className="text-xs text-zinc-500 font-medium uppercase tracking-wide mb-1.5">What this client sees</p>
                 <div className="space-y-1 text-xs">
-                  {dbData.portal_tier === 'active' && (
+                  {portalTierLocal === 'active' && (
                     <>
                       <div className="flex items-center gap-1.5 text-emerald-600">
                         <CheckCircle2 className="h-3 w-3" /> Full portal (services, documents, invoices, chat)
@@ -1257,22 +1327,22 @@ export function AuditPanel({
                       )}
                     </>
                   )}
-                  {dbData.portal_tier === 'onboarding' && (
+                  {portalTierLocal === 'onboarding' && (
                     <div className="flex items-center gap-1.5 text-purple-600">
                       <CheckCircle2 className="h-3 w-3" /> Onboarding wizard only
                     </div>
                   )}
-                  {dbData.portal_tier === 'formation' && (
+                  {portalTierLocal === 'formation' && (
                     <div className="flex items-center gap-1.5 text-orange-600">
                       <CheckCircle2 className="h-3 w-3" /> Formation status page only
                     </div>
                   )}
-                  {dbData.portal_tier === 'lead' && (
+                  {portalTierLocal === 'lead' && (
                     <div className="flex items-center gap-1.5 text-zinc-500">
                       <CheckCircle2 className="h-3 w-3" /> Lead landing page only
                     </div>
                   )}
-                  {!dbData.portal_tier && (
+                  {!portalTierLocal && (
                     <div className="text-zinc-400 italic">No portal tier — not accessible</div>
                   )}
                 </div>

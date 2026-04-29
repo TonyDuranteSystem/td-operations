@@ -26,6 +26,7 @@ export type AccountRow = {
   formation_date: string | null
   onboarding_date: string | null
   ein_number: string | null
+  filing_id: string | null
   state_of_formation: string | null
   physical_address: string | null
   notes: string | null
