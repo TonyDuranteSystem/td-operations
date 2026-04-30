@@ -11,7 +11,7 @@ export const updateAccountSchema = z.object({
   state_of_formation: z.string().max(50).optional(),
   formation_date: z.string().optional(),
   physical_address: z.string().max(500).optional(),
-  registered_agent: z.string().max(200).optional(),
+  registered_agent_provider: z.string().max(200).optional(),
   notes: z.string().max(5000).optional(),
 })
 

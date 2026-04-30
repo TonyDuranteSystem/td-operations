@@ -82,7 +82,7 @@ export interface Account {
   formation_date: string | null
   state_of_formation: string | null
   physical_address: string | null
-  registered_agent: string | null
+  registered_agent_provider: string | null
   ra_renewal_date: string | null
   portal_account: boolean | null
   portal_created_date: string | null
