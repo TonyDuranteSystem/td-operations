@@ -88,6 +88,8 @@ export type Database = {
           annual_report_due_date: string | null
           audit_flag: boolean
           audit_reviewed_at: string | null
+          audit_reviewed_by: string | null
+          audit_sections: Json | null
           bank_details: Json | null
           cancellation_date: string | null
           cancellation_requested: boolean | null
@@ -154,6 +156,8 @@ export type Database = {
           annual_report_due_date?: string | null
           audit_flag?: boolean
           audit_reviewed_at?: string | null
+          audit_reviewed_by?: string | null
+          audit_sections?: Json | null
           bank_details?: Json | null
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
@@ -224,6 +228,8 @@ export type Database = {
           annual_report_due_date?: string | null
           audit_flag?: boolean
           audit_reviewed_at?: string | null
+          audit_reviewed_by?: string | null
+          audit_sections?: Json | null
           bank_details?: Json | null
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
