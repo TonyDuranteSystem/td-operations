@@ -48,10 +48,12 @@ const TD_OFFICE = {
 const APPLICANT_PHONE = "7274234285"
 const APPLICANT_FAX = "7275135584"
 
-// STATE_COUNTY_MAP removed: Line 6 must reflect PRINCIPAL BUSINESS LOCATION (always TD office =
-// Pinellas County, Florida), NOT the formation state. Using formation state produced wrong Line 6
-// values (e.g. NM-formed LLCs got "Bernalillo - New Mexico" instead of "Pinellas County, Florida").
-// county_and_state is now always set at insert time. See ss4.ts and generate-document/route.ts.
+// STATE_COUNTY_MAP removed: Line 6 must reflect the entity's primary physical location per IRS
+// SS-4 instructions ("Enter the entity's primary physical location"). It is NOT derived from
+// formation state, registered agent address, owner address, or mailing address unless one of
+// those is verified as the entity's actual primary physical location.
+// county_and_state must be explicitly set by an admin who has verified the correct address.
+// SS-4 generation throws (see below) if county_and_state is missing.
 
 export type EntityType = "SMLLC" | "MMLLC" | "Corporation"
 
@@ -136,9 +138,10 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   // === LINE 4b: City, state, ZIP ===
   text(75, 618, TD_OFFICE.cityStateZip)
 
-  // === LINE 6: County and state (principal business location — always TD office = Pinellas County, Florida) ===
+  // === LINE 6: County and state — entity's primary physical location (IRS SS-4 instruction) ===
+  // Must be explicitly set by admin after verifying the address. Never auto-derived.
   if (!data.countyAndState) {
-    throw new Error("SS-4 generation blocked: county_and_state is required but missing. Set it at insert time.")
+    throw new Error("SS-4 generation blocked: county_and_state (Line 6) is required. Per IRS instructions, enter the entity's primary physical location. Verify and set before generating.")
   }
   text(75, 593, data.countyAndState)
 

@@ -16,6 +16,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
+import { countyFromRAAddress } from "@/lib/ra/county-from-ra-address"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -43,7 +44,7 @@ const ENTITY_MAP: Record<string, string> = {
 async function fetchAccountAndContact(accountId: string) {
   const { data: account, error: accErr } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, ein_number, entity_type, state_of_formation, formation_date")
+    .select("id, company_name, ein_number, entity_type, state_of_formation, formation_date, registered_agent_address")
     .eq("id", accountId)
     .single()
 
@@ -270,6 +271,15 @@ async function generateSS4(accountId: string) {
     memberCount = contactLinks!.length || 2
   }
 
+  // Resolve Line 6 (county_and_state) from the account's registered_agent_address.
+  // TD operating rule (Antonio, 2026-04-30): for foreign-owned LLC EIN filings, the
+  // RA / registered office address is the source for Line 6. The helper returns null
+  // for unknown/blank/unmappable addresses — no state-to-county fallback, no global
+  // Pinellas default. CRM-button creates always start at status='draft', so a null here
+  // is allowed at insert; the ss4_update gate later blocks advancement to awaiting_signature.
+  const raMatch = countyFromRAAddress(account.registered_agent_address)
+  const resolvedCountyAndState = raMatch?.countyAndState ?? null
+
   const slug = slugify(account.company_name)
   const token = `ss4-${slug}-${new Date().getFullYear()}`
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
@@ -290,7 +300,7 @@ async function generateSS4(accountId: string) {
       responsible_party_phone: contact.phone || null,
       responsible_party_title: title,
       language: contact.language === "Italian" ? "it" : "en",
-      county_and_state: "Pinellas County, Florida", // principal business = TD office (Largo FL)
+      county_and_state: resolvedCountyAndState, // null if RA address unknown — admin must fix RA + ss4_update before signing
       status: "draft",
     })
     .select("id, token, access_code, status")

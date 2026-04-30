@@ -11,6 +11,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
+import { countyFromRAAddress } from "@/lib/ra/county-from-ra-address"
 
 export function registerSs4Tools(server: McpServer) {
 
@@ -49,7 +50,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
         // ─── 1. FETCH ACCOUNT ───
         const { data: account, error: accErr } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number")
+          .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_address")
           .eq("id", params.account_id)
           .single()
 
@@ -227,14 +228,33 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
           }
         }
 
-        // ─── 6. BUILD TOKEN ───
+        // ─── 6. RESOLVE LINE 6 (county_and_state) FROM REGISTERED AGENT ADDRESS ───
+        // IRS instruction: "Enter the entity's primary physical location."
+        // TD operating rule (Antonio, 2026-04-30): for foreign-owned LLC EIN filings,
+        // the registered agent / registered office address is the source for Line 6.
+        // The helper matches the free-text RA address against known canonical addresses
+        // and returns null for unknown/blank/unmappable. No state-to-county fallback,
+        // no formation-state map, no global Pinellas default, no use of physical_address
+        // or owner_state_province.
+        const raMatch = countyFromRAAddress(account.registered_agent_address)
+        const resolvedCountyAndState = raMatch?.countyAndState ?? null
+
+        // Block direct-to-signature creation if Line 6 cannot be resolved.
+        if (params.ready_to_sign && !resolvedCountyAndState) {
+          const reason = !account.registered_agent_address || !account.registered_agent_address.trim()
+            ? "Registered Agent address is missing on the account"
+            : `Registered Agent address "${account.registered_agent_address}" is not a recognized RA office`
+          return { content: [{ type: "text" as const, text: `Error: SS-4 cannot be created at 'awaiting_signature' for ${account.company_name} — ${reason}. Add or correct the Registered Agent address before sending for signature, then retry.` }] }
+        }
+
+        // ─── 7. BUILD TOKEN ───
         const slug = account.company_name
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, "-")
           .replace(/(^-|-$)/g, "")
         const token = `ss4-${slug}-${new Date().getFullYear()}`
 
-        // ─── 7. INSERT RECORD ───
+        // ─── 8. INSERT RECORD ───
         const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
 
         const { data: ss4, error: insertErr } = await supabaseAdmin
@@ -253,7 +273,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
             responsible_party_phone: contact.phone || null,
             responsible_party_title: title,
             language: "en", // SS-4 is always English (IRS form)
-            county_and_state: "Pinellas County, Florida", // principal business = TD office (Largo FL)
+            county_and_state: resolvedCountyAndState, // null if RA address unknown — caller must fix RA + ss4_update before signing
             status: params.ready_to_sign ? "awaiting_signature" : "draft",
           })
           .select("id, token, access_code, status")
@@ -263,7 +283,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
           return { content: [{ type: "text" as const, text: `Error creating SS-4: ${insertErr?.message || "insert failed"}` }] }
         }
 
-        // ─── 8. LOG ACTION ───
+        // ─── 9. LOG ACTION ───
         await logAction({
           action_type: "create",
           table_name: "ss4_applications",
@@ -272,7 +292,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
           summary: `Created SS-4 for ${account.company_name} (${entityType}, ${state})`,
         })
 
-        // ─── 9. RETURN RESULT ───
+        // ─── 10. RETURN RESULT ───
         const previewUrl = `${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`
 
         return {
@@ -370,7 +390,7 @@ Note: signed records (status='signed') cannot be updated.`,
           if (params.status === "awaiting_signature") {
             const resolvedCounty = (params.county_and_state as string | undefined) || (ss4.county_and_state as string | undefined)
             if (!resolvedCounty) {
-              return { content: [{ type: "text" as const, text: `Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Set it first: ss4_update(..., county_and_state: "Pinellas County, Florida")` }] }
+              return { content: [{ type: "text" as const, text: `Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").` }] }
             }
           }
           updates.status = params.status
