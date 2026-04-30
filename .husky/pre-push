@@ -5,6 +5,57 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" 2>/dev/null
 nvm use default 2>/dev/null || true
 
+# ── Sandbox-first guard ─────────────────────────────────────────────────────
+# Capture push refs from stdin FIRST — git passes them on stdin and they can
+# only be read once. Must happen before any other stdin read in this script.
+PUSH_REFS=$(cat)
+
+# Parse the captured refs to detect whether this push targets main.
+# Format per line: <local-ref> <local-sha> <remote-ref> <remote-sha>
+PUSHING_TO_MAIN=false
+while IFS=' ' read -r _lref _lsha rref _rsha; do
+  if [ "$rref" = "refs/heads/main" ]; then
+    PUSHING_TO_MAIN=true
+    break
+  fi
+done << ENDPUSHREFS
+$PUSH_REFS
+ENDPUSHREFS
+
+if [ "$PUSHING_TO_MAIN" = "true" ]; then
+  PROD_PROJECT_ID="prj_4UpclHxvYz46p7KRTnXOnF1TT4Iz"
+  if grep -q "\"$PROD_PROJECT_ID\"" .vercel/project.json 2>/dev/null; then
+    if [ "${ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA:-}" != "1" ]; then
+      echo ""
+      echo "⛔ PUSH BLOCKED — Sandbox-first rule (CLAUDE.md)"
+      echo ""
+      echo "   .vercel/project.json → PRODUCTION project (td-operations)."
+      echo "   Pushing to main auto-deploys to:"
+      echo "     app.tonydurante.us · portal.tonydurante.us · crm.tonydurante.us"
+      echo ""
+      echo "   Required before pushing to main:"
+      echo "   1. Deploy to sandbox first:"
+      echo "        Temporarily swap .vercel/project.json → prj_qBcCaljYbydhpus0xAuzZ1VCcj9S"
+      echo "        vercel deploy --prod --yes"
+      echo "        Restore .vercel/project.json → prj_4UpclHxvYz46p7KRTnXOnF1TT4Iz"
+      echo "   2. Browser-verify: open td-operations-sandbox.vercel.app and confirm"
+      echo "   3. Get explicit approval from Antonio in the session chat"
+      echo ""
+      echo "   ⚠️  Do NOT use --no-verify — that skips lint, tests, schema drift, and build."
+      echo ""
+      echo "   After sandbox QA is confirmed by Antonio, push with:"
+      echo "   ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin main"
+      echo ""
+      exit 1
+    else
+      echo "✅ ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 — sandbox QA declared confirmed."
+      echo "   Continuing with all safety checks (lint · schema · tests · build)..."
+      echo ""
+    fi
+  fi
+fi
+# ── End sandbox-first guard ─────────────────────────────────────────────────
+
 # Check if remote is ahead (another machine may have pushed)
 git fetch origin main --quiet 2>/dev/null
 AHEAD=$(git rev-list HEAD..origin/main --count 2>/dev/null || echo "0")
