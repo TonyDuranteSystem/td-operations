@@ -36,13 +36,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const { section, confirmed, audit_sections } = await req.json()
 
-  const { error } = await (supabaseAdmin as any)
+  const { data, error } = await (supabaseAdmin as any)
     .from('accounts')
     .update({ audit_sections: audit_sections ?? {} })
     .eq('id', params.id)
+    .select('id, audit_sections')
+    .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!data) return NextResponse.json({ error: 'Account not found or update blocked — check service role key' }, { status: 500 })
 
-  return NextResponse.json({ ok: true, section, confirmed })
+  return NextResponse.json({ ok: true, section, confirmed, saved: data.audit_sections })
 }
 /* eslint-enable no-restricted-syntax, @typescript-eslint/no-explicit-any */

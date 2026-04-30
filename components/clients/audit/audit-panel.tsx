@@ -974,6 +974,9 @@ export function AuditPanel({
         setSectionsDone(snapshot) // revert optimistic on API error
         toast.error(d.error || 'Failed to save section')
       } else {
+        const d = await res.json().catch(() => ({}))
+        // Sync from DB-confirmed state if available (detects silent write failures)
+        if (d.saved) setSectionsDone(d.saved)
         toast.success(!wasDone ? `Section marked done` : `Section unmarked`)
       }
     } catch {
