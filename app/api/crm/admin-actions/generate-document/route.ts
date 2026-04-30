@@ -290,6 +290,7 @@ async function generateSS4(accountId: string) {
       responsible_party_phone: contact.phone || null,
       responsible_party_title: title,
       language: contact.language === "Italian" ? "it" : "en",
+      county_and_state: "Pinellas County, Florida", // principal business = TD office (Largo FL)
       status: "draft",
     })
     .select("id, token, access_code, status")

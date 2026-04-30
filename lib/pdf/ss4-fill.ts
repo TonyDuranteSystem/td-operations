@@ -48,16 +48,10 @@ const TD_OFFICE = {
 const APPLICANT_PHONE = "7274234285"
 const APPLICANT_FAX = "7275135584"
 
-/**
- * County and state mapping for Line 6.
- * Based on where the registered agent is located in each state.
- */
-const STATE_COUNTY_MAP: Record<string, string> = {
-  NM: "Bernalillo - New Mexico",
-  WY: "Sheridan - Wyoming",
-  FL: "Pinellas - Florida",
-  DE: "New Castle - Delaware",
-}
+// STATE_COUNTY_MAP removed: Line 6 must reflect PRINCIPAL BUSINESS LOCATION (always TD office =
+// Pinellas County, Florida), NOT the formation state. Using formation state produced wrong Line 6
+// values (e.g. NM-formed LLCs got "Bernalillo - New Mexico" instead of "Pinellas County, Florida").
+// county_and_state is now always set at insert time. See ss4.ts and generate-document/route.ts.
 
 export type EntityType = "SMLLC" | "MMLLC" | "Corporation"
 
@@ -142,9 +136,11 @@ export async function fillSS4(data: SS4FillData): Promise<Uint8Array> {
   // === LINE 4b: City, state, ZIP ===
   text(75, 618, TD_OFFICE.cityStateZip)
 
-  // === LINE 6: County and state ===
-  const countyState = data.countyAndState || STATE_COUNTY_MAP[data.stateOfFormation] || ""
-  text(75, 593, countyState)
+  // === LINE 6: County and state (principal business location — always TD office = Pinellas County, Florida) ===
+  if (!data.countyAndState) {
+    throw new Error("SS-4 generation blocked: county_and_state is required but missing. Set it at insert time.")
+  }
+  text(75, 593, data.countyAndState)
 
   // === LINE 7a: Name of responsible party ===
   text(75, 567, data.responsiblePartyName)

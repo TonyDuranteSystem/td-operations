@@ -11,6 +11,7 @@ const SMLLC_DATA: SS4FillData = {
   responsiblePartyName: "John Smith",
   responsiblePartyTitle: "Owner",
   responsiblePartyPhone: "+44 7911 123456",
+  countyAndState: "Pinellas County, Florida",
 }
 
 const MMLLC_DATA: SS4FillData = {
@@ -23,6 +24,7 @@ const MMLLC_DATA: SS4FillData = {
   responsiblePartyItin: "912-34-5678",
   responsiblePartyTitle: "Member",
   responsiblePartyPhone: "+49 30 12345678",
+  countyAndState: "Pinellas County, Florida",
 }
 
 describe("SS-4 PDF Fill", () => {
@@ -90,5 +92,38 @@ describe("SS-4 PDF Fill", () => {
     }
     const bytes = await fillSS4(data)
     expect(bytes.length).toBeGreaterThan(0)
+  }, 30000)
+
+  // ─── Safety: county_and_state is required ───────────────────────────────────
+
+  it("throws when countyAndState is missing (Line 6 guard)", async () => {
+    const data: SS4FillData = {
+      ...SMLLC_DATA,
+      countyAndState: undefined,
+    }
+    await expect(fillSS4(data)).rejects.toThrow("county_and_state is required")
+  }, 30000)
+
+  it("NM formation + TD FL principal → Line 6 = Pinellas County, Florida", async () => {
+    // TD office is in Pinellas County, FL — principal business is ALWAYS there,
+    // regardless of formation state. county_and_state must be set at insert time.
+    const data: SS4FillData = {
+      ...SMLLC_DATA,
+      stateOfFormation: "NM",
+      countyAndState: "Pinellas County, Florida",
+    }
+    const bytes = await fillSS4(data)
+    const pdf = await PDFDocument.load(bytes)
+    expect(pdf.getPageCount()).toBeGreaterThanOrEqual(1)
+  }, 30000)
+
+  it("WY formation still uses Pinellas County, Florida as principal", async () => {
+    const data: SS4FillData = {
+      ...MMLLC_DATA,
+      stateOfFormation: "WY",
+      countyAndState: "Pinellas County, Florida",
+    }
+    const bytes = await fillSS4(data)
+    expect(bytes.length).toBeGreaterThan(50000)
   }, 30000)
 })

@@ -455,7 +455,29 @@ export async function POST(req: NextRequest) {
 
         const sideEffects: string[] = []
         const wizardData = (wp.data || {}) as Record<string, unknown>
-        const state = (wizardData.owner_state_province as string) || "NM"
+
+        // Formation state must come from formation_submissions.state — the explicit state
+        // chosen by Antonio when creating the formation form. Never use owner_state_province
+        // (the owner's personal address province, e.g. "italy") for LLC state_of_formation.
+        const VALID_FORMATION_STATES = ["NM", "WY", "FL", "DE"]
+
+        const { data: formSub } = await supabaseAdmin
+          .from("formation_submissions")
+          .select("state")
+          .eq("contact_id", wp.contact_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        const rawFormState = (formSub?.state || "").toUpperCase().trim()
+        const stateCode = VALID_FORMATION_STATES.includes(rawFormState) ? rawFormState : null
+
+        if (!stateCode) {
+          // No formation_submissions record or state not in known list — use NM as controlled default
+          sideEffects.push(`WARNING: No explicit formation state found in formation_submissions for contact ${wp.contact_id}. Defaulting to NM. Verify with Antonio.`)
+        }
+        const state = stateCode ?? "NM"
+
         const entityType = wizardData.entity_type === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
 
         // Classify the source: wizard-original names get legacy " LLC" auto-append

@@ -253,6 +253,7 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
             responsible_party_phone: contact.phone || null,
             responsible_party_title: title,
             language: "en", // SS-4 is always English (IRS form)
+            county_and_state: "Pinellas County, Florida", // principal business = TD office (Largo FL)
             status: params.ready_to_sign ? "awaiting_signature" : "draft",
           })
           .select("id, token, access_code, status")
@@ -325,7 +326,7 @@ Note: signed records (status='signed') cannot be updated.`,
       try {
         const { data: ss4, error: fetchErr } = await supabaseAdmin
           .from("ss4_applications")
-          .select("id, token, status, company_name, access_code")
+          .select("id, token, status, company_name, access_code, county_and_state")
           .eq("account_id", params.account_id)
           .maybeSingle()
 
@@ -365,6 +366,13 @@ Note: signed records (status='signed') cannot be updated.`,
 
         // Status logic: explicit override wins; otherwise reset to draft if content changed while awaiting_signature
         if (params.status) {
+          // Block awaiting_signature if county_and_state would remain blank
+          if (params.status === "awaiting_signature") {
+            const resolvedCounty = (params.county_and_state as string | undefined) || (ss4.county_and_state as string | undefined)
+            if (!resolvedCounty) {
+              return { content: [{ type: "text" as const, text: `Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Set it first: ss4_update(..., county_and_state: "Pinellas County, Florida")` }] }
+            }
+          }
           updates.status = params.status
         } else if (contentFieldsChanged && ss4.status === "awaiting_signature") {
           updates.status = "draft"
