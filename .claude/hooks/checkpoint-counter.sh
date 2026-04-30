@@ -23,7 +23,5 @@ if [ $((COUNT % 50)) -eq 0 ]; then
 fi
 
 if [ "$COUNT" -ge 15 ]; then echo "🔴 URGENT: ${COUNT} tool calls without checkpoint! You MUST save now. Call session_checkpoint({summary: \"what you did\", next_steps: \"what's pending\"})."
-elif [ "$COUNT" -ge 10 ]; then echo "🟠 WARNING: ${COUNT} tool calls since last checkpoint. Save your progress now with session_checkpoint({summary: \"what you did\", next_steps: \"what's pending\"})."
-elif [ "$COUNT" -ge 5 ]; then echo "🟡 Reminder: ${COUNT} tool calls since last checkpoint. Consider saving with session_checkpoint."
 fi
 exit 0

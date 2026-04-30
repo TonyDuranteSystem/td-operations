@@ -38,16 +38,6 @@
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/assumption-check.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/stop-enforcement.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "bash .claude/hooks/r095-gate.sh",
             "timeout": 5
           }
