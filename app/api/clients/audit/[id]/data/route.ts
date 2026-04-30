@@ -7,7 +7,8 @@ export const dynamic = 'force-dynamic'
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id
 
-  const [sdsRes, taxRes, submissionsRes, paymentsRes, accountRes, membersRes, agreementsRes, contactsRes] = await Promise.all([
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [sdsRes, taxRes, submissionsRes, paymentsRes, accountRes, membersRes, agreementsRes, contactsRes, accountFlagsRes] = await Promise.all([
     supabaseAdmin
       .from('service_deliveries')
       .select('id, service_type, service_name, status, stage, start_date, end_date, notes, amount, amount_currency, assigned_to')
@@ -60,27 +61,57 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .from('account_contacts')
       .select('contact_id, role')
       .eq('account_id', id),
+
+    // Phase 1: load active audit_flags for this account entity (reversed_at IS NULL = active)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any)
+      .from('audit_flags')
+      .select('id, entity_type, entity_id, field_name, flag_type, note, marked_by, marked_at')
+      .eq('entity_type', 'account')
+      .eq('entity_id', id)
+      .is('reversed_at', null),
   ])
 
-  // Step 2: fetch the contacts themselves by id
-  const linkedContactIds = (contactsRes.data ?? []).map(r => r.contact_id).filter(Boolean) as string[]
-  const { data: contactRows } = linkedContactIds.length > 0
-    ? await supabaseAdmin
-        .from('contacts')
-        .select('id, full_name, email, phone, language, citizenship, itin_number, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
-        .in('id', linkedContactIds)
-    : { data: [] as Array<{
-        id: string; full_name: string | null; email: string | null; phone: string | null
-        language: string | null; citizenship: string | null; itin_number: string | null; portal_tier: string | null
-        date_of_birth: string | null; passport_number: string | null; passport_expiry_date: string | null
-        passport_on_file: boolean | null; kyc_status: string | null
-        address_line1: string | null; address_city: string | null; address_state: string | null
-        address_zip: string | null; address_country: string | null
-      }> }
+  // Step 2: fetch contacts + contact flags in parallel
+  const linkedContactIds = (contactsRes.data ?? []).map((r: { contact_id: string }) => r.contact_id).filter(Boolean) as string[]
+
+  const [contactRowsRes, contactFlagsRes] = await Promise.all([
+    linkedContactIds.length > 0
+      ? supabaseAdmin
+          .from('contacts')
+          .select('id, full_name, email, phone, language, citizenship, itin_number, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
+          .in('id', linkedContactIds)
+      : Promise.resolve({ data: [] as Array<{
+          id: string; full_name: string | null; email: string | null; phone: string | null
+          language: string | null; citizenship: string | null; itin_number: string | null; portal_tier: string | null
+          date_of_birth: string | null; passport_number: string | null; passport_expiry_date: string | null
+          passport_on_file: boolean | null; kyc_status: string | null
+          address_line1: string | null; address_city: string | null; address_state: string | null
+          address_zip: string | null; address_country: string | null
+        }> }),
+
+    // Phase 1: load active audit_flags for all linked contacts
+    linkedContactIds.length > 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? (supabaseAdmin as any)
+          .from('audit_flags')
+          .select('id, entity_type, entity_id, field_name, flag_type, note, marked_by, marked_at')
+          .eq('entity_type', 'contact')
+          .in('entity_id', linkedContactIds)
+          .is('reversed_at', null)
+      : Promise.resolve({ data: [] }),
+  ])
 
   // Use the explicitly-fetched contacts (Step 2 above) instead of the
   // unreliable PostgREST embed.
-  const contacts = (contactRows ?? []).map(c => ({
+  const contacts = (contactRowsRes.data ?? []).map((c: {
+    id: string; full_name: string | null; email: string | null; phone: string | null
+    language: string | null; citizenship: string | null; itin_number: string | null; portal_tier: string | null
+    date_of_birth: string | null; passport_number: string | null; passport_expiry_date: string | null
+    passport_on_file: boolean | null; kyc_status: string | null
+    address_line1: string | null; address_city: string | null; address_state: string | null
+    address_zip: string | null; address_country: string | null
+  }) => ({
     id: c.id as string,
     full_name: (c.full_name ?? '') as string,
     email: (c.email ?? '') as string,
@@ -100,6 +131,22 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     address_zip: (c.address_zip ?? null) as string | null,
     address_country: (c.address_country ?? null) as string | null,
   }))
+
+  // Combine account + contact flags into a single array for the panel
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allFlags: Array<{
+    id: string
+    entity_type: string
+    entity_id: string
+    field_name: string
+    flag_type: string
+    note: string | null
+    marked_by: string
+    marked_at: string
+  }> = [
+    ...(accountFlagsRes.data ?? []),
+    ...(contactFlagsRes.data ?? []),
+  ]
 
   // Read banned_until via a Postgres RPC that selects directly from
   // auth.users — the Supabase auth admin API (listUsers AND getUserById)
@@ -160,5 +207,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     auth_user_map: authUserMap,
     auth_banned_map: authBannedMap,
     contacts_with_tier: contacts,
+    // Phase 1: active audit_flags for this account + its linked contacts
+    flags: allFlags,
   })
 }

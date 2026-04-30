@@ -228,7 +228,13 @@ export function AuditShell({
                     {account.completeness && (
                       <>
                         <span
-                          title={`Contact: ${account.completeness.contact.status}${account.completeness.contact.missing_critical.length > 0 ? ` — ${account.completeness.contact.missing_critical.join(', ')}` : ''}`}
+                          title={(() => {
+                            const c = account.completeness.contact
+                            const naCount = c.na_fields?.length ?? 0
+                            const base = `Contact: ${c.status}`
+                            if (c.status === 'green') return naCount > 0 ? `${base} · ${naCount} N/A` : base
+                            return `${base} — ${c.missing_critical.join(', ')}`
+                          })()}
                           className={cn(
                             'text-[9px] font-bold leading-none w-3.5 h-3.5 rounded-full flex items-center justify-center',
                             account.completeness.contact.status === 'red' && 'bg-red-500 text-white',
@@ -237,7 +243,13 @@ export function AuditShell({
                           )}
                         >C</span>
                         <span
-                          title={`Account: ${account.completeness.account.status}${account.completeness.account.missing_critical.length > 0 ? ` — ${account.completeness.account.missing_critical.join(', ')}` : ''}`}
+                          title={(() => {
+                            const a = account.completeness.account
+                            const naCount = a.na_fields?.length ?? 0
+                            const base = `Account: ${a.status}`
+                            if (a.status === 'green') return naCount > 0 ? `${base} · ${naCount} N/A` : base
+                            return `${base} — ${a.missing_critical.join(', ')}`
+                          })()}
                           className={cn(
                             'text-[9px] font-bold leading-none w-3.5 h-3.5 rounded-full flex items-center justify-center',
                             account.completeness.account.status === 'red' && 'bg-red-500 text-white',
