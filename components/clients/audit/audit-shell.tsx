@@ -5,6 +5,7 @@ import { Search, CheckCircle2, Flag, AlertCircle, Clock, User } from 'lucide-rea
 import { cn } from '@/lib/utils'
 import { AuditPanel } from './audit-panel'
 import { format, parseISO } from 'date-fns'
+import { type CompletenessScore } from '@/lib/audit/completeness-rules'
 
 export type ContactRow = {
   id: string
@@ -13,7 +14,7 @@ export type ContactRow = {
   phone: string | null
   language: string | null
   citizenship: string | null
-  itin: string | null
+  itin_number: string | null
   portal_tier: string | null
   date_of_birth: string | null
   passport_number: string | null
@@ -54,6 +55,7 @@ export type AccountRow = {
   drive_folder_id: string | null
   contacts: ContactRow[]
   anomaly_score: number
+  completeness?: CompletenessScore
 }
 
 type ShowFilter = 'all' | 'unreviewed' | 'reviewed' | 'flagged'
@@ -222,6 +224,29 @@ export function AuditShell({
                   <span className="text-xs text-zinc-400 w-6 shrink-0">{idx + 1}</span>
                   <span className="flex-1 text-sm font-medium truncate">{account.company_name}</span>
                   <div className="flex items-center gap-1 shrink-0">
+                    {/* Completeness dots: Contact (C) and Account (A) */}
+                    {account.completeness && (
+                      <>
+                        <span
+                          title={`Contact: ${account.completeness.contact.status}${account.completeness.contact.missing_critical.length > 0 ? ` — ${account.completeness.contact.missing_critical.join(', ')}` : ''}`}
+                          className={cn(
+                            'text-[9px] font-bold leading-none w-3.5 h-3.5 rounded-full flex items-center justify-center',
+                            account.completeness.contact.status === 'red' && 'bg-red-500 text-white',
+                            account.completeness.contact.status === 'yellow' && 'bg-amber-400 text-white',
+                            account.completeness.contact.status === 'green' && 'bg-emerald-500 text-white',
+                          )}
+                        >C</span>
+                        <span
+                          title={`Account: ${account.completeness.account.status}${account.completeness.account.missing_critical.length > 0 ? ` — ${account.completeness.account.missing_critical.join(', ')}` : ''}`}
+                          className={cn(
+                            'text-[9px] font-bold leading-none w-3.5 h-3.5 rounded-full flex items-center justify-center',
+                            account.completeness.account.status === 'red' && 'bg-red-500 text-white',
+                            account.completeness.account.status === 'yellow' && 'bg-amber-400 text-white',
+                            account.completeness.account.status === 'green' && 'bg-emerald-500 text-white',
+                          )}
+                        >A</span>
+                      </>
+                    )}
                     {account.anomaly_score > 0 && !account.audit_reviewed_at && (
                       <span className="text-xs text-amber-500 font-medium">!</span>
                     )}

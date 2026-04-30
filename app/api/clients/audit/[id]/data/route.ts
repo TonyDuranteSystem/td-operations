@@ -67,11 +67,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const { data: contactRows } = linkedContactIds.length > 0
     ? await supabaseAdmin
         .from('contacts')
-        .select('id, full_name, email, phone, language, citizenship, itin, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
+        .select('id, full_name, email, phone, language, citizenship, itin_number, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country')
         .in('id', linkedContactIds)
     : { data: [] as Array<{
         id: string; full_name: string | null; email: string | null; phone: string | null
-        language: string | null; citizenship: string | null; itin: string | null; portal_tier: string | null
+        language: string | null; citizenship: string | null; itin_number: string | null; portal_tier: string | null
         date_of_birth: string | null; passport_number: string | null; passport_expiry_date: string | null
         passport_on_file: boolean | null; kyc_status: string | null
         address_line1: string | null; address_city: string | null; address_state: string | null
@@ -87,7 +87,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     phone: (c.phone ?? null) as string | null,
     language: (c.language ?? null) as string | null,
     citizenship: (c.citizenship ?? null) as string | null,
-    itin: (c.itin ?? null) as string | null,
+    itin_number: (c.itin_number ?? null) as string | null,
     portal_tier: c.portal_tier as string | null,
     date_of_birth: (c.date_of_birth ?? null) as string | null,
     passport_number: (c.passport_number ?? null) as string | null,

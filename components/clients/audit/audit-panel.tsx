@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   User, Building2, Calendar, DollarSign, Briefcase, FileText,
   Flag, CheckCircle2, AlertCircle, ExternalLink, Loader2,
@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
 import { type AccountRow, type ContactRow } from './audit-shell'
+import { computeCompleteness, type CompletenessResult } from '@/lib/audit/completeness-rules'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -263,6 +264,40 @@ function Section({ icon: Icon, title, children, badge, done, onToggleDone }: {
   )
 }
 
+function CompletenessChip({ label, result }: { label: string; result: CompletenessResult }) {
+  const dotClass = cn(
+    'inline-block w-2 h-2 rounded-full mr-1.5',
+    result.status === 'red' && 'bg-red-500',
+    result.status === 'yellow' && 'bg-amber-400',
+    result.status === 'green' && 'bg-emerald-500',
+  )
+  const chipClass = cn(
+    'flex items-center px-2.5 py-1 rounded-full border text-xs font-medium',
+    result.status === 'red' && 'bg-red-50 border-red-200 text-red-700',
+    result.status === 'yellow' && 'bg-amber-50 border-amber-200 text-amber-700',
+    result.status === 'green' && 'bg-emerald-50 border-emerald-200 text-emerald-700',
+  )
+
+  const detail =
+    result.status === 'green'
+      ? 'Complete'
+      : result.status === 'red'
+      ? result.missing_critical.join(', ')
+      : result.missing_warning.join(', ')
+
+  return (
+    <div className={chipClass} title={detail}>
+      <span className={dotClass} />
+      <span className="mr-1 opacity-60">{label}:</span>
+      {result.status === 'green' ? (
+        <span>Complete</span>
+      ) : (
+        <span className="max-w-[220px] truncate">{detail}</span>
+      )}
+    </div>
+  )
+}
+
 function ServiceRadio({
   label, value, onChange, sds,
 }: {
@@ -446,6 +481,37 @@ export function AuditPanel({
   // ── DB data ──
   const [dbData, setDbData] = useState<AccountData | null>(null)
   const [dbLoading, setDbLoading] = useState(true)
+
+  // ── Completeness score (computed after DB data loads) ──
+  const completeness = useMemo(() => {
+    if (!dbData) return null
+    const activeServiceTypes = dbData.service_deliveries
+      .filter(sd => sd.status !== 'Cancelled')
+      .map(sd => sd.service_type)
+    const primaryContact = localContacts[0] ?? null
+    return computeCompleteness(
+      {
+        entity_type: account.entity_type,
+        ein_number: ein || null,
+        state_of_formation: stateOfFormation || null,
+        physical_address: address || null,
+        onboarding_date: onboardingDate || null,
+        account_type: accountType || null,
+      },
+      primaryContact
+        ? {
+            full_name: primaryContact.full_name ?? null,
+            email: primaryContact.email ?? null,
+            itin_number: primaryContact.itin_number ?? null,
+            citizenship: primaryContact.citizenship ?? null,
+            date_of_birth: primaryContact.date_of_birth ?? null,
+            passport_on_file: primaryContact.passport_on_file ?? null,
+            address_line1: primaryContact.address_line1 ?? null,
+          }
+        : null,
+      activeServiceTypes,
+    )
+  }, [dbData, localContacts, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType])
 
   // ── UI state ──
   const [saving, setSaving] = useState(false)
@@ -746,6 +812,19 @@ export function AuditPanel({
           </div>
         </div>
 
+        {/* Completeness summary bar */}
+        {dbLoading ? (
+          <div className="flex items-center gap-2 px-3 py-2 bg-zinc-50 border rounded-lg text-xs text-zinc-400">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Computing completeness…
+          </div>
+        ) : completeness ? (
+          <div className="flex flex-wrap gap-2">
+            <CompletenessChip label="Contact" result={completeness.contact} />
+            <CompletenessChip label="Account" result={completeness.account} />
+          </div>
+        ) : null}
+
         {/* S1 — Contact(s) */}
         <Section
           icon={localContacts.length > 1 ? Users : User}
@@ -851,8 +930,8 @@ export function AuditPanel({
                     />
                     <Field
                       label="ITIN"
-                      value={getContactValue(c, 'itin')}
-                      onChange={v => setContactValue(c.id, 'itin', v)}
+                      value={getContactValue(c, 'itin_number')}
+                      onChange={v => setContactValue(c.id, 'itin_number', v)}
                     />
                     <div className="flex items-end gap-3 text-xs">
                       <span className={cn(
