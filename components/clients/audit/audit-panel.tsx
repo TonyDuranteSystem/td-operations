@@ -260,6 +260,7 @@ function Section({ icon: Icon, title, children, badge, done, onToggleDone }: {
         {badge && <span className="ml-1 text-xs text-muted-foreground">{badge}</span>}
         {onToggleDone !== undefined && (
           <button
+            type="button"
             onClick={onToggleDone}
             className={cn(
               'ml-auto flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors',
@@ -958,13 +959,27 @@ export function AuditPanel({
   const septemberRule = computeSeptemberRule(onboardingDate)
 
   async function toggleSection(key: string) {
-    const next = { ...sectionsDone, [key]: !sectionsDone[key] }
+    const snapshot = { ...sectionsDone }
+    const wasDone = snapshot[key] ?? false
+    const next = { ...snapshot, [key]: !wasDone }
     setSectionsDone(next)
-    await fetch(`/api/clients/audit/${account.id}/review`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ section: key, confirmed: !sectionsDone[key], audit_sections: next }),
-    }).catch(() => null)
+    try {
+      const res = await fetch(`/api/clients/audit/${account.id}/review`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section: key, confirmed: !wasDone, audit_sections: next }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setSectionsDone(snapshot) // revert optimistic on API error
+        toast.error(d.error || 'Failed to save section')
+      } else {
+        toast.success(!wasDone ? `Section marked done` : `Section unmarked`)
+      }
+    } catch {
+      setSectionsDone(snapshot) // revert optimistic on network error
+      toast.error('Network error — section not saved')
+    }
   }
 
   async function handleSave() {
