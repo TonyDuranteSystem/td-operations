@@ -202,6 +202,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     portal_tier: accountRes.data?.portal_tier ?? null,
     entity_type: accountRes.data?.entity_type ?? null,
     audit_sections: accountRes.data?.audit_sections ?? {},
+    _debug_acct_err: accountRes.error?.message ?? null,
+    _debug_supabase_url: process.env.NEXT_PUBLIC_SUPABASE_URL?.slice(8, 40) ?? 'unset',
     members: members,
     annual_agreements: agreementsRes.data ?? [],
     auth_user_map: authUserMap,
