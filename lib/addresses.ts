@@ -1,6 +1,29 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
+// Full row shape returned by GET /api/addresses (includes computed linked_account_count).
+export interface AddressRow {
+  id: string
+  kind: AddressKind
+  name: string
+  provider: string | null
+  agent_name: string | null
+  address_line1: string
+  address_line2: string | null
+  city: string
+  state: string
+  zip: string
+  country: string
+  county: string | null
+  is_td_provided: boolean
+  notes: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+  created_by: string | null
+  linked_account_count: number
+}
+
 // Supabase row shape returned by joining addresses!business_mailing_address_id
 export interface MailingAddressRow {
   address_line1: string | null
