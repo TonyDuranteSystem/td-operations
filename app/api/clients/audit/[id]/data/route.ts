@@ -205,6 +205,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     _debug_acct_err: accountRes.error?.message ?? null,
     _debug_supabase_url: process.env.NEXT_PUBLIC_SUPABASE_URL?.slice(8, 40) ?? 'unset',
     _debug_acct_raw: accountRes.data ? JSON.stringify(accountRes.data) : 'null',
+    _debug_svc_key_prefix: process.env.SUPABASE_SERVICE_ROLE_KEY?.slice(0, 25) ?? 'unset',
     members: members,
     annual_agreements: agreementsRes.data ?? [],
     auth_user_map: authUserMap,
