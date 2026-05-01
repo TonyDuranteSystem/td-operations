@@ -11,7 +11,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
-import { countyFromRAAddress } from "@/lib/ra/county-from-ra-address"
+import { formatCountyAndState } from "@/lib/addresses"
 
 export function registerSs4Tools(server: McpServer) {
 
@@ -48,9 +48,10 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
     async (params) => {
       try {
         // ─── 1. FETCH ACCOUNT ───
-        const { data: account, error: accErr } = await supabaseAdmin
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: account, error: accErr } = await (supabaseAdmin as any)
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_address")
+          .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_id")
           .eq("id", params.account_id)
           .single()
 
@@ -228,24 +229,27 @@ Workflow: ss4_create → client sees it in portal → signs → Luca faxes to IR
           }
         }
 
-        // ─── 6. RESOLVE LINE 6 (county_and_state) FROM REGISTERED AGENT ADDRESS ───
+        // ─── 6. RESOLVE LINE 6 (county_and_state) FROM REGISTERED AGENT REGISTRY ───
         // IRS instruction: "Enter the entity's primary physical location."
         // TD operating rule (Antonio, 2026-04-30): for foreign-owned LLC EIN filings,
         // the registered agent / registered office address is the source for Line 6.
-        // The helper matches the free-text RA address against known canonical addresses
-        // and returns null for unknown/blank/unmappable. No state-to-county fallback,
-        // no formation-state map, no global Pinellas default, no use of physical_address
-        // or owner_state_province.
-        const raMatch = countyFromRAAddress(account.registered_agent_address)
-        const resolvedCountyAndState = raMatch?.countyAndState ?? null
-
-        // Block direct-to-signature creation if Line 6 cannot be resolved.
-        if (params.ready_to_sign && !resolvedCountyAndState) {
-          const reason = !account.registered_agent_address || !account.registered_agent_address.trim()
-            ? "Registered Agent address is missing on the account"
-            : `Registered Agent address "${account.registered_agent_address}" is not a recognized RA office`
-          return { content: [{ type: "text" as const, text: `Error: SS-4 cannot be created at 'awaiting_signature' for ${account.company_name} — ${reason}. Add or correct the Registered Agent address before sending for signature, then retry.` }] }
+        // Path 2: read county directly from the addresses registry via FK join.
+        // No fallback — if registered_agent_id is unset or county is blank, block.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const raId = (account as any).registered_agent_id as string | null
+        if (!raId) {
+          return { content: [{ type: "text" as const, text: `Error: No Registered Agent set for ${account.company_name}. Link a Registered Agent in the addresses registry before creating an SS-4.` }] }
         }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: raAddress } = await (supabaseAdmin as any)
+          .from("addresses")
+          .select("county, state")
+          .eq("id", raId)
+          .single()
+        if (!raAddress?.county) {
+          return { content: [{ type: "text" as const, text: `Error: Registered Agent address for ${account.company_name} is missing county. Set the county in the addresses registry, then retry.` }] }
+        }
+        const resolvedCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
 
         // ─── 7. BUILD TOKEN ───
         const slug = account.company_name

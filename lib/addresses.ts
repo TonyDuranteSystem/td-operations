@@ -1,6 +1,26 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
+const STATE_NAMES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+  CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
+  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
+  KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri',
+  MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey',
+  NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio',
+  OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
+  VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+}
+
+// Builds SS-4 Line 6 string from structured registry columns.
+// county = "Sheridan", stateCode = "WY" → "Sheridan County, Wyoming"
+export function formatCountyAndState(county: string, stateCode: string): string {
+  const stateName = STATE_NAMES[stateCode.toUpperCase()] ?? stateCode
+  return `${county} County, ${stateName}`
+}
+
 export const VALID_KINDS = ['business_legal', 'business_mailing', 'registered_agent'] as const
 export type AddressKind = (typeof VALID_KINDS)[number]
 
