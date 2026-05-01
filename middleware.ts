@@ -18,7 +18,6 @@ const PUBLIC_PREFIXES = [
   '/api/message',
   '/api/sync-drive',
   '/api/sync-airtable',
-  '/api/sync-hubspot',
   '/api/webhooks',
   '/api/cron',
   // Liveness probe for post-deploy smoke (P2.7 — plan §4 line 576).

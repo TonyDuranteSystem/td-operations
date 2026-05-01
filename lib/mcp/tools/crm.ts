@@ -4,7 +4,6 @@
  */
 
 import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
-import { upsertCompany, upsertContact, associateContactToCompany } from "@/lib/hubspot"
 import { logAction } from "@/lib/mcp/action-log"
 import {
   ACCOUNT_STATUS, PAYMENT_STATUS, TASK_STATUS,
@@ -108,6 +107,7 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
 
   const isFinal = !stages.find(s => s.stage_order > nextStage.stage_order)
 
+  // eslint-disable-next-line no-restricted-syntax
   const { error: advErr } = await supabaseAdmin
     .from("service_deliveries")
     .update({
@@ -128,6 +128,7 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
   const createdTasks: string[] = []
   if (nextStage.auto_tasks && Array.isArray(nextStage.auto_tasks)) {
     for (const taskDef of nextStage.auto_tasks as Array<{ title: string; assigned_to?: string; category?: string; priority?: string; description?: string }>) {
+      // eslint-disable-next-line no-restricted-syntax
       const { error: tErr } = await supabaseAdmin.from("tasks").insert({
         task_title: `[${delivery.service_name || delivery.service_type}] ${taskDef.title}`,
         assigned_to: taskDef.assigned_to || "Luca",
@@ -876,118 +877,6 @@ export function registerCrmTools(server: McpServer) {
         }
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `❌ crm_update_record error: ${err.message}` }] }
-      }
-    }
-  )
-
-  // ─── crm_sync_hubspot ───────────────────────────────────────────────
-  server.tool(
-    "crm_sync_hubspot",
-    "Sync CRM data from Supabase to HubSpot (one-way push). Syncs Active accounts as Companies, their contacts as Contacts, and creates associations. Requires HUBSPOT_PAT env var. Use dry_run to preview. Supports syncing specific accounts by ID or all Active accounts.",
-    {
-      dry_run: z.boolean().optional().default(true).describe("If true, preview what would sync without writing to HubSpot (default: true — must be explicitly set to false to perform writes)"),
-      account_ids: z.array(z.string()).optional().describe("Specific account UUIDs to sync. If omitted, syncs all Active accounts."),
-      limit: z.number().optional().default(0).describe("Max accounts to sync (0 = all)"),
-    },
-    async ({ dry_run, account_ids, limit }) => {
-      try {
-        // 1) Fetch accounts from Supabase
-        let query = supabaseAdmin
-          .from("accounts")
-          .select("id, company_name, entity_type, ein_number, state_of_formation, formation_date, physical_address, status")
-          .eq("status", "Active")
-          .or("is_test.is.null,is_test.eq.false")
-          .order("company_name")
-
-        if (account_ids?.length) {
-          query = query.in("id", account_ids)
-        }
-        if (limit && limit > 0) {
-          query = query.limit(limit)
-        }
-
-        const { data: accounts, error: aErr } = await query
-        if (aErr) throw aErr
-        if (!accounts || accounts.length === 0) {
-          return { content: [{ type: "text" as const, text: "No active accounts to sync." }] }
-        }
-
-        if (dry_run) {
-          return {
-            content: [{ type: "text" as const, text: `🔍 DRY RUN — ${accounts.length} accounts would sync:\n${accounts.map(a => `  • ${a.company_name}`).join("\n")}` }],
-          }
-        }
-
-        let companiesSynced = 0, companiesFailed = 0
-        let contactsSynced = 0, contactsFailed = 0
-        let associationsCreated = 0
-        const errors: string[] = []
-
-        // Process sequentially — HubSpot has 4 API calls/second rate limit
-        const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-        for (const account of accounts) {
-          try {
-            const companyId = await upsertCompany(account)
-            companiesSynced++
-            await delay(350)
-
-            const { data: junctions } = await supabaseAdmin
-              .from("account_contacts")
-              .select("contact:contacts(id, full_name, first_name, last_name, email, email_2, phone, citizenship, itin_number, language)")
-              .eq("account_id", account.id)
-
-            if (!junctions) continue
-
-            for (const j of junctions) {
-              const contact = j.contact as unknown as {
-                id: string; full_name: string; first_name: string | null; last_name: string | null
-                email: string | null; email_2: string | null; phone: string | null
-                citizenship: string | null; itin_number: string | null; language: string | null
-              }
-              if (!contact?.email) continue
-
-              try {
-                const contactId = await upsertContact(contact)
-                if (contactId) {
-                  contactsSynced++
-                  await delay(350)
-                  try {
-                    await associateContactToCompany(contactId, companyId)
-                    associationsCreated++
-                    await delay(200)
-                  } catch { /* non-fatal */ }
-                }
-              } catch (cErr) {
-                contactsFailed++
-                errors.push(`Contact ${contact.full_name}: ${cErr instanceof Error ? cErr.message : String(cErr)}`)
-              }
-            }
-          } catch (err) {
-            companiesFailed++
-            errors.push(`Company ${account.company_name}: ${err instanceof Error ? err.message : String(err)}`)
-            await delay(1000)
-          }
-        }
-
-        const lines = [
-          "✅ HubSpot sync complete",
-          "",
-          `📊 Companies: ${companiesSynced} synced, ${companiesFailed} failed`,
-          `👤 Contacts: ${contactsSynced} synced, ${contactsFailed} failed`,
-          `🔗 Associations: ${associationsCreated} created`,
-        ]
-
-        if (errors.length > 0) {
-          lines.push("", `⚠️ Errors (${errors.length}):`, ...errors.slice(0, 20).map(e => `  • ${e}`))
-          if (errors.length > 20) lines.push(`  ... and ${errors.length - 20} more`)
-        }
-
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: `❌ HubSpot sync failed: ${error instanceof Error ? error.message : String(error)}` }],
-        }
       }
     }
   )
