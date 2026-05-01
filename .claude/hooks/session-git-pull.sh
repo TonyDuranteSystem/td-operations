@@ -49,4 +49,27 @@ if [ "$STASHED" = true ]; then
   echo "⚠️ Had to stash local changes. Run 'git stash pop' if you need them back."
 fi
 
+# ── Environment state declaration ─────────────────────────────────────────
+# Printed every session start so Claude and Antonio always know which
+# environment this machine is in before any work begins.
+VERCEL_PROJECT=$(python3 -c "import json; print(json.load(open('.vercel/project.json')).get('projectName','UNKNOWN'))" 2>/dev/null || echo "UNKNOWN")
+SUPABASE_URL=$(grep 'NEXT_PUBLIC_SUPABASE_URL' .env.local 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "MISSING")
+SUPABASE_REF=$(echo "$SUPABASE_URL" | sed 's|https://\([^.]*\)\.supabase\.co|\1|')
+BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+
+echo ""
+if [ "$VERCEL_PROJECT" = "td-operations-sandbox" ] && echo "$SUPABASE_URL" | grep -q "xjcxlmlpeywtwkhstjlw"; then
+  echo "✅ Environment: SANDBOX"
+else
+  echo "⛔ WARNING: Environment is NOT sandbox"
+fi
+echo "   Vercel project : $VERCEL_PROJECT"
+echo "   Supabase ref   : $SUPABASE_REF"
+echo "   Branch         : $BRANCH"
+if [ "$VERCEL_PROJECT" != "td-operations-sandbox" ] || ! echo "$SUPABASE_URL" | grep -q "xjcxlmlpeywtwkhstjlw"; then
+  echo ""
+  echo "   Run: bash scripts/dev-setup.sh — to reset to sandbox"
+fi
+echo ""
+
 exit 0
