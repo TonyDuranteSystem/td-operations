@@ -27,6 +27,13 @@ interface ChatThread {
   unread_count: number
 }
 
+interface ChatAttachment {
+  url: string
+  name: string
+  mime_type?: string
+  size?: number
+}
+
 interface ChatMessage {
   id: string
   message: string
@@ -35,6 +42,7 @@ interface ChatMessage {
   created_at: string
   attachment_url?: string
   attachment_name?: string
+  attachments?: ChatAttachment[] | null
   read_at?: string | null
   reply_to_id?: string | null
   deleted_at?: string | null
@@ -1945,31 +1953,42 @@ export default function PortalChatsPage() {
                             <p className="line-clamp-2">{replyRef.message || '[Attachment]'}</p>
                           </div>
                         )}
-                        {msg.attachment_url && (
-                          (() => {
-                            const ext = msg.attachment_url.split('?')[0].split('.').pop()?.toLowerCase() || ''
-                            const isImg = ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
-                            return isImg ? (
-                              <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="block mb-1">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={msg.attachment_url} alt={msg.attachment_name || 'Image'} className="max-w-[200px] rounded-lg" loading="lazy" />
-                              </a>
-                            ) : (
-                              <a
-                                href={msg.attachment_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={cn(
-                                  'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
-                                  isAdmin ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
-                                )}
-                              >
-                                <FileText className="h-3.5 w-3.5 shrink-0" />
-                                <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
-                              </a>
-                            )
-                          })()
-                        )}
+                        {(() => {
+                          const atts: ChatAttachment[] = msg.attachments?.length
+                            ? msg.attachments
+                            : msg.attachment_url
+                            ? [{ url: msg.attachment_url, name: msg.attachment_name || 'Attachment' }]
+                            : []
+                          if (!atts.length) return null
+                          return (
+                            <>
+                              {atts.map((att, i) => {
+                                const ext = att.url.split('?')[0].split('.').pop()?.toLowerCase() || ''
+                                const isImg = ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
+                                return isImg ? (
+                                  <a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="block mb-1">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={att.url} alt={att.name} className="max-w-[200px] rounded-lg" loading="lazy" />
+                                  </a>
+                                ) : (
+                                  <a
+                                    key={i}
+                                    href={att.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={cn(
+                                      'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
+                                      isAdmin ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                                    )}
+                                  >
+                                    <FileText className="h-3.5 w-3.5 shrink-0" />
+                                    <span className="truncate">{att.name}</span>
+                                  </a>
+                                )
+                              })}
+                            </>
+                          )
+                        })()}
                         <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
                         <p className={cn(
                           'text-xs mt-1 flex items-center gap-1',
