@@ -871,7 +871,6 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     // 3b. Create follow-up tasks linked to service delivery
     const taskDefs = [
-      { title: `Review and send lease agreement — ${company_name}`, assigned_to: "Antonio", category: "Document", priority: "High" },
       { title: `Registered Agent change — ${company_name}`, assigned_to: "Luca", category: "Formation", priority: "High" },
     ]
     for (const td of taskDefs) {

@@ -1117,32 +1117,86 @@ export async function POST(req: NextRequest) {
     // ─── STEP 5: Notify Luca + Antonio via email ──────────
     try {
       const { gmailPost } = await import("@/lib/gmail")
-      const sdList = sdResults.map(r => `- ${r.pipeline}: ${r.status}${r.id ? ` (${r.id.slice(0,8)})` : ""}`).join("\n")
-      const supervisedList = preparedSteps.map(p => `- ${p.description}`).join("\n")
 
-      const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
-<h2>[NEW CLIENT] ${activation.client_name} -- Payment Confirmed</h2>
-<table style="border-collapse:collapse">
-<tr><td style="padding:4px 8px;font-weight:bold">Contract type:</td><td style="padding:4px 8px">${contractType}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Amount:</td><td style="padding:4px 8px">${activation.currency} ${activation.amount}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Payment:</td><td style="padding:4px 8px">${activation.payment_method}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Email:</td><td style="padding:4px 8px">${activation.client_email}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Contact ID:</td><td style="padding:4px 8px">${contactId || "N/A"}</td></tr>
-</table>
+      // For onboarding: pull submission data to enrich the email
+      let sub: Record<string, unknown> = {}
+      if (contractType === "onboarding" && contactId) {
+        const { data: submission } = await supabase
+          .from("onboarding_submissions")
+          .select("submitted_data")
+          .eq("contact_id", contactId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (submission?.submitted_data) sub = submission.submitted_data as Record<string, unknown>
+      }
 
-<h3>Service Deliveries Created</h3>
-<pre style="background:#f3f4f6;padding:12px;border-radius:6px">${sdList || "None"}</pre>
+      const str = (v: unknown) => (v ? String(v) : "")
+      const row = (label: string, value: unknown) => value
+        ? `<tr><td style="padding:6px 12px;font-weight:bold;color:#6b7280;font-size:12px;width:38%;text-transform:uppercase;letter-spacing:0.03em">${label}</td><td style="padding:6px 12px;font-size:14px;color:#111827">${String(value)}</td></tr>`
+        : ""
+      const section = (title: string, rows: string) => rows.trim()
+        ? `<p style="margin:24px 0 6px;font-size:11px;font-weight:bold;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em">${title}</p><table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">${rows}</table>`
+        : ""
 
-${referralNoteLine ? `<h3>Referral</h3><p>${referralNoteLine}</p>` : ""}
+      const paidDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      const serviceLabel = contractType === "formation" ? "LLC Formation"
+        : contractType === "onboarding" ? "LLC Onboarding"
+        : contractType === "tax_return" ? "Tax Return"
+        : contractType === "itin" ? "ITIN Application"
+        : contractType
 
-${preparedSteps.length > 0 ? `<h3>Supervised Steps (awaiting confirmation)</h3>
-<pre style="background:#fef3c7;padding:12px;border-radius:6px">${supervisedList}</pre>
-<p>Use <code>formation_confirm(activation_id)</code> in Claude to review and execute these steps.</p>` : ""}
+      const paymentSection = section("Payment", [
+        row("Client", activation.client_name),
+        row("Email", activation.client_email),
+        row("Service", serviceLabel),
+        row("Amount", `${activation.currency} ${activation.amount}`),
+        row("Payment method", activation.payment_method),
+        row("Date", paidDate),
+        referralNoteLine ? row("Referral", referralNoteLine) : "",
+      ].join(""))
 
-<p style="font-size:12px;color:#6b7280">Activation ID: ${pending_activation_id} | Offer: ${activation.offer_token}</p>
+      const ownerSection = contractType === "onboarding" ? section("Owner", [
+        row("Full name", `${str(sub.owner_first_name)} ${str(sub.owner_last_name)}`.trim()),
+        row("Email", str(sub.owner_email)),
+        row("Phone", str(sub.owner_phone)),
+        row("Date of birth", str(sub.owner_dob)),
+        row("Nationality", str(sub.owner_nationality)),
+        row("Address", [sub.owner_street, sub.owner_city, sub.owner_state_province, sub.owner_zip, sub.owner_country].filter(Boolean).join(", ")),
+      ].join("")) : ""
+
+      const companySection = contractType === "onboarding" ? section("Company", [
+        row("Name", str(sub.company_name)),
+        row("State", str(sub.state_of_formation)),
+        row("Formation date", str(sub.formation_date)),
+        row("EIN", str(sub.ein)),
+        row("Filing ID", str(sub.filing_id)),
+        row("Business purpose", str(sub.business_purpose)),
+        row("Current registered agent", str(sub.registered_agent)),
+      ].join("")) : ""
+
+      const taxSection = contractType === "onboarding" ? section("Tax history", [
+        row("Previous year filed", str(sub.tax_return_previous_year_filed)),
+        row("Current year filed", str(sub.tax_return_current_year_filed)),
+      ].join("")) : ""
+
+      const nextStep = contractType === "onboarding"
+        ? `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px 16px;margin:28px 0 0"><p style="margin:0;font-size:13px;font-weight:600;color:#1e40af">Next step</p><p style="margin:4px 0 0;font-size:13px;color:#1d4ed8">Luca — Registered Agent change: ${str(sub.company_name) || activation.client_name}</p></div>`
+        : ""
+
+      const inner = `${paymentSection}${ownerSection}${companySection}${taxSection}${nextStep}`
+      const emailBody = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+  <div style="background:#2563eb;padding:24px;border-radius:12px 12px 0 0">
+    <h1 style="color:white;margin:0;font-size:20px">Tony Durante LLC</h1>
+    <p style="color:rgba(255,255,255,0.85);margin:4px 0 0;font-size:13px">New Client</p>
+  </div>
+  <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px">
+    ${inner}
+    <div style="border-top:1px solid #e5e7eb;margin-top:24px;padding-top:12px;font-size:11px;color:#9ca3af">Tony Durante LLC · 1111 Lincoln Road, Suite 400, Miami Beach, FL 33139</div>
+  </div>
 </div>`
 
-      const activationSubject = `[NEW CLIENT] ${activation.client_name} -- ${contractType} -- Payment Confirmed`
+      const activationSubject = `New client: ${activation.client_name} — ${serviceLabel}`
       const encodedSubject = `=?utf-8?B?${Buffer.from(activationSubject).toString("base64")}?=`
       const raw = Buffer.from(
         `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
