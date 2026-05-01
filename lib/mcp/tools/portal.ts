@@ -10,6 +10,7 @@ import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
 import { gmailPost } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
+import type { MailingAddressRow } from "@/lib/addresses"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -36,13 +37,15 @@ const TD_ADDRESS_PATTERNS = [
   "park blvd",
 ]
 
-function isTDAddress(address: string | null): boolean {
+function isTDAddress(address: string | null, mailingRow?: Pick<MailingAddressRow, 'is_td_provided'> | null): boolean {
+  if (mailingRow != null) return mailingRow.is_td_provided === true
   if (!address) return false
   const lower = address.toLowerCase()
   return TD_ADDRESS_PATTERNS.some(p => lower.includes(p))
 }
 
-function isCurrentTDAddress(address: string | null): boolean {
+function isCurrentTDAddress(address: string | null, mailingRow?: Pick<MailingAddressRow, 'is_td_provided'> | null): boolean {
+  if (mailingRow != null) return mailingRow.is_td_provided === true
   if (!address) return false
   return address.toLowerCase().includes("ulmerton")
 }
@@ -62,6 +65,7 @@ export function registerPortalTools(server: McpServer) {
     account: {
       id: string; company_name: string; entity_type: string | null; state_of_formation: string | null
       ein_number: string | null; formation_date: string | null; onboarding_date: string | null; status: string; physical_address: string | null
+      mailing_address?: Pick<MailingAddressRow, 'is_td_provided'> | null
       drive_folder_id: string | null; portal_account: boolean | null; portal_tier: string | null
       services_bundle: string[] | null; account_type: string | null
       installment_1_amount: number | null; installment_2_amount: number | null; notes: string | null
@@ -75,7 +79,7 @@ export function registerPortalTools(server: McpServer) {
     const isOneTime = account.account_type === "One-Time"
 
     // Pre-flight: TD address check (Client accounts only)
-    if (!isOneTime && !isTDAddress(account.physical_address)) {
+    if (!isOneTime && !isTDAddress(account.physical_address, account.mailing_address)) {
       flags.push(`FLAG: Non-TD address (${account.physical_address || "NULL"}) -- needs manual address verification`)
       lines.push("SKIPPED: Non-TD address")
       return { lines, flags, pendingDocs, skipped: true }
@@ -455,7 +459,7 @@ export function registerPortalTools(server: McpServer) {
     if (createdDeadlines.length > 0) lines.push(`Deadlines created: ${createdDeadlines.join(", ")}`)
 
     // OLD ADDRESS FLAG
-    if (isTDAddress(account.physical_address) && !isCurrentTDAddress(account.physical_address)) {
+    if (isTDAddress(account.physical_address, account.mailing_address) && !isCurrentTDAddress(account.physical_address, account.mailing_address)) {
       flags.push(`FLAG: Old TD address (${account.physical_address}) -- will need Form 8822-B to change to Ulmerton (do later)`)
     }
 
@@ -665,7 +669,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data: allAccounts } = await (supabaseAdmin as any)
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
           .in("id", allAccountIds)
           .eq("status", "Active") as { data: Parameters<typeof processAccountForTransition>[0][] | null }
 
@@ -892,7 +896,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const { data: activeAccounts } = await (supabaseAdmin as any)
               .from("accounts")
-              .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+              .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
               .in("id", allContactAccountIds)
               .eq("status", "Active") as { data: Parameters<typeof processAccountForTransition>[0][] | null }
 

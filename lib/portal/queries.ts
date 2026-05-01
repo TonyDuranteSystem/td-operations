@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { resolveMailingAddress } from '@/lib/addresses'
 import type { PortalAccount, PortalService } from '@/lib/types'
 
 /**
@@ -52,26 +53,28 @@ export async function getFormationAccount(contactId: string) {
   if (!links || links.length === 0) return null
 
   const accountIds = links.map(l => l.account_id)
-  const { data } = await supabaseAdmin
+  const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, filing_id, status, physical_address')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, filing_id, status, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .in('id', accountIds)
     .eq('status', 'Pending Formation')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  return data
+  if (!data) return data
+  return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address) }
 }
 
 export async function getPortalAccountDetail(accountId: string) {
-  const { data } = await supabaseAdmin
+  const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', accountId)
     .single()
 
-  return data
+  if (!data) return data
+  return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address) }
 }
 
 export async function getPortalMembers(accountId: string) {

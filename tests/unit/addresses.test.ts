@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isValidKind, linkedAccountCount, nearDupeCheck } from '@/lib/addresses'
+import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress } from '@/lib/addresses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
@@ -135,3 +135,70 @@ describe('nearDupeCheck', () => {
 })
 
 /* eslint-enable no-restricted-syntax */
+
+// ── formatAddressString ──────────────────────────────────────────────────────
+
+describe('formatAddressString', () => {
+  it('returns null for null input', () => {
+    expect(formatAddressString(null)).toBeNull()
+    expect(formatAddressString(undefined)).toBeNull()
+  })
+
+  it('returns null when address_line1 is missing', () => {
+    expect(formatAddressString({ address_line1: null, city: 'Miami', state: 'FL', zip: '33101' })).toBeNull()
+  })
+
+  it('formats a standard address without line2', () => {
+    expect(formatAddressString({
+      address_line1: '10225 Ulmerton Rd',
+      city: 'Largo',
+      state: 'FL',
+      zip: '33771',
+    })).toBe('10225 Ulmerton Rd, Largo FL 33771')
+  })
+
+  it('includes address_line2 when present', () => {
+    expect(formatAddressString({
+      address_line1: '10225 Ulmerton Rd',
+      address_line2: 'Suite 3D',
+      city: 'Largo',
+      state: 'FL',
+      zip: '33771',
+    })).toBe('10225 Ulmerton Rd, Suite 3D, Largo FL 33771')
+  })
+
+  it('handles missing city/state/zip gracefully', () => {
+    expect(formatAddressString({ address_line1: '123 Main St', city: null, state: null, zip: null })).toBe('123 Main St')
+  })
+})
+
+// ── resolveMailingAddress ────────────────────────────────────────────────────
+
+describe('resolveMailingAddress', () => {
+  it('returns formatted address from mailingRow when present', () => {
+    expect(resolveMailingAddress(
+      { address_line1: '10225 Ulmerton Rd', city: 'Largo', state: 'FL', zip: '33771' },
+      '456 Old St, Miami, FL 33101',
+    )).toBe('10225 Ulmerton Rd, Largo FL 33771')
+  })
+
+  it('falls back to legacyPhysical when mailingRow is null', () => {
+    expect(resolveMailingAddress(null, '456 Old St, Miami, FL 33101')).toBe('456 Old St, Miami, FL 33101')
+  })
+
+  it('falls back to legacyPhysical when mailingRow is undefined', () => {
+    expect(resolveMailingAddress(undefined, '456 Old St')).toBe('456 Old St')
+  })
+
+  it('falls back to legacyPhysical when mailingRow has no address_line1', () => {
+    expect(resolveMailingAddress(
+      { address_line1: null, city: 'Largo', state: 'FL', zip: '33771' },
+      'legacy fallback',
+    )).toBe('legacy fallback')
+  })
+
+  it('returns null when both are absent', () => {
+    expect(resolveMailingAddress(null, null)).toBeNull()
+    expect(resolveMailingAddress(undefined, undefined)).toBeNull()
+  })
+})
