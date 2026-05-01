@@ -13,6 +13,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { generateInvoicePdf, type InvoicePdfInput } from "@/lib/pdf/invoice-pdf"
+import { resolveMailingAddress } from "@/lib/addresses"
 import { syncInvoiceToQB } from "@/lib/qb-sync"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { buildInvoiceEmail } from "@/lib/email/invoice-email"
@@ -124,9 +125,9 @@ export async function sendTDInvoice(
     .eq("payment_id", paymentId)
     .order("sort_order")
 
-  const { data: account } = await supabaseAdmin
+  const { data: account } = await (supabaseAdmin as any)
     .from("accounts")
-    .select("company_name, physical_address")
+    .select("company_name, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
     .eq("id", payment.account_id)
     .single()
 
@@ -176,7 +177,7 @@ export async function sendTDInvoice(
     billTo: {
       name: account?.company_name ?? "Client",
       email: recipientEmail,
-      address: account?.physical_address ?? null,
+      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
     },
     items: items ?? [],
     subtotal: Number(payment.subtotal ?? 0),
@@ -309,12 +310,12 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
     .order("sort_order")
 
   const { data: account } = payment.account_id
-    ? await supabaseAdmin
+    ? await (supabaseAdmin as any)
         .from("accounts")
-        .select("company_name, physical_address")
+        .select("company_name, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
         .eq("id", payment.account_id)
         .single()
-    : { data: null as { company_name: string | null; physical_address: string | null } | null }
+    : { data: null as { company_name: string | null; physical_address: string | null; mailing_address?: unknown } | null }
 
   // Resolve recipient email + name. Prefer contact_id, then account owner,
   // then account communication_email (same priority as sendTDInvoice).
@@ -384,7 +385,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
     billTo: {
       name: account?.company_name ?? "Client",
       email: recipientEmail,
-      address: account?.physical_address ?? null,
+      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
     },
     items: items ?? [],
     subtotal: Number(payment.subtotal ?? 0),

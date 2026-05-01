@@ -1,6 +1,35 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
+// Supabase row shape returned by joining addresses!business_mailing_address_id
+export interface MailingAddressRow {
+  address_line1: string | null
+  address_line2?: string | null
+  city: string | null
+  state: string | null
+  zip: string | null
+  is_td_provided?: boolean
+}
+
+// Build a single-line address string from a structured addresses row.
+export function formatAddressString(addr: MailingAddressRow | null | undefined): string | null {
+  if (!addr?.address_line1) return null
+  const parts: string[] = [addr.address_line1.trim()]
+  if (addr.address_line2?.trim()) parts.push(addr.address_line2.trim())
+  const csz = [addr.city?.trim(), addr.state?.trim(), addr.zip?.trim()].filter(Boolean).join(' ')
+  if (csz) parts.push(csz)
+  return parts.join(', ')
+}
+
+// Prefer the FK-joined address row; fall back to the legacy physical_address text column.
+export function resolveMailingAddress(
+  mailingRow: MailingAddressRow | null | undefined,
+  legacyPhysical: string | null | undefined,
+): string | null {
+  const formatted = formatAddressString(mailingRow)
+  return formatted ?? legacyPhysical ?? null
+}
+
 const STATE_NAMES: Record<string, string> = {
   AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
   CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',

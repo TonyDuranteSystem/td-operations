@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
 import { invoiceLabels, type InvoiceLang } from '@/lib/portal/invoice-labels'
 import { sanitizePdfLine } from '@/lib/pdf/sanitize'
+import { resolveMailingAddress } from '@/lib/addresses'
 
 /**
  * GET /api/portal/invoices/[id]/pdf — Generate and stream invoice PDF
@@ -48,9 +49,9 @@ export async function GET(
     .eq('invoice_id', id)
     .order('sort_order')
 
-  const { data: account } = await supabaseAdmin
+  const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, invoice_logo_url, physical_address, ein_number, state_of_formation')
+    .select('company_name, invoice_logo_url, physical_address, ein_number, state_of_formation, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', invoice.account_id)
     .single()
 
@@ -125,8 +126,9 @@ export async function GET(
 
   // Company details under company name
   let detailY = y - 16
-  if (account?.physical_address) {
-    page.drawText(sanitizePdfLine(account.physical_address), { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
+  const resolvedAddress = resolveMailingAddress((account as any)?.mailing_address, account?.physical_address)
+  if (resolvedAddress) {
+    page.drawText(sanitizePdfLine(resolvedAddress), { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
     detailY -= 11
   }
   const companyMeta = [

@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
+import { resolveMailingAddress } from '@/lib/addresses'
 
 // TD LLC company info
 const TD_COMPANY = {
@@ -58,9 +59,9 @@ export async function GET(
     .eq('payment_id', id)
     .order('sort_order')
 
-  const { data: account } = await supabaseAdmin
+  const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, physical_address, ein_number')
+    .select('company_name, physical_address, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', payment.account_id)
     .single()
 
@@ -93,7 +94,7 @@ export async function GET(
     billTo: {
       name: account?.company_name ?? 'Client',
       email: contact?.email ?? null,
-      address: account?.physical_address ?? null,
+      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
     },
 
     items: items ?? [],

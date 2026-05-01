@@ -7,6 +7,7 @@ import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
+import type { MailingAddressRow } from '@/lib/addresses'
 
 export const maxDuration = 60 // Vercel Pro: 60s
 
@@ -18,7 +19,8 @@ const PORTAL_VISIBLE_DOC_TYPES = [
 const PORTAL_VISIBLE_CATEGORIES = [3, 5] // Tax, Correspondence
 
 const TD_ADDRESS_PATTERNS = ['ulmerton', 'gulf blvd', 'indian shores', 'park blvd']
-function isTDAddress(addr: string | null): boolean {
+function isTDAddress(addr: string | null, mailingRow?: Pick<MailingAddressRow, 'is_td_provided'> | null): boolean {
+  if (mailingRow != null) return mailingRow.is_td_provided === true
   if (!addr) return false
   const l = addr.toLowerCase()
   return TD_ADDRESS_PATTERNS.some(p => l.includes(p))
@@ -79,9 +81,9 @@ export async function POST(request: NextRequest) {
 
   const allAccountIds = (allLinks ?? []).map(l => l.account_id)
 
-  const { data: allAccounts } = await supabaseAdmin
+  const { data: allAccounts } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes')
     .in('id', allAccountIds)
     .eq('status', 'Active')
 
@@ -106,7 +108,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Pre-flight: TD address (Client accounts only)
-    if (!isOneTime && !isTDAddress(acct.physical_address)) {
+    if (!isOneTime && !isTDAddress(acct.physical_address, (acct as any).mailing_address)) {
       warnings.push(`${acct.company_name}: Non-TD address (${acct.physical_address || 'NULL'})`)
     }
 
@@ -327,7 +329,7 @@ export async function POST(request: NextRequest) {
       })
       createdSDs.push('Annual Renewal')
     }
-    if (!isOneTime && !sdTypes.has('CMRA Mailing Address') && isTDAddress(acct.physical_address)) {
+    if (!isOneTime && !sdTypes.has('CMRA Mailing Address') && isTDAddress(acct.physical_address, (acct as any).mailing_address)) {
       // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'CMRA Mailing Address',
