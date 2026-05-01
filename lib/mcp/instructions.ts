@@ -357,7 +357,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - sysdoc_*: System documentation — list, read, create, update (4 tools). Key docs: session-context (lean quick-ref), project-state (milestones), tech-stack (architecture). Use sysdoc_create for session logs.
 - session_checkpoint: ONE-CALL save for session progress. Saves summary + next_steps, resets reminder counter. Use after every significant action.
 - work_*: Cross-machine work locks (3 tools: work_claim, work_release, work_list). **Advisory only** — does NOT block writes. Use BEFORE editing shared files on a multi-machine setup so other sessions can see what you're working on. Partial unique index on (file_path WHERE released_at IS NULL) enforces one active lock per file. Check work_list({include_released:false}) at session start to see what other machines are doing.
-- execute_sql: LAST RESORT — raw SQL. Prefer dedicated tools.
+- execute_sql: LAST RESORT — raw SQL. Prefer dedicated tools. DDL (CREATE/ALTER TABLE, FUNCTION, TRIGGER, VIEW, SEQUENCE, TYPE, EXTENSION, INDEX) is BLOCKED unless reason starts with "migration:<filename>". Pattern: write SQL to scripts/migrations/YYYYMMDD-HHMM-description.sql → test on sandbox via node scripts/apply-migration.js → promote with reason="migration:<filename>".
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).
 - hc_*: Harbor Compliance registered agent integration (8 tools). Sync companies, submit RA change orders, download RA deliveries to Drive, track licenses, sync license expirations to deadlines table. Requires HC_CLIENT_ID/HC_CLIENT_SECRET env vars. Use hc_sync_company to link a CRM account to HC before submitting orders.

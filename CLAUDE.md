@@ -195,6 +195,8 @@ Before saying "it works" or "done", run `npm run test:unit`. If you didn't run t
 
 - **R104** — SANDBOX IS THE ONLY DEVELOPMENT ENVIRONMENT (2026-05-01, structural enforcement). Three layers prevent production access during development: (1) `.vercel/project.json` is committed to git with sandbox values — `git pull` resets it on every machine automatically, drift is visible in `git status`; (2) `bash-production-guard.sh` PreToolUse hook blocks `git push origin main`, `npm run dev/build/test` with prod URL, `vercel deploy/build/env pull` against production project — fires before every Bash call, cannot be bypassed without modifying committed source; (3) `lib/supabase-admin.ts` hardcoded production ref check — server refuses to start locally if `NEXT_PUBLIC_SUPABASE_URL` contains production ref `ydzipybqeebtpcvsbtvs`. SessionStart hook reports environment state automatically. **You never need to say "sandbox first" — the system enforces it.** Production push only after Antonio's explicit approval: `ALLOW_PRODUCTION_PUSH_AFTER_SANDBOX_QA=1 git push origin main`. First-time machine setup: `bash scripts/dev-setup.sh`.
 
+- **R105** — ALL DDL MUST GO THROUGH MIGRATION FILES (2026-04-30, structural enforcement). `CREATE TABLE`, `ALTER TABLE`, `CREATE FUNCTION/TRIGGER/VIEW/SEQUENCE/TYPE/EXTENSION`, and `CREATE INDEX` are blocked by `execute_sql` unless `reason` starts with `migration:<filename>`. Pattern: (1) write SQL to `scripts/migrations/YYYYMMDD-HHMM-description.sql`; (2) apply to sandbox: `node scripts/apply-migration.js <file>` — refuses if `.env.local` points to production; (3) Antonio approves → promote to production via `execute_sql(mode: "write", reason: "migration:<filename>")`. NEVER run DDL directly via `execute_sql` without this pattern. NEVER run DDL on production without sandbox test first.
+
 - **R102** — Portal tier has exactly 4 values: `lead`, `formation`, `onboarding`, `active`. The value `full` is removed and must never be used. All writes to `contacts.portal_tier` or `accounts.portal_tier` MUST go through `syncTier()` in `lib/operations/sync-tier.ts` — direct column writes are forbidden. `formation` tier = company being formed (no EIN yet); these clients see a formation-specific dashboard. When EIN is received, tier advances to `active` via the "Record EIN Received" button or `enter_ein` action — never advance tier manually. Contact `portal_tier` is computed as the highest tier across all linked accounts; contacts without any account keep their own tier.
 
 <!-- TIER2:END -->
@@ -318,7 +320,7 @@ The ONLY source of truth for active tools is `app/api/[transport]/route.ts`.
 - When removing tools: DELETE the source file (or move to `/deprecated`). Never leave dead tool files — they cause confusion across machines and incorrect counts.
 
 **Database:**
-- All schema changes via Supabase Dashboard or `execute_sql` — no local migrations
+- All schema changes via migration files in `scripts/migrations/` — apply to sandbox first with `node scripts/apply-migration.js <file>`, promote to production via `execute_sql(reason: "migration:<filename>")`. See R105.
 - RLS enabled on all tables
 - Enums defined in DB — check before adding new values
 
