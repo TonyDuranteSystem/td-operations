@@ -49,4 +49,24 @@ if [ $PULL_EXIT -eq 0 ] && [ -f package-lock.json ]; then
   fi
 fi
 
+# Auto-generate .mcp.json if missing (sandbox MCP connection for Claude Code)
+if [ ! -f ".mcp.json" ] && [ -f ".env.local" ]; then
+  SANDBOX_MCP_KEY=$(grep 'TD_MCP_API_KEY' .env.local | head -1 | sed 's/TD_MCP_API_KEY="\(.*\)"/\1/')
+  if [ -n "$SANDBOX_MCP_KEY" ]; then
+    cat > .mcp.json << EOF
+{
+  "mcpServers": {
+    "td-ops-sandbox": {
+      "type": "http",
+      "url": "https://td-operations-sandbox.vercel.app/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SANDBOX_MCP_KEY}"
+      }
+    }
+  }
+}
+EOF
+  fi
+fi
+
 exit 0
