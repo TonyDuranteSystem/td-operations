@@ -20,13 +20,22 @@ export async function updateAccountField(
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
     'communication_email',
+    // Path 2 address FK columns
+    'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id',
+    // Path 2 verified flags
+    'legal_link_verified', 'mailing_link_verified', 'ra_link_verified',
   ]
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
   }
 
+  const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified'])
+  const coercedValue = booleanFields.has(field)
+    ? value === 'true'
+    : (value || null)
+
   return safeAction(async () => {
-    const result = await updateWithLock('accounts', accountId, { [field]: value || null }, updatedAt)
+    const result = await updateWithLock('accounts', accountId, { [field]: coercedValue }, updatedAt)
     if (!result.success) throw new Error(result.error)
     revalidatePath(`/accounts/${accountId}`)
   }, {
