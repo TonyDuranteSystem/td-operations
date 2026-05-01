@@ -871,7 +871,6 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     // 3b. Create follow-up tasks linked to service delivery
     const taskDefs = [
-      { title: `Create WhatsApp group — ${company_name}`, assigned_to: "Luca", category: "Client Communication", priority: "High" },
       { title: `Review and send lease agreement — ${company_name}`, assigned_to: "Antonio", category: "Document", priority: "High" },
       { title: `Registered Agent change — ${company_name}`, assigned_to: "Luca", category: "Formation", priority: "High" },
     ]
@@ -1106,8 +1105,31 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     await updateJobProgress(job.id, result)
   }
 
-  // ─── 6. LEAD CONVERSION — SKIPPED (now happens at payment in whop webhook / check-wire-payments) ───
-  result.steps.push(step("lead_converted", "skipped", "Moved to payment confirmation (Change 1.1)"))
+  // ─── 6. LEAD CONVERSION — write converted_to_account_id + converted_at now that account exists ───
+  try {
+    if (!account_id) {
+      result.steps.push(step("lead_converted", "skipped", "No account_id available"))
+    } else if (!p.lead_id && !contact_id) {
+      result.steps.push(step("lead_converted", "skipped", "No lead_id or contact_id to match"))
+    } else {
+      let leadUpdate = supabaseAdmin
+        .from("leads")
+        .update({ converted_to_account_id: account_id, converted_at: now })
+      if (p.lead_id) {
+        leadUpdate = leadUpdate.eq("id", p.lead_id)
+      } else {
+        leadUpdate = leadUpdate.eq("converted_to_contact_id", contact_id!)
+      }
+      const { error: leadErr } = await leadUpdate
+      if (leadErr) {
+        result.steps.push(step("lead_converted", "error", leadErr.message))
+      } else {
+        result.steps.push(step("lead_converted", "ok", "converted_to_account_id + converted_at written"))
+      }
+    }
+  } catch (e) {
+    result.steps.push(step("lead_converted", "error", e instanceof Error ? e.message : String(e)))
+  }
 
   // ─── 7. MARK FORM AS REVIEWED ───
   if (p.submission_id) {
@@ -1174,6 +1196,31 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step("portal_notification", "ok", "Contact notified in portal"))
     } catch (e) {
       result.steps.push(step("portal_notification", "error", e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  // ─── 10b. PORTAL CHAT WELCOME MESSAGE ───
+  if (contact_id && account_id) {
+    try {
+      const welcomeMsg = company_name
+        ? `Welcome to Tony Durante LLC! We've received everything for ${company_name}.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup (Relay USD + Payset EUR) is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
+        : `Welcome to Tony Durante LLC! We've received your onboarding data.\n\nYour Operating Agreement and Lease Agreement are ready for your signature — you'll find them in your portal dashboard. Your Banking setup is also available whenever you're ready.\n\nIf you have any questions, just reply here.`
+      const { error: chatErr } = await supabaseAdmin
+        .from("portal_messages")
+        .insert({
+          account_id,
+          contact_id,
+          sender_type: "admin",
+          sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+          message: welcomeMsg,
+        })
+      if (chatErr) {
+        result.steps.push(step("portal_welcome_chat", "error", chatErr.message))
+      } else {
+        result.steps.push(step("portal_welcome_chat", "ok", "Welcome message sent via portal chat"))
+      }
+    } catch (e) {
+      result.steps.push(step("portal_welcome_chat", "error", e instanceof Error ? e.message : String(e)))
     }
   }
 
