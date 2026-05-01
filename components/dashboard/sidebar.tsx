@@ -75,7 +75,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; overdueInvoices?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number }
   enabledFeatures?: string[]
 }
 
@@ -86,6 +86,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
+  { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
@@ -190,6 +191,7 @@ export function Sidebar({
   const [navOrder, setNavOrder] = useState<string[]>([])
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
   const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
+  const [liveTeamChat, setLiveTeamChat] = useState(badgeCounts?.teamChat ?? 0)
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const pathnameRef = useRef(pathname)
@@ -212,6 +214,9 @@ export function Sidebar({
           if (typeof data.portalChats === 'number' && pathnameRef.current !== '/portal-chats') {
             setLivePortalChats(data.portalChats)
           }
+          if (typeof data.teamChat === 'number' && pathnameRef.current !== '/team-chat') {
+            setLiveTeamChat(data.teamChat)
+          }
           if (typeof data.inbox === 'number' && pathnameRef.current !== '/inbox') {
             setLiveInbox(data.inbox)
           }
@@ -230,7 +235,7 @@ export function Sidebar({
   // When entering a page, refetch badges instead of resetting to 0
   // The badge disappears naturally when messages are actually read
   useEffect(() => {
-    if (pathname === '/portal-chats' || pathname === '/inbox') {
+    if (pathname === '/portal-chats' || pathname === '/inbox' || pathname === '/team-chat') {
       // Refetch after a short delay to allow read-marking to happen
       const timer = setTimeout(() => {
         fetch('/api/dashboard/badges')
@@ -238,6 +243,7 @@ export function Sidebar({
           .then(data => {
             if (!data) return
             if (typeof data.portalChats === 'number') setLivePortalChats(data.portalChats)
+            if (typeof data.teamChat === 'number') setLiveTeamChat(data.teamChat)
             if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
           })
           .catch(() => {})
@@ -297,8 +303,8 @@ export function Sidebar({
           table: 'internal_messages',
         },
         () => {
-          if (pathnameRef.current !== '/portal-chats') {
-            setLivePortalChats(prev => prev + 1)
+          if (pathnameRef.current !== '/team-chat') {
+            setLiveTeamChat(prev => prev + 1)
           }
         }
       )
@@ -352,6 +358,7 @@ export function Sidebar({
       if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
       // Tasks badge removed — daily work tracked via message action tags instead
       if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
+      if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
       if (item.id === 'finance' && liveOverdue > 0) return { ...item, badge: liveOverdue }
       return item
     })

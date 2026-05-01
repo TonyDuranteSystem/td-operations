@@ -53,7 +53,7 @@ export async function GET() {
         .eq('status', 'Overdue'),
     ])
 
-    // Portal chats count (client messages + internal team messages)
+    // Portal chats count (client messages only — internal team chat has its own badge)
     let portalClientCount = 0
     if (portalResult.status === 'fulfilled') {
       if (portalResult.value.error) {
@@ -63,14 +63,15 @@ export async function GET() {
       }
     }
 
-    let internalCount = 0
+    const portalChats = portalClientCount
+
+    // Team chat badge (internal team messages unread from others)
+    let teamChat = 0
     if (internalResult.status === 'fulfilled') {
       if (!internalResult.value.error) {
-        internalCount = internalResult.value.data?.length ?? 0
+        teamChat = internalResult.value.data?.length ?? 0
       }
     }
-
-    const portalChats = portalClientCount + internalCount
 
     // Gmail unread
     const supportUnread = gmailSupportResult.status === 'fulfilled'
@@ -93,7 +94,7 @@ export async function GET() {
       overdueInvoices = overdueResult.value.count ?? 0
     }
 
-    return NextResponse.json({ portalChats, inbox, tasks, overdueInvoices, _debug: { supportUnread, antonioUnread } })
+    return NextResponse.json({ portalChats, teamChat, inbox, tasks, overdueInvoices, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0 })

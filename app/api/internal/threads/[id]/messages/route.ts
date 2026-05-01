@@ -54,6 +54,7 @@ export async function POST(
       message,
       attachment_url: attachmentUrl,
       attachment_name: attachmentName,
+      read_at: new Date().toISOString(), // sender has already "read" their own message
     })
     .select()
     .single()
