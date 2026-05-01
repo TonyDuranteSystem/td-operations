@@ -120,6 +120,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       url: urlData.publicUrl,
       name: file.name,
+      mime_type: file.type,
+      size: file.size,
     })
   } catch (err) {
     console.error('Chat upload error:', err)

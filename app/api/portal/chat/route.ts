@@ -89,13 +89,13 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, message, attachment_url, attachment_name, reply_to_id } = body
+  const { account_id, contact_id: bodyContactId, message, attachment_url, attachment_name, attachments, reply_to_id } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
-  if (!message?.trim() && !attachment_url) {
+  if (!message?.trim() && !attachment_url && (!attachments || attachments.length === 0)) {
     return NextResponse.json({ error: 'message or attachment required' }, { status: 400 })
   }
 
@@ -106,8 +106,18 @@ export async function POST(request: NextRequest) {
 
   // Validate attachment_url is from our storage only
   // .trim() guards against trailing \n in env var (which broke uploads on 2026-04-18 when env vars were re-entered)
-  if (attachment_url && !attachment_url.startsWith((process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim())) {
+  const supabaseBaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim()
+  if (attachment_url && !attachment_url.startsWith(supabaseBaseUrl)) {
     return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
+  }
+
+  // Validate each attachment URL in the array
+  if (Array.isArray(attachments)) {
+    for (const att of attachments) {
+      if (!att.url || !att.url.startsWith(supabaseBaseUrl)) {
+        return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
+      }
+    }
   }
 
   // Determine sender type
@@ -142,6 +152,7 @@ export async function POST(request: NextRequest) {
       message: (message || '').trim(),
       attachment_url: attachment_url || null,
       attachment_name: attachment_name || null,
+      attachments: Array.isArray(attachments) ? attachments : [],
       reply_to_id: reply_to_id || null,
     })
     .select('*, contacts:contact_id(full_name)')

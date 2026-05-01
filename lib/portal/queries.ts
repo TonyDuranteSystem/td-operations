@@ -465,6 +465,7 @@ export async function getUnreadChatCount(accountId: string | null, contactId: st
     .select('id', { count: 'exact', head: true })
     .eq('sender_type', 'admin')
     .is('read_at', null)
+    .is('deleted_at', null)
 
   if (accountId) {
     query = query.eq('account_id', accountId)

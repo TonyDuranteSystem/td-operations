@@ -1754,7 +1754,7 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
         // Fetch messages
         let query = supabaseAdmin
           .from("portal_messages")
-          .select("id, sender_type, sender_id, message, attachment_url, attachment_name, read_at, created_at, contact_id, contacts:contact_id(full_name)")
+          .select("id, sender_type, sender_id, message, attachment_url, attachment_name, attachments, read_at, created_at, contact_id, contacts:contact_id(full_name)")
           .order("created_at", { ascending: false })
           .limit(msgLimit)
 
@@ -1764,12 +1764,14 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
           query = query.eq("contact_id", contact_id!).is("account_id", null)
         }
 
-        const { data: messages, error } = await query
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: messages, error } = await (query as any)
         if (error) return { content: [{ type: "text" as const, text: `Failed to read messages: ${error.message}` }] }
         if (!messages?.length) return { content: [{ type: "text" as const, text: `No messages found for ${clientName}.` }] }
 
         // Reverse to chronological order
-        const sorted = messages.reverse()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sorted = (messages as any[]).reverse()
 
         // Count unread
         const unreadCount = sorted.filter(m => m.sender_type === "client" && !m.read_at).length
@@ -1781,8 +1783,10 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
           const sender = m.sender_type === "client" ? `Client${senderLabel ? ` (${senderLabel})` : ""}` : `Admin${senderLabel ? ` (${senderLabel})` : ""}`
           const time = new Date(m.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
           const readStatus = m.sender_type === "client" && !m.read_at ? " 🔴 UNREAD" : ""
-          const attachment = m.attachment_url ? `\n   📎 Attachment: ${m.attachment_name || "file"} — ${m.attachment_url}` : ""
-          return `[${time}] ${sender}${readStatus}:\n   ${m.message}${attachment}`
+          const atts = (m as any).attachments?.length
+            ? (m as any).attachments.map((a: { name: string; url: string }) => `\n   📎 ${a.name} — ${a.url}`).join("")
+            : m.attachment_url ? `\n   📎 ${m.attachment_name || "file"} — ${m.attachment_url}` : ""
+          return `[${time}] ${sender}${readStatus}:\n   ${m.message}${atts}`
         })
 
         return {
@@ -1889,10 +1893,16 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
       account_id: z.string().uuid().optional().describe("Account UUID for LLC-related messages. At least one of account_id or contact_id required."),
       contact_id: z.string().uuid().optional().describe("Contact UUID for person-level messages. At least one of account_id or contact_id required."),
       message: z.string().describe("Message text to send"),
-      attachment_url: z.string().optional().describe("Optional attachment URL"),
-      attachment_name: z.string().optional().describe("Optional attachment filename"),
+      attachment_url: z.string().optional().describe("Optional single attachment URL (legacy, for backward compat)"),
+      attachment_name: z.string().optional().describe("Optional single attachment filename (legacy, for backward compat)"),
+      attachments: z.array(z.object({
+        url: z.string(),
+        name: z.string(),
+        mime_type: z.string().optional(),
+        size: z.number().optional(),
+      })).optional().describe("Array of file attachments. Preferred over attachment_url for one or more files."),
     },
-    async ({ account_id, contact_id, message: msgText, attachment_url, attachment_name }) => {
+    async ({ account_id, contact_id, message: msgText, attachment_url, attachment_name, attachments }) => {
       try {
         if (!account_id && !contact_id) {
           return { content: [{ type: "text" as const, text: "Error: At least one of account_id or contact_id is required." }] }
@@ -1911,6 +1921,7 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
             message: msgText,
             attachment_url: attachment_url || null,
             attachment_name: attachment_name || null,
+            attachments: attachments ?? [],
           })
           .select("id, created_at")
           .single()

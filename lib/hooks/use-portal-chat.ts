@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import type { PortalMessage } from '@/lib/types'
+import type { PortalMessage, ChatAttachment } from '@/lib/types'
 
 /**
  * Real-time chat hook using Supabase Realtime.
@@ -135,8 +135,8 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   }, [filterColumn, filterValue])
 
   // Send message
-  const sendMessage = useCallback(async (message: string, attachment?: { url: string; name: string }, replyToId?: string) => {
-    if ((!message.trim() && !attachment) || sending) return
+  const sendMessage = useCallback(async (message: string, attachments?: ChatAttachment[], replyToId?: string) => {
+    if ((!message.trim() && (!attachments || attachments.length === 0)) || sending) return
 
     setSending(true)
     try {
@@ -146,9 +146,8 @@ export function usePortalChat(accountId: string | null, contactId: string) {
         body: JSON.stringify({
           account_id: accountId || undefined,
           contact_id: contactId,
-          message: message || (attachment ? `[Attachment: ${attachment.name}]` : ''),
-          attachment_url: attachment?.url,
-          attachment_name: attachment?.name,
+          message: message || '',
+          attachments: attachments ?? [],
           reply_to_id: replyToId || undefined,
         }),
       })

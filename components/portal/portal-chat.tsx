@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
+import type { ChatAttachment } from '@/lib/types'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { toast } from 'sonner'
@@ -26,6 +27,7 @@ function formatFileSize(bytes: number): string {
 const MAX_FILE_SIZE_MB = 10
 const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 const ALLOWED_EXT_LABEL = 'PDF, JPG, PNG, WEBP, GIF, DOC, DOCX, XLS, XLSX, TXT, CSV'
+const MAX_ATTACHMENTS = 5
 
 interface PendingFile {
   file: File
@@ -57,7 +59,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const [micConsented, setMicConsented] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
-  const [pendingFile, setPendingFile] = useState<PendingFile | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const { t } = useLocale()
@@ -131,31 +133,33 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   }
 
   const handleSend = async () => {
-    if ((!input.trim() && !pendingFile) || sending || uploading) return
+    if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
     if (isRecording) stopRecording()
     const msg = input
     const replyId = replyTo?.id
-    const fileToSend = pendingFile
+    const filesToSend = pendingFiles
     setInput('')
     setReplyTo(null)
-    setPendingFile(null)
+    setPendingFiles([])
     if (inputRef.current) inputRef.current.style.height = 'auto'
 
     try {
-      if (fileToSend) {
+      if (filesToSend.length > 0) {
         setUploading(true)
         try {
-          const formData = new FormData()
-          formData.append('file', fileToSend.file)
-          formData.append('account_id', accountId || '')
-          formData.append('contact_id', contactId)
-          const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}))
-            throw new Error(data.error || 'Upload failed — please try again.')
-          }
-          const { url, name } = await res.json()
-          await sendMessage(msg || '', { url, name }, replyId)
+          const uploaded = await Promise.all(filesToSend.map(async (pf) => {
+            const formData = new FormData()
+            formData.append('file', pf.file)
+            formData.append('account_id', accountId || '')
+            formData.append('contact_id', contactId)
+            const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}))
+              throw new Error(data.error || 'Upload failed — please try again.')
+            }
+            return await res.json() as ChatAttachment
+          }))
+          await sendMessage(msg || '', uploaded, replyId)
         } finally {
           setUploading(false)
         }
@@ -187,13 +191,19 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
       toast.error(`File too large: ${formatFileSize(file.size)}. Maximum allowed: ${MAX_FILE_SIZE_MB} MB.`)
       return
     }
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = e => setPendingFile({ file, previewUrl: e.target?.result as string })
-      reader.readAsDataURL(file)
-    } else {
-      setPendingFile({ file })
-    }
+    setPendingFiles(prev => {
+      if (prev.length >= MAX_ATTACHMENTS) {
+        toast.error(`Maximum ${MAX_ATTACHMENTS} files per message.`)
+        return prev
+      }
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader()
+        reader.onload = e => setPendingFiles(p => [...p, { file, previewUrl: e.target?.result as string }])
+        reader.readAsDataURL(file)
+        return prev
+      }
+      return [...prev, { file }]
+    })
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -210,8 +220,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) handleFileSelect(file)
+    Array.from(e.dataTransfer.files).forEach(file => handleFileSelect(file))
   }
 
   const handleMicToggle = () => {
@@ -347,39 +356,67 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                         <p className="line-clamp-2">{replyMsg.message || '[Attachment]'}</p>
                       </div>
                     )}
-                    {msg.attachment_url && (
-                      isImageUrl(msg.attachment_url) ? (
-                        <button
-                          onClick={() => setLightboxUrl(msg.attachment_url!)}
-                          className="relative group rounded-lg overflow-hidden mb-1 block"
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={msg.attachment_url}
-                            alt={msg.attachment_name || 'Image'}
-                            className="max-w-[240px] rounded-lg"
-                            loading="lazy"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                            <ZoomIn className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </div>
-                        </button>
-                      ) : (
-                        <a
-                          href={msg.attachment_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={cn(
-                            'flex items-center gap-2 px-3 py-2 rounded-lg text-xs mb-1',
-                            isOwn ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                    {(() => {
+                      const atts: ChatAttachment[] = msg.attachments?.length
+                        ? msg.attachments
+                        : msg.attachment_url
+                        ? [{ url: msg.attachment_url, name: msg.attachment_name || 'Attachment', mime_type: undefined }]
+                        : []
+                      if (atts.length === 0) return null
+                      const images = atts.filter(a => isImageUrl(a.url))
+                      const docs = atts.filter(a => !isImageUrl(a.url))
+                      return (
+                        <div className="mb-1 space-y-1">
+                          {images.length > 0 && (
+                            <div className={cn(
+                              'grid gap-1',
+                              images.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
+                            )}>
+                              {images.slice(0, 4).map((att, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => setLightboxUrl(att.url)}
+                                  className="relative group rounded-lg overflow-hidden block"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={att.url}
+                                    alt={att.name}
+                                    className="w-full max-w-[200px] rounded-lg object-cover"
+                                    loading="lazy"
+                                  />
+                                  {i === 3 && images.length > 4 && (
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
+                                      <span className="text-white font-bold text-sm">+{images.length - 3}</span>
+                                    </div>
+                                  )}
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                                    <ZoomIn className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
                           )}
-                        >
-                          <FileText className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{msg.attachment_name || 'Attachment'}</span>
-                          <ExternalLink className="h-3 w-3 shrink-0" />
-                        </a>
+                          {docs.map((att, i) => (
+                            <a
+                              key={i}
+                              href={att.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={cn(
+                                'flex items-center gap-2 px-3 py-2 rounded-lg text-xs',
+                                isOwn ? 'bg-blue-500/30 hover:bg-blue-500/40' : 'bg-zinc-200 hover:bg-zinc-300'
+                              )}
+                            >
+                              <FileText className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate flex-1">{att.name}</span>
+                              {att.size && <span className="text-[10px] opacity-60 shrink-0">{formatFileSize(att.size)}</span>}
+                              <ExternalLink className="h-3 w-3 shrink-0" />
+                            </a>
+                          ))}
+                        </div>
                       )
-                    )}
+                    })()}
                     {msg.message && <p className="whitespace-pre-wrap break-words">{msg.message}</p>}
                     <p className={cn(
                       'text-[10px] mt-1 flex items-center gap-1',
@@ -454,31 +491,50 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
       )}
 
       {/* File preview strip */}
-      {pendingFile && (
-        <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50 flex items-center gap-3">
-          {pendingFile.previewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={pendingFile.previewUrl} alt={pendingFile.file.name} className="h-12 w-12 rounded object-cover border border-zinc-200 shrink-0" />
-          ) : (
-            <div className="h-12 w-12 rounded border border-zinc-200 bg-white flex items-center justify-center shrink-0">
-              <FileText className="h-5 w-5 text-zinc-400" />
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-zinc-700 truncate">{pendingFile.file.name}</p>
-            <p className="text-[10px] text-zinc-400">{formatFileSize(pendingFile.file.size)}</p>
+      {pendingFiles.length > 0 && (
+        <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {pendingFiles.map((pf, i) => (
+              <div key={i} className="relative shrink-0 group">
+                {pf.previewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={pf.previewUrl} alt={pf.file.name} className="h-14 w-14 rounded-lg object-cover border border-zinc-200" />
+                ) : (
+                  <div className="h-14 w-14 rounded-lg border border-zinc-200 bg-white flex flex-col items-center justify-center gap-0.5">
+                    <FileText className="h-5 w-5 text-zinc-400" />
+                    <span className="text-[9px] text-zinc-400 truncate w-12 text-center px-1">
+                      {pf.file.name.split('.').pop()?.toUpperCase()}
+                    </span>
+                  </div>
+                )}
+                <div className="absolute -bottom-1 left-0 right-0 text-center">
+                  <span className="text-[9px] text-zinc-400 bg-white px-1 rounded truncate block max-w-full">
+                    {formatFileSize(pf.file.size)}
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setPendingFiles(prev => prev.filter((_, idx) => idx !== i)); if (fileRef.current) fileRef.current.value = '' }}
+                  className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-zinc-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            ))}
+            {pendingFiles.length < MAX_ATTACHMENTS && (
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="h-14 w-14 rounded-lg border-2 border-dashed border-zinc-300 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:border-zinc-400 shrink-0 transition-colors"
+              >
+                <ImageIcon className="h-5 w-5" />
+              </button>
+            )}
           </div>
-          <button
-            onClick={() => { setPendingFile(null); if (fileRef.current) fileRef.current.value = '' }}
-            className="p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 shrink-0"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <p className="text-[10px] text-zinc-400 mt-1">{pendingFiles.length}/{MAX_ATTACHMENTS} files</p>
         </div>
       )}
 
       {/* Input — WhatsApp-style pill + action button */}
-      <div className={cn('border-t p-2 sm:p-3', (replyTo || pendingFile) && 'border-t-0')}>
+      <div className={cn('border-t p-2 sm:p-3', (replyTo || pendingFiles.length > 0) && 'border-t-0')}>
         <div className="flex items-end gap-2">
           {/* Pill container */}
           <div className={cn(
@@ -526,7 +582,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
               disabled={uploading}
               className={cn(
                 'p-2 rounded-full transition-colors shrink-0',
-                pendingFile
+                pendingFiles.length > 0
                   ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
                   : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
               )}
@@ -537,7 +593,8 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
               ref={fileRef}
               type="file"
               accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
+              multiple
+              onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleFileSelect(f)) }}
               className="hidden"
             />
             {/* Textarea */}
@@ -559,7 +616,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
             >
               <Loader2 className="h-5 w-5 animate-spin" />
             </button>
-          ) : (input.trim() || pendingFile) ? (
+          ) : (input.trim() || pendingFiles.length > 0) ? (
             <button
               onClick={handleSend}
               disabled={uploading}

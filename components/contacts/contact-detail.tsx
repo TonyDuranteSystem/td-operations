@@ -31,7 +31,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { format, parseISO } from 'date-fns'
-import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
+import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 
 // ─── Constants ───
 
@@ -1600,6 +1600,7 @@ interface ChatMessage {
   message: string
   attachment_url: string | null
   attachment_name: string | null
+  attachments?: ChatAttachment[] | null
   read_at: string | null
   created_at: string
   source: string
@@ -1630,7 +1631,8 @@ function ChatTab({
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [draft, setDraft] = useState('')
-  const [pendingFile, setPendingFile] = useState<{ name: string; url?: string } | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<Array<{ file: File }>>([])
+  const MAX_ATTACHMENTS_STAFF = 5
   const [error, setError] = useState<string | null>(null)
   const [notifOpen, setNotifOpen] = useState(false)
   const [polishing, setPolishing] = useState(false)
@@ -1673,54 +1675,71 @@ function ChatTab({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const handleFileSelect = async (file: File) => {
+  const handleFileSelect = (file: File) => {
     const MAX_MB = 10
+    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      toast.error(`File type not allowed. Use PDF, JPG, PNG, WEBP, GIF, DOC, DOCX, XLS, XLSX, TXT, CSV.`)
+      return
+    }
     if (file.size > MAX_MB * 1024 * 1024) {
       const sizeMB = (file.size / 1024 / 1024).toFixed(1)
       toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${MAX_MB} MB.`)
       return
     }
-    setUploading(true)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || 'Upload failed — please try again.')
+    setPendingFiles(prev => {
+      if (prev.length >= MAX_ATTACHMENTS_STAFF) {
+        toast.error(`Maximum ${MAX_ATTACHMENTS_STAFF} files per message.`)
+        return prev
       }
-      const data = await res.json()
-      setPendingFile({ name: file.name, url: data.url })
-    } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'File upload failed')
-    } finally {
-      setUploading(false)
-    }
+      return [...prev, { file }]
+    })
   }
 
   const handleSend = async () => {
-    if ((!draft.trim() && !pendingFile) || sending) return
+    if ((!draft.trim() && pendingFiles.length === 0) || sending) return
     setSending(true)
+    const filesToSend = pendingFiles
+    const msg = draft.trim()
+    setDraft('')
+    setPendingFiles([])
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
     try {
+      let uploaded: ChatAttachment[] = []
+      if (filesToSend.length > 0) {
+        setUploading(true)
+        try {
+          uploaded = await Promise.all(filesToSend.map(async (pf) => {
+            const formData = new FormData()
+            formData.append('file', pf.file)
+            const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}))
+              throw new Error(data.error || 'Upload failed — please try again.')
+            }
+            return await res.json() as ChatAttachment
+          }))
+        } finally {
+          setUploading(false)
+        }
+      }
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contact_id: contactId,
-          message: draft.trim() || (pendingFile ? `[Attachment: ${pendingFile.name}]` : ''),
-          ...(pendingFile?.url ? { attachment_url: pendingFile.url, attachment_name: pendingFile.name } : {}),
+          message: msg,
+          attachments: uploaded,
         }),
       })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.error || `HTTP ${res.status}`)
       }
-      setDraft('')
-      setPendingFile(null)
-      if (textareaRef.current) textareaRef.current.style.height = 'auto'
       await fetchMessages()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to send')
+      setDraft(msg)
     } finally {
       setSending(false)
     }
@@ -1836,17 +1855,31 @@ function ChatTab({
                           )}
                         </div>
                         <p className="text-sm whitespace-pre-wrap break-words">{msg.message}</p>
-                        {msg.attachment_url && (
-                          <a
-                            href={msg.attachment_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"
-                          >
-                            <FileText className="h-3 w-3" />
-                            {msg.attachment_name ?? 'Attachment'}
-                          </a>
-                        )}
+                        {(() => {
+                          const atts: ChatAttachment[] = msg.attachments?.length
+                            ? msg.attachments
+                            : msg.attachment_url
+                            ? [{ url: msg.attachment_url, name: msg.attachment_name || 'Attachment' }]
+                            : []
+                          if (atts.length === 0) return null
+                          return (
+                            <div className="mt-1 space-y-1">
+                              {atts.map((att, i) => (
+                                <a
+                                  key={i}
+                                  href={att.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                                >
+                                  <FileText className="h-3 w-3 shrink-0" />
+                                  <span className="truncate max-w-[200px]">{att.name}</span>
+                                  {att.size && <span className="text-zinc-400">({formatFileSize(att.size)})</span>}
+                                </a>
+                              ))}
+                            </div>
+                          )
+                        })()}
                         <p className="text-[10px] text-zinc-400 mt-1">
                           {formatDateTime(msg.created_at)}
                         </p>
@@ -1900,13 +1933,21 @@ function ChatTab({
         )}
 
         {/* Pending file preview */}
-        {pendingFile && (
-          <div className="mx-3 mb-2 flex items-center gap-2 p-2 bg-blue-50 rounded-lg text-sm">
-            <Paperclip className="h-4 w-4 text-blue-500 shrink-0" />
-            <span className="truncate text-blue-700">{pendingFile.name}</span>
-            <button onClick={() => setPendingFile(null)} className="ml-auto text-blue-400 hover:text-blue-600 shrink-0">
-              <X className="h-4 w-4" />
-            </button>
+        {pendingFiles.length > 0 && (
+          <div className="mx-3 mb-2 flex flex-wrap gap-2 p-2 bg-blue-50 rounded-lg">
+            {pendingFiles.map((pf, i) => (
+              <div key={i} className="flex items-center gap-1.5 bg-white border border-blue-200 rounded-lg px-2 py-1 text-xs max-w-[180px] group">
+                <FileText className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                <span className="truncate text-blue-700">{pf.file.name}</span>
+                <span className="text-blue-400 shrink-0">{formatFileSize(pf.file.size)}</span>
+                <button
+                  onClick={() => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+                  className="text-blue-400 hover:text-blue-600 shrink-0 ml-auto"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -1919,7 +1960,7 @@ function ChatTab({
               disabled={uploading}
               className={cn(
                 'p-2 rounded-full transition-colors shrink-0',
-                pendingFile
+                pendingFiles.length > 0
                   ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
                   : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
               )}
@@ -1930,7 +1971,8 @@ function ChatTab({
               ref={fileRef}
               type="file"
               accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              onChange={e => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]) }}
+              multiple
+              onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleFileSelect(f)) }}
               className="hidden"
             />
             {/* Auto-growing textarea */}
@@ -1975,7 +2017,7 @@ function ChatTab({
               <button disabled className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
                 <Loader2 className="h-5 w-5 animate-spin" />
               </button>
-            ) : (draft.trim() || pendingFile) ? (
+            ) : (draft.trim() || pendingFiles.length > 0) ? (
               <button
                 onClick={handleSend}
                 disabled={uploading}

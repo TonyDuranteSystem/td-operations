@@ -428,6 +428,13 @@ export interface ClientInvoiceItem {
   sort_order: number
 }
 
+export interface ChatAttachment {
+  url: string
+  name: string
+  mime_type?: string
+  size?: number
+}
+
 export interface PortalMessage {
   id: string
   account_id: string
@@ -438,9 +445,12 @@ export interface PortalMessage {
   message: string
   attachment_url: string | null
   attachment_name: string | null
+  attachments: ChatAttachment[] | null
   read_at: string | null
   reply_to_id: string | null
   created_at: string
+  deleted_at?: string | null
+  deleted_by?: string | null
 }
 
 export interface PortalNotification {
