@@ -439,13 +439,13 @@ export function registerSqlTools(server: McpServer) {
         //          test sandbox → node scripts/apply-migration.js <file>
         //          promote here → reason: "migration:<filename>"
         const upperQuery = sqlQuery.replace(/\s+/g, ' ').trim().toUpperCase()
-        const hasDDL = /\b(CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+(UNIQUE\s+)?INDEX)\b/.test(upperQuery)
+        const hasDDL = /\b(CREATE\s+(OR\s+REPLACE\s+)?(TABLE|FUNCTION|PROCEDURE|TRIGGER|VIEW|SEQUENCE|TYPE|EXTENSION)|ALTER\s+(TABLE|SEQUENCE|TYPE)|CREATE\s+(UNIQUE\s+)?INDEX)\b/.test(upperQuery)
         if (hasDDL && mode === 'write') {
           if (!reason || !reason.trim().startsWith('migration:')) {
             return {
               content: [{
                 type: "text" as const,
-                text: `🛑 BLOCKED: DDL detected (CREATE TABLE / ALTER TABLE / CREATE INDEX).\n\nSchema changes must go through migration files:\n  1. Write SQL to scripts/migrations/YYYYMMDD-HHMM-description.sql\n  2. Test on sandbox: node scripts/apply-migration.js <file>\n  3. Antonio approves → re-run with reason: "migration:<filename>"\n\nThe query was NOT executed.`,
+                text: `🛑 BLOCKED: DDL detected (CREATE/ALTER TABLE, FUNCTION, TRIGGER, VIEW, SEQUENCE, TYPE, EXTENSION, INDEX).\n\nSchema changes must go through migration files:\n  1. Write SQL to scripts/migrations/YYYYMMDD-HHMM-description.sql\n  2. Test on sandbox: node scripts/apply-migration.js <file>\n  3. Antonio approves → re-run with reason: "migration:<filename>"\n\nThe query was NOT executed.`,
               }],
             }
           }
