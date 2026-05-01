@@ -393,7 +393,7 @@ export function registerSqlTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "execute_sql",
-    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. Default mode is 'read' — rejects any mutation. Mutations (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies) REQUIRE mode='write' to be set explicitly. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic. Writes to PROTECTED_TABLES require a `reason:` field explaining the change — logged to action_log.details.reason for the weekly audit report (P2.3).",
+    "Execute raw SQL on the Supabase PostgreSQL database. Use this ONLY when no dedicated tool exists for the operation (e.g. complex joins, aggregations, or tables without a dedicated tool). Supports SELECT, INSERT, UPDATE, DELETE. Default mode is 'read' — rejects any mutation. Mutations (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies) REQUIRE mode='write' to be set explicitly. For SELECT: returns JSON array of rows. For mutations: use RETURNING clause. PREFER dedicated tools (crm_update_record, crm_search_*, doc_*, etc.) when available — they include validation and business logic. Writes to PROTECTED_TABLES require a `reason:` field. DDL (CREATE TABLE / ALTER TABLE / CREATE INDEX) requires reason starting with 'migration:<filename>' — write the SQL to scripts/migrations/YYYYMMDD-HHMM-description.sql, apply to sandbox first via `node scripts/apply-migration.js <file>`, then promote here with reason='migration:<filename>'.",
     {
       query: z.string().describe("SQL query to execute. For SELECT: returns rows as JSON array. For mutations: wrap in a CTE that returns affected rows, e.g. WITH updated AS (UPDATE ... RETURNING *) SELECT * FROM updated"),
       mode: z.enum(["read", "write"]).optional().default("read").describe("Execution mode. 'read' (default) rejects any mutation (INSERT/UPDATE/DELETE/CREATE/ALTER, including those hidden in CTE bodies). 'write' is required to perform any mutation. The model MUST set mode='write' explicitly to write — never implicitly. Pure SELECT queries run in any mode."),
@@ -430,6 +430,24 @@ export function registerSqlTools(server: McpServer) {
               type: "text" as const,
               text: `🛑 BLOCKED (mode='read'): This query contains a mutation (${mutationLabel})${tableLabel}. The default execute_sql mode is 'read' and rejects any mutation. To perform this write, re-invoke with mode='write' explicitly. CTE bodies are inspected — wrapping a mutation inside a SELECT does not bypass this check.\n\nThe query was NOT executed.`,
             }],
+          }
+        }
+
+        // ─── DDL MIGRATION GUARD ───────────────────────────────────────────────
+        // CREATE TABLE / ALTER TABLE / CREATE INDEX must go through migration files.
+        // Pattern: write SQL → scripts/migrations/YYYYMMDD-HHMM-description.sql
+        //          test sandbox → node scripts/apply-migration.js <file>
+        //          promote here → reason: "migration:<filename>"
+        const upperQuery = sqlQuery.replace(/\s+/g, ' ').trim().toUpperCase()
+        const hasDDL = /\b(CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+(UNIQUE\s+)?INDEX)\b/.test(upperQuery)
+        if (hasDDL && mode === 'write') {
+          if (!reason || !reason.trim().startsWith('migration:')) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `🛑 BLOCKED: DDL detected (CREATE TABLE / ALTER TABLE / CREATE INDEX).\n\nSchema changes must go through migration files:\n  1. Write SQL to scripts/migrations/YYYYMMDD-HHMM-description.sql\n  2. Test on sandbox: node scripts/apply-migration.js <file>\n  3. Antonio approves → re-run with reason: "migration:<filename>"\n\nThe query was NOT executed.`,
+              }],
+            }
           }
         }
 
