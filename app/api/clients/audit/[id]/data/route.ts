@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
@@ -206,6 +207,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     _debug_supabase_url: process.env.NEXT_PUBLIC_SUPABASE_URL?.slice(8, 40) ?? 'unset',
     _debug_acct_raw: accountRes.data ? JSON.stringify(accountRes.data) : 'null',
     _debug_svc_key_prefix: process.env.SUPABASE_SERVICE_ROLE_KEY?.slice(0, 25) ?? 'unset',
+    _debug_fresh_read: await (async () => {
+      const fresh = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = await (fresh as any).from('accounts').select('id, audit_sections').eq('id', id).single()
+      return r.error ? `ERR:${r.error.message}` : JSON.stringify(r.data?.audit_sections)
+    })(),
     members: members,
     annual_agreements: agreementsRes.data ?? [],
     auth_user_map: authUserMap,
