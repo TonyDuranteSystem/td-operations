@@ -116,7 +116,7 @@ export default function PortalChatsPage() {
   const [saveTemplate, setSaveTemplate] = useState<{ messageText: string; title: string } | null>(null)
   const [saveTemplateLoading, setSaveTemplateLoading] = useState(false)
   const [saveTemplatePrompt, setSaveTemplatePrompt] = useState<string | null>(null)
-  const [pendingAdminFile, setPendingAdminFile] = useState<PendingAdminFile | null>(null)
+  const [pendingAdminFiles, setPendingAdminFiles] = useState<PendingAdminFile[]>([])
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: switches between chat messages and the per-thread Tasks list
@@ -804,13 +804,13 @@ export default function PortalChatsPage() {
 
   // Send reply
   const sendMutation = useMutation({
-    mutationFn: async ({ message, reply_to_id, attachment_url, attachment_name }: { message: string; reply_to_id?: string; attachment_url?: string; attachment_name?: string }) => {
+    mutationFn: async ({ message, reply_to_id, attachments }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[] }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }),
-          message, reply_to_id, attachment_url, attachment_name,
+          message, reply_to_id, attachments,
         }),
       })
       if (!res.ok) throw new Error('Failed to send')
@@ -820,7 +820,7 @@ export default function PortalChatsPage() {
       const sentText = lastSentTextRef.current
       setReplyText('')
       setReplyToMsg(null)
-      setPendingAdminFile(null)
+      setPendingAdminFiles([])
       // Prompt to save as template only for substantive replies (>40 chars)
       if (sentText.trim().length > 40) setSaveTemplatePrompt(sentText.trim())
       const readBody = selectedAccountId
@@ -858,6 +858,7 @@ export default function PortalChatsPage() {
     el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
   }, [internalReplyText])
 
+  const MAX_ADMIN_ATTACHMENTS = 5
   const handleAdminFileSelect = (file: File) => {
     const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/csv','text/plain','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     if (!ALLOWED_TYPES.includes(file.type)) {
@@ -870,13 +871,19 @@ export default function PortalChatsPage() {
       toast.error(`File too large: ${sizeMB} MB. Maximum allowed: ${maxMB} MB.`)
       return
     }
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = e => setPendingAdminFile({ file, previewUrl: e.target?.result as string })
-      reader.readAsDataURL(file)
-    } else {
-      setPendingAdminFile({ file })
-    }
+    setPendingAdminFiles(prev => {
+      if (prev.length >= MAX_ADMIN_ATTACHMENTS) {
+        toast.error(`Maximum ${MAX_ADMIN_ATTACHMENTS} files per message.`)
+        return prev
+      }
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader()
+        reader.onload = e => setPendingAdminFiles(p => [...p, { file, previewUrl: e.target?.result as string }])
+        reader.readAsDataURL(file)
+        return prev
+      }
+      return [...prev, { file }]
+    })
   }
 
   const handleAdminDragOver = (e: React.DragEvent) => {
@@ -893,29 +900,30 @@ export default function PortalChatsPage() {
   const handleAdminDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDraggingAdmin(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) handleAdminFileSelect(file)
+    Array.from(e.dataTransfer.files).forEach(file => handleAdminFileSelect(file))
   }
 
   const handleSend = async () => {
-    if ((!replyText.trim() && !pendingAdminFile) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
+    if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (isRecording) stopRecording()
     if (inputRef.current) inputRef.current.style.height = 'auto'
     lastSentTextRef.current = replyText.trim()
 
-    if (pendingAdminFile) {
+    if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
       try {
-        const formData = new FormData()
-        formData.append('file', pendingAdminFile.file)
-        formData.append(selectedAccountId ? 'account_id' : 'contact_id', (selectedAccountId || selectedContactId)!)
-        const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}))
-          throw new Error(data.error || 'Upload failed — please try again.')
-        }
-        const { url, name } = await res.json()
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachment_url: url, attachment_name: name })
+        const uploaded = await Promise.all(pendingAdminFiles.map(async (pf) => {
+          const formData = new FormData()
+          formData.append('file', pf.file)
+          formData.append(selectedAccountId ? 'account_id' : 'contact_id', (selectedAccountId || selectedContactId)!)
+          const res = await fetch('/api/portal/chat/upload', { method: 'POST', body: formData })
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            throw new Error(data.error || 'Upload failed — please try again.')
+          }
+          return await res.json() as { url: string; name: string }
+        }))
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -2116,31 +2124,38 @@ export default function PortalChatsPage() {
             )}
 
             {/* File preview strip */}
-            {pendingAdminFile && (
-              <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50 flex items-center gap-3 shrink-0">
-                {pendingAdminFile.previewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={pendingAdminFile.previewUrl} alt={pendingAdminFile.file.name} className="h-12 w-12 rounded object-cover border border-zinc-200 shrink-0" />
-                ) : (
-                  <div className="h-12 w-12 rounded border border-zinc-200 bg-white flex items-center justify-center shrink-0">
-                    <FileText className="h-5 w-5 text-zinc-400" />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-zinc-700 truncate">{pendingAdminFile.file.name}</p>
-                  <p className="text-[10px] text-zinc-400">{formatFileSize(pendingAdminFile.file.size)}</p>
+            {pendingAdminFiles.length > 0 && (
+              <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50 shrink-0">
+                <div className="flex flex-wrap gap-2">
+                  {pendingAdminFiles.map((pf, i) => (
+                    <div key={i} className="flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-2 py-1.5 max-w-[200px]">
+                      {pf.previewUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={pf.previewUrl} alt={pf.file.name} className="h-8 w-8 rounded object-cover shrink-0" />
+                      ) : (
+                        <div className="h-8 w-8 rounded bg-zinc-100 flex items-center justify-center shrink-0">
+                          <FileText className="h-4 w-4 text-zinc-400" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-medium text-zinc-700 truncate">{pf.file.name}</p>
+                        <p className="text-[10px] text-zinc-400">{formatFileSize(pf.file.size)}</p>
+                      </div>
+                      <button
+                        onClick={() => setPendingAdminFiles(prev => prev.filter((_, idx) => idx !== i))}
+                        className="p-0.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 shrink-0"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-                <button
-                  onClick={() => { setPendingAdminFile(null); if (adminFileRef.current) adminFileRef.current.value = '' }}
-                  className="p-1 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 shrink-0"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                <p className="text-[10px] text-zinc-400 mt-1">{pendingAdminFiles.length}/{MAX_ADMIN_ATTACHMENTS} files</p>
               </div>
             )}
 
             {/* Reply input — WhatsApp-style pill + action button */}
-            <div className={cn('p-2 sm:p-3 border-t bg-white shrink-0', (replyToMsg || pendingAdminFile) && 'border-t-0')}>
+            <div className={cn('p-2 sm:p-3 border-t bg-white shrink-0', (replyToMsg || pendingAdminFiles.length > 0) && 'border-t-0')}>
               <div className="flex gap-2 items-end">
                 {/* Pill container */}
                 <div className={cn(
@@ -2188,7 +2203,7 @@ export default function PortalChatsPage() {
                     disabled={uploadingAdminFile}
                     className={cn(
                       'p-2 rounded-full transition-colors shrink-0',
-                      pendingAdminFile
+                      pendingAdminFiles.length > 0
                         ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
                         : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
                     )}
@@ -2200,7 +2215,8 @@ export default function PortalChatsPage() {
                     ref={adminFileRef}
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    onChange={e => { if (e.target.files?.[0]) handleAdminFileSelect(e.target.files[0]) }}
+                    multiple
+                    onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleAdminFileSelect(f)) }}
                     className="hidden"
                   />
                   {/* Textarea */}
@@ -2235,7 +2251,7 @@ export default function PortalChatsPage() {
                   <button disabled className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </button>
-                ) : (replyText.trim() || pendingAdminFile) ? (
+                ) : (replyText.trim() || pendingAdminFiles.length > 0) ? (
                   <button
                     onClick={handleSend}
                     disabled={uploadingAdminFile}
