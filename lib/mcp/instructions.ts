@@ -22,6 +22,16 @@ Sandbox (ref: xjcxlmlpeywtwkhstjlw, td-operations-sandbox.vercel.app) is the DEF
 Production (ref: ydzipybqeebtpcvsbtvs, app/portal.tonydurante.us) requires Antonio's explicit instruction.
 Verify NEXT_PUBLIC_SUPABASE_URL before any write if environment is uncertain.
 
+## MCP Tool Routing — R096 (2026-05-01)
+Two MCP connections exist in Claude Code sessions:
+- mcp__td-ops-sandbox__* → sandbox Supabase (development work)
+- mcp__af7d85f2-* → production Supabase (client operations)
+
+During DEVELOPMENT (building features, testing, verifying migrations): use mcp__td-ops-sandbox__* tools.
+During OPERATIONS (real clients, CRM updates, emails, payments): use mcp__af7d85f2-* tools.
+EXCEPTION: session_checkpoint and dev_task_* ALWAYS use mcp__af7d85f2-* — work tracking must persist to production.
+Antonio never switches anything. Claude owns this routing decision.
+
 ## ⛔ R093 — NO ASSUMPTIONS. EVER. (TOP RULE) — MANDATORY
 
 Verbatim from Antonio (2026-04-17): "YOU DON'T HAVE TO ASSUME ANYTHING. DO YOU UNDERSTAND? WITH YOUR ASSUMPTIONS WE RISK TO RUIN THE SYSTEM."
