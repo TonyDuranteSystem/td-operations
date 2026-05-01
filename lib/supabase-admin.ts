@@ -16,6 +16,20 @@ export const supabaseAdmin = new Proxy({} as SupabaseClient<Database>, {
   get(_target, prop) {
     if (!_supabaseAdmin) {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+
+      // Hardcoded production ref — never allowed in local/non-Vercel environments.
+      // This is independent of EXPECTED_SUPABASE_REF: even if the entire .env.local
+      // was pulled from production (so both URL and EXPECTED_SUPABASE_REF match
+      // production), this check still fires and blocks the server from starting.
+      // process.env.VERCEL is set by Vercel at deploy time; it is absent locally.
+      if (!process.env.VERCEL && supabaseUrl.includes('ydzipybqeebtpcvsbtvs')) {
+        throw new Error(
+          '\n⛔ FATAL: Local environment is connected to PRODUCTION Supabase (ydzipybqeebtpcvsbtvs).\n' +
+          'Running local code against production is forbidden.\n' +
+          'Fix: bash scripts/dev-setup.sh\n'
+        )
+      }
+
       const expectedRef = process.env.EXPECTED_SUPABASE_REF
       if (expectedRef) {
         const actualRef = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
