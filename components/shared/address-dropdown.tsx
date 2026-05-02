@@ -61,9 +61,10 @@ export function AddressDropdown({
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  // Fetch once on first open
+  // Fetch on first open OR on mount when a value is pre-selected (so the trigger shows the address name)
   useEffect(() => {
-    if (!open || loaded) return
+    if (loaded) return
+    if (!open && !value) return
     setLoading(true)
     fetch(`/api/addresses?kind=${encodeURIComponent(kind)}&active=true`)
       .then(async res => {
@@ -76,7 +77,7 @@ export function AddressDropdown({
         toast.error(err instanceof Error ? err.message : 'Failed to load addresses')
       })
       .finally(() => setLoading(false))
-  }, [open, loaded, kind])
+  }, [open, loaded, kind, value])
 
   // Focus search when panel opens
   useEffect(() => {
