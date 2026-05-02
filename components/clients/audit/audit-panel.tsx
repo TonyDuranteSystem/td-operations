@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
 import { type AccountRow, type ContactRow } from './audit-shell'
 import { computeCompleteness, type CompletenessResult } from '@/lib/audit/completeness-rules'
+import { computeBillingStatus, type BillingStatusResult, type BillingCheckStatus } from '@/lib/audit/billing-status'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -263,6 +264,30 @@ function Section({ icon: Icon, title, children, badge, done, onToggleDone }: {
         )}
       </div>
       {children}
+    </div>
+  )
+}
+
+function BillingCheckRow({ status, label, context }: { status: BillingCheckStatus; label: string; context: string }) {
+  const badge = cn(
+    'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium shrink-0',
+    status === 'ok'          && 'bg-emerald-100 text-emerald-700',
+    status === 'missing'     && 'bg-amber-100 text-amber-700',
+    status === 'not_yet_due' && 'bg-zinc-100 text-zinc-500',
+    status === 'na'          && 'bg-zinc-100 text-zinc-400',
+  )
+  const badgeText =
+    status === 'ok'          ? 'OK' :
+    status === 'missing'     ? 'Missing' :
+    status === 'not_yet_due' ? 'Not yet' :
+    'N/A'
+  return (
+    <div className="flex items-start gap-2 text-xs py-0.5">
+      <span className={badge}>{badgeText}</span>
+      <div className="min-w-0">
+        <span className="font-medium text-zinc-700">{label}</span>
+        {context && <span className="text-zinc-400 ml-1.5">{context}</span>}
+      </div>
     </div>
   )
 }
@@ -558,6 +583,24 @@ export function AuditPanel({
       [],
     )
   }, [dbData, localContacts, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType, raId, mailingAddressId, legalAddressId])
+
+  // ── Billing status (computed after DB data loads) ──
+  const billingStatus = useMemo((): BillingStatusResult | null => {
+    if (!dbData) return null
+    const now = new Date()
+    return computeBillingStatus(
+      {
+        account_type: accountType || null,
+        onboarding_date: onboardingDate || null,
+        installment_2_amount: inst2 ? parseFloat(inst2) : null,
+        installment_2_currency: currency,
+      },
+      dbData.payments,
+      dbData.annual_agreements,
+      now.getFullYear(),
+      now.getMonth() + 1,
+    )
+  }, [dbData, accountType, onboardingDate, inst2, currency])
 
   // ── UI state ──
   const [saving, setSaving] = useState(false)
@@ -1500,10 +1543,32 @@ export function AuditPanel({
         <Section
           icon={DollarSign}
           title="Billing"
+          badge={
+            dbLoading ? 'Loading…' :
+            billingStatus?.isNA ? 'N/A' :
+            billingStatus?.hasGap ? '⚠ Gap detected' :
+            billingStatus ? '✓ Complete' :
+            undefined
+          }
           done={sectionsDone['billing']}
           onToggleDone={() => toggleSection('billing')}
         >
-          <div className="grid grid-cols-3 gap-3">
+          {/* Billing status checklist */}
+          {!dbLoading && billingStatus && (
+            <div className="space-y-1">
+              {billingStatus.checks.map(chk => (
+                <BillingCheckRow key={chk.key} status={chk.status} label={chk.label} context={chk.context} />
+              ))}
+            </div>
+          )}
+          {dbLoading && (
+            <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading billing data…
+            </div>
+          )}
+
+          <div className="pt-3 border-t grid grid-cols-3 gap-3">
             <Field
               label="Jan installment"
               value={inst1}
