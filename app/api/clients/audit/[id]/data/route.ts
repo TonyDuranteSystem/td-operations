@@ -77,9 +77,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .select('contact_id, role')
       .eq('account_id', id),
 
-    // Phase 1: load active audit_flags for this account entity (reversed_at IS NULL = active)
+    // Phase 1: load active audit_flags for this account entity (reversed_at IS NULL = active).
+    // freshAdminClient() avoids the typed Proxy wrapper: audit_flags is not in database.types.ts,
+    // and the Proxy returns empty data with no error for unknown tables.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabaseAdmin as any)
+    (freshAdminClient() as any)
       .from('audit_flags')
       .select('id, entity_type, entity_id, field_name, flag_type, note, marked_by, marked_at')
       .eq('entity_type', 'account')
@@ -105,10 +107,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
           address_zip: string | null; address_country: string | null
         }> }),
 
-    // Phase 1: load active audit_flags for all linked contacts
+    // Phase 1: load active audit_flags for all linked contacts.
+    // freshAdminClient() for the same reason as account flags above (untyped table).
     linkedContactIds.length > 0
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ? (supabaseAdmin as any)
+      ? (freshAdminClient() as any)
           .from('audit_flags')
           .select('id, entity_type, entity_id, field_name, flag_type, note, marked_by, marked_at')
           .eq('entity_type', 'contact')
