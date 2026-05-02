@@ -36,6 +36,9 @@ const FULL_ACCOUNT: AccountInput = {
   physical_address: '123 Main St',
   onboarding_date: '2024-01-15',
   account_type: 'Client',
+  registered_agent_id: 'ra-uuid',
+  business_mailing_address_id: 'mailing-uuid',
+  business_legal_address_id: null,
 }
 
 const NO_SERVICES: string[] = []
@@ -180,17 +183,49 @@ describe('scoreAccount', () => {
     expect(r.missing_warning).toContain('Start date')
   })
 
-  it('adds CMRA warning when physical_address missing and CMRA active', () => {
+  it('adds CMRA warning when both mailing fields missing and CMRA active', () => {
+    const r = scoreAccount(
+      { ...FULL_ACCOUNT, physical_address: null, business_mailing_address_id: null },
+      CMRA_SERVICES,
+    )
+    expect(r.missing_warning).toContain('Mailing address (CMRA active)')
+  })
+
+  it('no CMRA warning when business_mailing_address_id is set (even if physical_address null)', () => {
     const r = scoreAccount(
       { ...FULL_ACCOUNT, physical_address: null },
       CMRA_SERVICES,
     )
-    expect(r.missing_warning).toContain('Physical address (CMRA active)')
+    expect(r.missing_warning).not.toContain('Mailing address (CMRA active)')
   })
 
-  it('no CMRA warning when physical_address present', () => {
-    const r = scoreAccount(FULL_ACCOUNT, CMRA_SERVICES)
-    expect(r.missing_warning).not.toContain('Physical address (CMRA active)')
+  it('no CMRA warning when physical_address set as legacy fallback', () => {
+    const r = scoreAccount(
+      { ...FULL_ACCOUNT, business_mailing_address_id: null },
+      CMRA_SERVICES,
+    )
+    expect(r.missing_warning).not.toContain('Mailing address (CMRA active)')
+  })
+
+  it('adds RA warning for Client account when registered_agent_id is null', () => {
+    const r = scoreAccount(
+      { ...FULL_ACCOUNT, registered_agent_id: null },
+      NO_SERVICES,
+    )
+    expect(r.missing_warning).toContain('Registered Agent not linked')
+  })
+
+  it('no RA warning when registered_agent_id is set', () => {
+    const r = scoreAccount(FULL_ACCOUNT, NO_SERVICES)
+    expect(r.missing_warning).not.toContain('Registered Agent not linked')
+  })
+
+  it('no RA warning for One-Time account even when registered_agent_id is null', () => {
+    const r = scoreAccount(
+      { ...FULL_ACCOUNT, account_type: 'One-Time', registered_agent_id: null },
+      NO_SERVICES,
+    )
+    expect(r.missing_warning).not.toContain('Registered Agent not linked')
   })
 
   it('returns red when multiple criticals missing', () => {
@@ -202,9 +237,9 @@ describe('scoreAccount', () => {
     expect(r.missing_critical.length).toBeGreaterThanOrEqual(3)
   })
 
-  it('returns yellow when only warnings present', () => {
+  it('returns yellow when only warnings present (CMRA + no mailing address)', () => {
     const r = scoreAccount(
-      { ...FULL_ACCOUNT, physical_address: null },
+      { ...FULL_ACCOUNT, physical_address: null, business_mailing_address_id: null },
       CMRA_SERVICES,
     )
     expect(r.status).toBe('yellow')
