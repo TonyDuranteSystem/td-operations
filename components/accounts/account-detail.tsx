@@ -1246,8 +1246,6 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
           <EditableField icon={Mail} label="Business Email" value={account.communication_email ?? ''} onSave={makeAccountSaver('communication_email')} />
           <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
-          <EditableField icon={Calendar} label="RA Renewal" value={account.ra_renewal_date ?? ''} type="date" onSave={makeAccountSaver('ra_renewal_date')} />
-          <EditableField icon={MapPin} label="Address" value={account.physical_address ?? ''} type="textarea" onSave={makeAccountSaver('physical_address')} />
 
           {/* Address Registry — structured FK links */}
           <div className="border-t pt-3 mt-1 space-y-3">
@@ -1283,11 +1281,6 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
                 verified={account.ra_link_verified ?? false}
                 onChange={() => router.refresh()}
               />
-              {!account.registered_agent_id && account.registered_agent_provider && (
-                <p className="text-xs text-amber-600 mt-1">
-                  Legacy: {account.registered_agent_provider} — link via registry above to migrate
-                </p>
-              )}
             </div>
           </div>
 
