@@ -723,6 +723,7 @@ export function AuditPanel({
   const [mailingVerified, setMailingVerified] = useState<boolean>(account.mailing_link_verified ?? false)
   const [raId, setRaId] = useState<string | null>(account.registered_agent_id ?? null)
   const [raVerified, setRaVerified] = useState<boolean>(account.ra_link_verified ?? false)
+  const [raCounty, setRaCounty] = useState<string | null>(null)
   const [acctUpdatedAt, setAcctUpdatedAt] = useState<string>(account.updated_at ?? '')
 
   const refreshAddressData = useCallback(async () => {
@@ -736,11 +737,18 @@ export function AuditPanel({
       setMailingVerified(d.mailing_link_verified ?? false)
       setRaId(d.registered_agent_id ?? null)
       setRaVerified(d.ra_link_verified ?? false)
+      setRaCounty(d.ra_county ?? null)
       if (d.updated_at) setAcctUpdatedAt(d.updated_at)
     } catch {
       // silent — stale values are acceptable; pickers show their own updates
     }
   }, [account.id])
+
+  // Fetch RA county on mount for SS-4 readiness check (C6)
+  useEffect(() => {
+    if (account.registered_agent_id) refreshAddressData()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ── Tax return edits ──
   const [taxEdits, setTaxEdits] = useState<Record<string, { status?: string; data_received?: boolean }>>({})
@@ -1673,6 +1681,71 @@ export function AuditPanel({
             onChange={refreshAddressData}
           />
         </Section>
+
+        {/* S_ss4 — SS-4 Readiness (C6) */}
+        {!dbLoading && (() => {
+          const isMMLC = entityType?.toLowerCase().includes('multi') || entityType?.toLowerCase().includes('mmllc') || entityType?.toLowerCase().includes('multi-member')
+          const primaryContact = localContacts[0] ?? null
+
+          const blockers: { key: string; label: string }[] = []
+          if (localContacts.length === 0) blockers.push({ key: 'no_contacts', label: 'No contacts linked to this account' })
+          if (!stateOfFormation) blockers.push({ key: 'no_sof', label: 'State of formation is missing' })
+          if (!raId) blockers.push({ key: 'no_ra', label: 'Registered Agent not linked' })
+          if (raId && raCounty === null) blockers.push({ key: 'ra_no_county', label: 'Registered Agent row is missing the county field' })
+
+          const warnings: { key: string; label: string }[] = []
+          if (!formationDate) warnings.push({ key: 'no_formation_date', label: 'Formation date missing (used in SS-4 header)' })
+          if (primaryContact && !getContactValue(primaryContact, 'itin_number')) warnings.push({ key: 'no_itin', label: 'Primary contact has no ITIN — will default to "Foreigner" on form' })
+          if (!entityType) warnings.push({ key: 'no_entity_type', label: 'Entity type unknown — will default to SMLLC' })
+          if (isMMLC && localContacts.length < 2) warnings.push({ key: 'mmllc_contacts', label: `MMLLC has only ${localContacts.length} contact(s) — typically needs 2+ members` })
+
+          const ready = blockers.length === 0
+
+          return (
+            <Section
+              icon={FileText}
+              title="SS-4 Readiness"
+              done={sectionsDone['ss4_readiness']}
+              onToggleDone={() => toggleSection('ss4_readiness')}
+            >
+              {ready && warnings.length === 0 ? (
+                <div className="flex items-center gap-2 py-1">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                  <span className="text-sm text-emerald-700 font-medium">Ready — all required fields are present</span>
+                </div>
+              ) : ready ? (
+                <div className="flex items-center gap-2 py-0.5 mb-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                  <span className="text-sm text-emerald-700 font-medium">No blockers — can generate SS-4</span>
+                </div>
+              ) : null}
+
+              {blockers.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-red-600 uppercase tracking-wide">Blockers — generation will fail</p>
+                  {blockers.map(b => (
+                    <div key={b.key} className="flex items-start gap-2 px-2.5 py-1.5 bg-red-50 border border-red-200 rounded-md">
+                      <AlertCircle className="h-3.5 w-3.5 text-red-500 shrink-0 mt-0.5" />
+                      <span className="text-xs text-red-700">{b.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {warnings.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-amber-600 uppercase tracking-wide">Warnings — generation proceeds but check these</p>
+                  {warnings.map(w => (
+                    <div key={w.key} className="flex items-start gap-2 px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-md">
+                      <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                      <span className="text-xs text-amber-700">{w.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          )
+        })()}
 
         {/* S3 — Dates */}
         <Section

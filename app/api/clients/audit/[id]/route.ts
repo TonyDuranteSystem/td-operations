@@ -10,7 +10,19 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+
+  let ra_county: string | null = null
+  if (data.registered_agent_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: raRow } = await (supabaseAdmin as any)
+      .from('addresses')
+      .select('county')
+      .eq('id', data.registered_agent_id)
+      .single()
+    ra_county = raRow?.county ?? null
+  }
+
+  return NextResponse.json({ ...data, ra_county })
 }
 
 /* eslint-disable no-restricted-syntax */
