@@ -1283,6 +1283,11 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
                 verified={account.ra_link_verified ?? false}
                 onChange={() => router.refresh()}
               />
+              {!account.registered_agent_id && account.registered_agent_provider && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Legacy: {account.registered_agent_provider} — link via registry above to migrate
+                </p>
+              )}
             </div>
           </div>
 
