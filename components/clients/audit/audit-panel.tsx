@@ -1688,6 +1688,43 @@ export function AuditPanel({
 
         {/* S_ss4 — SS-4 Readiness (C6) */}
         {!dbLoading && (() => {
+          const formationActive = services['company_formation'] === 'active'
+          const hasEin = !!ein
+
+          // Is the company older than 2 months? (IRS max processing window)
+          const twoMonthsAgo = new Date()
+          twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2)
+          const olderThan2Months = formationDate ? new Date(formationDate) < twoMonthsAgo : false
+
+          // Case 1: EIN present — SS-4 already done
+          if (hasEin) {
+            return (
+              <Section icon={FileText} title="SS-4 Readiness" done={sectionsDone['ss4_readiness']} onToggleDone={() => toggleSection('ss4_readiness')}>
+                <div className="flex items-center gap-2 py-1">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                  <span className="text-sm text-emerald-700 font-medium">EIN on file — SS-4 already processed</span>
+                </div>
+              </Section>
+            )
+          }
+
+          // Case 2: Company Formation not active — EIN missing is a data gap, not an SS-4 action
+          if (!formationActive) {
+            return (
+              <Section icon={FileText} title="SS-4 Readiness" done={sectionsDone['ss4_readiness']} onToggleDone={() => toggleSection('ss4_readiness')}>
+                <div className="flex items-start gap-2 px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-md">
+                  <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                  <span className="text-xs text-amber-700">
+                    {olderThan2Months
+                      ? 'Company is older than 2 months — EIN should already exist. Enter the EIN number in Company Info.'
+                      : 'Company Formation not active — EIN missing is a data entry gap, not an SS-4 action.'}
+                  </span>
+                </div>
+              </Section>
+            )
+          }
+
+          // Case 3: Company Formation active + no EIN — SS-4 readiness applies
           const isMMLC = entityType?.toLowerCase().includes('multi') || entityType?.toLowerCase().includes('mmllc') || entityType?.toLowerCase().includes('multi-member')
           const primaryContact = localContacts[0] ?? null
 
@@ -1698,6 +1735,7 @@ export function AuditPanel({
           if (raId && raCounty === null) blockers.push({ key: 'ra_no_county', label: 'Registered Agent row is missing the county field' })
 
           const warnings: { key: string; label: string }[] = []
+          if (olderThan2Months) warnings.push({ key: 'overdue_ein', label: 'Company is older than 2 months — EIN should have arrived already. Check with IRS or enter if received.' })
           if (!formationDate) warnings.push({ key: 'no_formation_date', label: 'Formation date missing (used in SS-4 header)' })
           if (primaryContact && !getContactValue(primaryContact, 'itin_number')) warnings.push({ key: 'no_itin', label: 'Primary contact has no ITIN — will default to "Foreigner" on form' })
           if (!entityType) warnings.push({ key: 'no_entity_type', label: 'Entity type unknown — will default to SMLLC' })
