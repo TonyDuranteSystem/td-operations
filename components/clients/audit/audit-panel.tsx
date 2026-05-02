@@ -14,20 +14,8 @@ import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
 import { type AccountRow, type ContactRow } from './audit-shell'
 import { computeCompleteness, type CompletenessResult } from '@/lib/audit/completeness-rules'
-import { isFieldEligibleForNA } from '@/lib/audit/na-allow-list'
 
 // ─── Types ────────────────────────────────────────────────
-
-type AuditFlag = {
-  id: string
-  entity_type: string
-  entity_id: string
-  field_name: string
-  flag_type: 'na' | 'follow_up'
-  note: string | null
-  marked_by: string
-  marked_at: string
-}
 
 type MemberRow = {
   id: string
@@ -139,8 +127,6 @@ type AccountData = {
   auth_user_map: Record<string, boolean>
   auth_banned_map: Record<string, boolean>
   contacts_with_tier: ContactWithTier[]
-  // Phase 1
-  flags: AuditFlag[]
 }
 
 type ServiceChoice = 'active' | 'not_active' | 'never_had' | null
@@ -295,9 +281,6 @@ function CompletenessChip({ label, result }: { label: string; result: Completene
     result.status === 'green' && 'bg-emerald-50 border-emerald-200 text-emerald-700',
   )
 
-  const naCount = result.na_fields?.length ?? 0
-  const fuCount = result.followup_fields?.length ?? 0
-
   const detail =
     result.status === 'green'
       ? 'Complete'
@@ -305,26 +288,14 @@ function CompletenessChip({ label, result }: { label: string; result: Completene
       ? result.missing_critical.join(', ')
       : result.missing_warning.join(', ')
 
-  const greenLabel = [
-    'Complete',
-    naCount > 0 ? `${naCount} N/A` : null,
-    fuCount > 0 ? `${fuCount} follow-up` : null,
-  ].filter(Boolean).join(' · ')
-
-  const titleText = result.status === 'green'
-    ? [
-        greenLabel,
-        naCount > 0 ? `N/A: ${result.na_fields.join(', ')}` : null,
-        fuCount > 0 ? `Follow-up: ${result.followup_fields.join(', ')}` : null,
-      ].filter(Boolean).join(' | ')
-    : detail
+  const titleText = result.status === 'green' ? 'Complete' : detail
 
   return (
     <div className={chipClass} title={titleText}>
       <span className={dotClass} />
       <span className="mr-1 opacity-60">{label}:</span>
       {result.status === 'green' ? (
-        <span>{greenLabel}</span>
+        <span>Complete</span>
       ) : (
         <span className="max-w-[220px] truncate">{detail}</span>
       )}
@@ -332,212 +303,6 @@ function CompletenessChip({ label, result }: { label: string; result: Completene
   )
 }
 
-// ─── Phase 1 — Field flag controls ───────────────────────────────────────
-
-type FlagControlsProps = {
-  entityType: 'account' | 'contact'
-  entityId: string
-  fieldName: string
-  label: string
-  flags: AuditFlag[]
-  activeServices: string[]
-  reviewer: string
-  onSet: (entityType: string, entityId: string, fieldName: string, flagType: 'na' | 'follow_up', note: string) => Promise<void>
-  onReverse: (flagId: string) => Promise<void>
-  saving: boolean
-}
-
-function FlagControls({
-  entityType, entityId, fieldName, label, flags,
-  activeServices, reviewer: _reviewer, onSet, onReverse, saving,
-}: FlagControlsProps) {
-  const [mode, setMode] = useState<null | 'na' | 'follow_up'>(null)
-  const [note, setNote] = useState('')
-  const [acting, setActing] = useState(false)
-
-  const naFlag = flags.find(f =>
-    f.entity_type === entityType && f.entity_id === entityId &&
-    f.field_name === fieldName && f.flag_type === 'na'
-  )
-  const fuFlag = flags.find(f =>
-    f.entity_type === entityType && f.entity_id === entityId &&
-    f.field_name === fieldName && f.flag_type === 'follow_up'
-  )
-
-  const eligibleForNA = isFieldEligibleForNA(fieldName, entityType, activeServices)
-
-  async function doSet(flagType: 'na' | 'follow_up', flagNote: string) {
-    setActing(true)
-    try {
-      await onSet(entityType, entityId, fieldName, flagType, flagNote)
-      setMode(null)
-      setNote('')
-    } catch (err) {
-      // error handled by parent via toast
-    } finally {
-      setActing(false)
-    }
-  }
-
-  async function doReverse(flagId: string) {
-    setActing(true)
-    try {
-      await onReverse(flagId)
-    } finally {
-      setActing(false)
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-1 mt-0.5">
-      <span className="text-[10px] text-zinc-400 font-medium mr-0.5">{label}:</span>
-
-      {/* N/A badge or button */}
-      {naFlag ? (
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 flex items-center gap-1 border border-zinc-200"
-          title={naFlag.note ? `N/A: ${naFlag.note} (${naFlag.marked_by})` : `N/A (${naFlag.marked_by})`}>
-          N/A
-          <button
-            onClick={() => doReverse(naFlag.id)}
-            disabled={acting || saving}
-            className="text-zinc-400 hover:text-red-500 disabled:opacity-50 leading-none"
-            title="Reverse N/A"
-          >×</button>
-        </span>
-      ) : eligibleForNA && (
-        <button
-          onClick={() => setMode(mode === 'na' ? null : 'na')}
-          disabled={acting || saving}
-          className={cn(
-            'text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50',
-            mode === 'na'
-              ? 'bg-zinc-700 text-white border-zinc-700'
-              : 'border-zinc-200 text-zinc-400 hover:border-zinc-400 hover:text-zinc-600'
-          )}
-        >N/A</button>
-      )}
-
-      {/* Follow-up badge or button */}
-      {fuFlag ? (
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 flex items-center gap-1 border border-amber-200"
-          title={fuFlag.note ? `Follow-up: ${fuFlag.note} (${fuFlag.marked_by})` : `Follow-up (${fuFlag.marked_by})`}>
-          ★ Follow-up
-          <button
-            onClick={() => doReverse(fuFlag.id)}
-            disabled={acting || saving}
-            className="hover:text-red-500 disabled:opacity-50 leading-none"
-            title="Reverse follow-up"
-          >×</button>
-        </span>
-      ) : (
-        <button
-          onClick={() => setMode(mode === 'follow_up' ? null : 'follow_up')}
-          disabled={acting || saving}
-          className={cn(
-            'text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50',
-            mode === 'follow_up'
-              ? 'bg-amber-500 text-white border-amber-500'
-              : 'border-zinc-200 text-zinc-400 hover:border-amber-300 hover:text-amber-600'
-          )}
-        >★</button>
-      )}
-
-      {/* Inline note input */}
-      {mode === 'na' && (
-        <div className="flex items-center gap-1 w-full mt-0.5">
-          <input
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder="Note required for N/A…"
-            autoFocus
-            className="text-[11px] px-2 py-0.5 border rounded flex-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
-          />
-          <button
-            onClick={() => { if (note.trim()) doSet('na', note.trim()) }}
-            disabled={!note.trim() || acting}
-            className="text-[10px] px-2 py-0.5 bg-zinc-700 text-white rounded disabled:opacity-50 whitespace-nowrap"
-          >Save N/A</button>
-          <button onClick={() => { setMode(null); setNote('') }}
-            className="text-[10px] text-zinc-400 hover:text-zinc-600">✕</button>
-        </div>
-      )}
-      {mode === 'follow_up' && (
-        <div className="flex items-center gap-1 w-full mt-0.5">
-          <input
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder="Note (optional)…"
-            autoFocus
-            className="text-[11px] px-2 py-0.5 border rounded flex-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
-          />
-          <button
-            onClick={() => doSet('follow_up', note.trim())}
-            disabled={acting}
-            className="text-[10px] px-2 py-0.5 bg-amber-600 text-white rounded disabled:opacity-50 whitespace-nowrap"
-          >Mark</button>
-          <button onClick={() => { setMode(null); setNote('') }}
-            className="text-[10px] text-zinc-400 hover:text-zinc-600">✕</button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** Renders flag controls for a group of fields in a compact block. */
-function FieldFlagsGroup({
-  entityType, entityId, fieldDefs, flags, activeServices, reviewer, onSet, onReverse, saving,
-}: {
-  entityType: 'account' | 'contact'
-  entityId: string
-  fieldDefs: Array<{ name: string; label: string }>
-  flags: AuditFlag[]
-  activeServices: string[]
-  reviewer: string
-  onSet: (entityType: string, entityId: string, fieldName: string, flagType: 'na' | 'follow_up', note: string) => Promise<void>
-  onReverse: (flagId: string) => Promise<void>
-  saving: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  const activeCount = fieldDefs.filter(f =>
-    flags.some(fl => fl.entity_type === entityType && fl.entity_id === entityId && fl.field_name === f.name)
-  ).length
-
-  return (
-    <div className="pt-2 border-t">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700"
-      >
-        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        Field Flags
-        {activeCount > 0 && (
-          <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">
-            {activeCount}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="mt-2 space-y-1.5 pl-1">
-          {fieldDefs.map(f => (
-            <FlagControls
-              key={f.name}
-              entityType={entityType}
-              entityId={entityId}
-              fieldName={f.name}
-              label={f.label}
-              flags={flags}
-              activeServices={activeServices}
-              reviewer={reviewer}
-              onSet={onSet}
-              onReverse={onReverse}
-              saving={saving}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
 
 function ServiceRadio({
   label, value, onChange, sds,
@@ -757,27 +522,13 @@ export function AuditPanel({
   const [dbData, setDbData] = useState<AccountData | null>(null)
   const [dbLoading, setDbLoading] = useState(true)
 
-  // ── Phase 1: audit flags ──
-  const [flags, setFlags] = useState<AuditFlag[]>([])
-  const [flagSaving, setFlagSaving] = useState(false)
-
-  // ── Completeness score (computed after DB data loads) — Phase 1: flag-aware ──
+  // ── Completeness score (computed after DB data loads) ──
   const completeness = useMemo(() => {
     if (!dbData) return null
     const activeServiceTypes = dbData.service_deliveries
       .filter(sd => sd.status !== 'Cancelled')
       .map(sd => sd.service_type)
     const primaryContact = localContacts[0] ?? null
-
-    // Phase 1: filter flags by entity
-    const contactFlags = primaryContact
-      ? flags
-          .filter(f => f.entity_type === 'contact' && f.entity_id === primaryContact.id)
-          .map(f => ({ field_name: f.field_name, flag_type: f.flag_type }))
-      : []
-    const accountFlags = flags
-      .filter(f => f.entity_type === 'account')
-      .map(f => ({ field_name: f.field_name, flag_type: f.flag_type }))
 
     return computeCompleteness(
       {
@@ -803,10 +554,10 @@ export function AuditPanel({
           }
         : null,
       activeServiceTypes,
-      contactFlags,
-      accountFlags,
+      [],
+      [],
     )
-  }, [dbData, localContacts, flags, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType, raId, mailingAddressId, legalAddressId])
+  }, [dbData, localContacts, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType, raId, mailingAddressId, legalAddressId])
 
   // ── UI state ──
   const [saving, setSaving] = useState(false)
@@ -823,62 +574,10 @@ export function AuditPanel({
         setDbData(d)
         if (d.audit_sections) setSectionsDone(d.audit_sections)
         setPortalTierLocal(d.portal_tier ?? null)
-        setFlags(d.flags ?? [])
       })
       .catch(() => setDbData(null))
       .finally(() => setDbLoading(false))
   }, [account.id])
-
-  // ── Phase 1: flag handlers ────────────────────────────────────────────────
-  async function handleSetFlag(
-    entityType: string,
-    entityId: string,
-    fieldName: string,
-    flagType: 'na' | 'follow_up',
-    note: string,
-  ) {
-    setFlagSaving(true)
-    try {
-      const res = await fetch(`/api/clients/audit/${account.id}/flags`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entity_type: entityType, entity_id: entityId, field_name: fieldName, flag_type: flagType, note, marked_by: reviewer }),
-      })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d.error || 'Failed to set flag')
-      // Refresh flags from server (UPSERT may update an existing row)
-      const refreshRes = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
-      const fresh: AccountData = await refreshRes.json()
-      setFlags(fresh.flags ?? [])
-      toast.success(`${flagType === 'na' ? 'N/A' : 'Follow-up'} flag set`)
-    } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Failed to set flag')
-      throw err
-    } finally {
-      setFlagSaving(false)
-    }
-  }
-
-  async function handleReverseFlag(flagId: string) {
-    setFlagSaving(true)
-    try {
-      const res = await fetch(`/api/clients/audit/${account.id}/flags/${flagId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reversed_by: reviewer }),
-      })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d.error || 'Failed to reverse flag')
-      // Remove from local state immediately
-      setFlags(prev => prev.filter(f => f.id !== flagId))
-      toast.success('Flag reversed')
-    } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Failed to reverse flag')
-      throw err
-    } finally {
-      setFlagSaving(false)
-    }
-  }
 
   function getContactValue(contact: ContactRow, field: keyof ContactRow): string {
     const edits = contactEdits[contact.id]
@@ -1349,26 +1048,6 @@ export function AuditPanel({
                   </div>
                 </div>
 
-                {/* Phase 1: Field-level N/A / Follow-up flags */}
-                {dbData && (
-                  <FieldFlagsGroup
-                    entityType="contact"
-                    entityId={c.id}
-                    fieldDefs={[
-                      { name: 'citizenship', label: 'Citizenship' },
-                      { name: 'date_of_birth', label: 'Date of birth' },
-                      { name: 'address_line1', label: 'Address' },
-                      { name: 'passport_on_file', label: 'Passport on file' },
-                      { name: 'itin_number', label: 'ITIN' },
-                    ]}
-                    flags={flags}
-                    activeServices={dbData.service_deliveries.filter(sd => sd.status !== 'Cancelled').map(sd => sd.service_type)}
-                    reviewer={reviewer}
-                    onSet={handleSetFlag}
-                    onReverse={handleReverseFlag}
-                    saving={flagSaving}
-                  />
-                )}
               </div>
             )
           })}
@@ -1615,25 +1294,6 @@ export function AuditPanel({
             </div>
           </div>
 
-          {/* Phase 1: Field-level N/A / Follow-up flags for account fields */}
-          {dbData && (
-            <FieldFlagsGroup
-              entityType="account"
-              entityId={account.id}
-              fieldDefs={[
-                { name: 'ein_number', label: 'EIN' },
-                { name: 'onboarding_date', label: 'Start date' },
-                { name: 'business_mailing_address_id', label: 'Mailing address' },
-                { name: 'registered_agent_id', label: 'Registered Agent' },
-              ]}
-              flags={flags}
-              activeServices={dbData.service_deliveries.filter(sd => sd.status !== 'Cancelled').map(sd => sd.service_type)}
-              reviewer={reviewer}
-              onSet={handleSetFlag}
-              onReverse={handleReverseFlag}
-              saving={flagSaving}
-            />
-          )}
         </Section>
 
         {/* S_legal — Legal Address */}
