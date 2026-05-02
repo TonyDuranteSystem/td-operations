@@ -77,6 +77,14 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/airwallex-sync?days=7",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/stripe-sync",
+      "schedule": "0 */6 * * *"
+    },
+    {
       "path": "/api/cron/portal-recurring-invoices",
       "schedule": "0 8 * * *"
     },
