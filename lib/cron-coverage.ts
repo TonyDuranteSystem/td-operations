@@ -43,6 +43,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/audit-health-check": "0 7 * * *",
   "/api/cron/raw-sql-weekly-report": "0 12 * * 1",
   "/api/cron/tax-reactivation": "30 10 * * *",
+  "/api/cron/airwallex-sync": "0 */6 * * *",
+  "/api/cron/stripe-sync": "0 */6 * * *",
 }
 
 /**

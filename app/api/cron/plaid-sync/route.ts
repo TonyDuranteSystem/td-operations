@@ -35,11 +35,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, skipped: true, reason: 'Plaid not configured' })
     }
 
-    // Get all active Plaid connections
+    // Get all active Plaid connections, skipping Mercury (has its own direct API sync via
+    // mercury-sync cron; running Plaid sync in parallel creates duplicate td_bank_feeds rows)
     const { data: connections, error: connErr } = await supabaseAdmin
       .from('plaid_connections')
       .select('id, access_token, bank_name, item_id')
       .eq('status', 'active')
+      .neq('bank_name', 'mercury')
 
     if (connErr) {
       console.error('[plaid-sync] Failed to query plaid_connections:', connErr.message)
