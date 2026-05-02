@@ -2,6 +2,11 @@ const { withSentryConfig } = require('@sentry/nextjs')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  experimental: {
+    // Prevent webpack from bundling OpenTelemetry packages as vendor chunks
+    // (Sentry injects OTel instrumentation which fails to chunk correctly in dev)
+    serverComponentsExternalPackages: ['@opentelemetry/api', '@opentelemetry/core', '@opentelemetry/sdk-trace-base'],
+  },
   eslint: {
     // Warnings in MCP tool files should not block production builds.
     // ESLint still runs in pre-commit (lint-staged) and pre-push hooks.
