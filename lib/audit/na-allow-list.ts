@@ -97,12 +97,11 @@ export function isFieldEligibleForNA(
     if (fieldName === 'ein_number') return true
     if (fieldName === 'onboarding_date') return true
 
-    // CMRA-conditional
-    if (fieldName === 'physical_address') {
-      // If CMRA is active, address is required (warning) — allow N/A even then
-      // since the N/A should explain the missing address situation
-      return true
-    }
+    // Address registry fields — always eligible for N/A
+    if (fieldName === 'physical_address') return true
+    if (fieldName === 'business_mailing_address_id') return true
+    if (fieldName === 'business_legal_address_id') return true
+    if (fieldName === 'registered_agent_id') return true
 
     // Unknown account field — not eligible by default
     return false

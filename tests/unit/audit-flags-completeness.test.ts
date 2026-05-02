@@ -37,6 +37,9 @@ const FULL_ACCOUNT: AccountInput = {
   physical_address: '123 Main St',
   onboarding_date: '2024-01-15',
   account_type: 'Client',
+  registered_agent_id: 'ra-uuid',
+  business_mailing_address_id: 'mailing-uuid',
+  business_legal_address_id: null,
 }
 
 const NO_SERVICES: string[] = []
@@ -173,10 +176,14 @@ describe('scoreAccount — N/A flag removes field from missing', () => {
     expect(r.na_fields).toContain('onboarding_date')
   })
 
-  it('physical_address N/A removes CMRA warning when CMRA active', () => {
-    const r = scoreAccount({ ...FULL_ACCOUNT, physical_address: null }, CMRA_SERVICES, [naFlag('physical_address')])
-    expect(r.missing_warning).not.toContain('Physical address (CMRA active)')
-    expect(r.na_fields).toContain('physical_address')
+  it('business_mailing_address_id N/A removes CMRA warning when CMRA active', () => {
+    const r = scoreAccount(
+      { ...FULL_ACCOUNT, physical_address: null, business_mailing_address_id: null },
+      CMRA_SERVICES,
+      [naFlag('business_mailing_address_id')],
+    )
+    expect(r.missing_warning).not.toContain('Mailing address (CMRA active)')
+    expect(r.na_fields).toContain('business_mailing_address_id')
     expect(r.status).toBe('green')
   })
 

@@ -97,9 +97,13 @@ export type AccountInput = {
   entity_type: string | null
   ein_number: string | null
   state_of_formation: string | null
-  physical_address: string | null
+  physical_address: string | null   // legacy; fallback for mailing address scoring
   onboarding_date: string | null
   account_type: string | null
+  // Address registry fields — C8
+  registered_agent_id: string | null
+  business_mailing_address_id: string | null
+  business_legal_address_id: string | null
 }
 
 // ── Scoring functions ──────────────────────────────────────────────────────
@@ -248,13 +252,24 @@ export function scoreAccount(
     }
   }
 
-  // CMRA: physical address needed if CMRA service is active — eligible for N/A
-  if (
-    activeServiceTypes.includes('CMRA Mailing Address') &&
-    !account.physical_address
-  ) {
-    if (hasNA('physical_address')) na_fields.push('physical_address')
-    else warning.push('Physical address (CMRA active)')
+  // Mailing address: required when CMRA service is active.
+  // Checks the new FK first; falls back to legacy physical_address during transition.
+  if (activeServiceTypes.includes('CMRA Mailing Address')) {
+    const hasMailing = !!(account.business_mailing_address_id || account.physical_address)
+    if (!hasMailing) {
+      if (hasNA('business_mailing_address_id') || hasNA('physical_address')) {
+        na_fields.push('business_mailing_address_id')
+      } else {
+        warning.push('Mailing address (CMRA active)')
+      }
+    }
+  }
+
+  // Registered Agent: warning for Client accounts — always eligible for N/A.
+  // One-Time accounts are exempt (they typically have no ongoing state filings).
+  if (!isOneTime && !account.registered_agent_id) {
+    if (hasNA('registered_agent_id')) na_fields.push('registered_agent_id')
+    else warning.push('Registered Agent not linked')
   }
 
   // Follow-up flags — tracked regardless of field presence; never affect dot color

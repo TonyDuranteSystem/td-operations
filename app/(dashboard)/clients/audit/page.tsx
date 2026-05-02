@@ -118,6 +118,9 @@ export default async function ClientAuditPage() {
         physical_address: a.physical_address ?? null,
         onboarding_date: a.onboarding_date ?? null,
         account_type: a.account_type ?? null,
+        registered_agent_id: a.registered_agent_id ?? null,
+        business_mailing_address_id: a.business_mailing_address_id ?? null,
+        business_legal_address_id: a.business_legal_address_id ?? null,
       },
       primaryContact
         ? {

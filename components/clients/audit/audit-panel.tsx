@@ -787,6 +787,9 @@ export function AuditPanel({
         physical_address: address || null,
         onboarding_date: onboardingDate || null,
         account_type: accountType || null,
+        registered_agent_id: raId,
+        business_mailing_address_id: mailingAddressId,
+        business_legal_address_id: legalAddressId,
       },
       primaryContact
         ? {
@@ -803,7 +806,7 @@ export function AuditPanel({
       contactFlags,
       accountFlags,
     )
-  }, [dbData, localContacts, flags, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType])
+  }, [dbData, localContacts, flags, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType, raId, mailingAddressId, legalAddressId])
 
   // ── UI state ──
   const [saving, setSaving] = useState(false)
