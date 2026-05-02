@@ -1623,7 +1623,8 @@ export function AuditPanel({
               fieldDefs={[
                 { name: 'ein_number', label: 'EIN' },
                 { name: 'onboarding_date', label: 'Start date' },
-                { name: 'physical_address', label: 'Physical address' },
+                { name: 'business_mailing_address_id', label: 'Mailing address' },
+                { name: 'registered_agent_id', label: 'Registered Agent' },
               ]}
               flags={flags}
               activeServices={dbData.service_deliveries.filter(sd => sd.status !== 'Cancelled').map(sd => sd.service_type)}
