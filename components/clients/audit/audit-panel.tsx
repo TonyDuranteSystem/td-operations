@@ -1,12 +1,14 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   User, Building2, Calendar, DollarSign, Briefcase, FileText,
   Flag, CheckCircle2, AlertCircle, ExternalLink, Loader2,
   Globe, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Users, Search, UserPlus,
+  Users, Search, UserPlus, MapPin,
 } from 'lucide-react'
+import { AddressPicker } from '@/components/shared/address-picker'
+import { RAPicker } from '@/components/shared/ra-picker'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
@@ -713,6 +715,32 @@ export function AuditPanel({
   const [sectionsDone, setSectionsDone] = useState<Record<string, boolean>>(
     account.audit_sections ?? {}
   )
+
+  // ── Address registry — C5 ──
+  const [legalAddressId, setLegalAddressId] = useState<string | null>(account.business_legal_address_id ?? null)
+  const [legalVerified, setLegalVerified] = useState<boolean>(account.legal_link_verified ?? false)
+  const [mailingAddressId, setMailingAddressId] = useState<string | null>(account.business_mailing_address_id ?? null)
+  const [mailingVerified, setMailingVerified] = useState<boolean>(account.mailing_link_verified ?? false)
+  const [raId, setRaId] = useState<string | null>(account.registered_agent_id ?? null)
+  const [raVerified, setRaVerified] = useState<boolean>(account.ra_link_verified ?? false)
+  const [acctUpdatedAt, setAcctUpdatedAt] = useState<string>(account.updated_at ?? '')
+
+  const refreshAddressData = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/clients/audit/${account.id}`)
+      if (!res.ok) return
+      const d = await res.json().catch(() => ({}))
+      setLegalAddressId(d.business_legal_address_id ?? null)
+      setLegalVerified(d.legal_link_verified ?? false)
+      setMailingAddressId(d.business_mailing_address_id ?? null)
+      setMailingVerified(d.mailing_link_verified ?? false)
+      setRaId(d.registered_agent_id ?? null)
+      setRaVerified(d.ra_link_verified ?? false)
+      if (d.updated_at) setAcctUpdatedAt(d.updated_at)
+    } catch {
+      // silent — stale values are acceptable; pickers show their own updates
+    }
+  }, [account.id])
 
   // ── Tax return edits ──
   const [taxEdits, setTaxEdits] = useState<Record<string, { status?: string; data_received?: boolean }>>({})
@@ -1594,6 +1622,56 @@ export function AuditPanel({
               saving={flagSaving}
             />
           )}
+        </Section>
+
+        {/* S_legal — Legal Address */}
+        <Section
+          icon={MapPin}
+          title="Legal Address"
+          done={sectionsDone['legal_address']}
+          onToggleDone={() => toggleSection('legal_address')}
+        >
+          <AddressPicker
+            accountId={account.id}
+            accountUpdatedAt={acctUpdatedAt}
+            kind="business_legal"
+            value={legalAddressId}
+            verified={legalVerified}
+            onChange={refreshAddressData}
+          />
+        </Section>
+
+        {/* S_mailing — Mailing Address */}
+        <Section
+          icon={MapPin}
+          title="Mailing Address"
+          done={sectionsDone['mailing_address']}
+          onToggleDone={() => toggleSection('mailing_address')}
+        >
+          <AddressPicker
+            accountId={account.id}
+            accountUpdatedAt={acctUpdatedAt}
+            kind="business_mailing"
+            value={mailingAddressId}
+            verified={mailingVerified}
+            onChange={refreshAddressData}
+          />
+        </Section>
+
+        {/* S_ra — Registered Agent */}
+        <Section
+          icon={MapPin}
+          title="Registered Agent"
+          done={sectionsDone['registered_agent']}
+          onToggleDone={() => toggleSection('registered_agent')}
+        >
+          <RAPicker
+            accountId={account.id}
+            accountUpdatedAt={acctUpdatedAt}
+            value={raId}
+            verified={raVerified}
+            onChange={refreshAddressData}
+          />
         </Section>
 
         {/* S3 — Dates */}
