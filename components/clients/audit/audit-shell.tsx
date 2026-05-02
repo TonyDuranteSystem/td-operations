@@ -53,6 +53,13 @@ export type AccountRow = {
   audit_flag: boolean | null
   audit_sections: Record<string, boolean> | null
   drive_folder_id: string | null
+  updated_at: string | null
+  business_legal_address_id: string | null
+  business_mailing_address_id: string | null
+  registered_agent_id: string | null
+  legal_link_verified: boolean | null
+  mailing_link_verified: boolean | null
+  ra_link_verified: boolean | null
   contacts: ContactRow[]
   anomaly_score: number
   completeness?: CompletenessScore

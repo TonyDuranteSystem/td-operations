@@ -32,7 +32,14 @@ export default async function ClientAuditPage() {
       audit_reviewed_by,
       audit_flag,
       audit_sections,
-      drive_folder_id
+      drive_folder_id,
+      updated_at,
+      business_legal_address_id,
+      business_mailing_address_id,
+      registered_agent_id,
+      legal_link_verified,
+      mailing_link_verified,
+      ra_link_verified
     `)
     .not('status', 'in', '("Cancelled","Closed")')
     .order('company_name')
