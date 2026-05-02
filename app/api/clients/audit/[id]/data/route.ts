@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { createClient } from '@supabase/supabase-js'
+import {
+  findFeedsForAccount,
+  findPlaidMercuryDuplicates,
+  type CascadeFeed,
+} from '@/lib/audit/bank-feed-cascade'
 
 // The supabaseAdmin singleton can return stale data for the accounts row in warm
 // Lambda instances (the singleton is initialized once; a write from another instance
@@ -211,6 +216,84 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  // Step 13 — Bank-feed cascade. Pull a broad pool of feeds (unmatched orphans
+  // for the cascade + all mercury / mercury_api rows for duplicate detection),
+  // resolve each to an account via matched_payment_id → payments.account_id,
+  // then run the pure cascade logic.
+  const { data: companyRow } = await supabaseAdmin
+    .from('accounts')
+    .select('company_name')
+    .eq('id', id)
+    .single()
+
+  const { data: feedRows } = await supabaseAdmin
+    .from('td_bank_feeds')
+    .select('id, source, transaction_date, amount, currency, sender_name, sender_reference, memo, status, matched_payment_id, raw_data')
+    .or('status.eq.unmatched,source.eq.mercury,source.eq.mercury_api')
+    .order('transaction_date', { ascending: false })
+    .limit(500)
+
+  const feedsTyped = (feedRows ?? []) as Array<{
+    id: string; source: string; transaction_date: string
+    amount: number | string; currency: string
+    sender_name: string | null; sender_reference: string | null; memo: string | null
+    status: string; matched_payment_id: string | null; raw_data: unknown
+  }>
+
+  // Resolve matched_account_id by looking up payments.account_id for every
+  // matched_payment_id appearing in the candidate pool.
+  const matchedPaymentIds = Array.from(
+    new Set(feedsTyped.map(f => f.matched_payment_id).filter((x): x is string => !!x))
+  )
+  const paymentToAccount = new Map<string, string | null>()
+  if (matchedPaymentIds.length > 0) {
+    const { data: payRows } = await supabaseAdmin
+      .from('payments')
+      .select('id, account_id')
+      .in('id', matchedPaymentIds)
+    for (const r of (payRows ?? []) as Array<{ id: string; account_id: string | null }>) {
+      paymentToAccount.set(r.id, r.account_id)
+    }
+  }
+
+  const feedsForCascade: CascadeFeed[] = feedsTyped.map(f => ({
+    id: f.id,
+    source: f.source,
+    transaction_date: f.transaction_date,
+    amount: typeof f.amount === 'string' ? parseFloat(f.amount) : f.amount,
+    currency: f.currency,
+    sender_name: f.sender_name,
+    sender_reference: f.sender_reference,
+    memo: f.memo,
+    status: f.status,
+    matched_payment_id: f.matched_payment_id,
+    matched_account_id: f.matched_payment_id ? (paymentToAccount.get(f.matched_payment_id) ?? null) : null,
+    raw_data: f.raw_data,
+  }))
+
+  const accountInvoices = (paymentsRes.data ?? [])
+    .map((p: { invoice_number: string | null }) => ({ invoice_number: p.invoice_number }))
+
+  const allOrphans = findFeedsForAccount(
+    { id, company_name: companyRow?.company_name ?? null },
+    contacts.map(c => ({ id: c.id, full_name: c.full_name, email: c.email })),
+    accountInvoices,
+    feedsForCascade,
+  )
+
+  const mercuryDuplicates = findPlaidMercuryDuplicates(
+    { id, company_name: companyRow?.company_name ?? null },
+    contacts.map(c => ({ id: c.id, full_name: c.full_name, email: c.email })),
+    accountInvoices,
+    feedsForCascade,
+  )
+
+  // A Plaid mercury feed that's a duplicate of a mercury_api row belongs in the
+  // duplicates table only — exclude it from orphans so the user sees exactly one
+  // row per actionable item.
+  const duplicatePlaidIds = new Set(mercuryDuplicates.map(d => d.plaid_feed.id))
+  const orphanFeeds = allOrphans.filter(o => !duplicatePlaidIds.has(o.feed.id))
+
   return NextResponse.json({
     service_deliveries: sdsRes.data ?? [],
     tax_returns: taxRes.data ?? [],
@@ -227,5 +310,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     contacts_with_tier: contacts,
     // Phase 1: active audit_flags for this account + its linked contacts
     flags: allFlags,
+    // Step 13 — bank-feed cascade results
+    orphan_feeds: orphanFeeds,
+    mercury_duplicates: mercuryDuplicates,
   })
 }

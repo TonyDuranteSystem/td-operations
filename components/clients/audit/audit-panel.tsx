@@ -15,6 +15,8 @@ import { format, parseISO } from 'date-fns'
 import { type AccountRow, type ContactRow } from './audit-shell'
 import { computeCompleteness, type CompletenessResult } from '@/lib/audit/completeness-rules'
 import { computeBillingStatus, type BillingStatusResult, type BillingCheckStatus } from '@/lib/audit/billing-status'
+import type { OrphanFeedMatch, MercuryDuplicate } from '@/lib/audit/bank-feed-cascade'
+import { ignoreBankFeed } from '@/app/(dashboard)/finance/actions'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -128,6 +130,8 @@ type AccountData = {
   auth_user_map: Record<string, boolean>
   auth_banned_map: Record<string, boolean>
   contacts_with_tier: ContactWithTier[]
+  orphan_feeds: OrphanFeedMatch[]
+  mercury_duplicates: MercuryDuplicate[]
 }
 
 type ServiceChoice = 'active' | 'not_active' | 'never_had' | null
@@ -288,6 +292,172 @@ function BillingCheckRow({ status, label, context }: { status: BillingCheckStatu
         <span className="font-medium text-zinc-700">{label}</span>
         {context && <span className="text-zinc-400 ml-1.5">{context}</span>}
       </div>
+    </div>
+  )
+}
+
+function FeedCleanupSubsection({
+  orphanFeeds,
+  mercuryDuplicates,
+  loading,
+}: {
+  orphanFeeds: OrphanFeedMatch[]
+  mercuryDuplicates: MercuryDuplicate[]
+  loading: boolean
+}) {
+  if (loading) return null
+  if (orphanFeeds.length === 0 && mercuryDuplicates.length === 0) return null
+
+  const ruleColor = (confidence: 'high' | 'medium') =>
+    confidence === 'high'
+      ? 'bg-emerald-100 text-emerald-700'
+      : 'bg-amber-100 text-amber-700'
+
+  const handleIgnore = async (feedId: string) => {
+    const res = await ignoreBankFeed(feedId)
+    if (!res.success) {
+      toast.error(res.error ?? 'Failed to ignore bank feed')
+      return
+    }
+    toast.success('Bank feed ignored — refresh to update list')
+  }
+
+  const stub = (label: string) => () => {
+    toast.info(`${label} — wired in a later step (this is the Step 13 sub-section)`)
+  }
+
+  return (
+    <div className="pt-3 mt-2 border-t space-y-4">
+      <p className="text-xs font-semibold text-zinc-700 uppercase tracking-wide">
+        Other paid services & feed cleanup
+      </p>
+
+      {orphanFeeds.length > 0 && (
+        <div>
+          <p className="text-xs text-zinc-500 mb-1.5">
+            Unmatched bank deposits that look like they belong to this client ({orphanFeeds.length})
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-400 border-b">
+                  <th className="text-left py-1 pr-2 font-medium">Date</th>
+                  <th className="text-left py-1 pr-2 font-medium">Source</th>
+                  <th className="text-left py-1 pr-2 font-medium">Sender / memo</th>
+                  <th className="text-right py-1 pr-2 font-medium">Amount</th>
+                  <th className="text-left py-1 pr-2 font-medium">Match</th>
+                  <th className="text-right py-1 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orphanFeeds.map(o => (
+                  <tr key={o.feed.id} className="border-b border-zinc-50 align-top">
+                    <td className="py-1.5 pr-2 whitespace-nowrap">{fmt(o.feed.transaction_date)}</td>
+                    <td className="py-1.5 pr-2 text-zinc-500">{o.feed.source}</td>
+                    <td className="py-1.5 pr-2 max-w-[260px]">
+                      <div className="truncate font-medium">{o.feed.sender_name ?? '—'}</div>
+                      {o.feed.memo && (
+                        <div className="truncate text-zinc-400">{o.feed.memo}</div>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                      {fmtAmt(o.feed.amount, o.feed.currency)}
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <span
+                        className={cn('px-1.5 py-0.5 rounded font-medium whitespace-nowrap', ruleColor(o.confidence))}
+                        title={`Tier ${o.tier} • ${o.confidence.toUpperCase()} • evidence: ${o.match_evidence}`}
+                      >
+                        {o.rule_label}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right whitespace-nowrap">
+                      <button
+                        onClick={stub('Create service')}
+                        className="px-2 py-0.5 mr-1 rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
+                      >
+                        Create service
+                      </button>
+                      <button
+                        onClick={() => handleIgnore(o.feed.id)}
+                        className="px-2 py-0.5 mr-1 rounded border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                      >
+                        Ignore
+                      </button>
+                      <a
+                        href="/finance"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-0.5 rounded border border-zinc-200 text-zinc-700 hover:bg-zinc-50 inline-block"
+                      >
+                        Open in matcher
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {mercuryDuplicates.length > 0 && (
+        <div>
+          <p className="text-xs text-zinc-500 mb-1.5">
+            Plaid-Mercury duplicates for this client ({mercuryDuplicates.length})
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-400 border-b">
+                  <th className="text-left py-1 pr-2 font-medium">Date</th>
+                  <th className="text-left py-1 pr-2 font-medium">Sender / memo</th>
+                  <th className="text-right py-1 pr-2 font-medium">Amount</th>
+                  <th className="text-left py-1 pr-2 font-medium">Attribution</th>
+                  <th className="text-right py-1 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mercuryDuplicates.map(d => (
+                  <tr key={d.plaid_feed.id} className="border-b border-zinc-50 align-top">
+                    <td className="py-1.5 pr-2 whitespace-nowrap">{fmt(d.plaid_feed.transaction_date)}</td>
+                    <td className="py-1.5 pr-2 max-w-[260px]">
+                      <div className="truncate font-medium">{d.plaid_feed.sender_name ?? '—'}</div>
+                      {d.plaid_feed.memo && (
+                        <div className="truncate text-zinc-400">{d.plaid_feed.memo}</div>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">
+                      {fmtAmt(d.plaid_feed.amount, d.plaid_feed.currency)}
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <span className="text-zinc-500">
+                        {d.attribution === 'matched' ? 'matched-payment' : 'cascade'}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right whitespace-nowrap">
+                      <button
+                        onClick={stub('Delete duplicate')}
+                        className="px-2 py-0.5 mr-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
+                      >
+                        Delete duplicate
+                      </button>
+                      <a
+                        href="/finance"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-0.5 rounded border border-zinc-200 text-zinc-700 hover:bg-zinc-50 inline-block"
+                      >
+                        Open in matcher
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1660,6 +1830,13 @@ export function AuditPanel({
               </div>
             </div>
           )}
+
+          {/* Step 13 — Other paid services & feed cleanup */}
+          <FeedCleanupSubsection
+            orphanFeeds={dbData?.orphan_feeds ?? []}
+            mercuryDuplicates={dbData?.mercury_duplicates ?? []}
+            loading={dbLoading}
+          />
         </Section>
 
         {/* S5 — Services */}
