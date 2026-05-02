@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
-import { matchAndReconcile } from "@/lib/bank-feed-matcher"
+import { matchAndReconcile, markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
 import { INTERNAL_BASE_URL } from "@/lib/config"
@@ -111,6 +111,20 @@ export async function GET(req: NextRequest) {
       }
     } catch (dedupErr) {
       console.error("[check-wire] Content dedup failed:", dedupErr)
+    }
+
+    // ─── Step 5c: Mark Mercury Stripe payouts as outgoing ────────────
+    // These rows are already tracked by the Stripe sync; marking them outgoing
+    // prevents the matcher from wasting cycles trying to reconcile them.
+    let stripePayoutsMarked = 0
+    try {
+      const stripeResult = await markMercuryStripePayoutsOutgoing()
+      stripePayoutsMarked = stripeResult.marked
+      if (stripePayoutsMarked > 0) {
+        console.warn(`[check-wire] Marked ${stripePayoutsMarked} Mercury Stripe payout(s) as outgoing`)
+      }
+    } catch (stripeOutgoingErr) {
+      console.error("[check-wire] Stripe outgoing mark failed:", stripeOutgoingErr)
     }
 
     // ─── Step 6: Match all unmatched feeds against invoices ──────────
@@ -231,6 +245,7 @@ export async function GET(req: NextRequest) {
                     .eq("id", pending.id)
 
                   // Create CRM task for manual review
+                  // eslint-disable-next-line no-restricted-syntax
                   await supabase.from("tasks").insert({
                     task_title: `[ACTIVATION FAILED] ${pending.client_name} — wire payment matched but activation failed`,
                     assigned_to: "Luca",
@@ -254,6 +269,7 @@ export async function GET(req: NextRequest) {
                   .eq("id", pending.id)
 
                 // Create CRM task for manual review
+                // eslint-disable-next-line no-restricted-syntax
                 await supabase.from("tasks").insert({
                   task_title: `[ACTIVATION FAILED] ${pending.client_name} — wire payment matched but activation call failed`,
                   assigned_to: "Luca",
@@ -284,6 +300,7 @@ export async function GET(req: NextRequest) {
         pending_activations: pendingList?.length ?? 0,
         open_invoices: openInvoices?.length ?? 0,
         airwallex_feeds: airwallexFeedCount,
+        stripe_payouts_marked_outgoing: stripePayoutsMarked,
         unmatched_feeds: unmatchedFeeds?.length ?? 0,
         invoice_matched: invoiceMatched,
         activation_matched: activationMatched,

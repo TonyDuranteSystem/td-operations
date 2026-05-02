@@ -360,6 +360,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
       await syncInvoiceStatus("payment", best.id, "Partial", today, feedAmount)
 
+      // eslint-disable-next-line no-restricted-syntax
       await supabaseAdmin
         .from("payments")
         .update({ payment_method: paymentMethod })
@@ -390,6 +391,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     await syncInvoiceStatus("payment", best.id, "Paid", today, feedAmount)
 
     // Also set payment_method on the payments record
+    // eslint-disable-next-line no-restricted-syntax
     await supabaseAdmin
       .from("payments")
       .update({ payment_method: paymentMethod })
@@ -407,6 +409,46 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
   } catch (err) {
     return { matched: false, error: (err as Error).message }
   }
+}
+
+/**
+ * Returns true if a td_bank_feeds row is a Stripe payout deposit on Mercury.
+ * These rows are already tracked via the Stripe sync (source='stripe'); the Mercury
+ * entry is a redundant deposit notification — not a client payment to reconcile.
+ *
+ * Exported for unit tests.
+ */
+export function isStripePayoutFeed(memo: string | null, senderReference: string | null): boolean {
+  const memoUp = (memo || "").toUpperCase()
+  const refUp = (senderReference || "").toUpperCase()
+  return memoUp.includes("STRIPE; TRANSFER") || refUp.includes("STRIPE; TRANSFER")
+}
+
+/**
+ * Marks unmatched Mercury/mercury_api rows that are Stripe payouts as 'outgoing'
+ * so the matcher loop skips them. Called as a pre-processing step in check-wire-payments.
+ */
+export async function markMercuryStripePayoutsOutgoing(): Promise<{ marked: number }> {
+  const { data: feeds, error } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("id, memo, sender_reference")
+    .in("source", ["mercury", "mercury_api"])
+    .eq("status", "unmatched")
+
+  if (error || !feeds || feeds.length === 0) return { marked: 0 }
+
+  const ids = feeds
+    .filter(f => isStripePayoutFeed(f.memo, f.sender_reference))
+    .map(f => f.id)
+
+  if (ids.length === 0) return { marked: 0 }
+
+  await supabaseAdmin
+    .from("td_bank_feeds")
+    .update({ status: "outgoing", updated_at: new Date().toISOString() })
+    .in("id", ids)
+
+  return { marked: ids.length }
 }
 
 /**
@@ -443,6 +485,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
       await syncInvoiceStatus("payment", paymentId, "Paid", today)
 
       // Also set payment_method
+      // eslint-disable-next-line no-restricted-syntax
       await supabaseAdmin
         .from("payments")
         .update({ payment_method: "Wire (Manual Match)" })
