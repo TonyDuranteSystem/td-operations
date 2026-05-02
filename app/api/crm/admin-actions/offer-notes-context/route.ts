@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
 
+export const dynamic = 'force-dynamic'
+
 interface NoteSource {
   type: 'lead_notes' | 'contact_notes' | 'account_notes' | 'call_summary'
   label: string
