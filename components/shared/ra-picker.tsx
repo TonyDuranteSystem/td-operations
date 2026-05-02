@@ -378,6 +378,23 @@ export function RAPicker({
         </button>
       </div>
 
+      {/* RA detail row — agent name, provider, county */}
+      {selectedRow && (
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs pl-0.5 mt-0.5">
+          {selectedRow.agent_name && (
+            <span className="text-zinc-500"><span className="text-zinc-400">Agent:</span> {selectedRow.agent_name}</span>
+          )}
+          {selectedRow.provider && (
+            <span className="text-zinc-500"><span className="text-zinc-400">Provider:</span> {selectedRow.provider}</span>
+          )}
+          {selectedRow.county ? (
+            <span className="text-emerald-600">{selectedRow.county} County</span>
+          ) : (
+            <span className="text-amber-600">No county — SS-4 blocker</span>
+          )}
+        </div>
+      )}
+
       {/* Verification status — only when a row is selected */}
       {value && (
         <div className="flex items-center gap-2 pl-0.5">
