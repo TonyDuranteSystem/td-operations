@@ -31,6 +31,8 @@ import { updateAccountField, updateContactField, addAccountNote } from '@/app/(d
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
+import { AddressPicker } from '@/components/shared/address-picker'
+import { RAPicker } from '@/components/shared/ra-picker'
 import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
 import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
@@ -1173,6 +1175,7 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
 function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void }) {
+  const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
 
@@ -1246,6 +1249,44 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Shield} label="Registered Agent" value={account.registered_agent_provider ?? ''} onSave={makeAccountSaver('registered_agent_provider')} />
           <EditableField icon={Calendar} label="RA Renewal" value={account.ra_renewal_date ?? ''} type="date" onSave={makeAccountSaver('ra_renewal_date')} />
           <EditableField icon={MapPin} label="Address" value={account.physical_address ?? ''} type="textarea" onSave={makeAccountSaver('physical_address')} />
+
+          {/* Address Registry — structured FK links */}
+          <div className="border-t pt-3 mt-1 space-y-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Address Registry</p>
+            <div>
+              <p className="text-xs text-zinc-500 mb-1">Legal Address</p>
+              <AddressPicker
+                accountId={account.id}
+                accountUpdatedAt={account.updated_at}
+                kind="business_legal"
+                value={account.business_legal_address_id ?? null}
+                verified={account.legal_link_verified ?? false}
+                onChange={() => router.refresh()}
+              />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500 mb-1">Mailing Address</p>
+              <AddressPicker
+                accountId={account.id}
+                accountUpdatedAt={account.updated_at}
+                kind="business_mailing"
+                value={account.business_mailing_address_id ?? null}
+                verified={account.mailing_link_verified ?? false}
+                onChange={() => router.refresh()}
+              />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500 mb-1">Registered Agent</p>
+              <RAPicker
+                accountId={account.id}
+                accountUpdatedAt={account.updated_at}
+                value={account.registered_agent_id ?? null}
+                verified={account.ra_link_verified ?? false}
+                onChange={() => router.refresh()}
+              />
+            </div>
+          </div>
+
           {account.gdrive_folder_url && (
             <div className="flex items-center gap-2">
               <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />

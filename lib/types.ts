@@ -113,6 +113,12 @@ export interface Account {
   audit_flag: boolean | null
   audit_reviewed_by: string | null
   audit_sections: Record<string, boolean> | null
+  business_legal_address_id: string | null
+  business_mailing_address_id: string | null
+  registered_agent_id: string | null
+  legal_link_verified: boolean | null
+  mailing_link_verified: boolean | null
+  ra_link_verified: boolean | null
   created_at: string
   updated_at: string
 }
