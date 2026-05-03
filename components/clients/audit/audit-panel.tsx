@@ -296,15 +296,41 @@ function BillingCheckRow({ status, label, context }: { status: BillingCheckStatu
   )
 }
 
+// Autocomplete suggestions for the Create-service modal — derived from the
+// most-used service_type values in service_deliveries (sandbox query 2026-05-02).
+const SERVICE_TYPE_SUGGESTIONS = [
+  'State Annual Report',
+  'CMRA Mailing Address',
+  'State RA Renewal',
+  'Tax Return',
+  'Company Formation',
+  'Annual Renewal',
+  'EIN',
+  'ITIN',
+  'Banking Fintech',
+  'Client Onboarding',
+]
+
 function FeedCleanupSubsection({
+  accountId,
   orphanFeeds,
   mercuryDuplicates,
   loading,
+  refetchDbData,
 }: {
+  accountId: string
   orphanFeeds: OrphanFeedMatch[]
   mercuryDuplicates: MercuryDuplicate[]
   loading: boolean
+  refetchDbData: () => Promise<void>
 }) {
+  // Step 14 — Create-service modal state (must come before any early-return so
+  // hook order is stable across renders.)
+  const [createForFeed, setCreateForFeed] = useState<OrphanFeedMatch | null>(null)
+  const [createServiceType, setCreateServiceType] = useState('')
+  const [createServiceName, setCreateServiceName] = useState('')
+  const [createSubmitting, setCreateSubmitting] = useState(false)
+
   if (loading) return null
   if (orphanFeeds.length === 0 && mercuryDuplicates.length === 0) return null
 
@@ -319,11 +345,64 @@ function FeedCleanupSubsection({
       toast.error(res.error ?? 'Failed to ignore bank feed')
       return
     }
-    toast.success('Bank feed ignored — refresh to update list')
+    toast.success('Bank feed ignored')
+    await refetchDbData()
+  }
+
+  const openCreateModal = (m: OrphanFeedMatch) => {
+    setCreateForFeed(m)
+    setCreateServiceType('')
+    setCreateServiceName('')
+  }
+
+  const closeCreateModal = () => {
+    if (createSubmitting) return
+    setCreateForFeed(null)
+    setCreateServiceType('')
+    setCreateServiceName('')
+  }
+
+  const submitCreateService = async () => {
+    if (!createForFeed) return
+    const serviceType = createServiceType.trim()
+    if (!serviceType) {
+      toast.error('Pick or type a service type')
+      return
+    }
+    const serviceName = createServiceName.trim() || serviceType
+    setCreateSubmitting(true)
+    try {
+      const res = await fetch(`/api/clients/audit/${accountId}/create-service-from-feed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feed_id: createForFeed.feed.id,
+          service_type: serviceType,
+          service_name: serviceName,
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(d.error ?? `Request failed (${res.status})`)
+      }
+      if (d.warning) {
+        toast.warning(d.warning)
+      } else {
+        toast.success(`Service + invoice ${d.invoice_number ?? ''} created`)
+      }
+      setCreateForFeed(null)
+      setCreateServiceType('')
+      setCreateServiceName('')
+      await refetchDbData()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Create service failed')
+    } finally {
+      setCreateSubmitting(false)
+    }
   }
 
   const stub = (label: string) => () => {
-    toast.info(`${label} — wired in a later step (this is the Step 13 sub-section)`)
+    toast.info(`${label} — wired in a later step`)
   }
 
   return (
@@ -373,7 +452,7 @@ function FeedCleanupSubsection({
                     </td>
                     <td className="py-1.5 text-right whitespace-nowrap">
                       <button
-                        onClick={stub('Create service')}
+                        onClick={() => openCreateModal(o)}
                         className="px-2 py-0.5 mr-1 rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
                       >
                         Create service
@@ -455,6 +534,93 @@ function FeedCleanupSubsection({
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Step 14 — Create-service modal */}
+      {createForFeed && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={closeCreateModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900">Create service from bank feed</h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Creates a Completed service delivery + a paid invoice, links the feed.
+              </p>
+            </div>
+
+            <div className="bg-zinc-50 rounded p-3 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Date</span>
+                <span className="font-medium tabular-nums">{fmt(createForFeed.feed.transaction_date)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Amount</span>
+                <span className="font-medium tabular-nums">{fmtAmt(createForFeed.feed.amount, createForFeed.feed.currency)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Sender</span>
+                <span className="font-medium truncate ml-2">{createForFeed.feed.sender_name ?? '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Source</span>
+                <span className="font-medium">{createForFeed.feed.source}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Service type</label>
+              <input
+                list="audit-service-type-suggestions"
+                value={createServiceType}
+                onChange={e => {
+                  setCreateServiceType(e.target.value)
+                  if (!createServiceName.trim()) setCreateServiceName(e.target.value)
+                }}
+                placeholder="Pick or type (e.g. Tax Return)"
+                className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={createSubmitting}
+              />
+              <datalist id="audit-service-type-suggestions">
+                {SERVICE_TYPE_SUGGESTIONS.map(s => <option key={s} value={s} />)}
+              </datalist>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Service name (invoice description)</label>
+              <input
+                value={createServiceName}
+                onChange={e => setCreateServiceName(e.target.value)}
+                placeholder="Defaults to service type"
+                className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={createSubmitting}
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={closeCreateModal}
+                disabled={createSubmitting}
+                className="px-3 py-1.5 text-sm rounded border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitCreateService}
+                disabled={createSubmitting || !createServiceType.trim()}
+                className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {createSubmitting ? 'Creating…' : 'Create service + invoice'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1833,9 +1999,14 @@ export function AuditPanel({
 
           {/* Step 13 — Other paid services & feed cleanup */}
           <FeedCleanupSubsection
+            accountId={account.id}
             orphanFeeds={dbData?.orphan_feeds ?? []}
             mercuryDuplicates={dbData?.mercury_duplicates ?? []}
             loading={dbLoading}
+            refetchDbData={async () => {
+              const r = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
+              if (r.ok) setDbData(await r.json() as AccountData)
+            }}
           />
         </Section>
 

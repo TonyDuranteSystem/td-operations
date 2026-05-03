@@ -256,6 +256,84 @@ export async function createSD(
   }
 }
 
+// ─── createBackfilledSD ────────────────────────────────
+
+export interface CreateBackfilledSDParams {
+  account_id: string
+  service_type: string
+  service_name?: string
+  amount: number
+  amount_currency: string
+  /** Both start and end_date set to this value (the historical event date). */
+  delivered_on: string
+  notes?: string
+}
+
+export interface CreateBackfilledSDResult {
+  id: string
+  service_type: string
+  service_name: string
+}
+
+/**
+ * Backfill a Completed/Delivered service delivery for a historical paid event
+ * (used by the audit panel's "Create service from bank feed" flow).
+ *
+ * Differs from `createSD` in three ways:
+ *   1. Does NOT consult `pipeline_stages` — the caller may pass a service_type
+ *      that has no pipeline (free-text, e.g. "Shipping" surfaced from a feed).
+ *   2. Inserts directly at status='Completed', stage='Delivered'.
+ *   3. Carries amount + currency from the originating event.
+ *
+ * The `is_test` flag is propagated from the parent account so test SDs stay
+ * filterable.
+ */
+export async function createBackfilledSD(
+  params: CreateBackfilledSDParams,
+): Promise<CreateBackfilledSDResult> {
+  const service_name = params.service_name || params.service_type
+
+  let is_test = false
+  const { data: acct } = await supabaseAdmin
+    .from("accounts")
+    .select("is_test")
+    .eq("id", params.account_id)
+    .maybeSingle()
+  if (acct?.is_test === true) is_test = true
+
+  const row = await dbWrite(
+    supabaseAdmin
+      .from("service_deliveries")
+      .insert({
+        service_type: params.service_type,
+        service_name,
+        account_id: params.account_id,
+        status: "Completed",
+        stage: "Delivered",
+        start_date: params.delivered_on,
+        end_date: params.delivered_on,
+        amount: params.amount,
+        amount_currency: params.amount_currency,
+        notes: params.notes ?? null,
+        stage_entered_at: new Date().toISOString(),
+        is_test,
+      })
+      .select("id, service_type, service_name")
+      .single(),
+    "service_deliveries.insert.backfill",
+  )
+
+  if (!row) {
+    throw new Error("[createBackfilledSD] insert returned null")
+  }
+
+  return {
+    id: row.id,
+    service_type: row.service_type,
+    service_name: row.service_name || service_name,
+  }
+}
+
 // ─── advanceStage ──────────────────────────────────────
 
 /**

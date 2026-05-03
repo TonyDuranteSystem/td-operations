@@ -12,11 +12,24 @@ import {
 // Lambda instances (the singleton is initialized once; a write from another instance
 // is not reflected in subsequent reads through the cached client).  Creating a
 // fresh client per request guarantees we always read from the live DB state.
+//
+// Additionally: Next.js 14 patches the global fetch and caches GET requests by
+// default. Supabase JS uses fetch under the hood; even with `force-dynamic` set
+// on this route, supabase queries can return cached data after a write from
+// another path (e.g. Step 14 manualMatch flips td_bank_feeds.status='matched',
+// then this route's read still sees 'unmatched'). Passing a custom fetch with
+// `cache: 'no-store'` disables that layer.
 function freshAdminClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false } }
+    {
+      auth: { persistSession: false },
+      global: {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          fetch(input, { ...init, cache: 'no-store' }),
+      },
+    }
   )
 }
 
@@ -226,7 +239,13 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .eq('id', id)
     .single()
 
-  const { data: feedRows } = await supabaseAdmin
+  // Use freshAdminClient for td_bank_feeds — same singleton stale-read class
+  // of bug as accounts/audit_flags above. Without this, after manualMatch
+  // flips a feed to status='matched' (e.g. via Step 14 create-service-from-feed)
+  // the supabaseAdmin singleton can return the stale 'unmatched' row, leaving
+  // the orphan visible in the audit panel until the next cold restart.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: feedRows } = await (freshAdminClient() as any)
     .from('td_bank_feeds')
     .select('id, source, transaction_date, amount, currency, sender_name, sender_reference, memo, status, matched_payment_id, raw_data')
     .or('status.eq.unmatched,source.eq.mercury,source.eq.mercury_api')
