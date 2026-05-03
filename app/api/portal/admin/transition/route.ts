@@ -7,6 +7,7 @@ import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
+import { defaultInstallmentAmount } from '@/lib/billing/installment-defaults'
 import type { MailingAddressRow } from '@/lib/addresses'
 
 export const maxDuration = 60 // Vercel Pro: 60s
@@ -266,10 +267,14 @@ export async function POST(request: NextRequest) {
           effective_date: `${year}-01-01`,
           bundled_pipelines: ['CMRA Mailing Address', 'State RA Renewal', 'State Annual Report', 'Tax Return'],
           services: [{ name: 'Annual LLC Management', price: (acct.installment_1_amount || 0) + (acct.installment_2_amount || 0), description: 'Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal' }],
-          cost_summary: [
-            { label: 'First Installment (January)', items: [{ name: 'Annual Management', price: `$${acct.installment_1_amount?.toLocaleString() || '1,000'}` }], total: `$${acct.installment_1_amount?.toLocaleString() || '1,000'}` },
-            { label: 'Second Installment (June)', items: [{ name: 'Annual Management', price: `$${acct.installment_2_amount?.toLocaleString() || '1,000'}` }], total: `$${acct.installment_2_amount?.toLocaleString() || '1,000'}` },
-          ],
+          cost_summary: (() => {
+            const inst1 = acct.installment_1_amount ?? defaultInstallmentAmount(acct.entity_type)
+            const inst2 = acct.installment_2_amount ?? defaultInstallmentAmount(acct.entity_type)
+            return [
+              { label: 'First Installment (January)', items: [{ name: 'Annual Management', price: `$${inst1.toLocaleString()}` }], total: `$${inst1.toLocaleString()}` },
+              { label: 'Second Installment (June)', items: [{ name: 'Annual Management', price: `$${inst2.toLocaleString()}` }], total: `$${inst2.toLocaleString()}` },
+            ]
+          })(),
         }).select('id, token').single() as { data: { id: string; token: string } | null }
         acctLines.push(newMSA ? `MSA: auto-created (draft, ${newMSA.token})` : 'MSA: creation failed')
       } else if (existingMSA) {

@@ -733,18 +733,22 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 function InstallmentsSection({ account, payments, makeAccountSaver }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }> }) {
   const [openForInst, setOpenForInst] = useState<1 | 2 | null>(null)
 
+  const year = new Date().getFullYear()
+
   // Resolve 1st installment invoice first
   const inst1Amount = account.installment_1_amount
   const inst1Currency = (account.installment_1_currency ?? 'USD') as 'USD' | 'EUR'
-  const inst1Match = inst1Amount ? findInstallmentInvoice(payments, inst1Amount, inst1Currency, []) : null
+  const inst1Match = inst1Amount
+    ? findInstallmentInvoice(payments, inst1Amount, inst1Currency, 'Installment 1 (Jan)', year, [])
+    : null
 
   // Resolve 2nd installment, excluding the 1st match to avoid double-counting
   const inst2Amount = account.installment_2_amount
   const inst2Currency = (account.installment_2_currency ?? 'USD') as 'USD' | 'EUR'
   const excludeIds = inst1Match ? [inst1Match.id] : []
-  const inst2Match = inst2Amount ? findInstallmentInvoice(payments, inst2Amount, inst2Currency, excludeIds) : null
-
-  const year = new Date().getFullYear()
+  const inst2Match = inst2Amount
+    ? findInstallmentInvoice(payments, inst2Amount, inst2Currency, 'Installment 2 (Jun)', year, excludeIds)
+    : null
 
   const dialogDefaults: InvoiceDialogDefaults | undefined = openForInst === 1
     ? {
@@ -818,9 +822,19 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
   )
 }
 
-function findInstallmentInvoice(payments: Payment[], amount: number, currency: string, excludeIds: string[]): Payment | null {
+function findInstallmentInvoice(
+  payments: Payment[],
+  amount: number,
+  currency: string,
+  installmentLabel: 'Installment 1 (Jan)' | 'Installment 2 (Jun)',
+  year: number,
+  excludeIds: string[],
+): Payment | null {
+  const yearStr = String(year)
   return payments.find(p => {
     if (excludeIds.includes(p.id)) return false
+    if (p.installment !== installmentLabel) return false
+    if (!p.description?.includes(yearStr)) return false
     const invTotal = Number(p.total) || p.amount || 0
     const invCurr = p.amount_currency || 'USD'
     return Math.abs(invTotal - amount) < 2 && invCurr === currency && p.invoice_number && p.invoice_number !== '1.0' && p.invoice_number !== '2.0'
@@ -1318,8 +1332,10 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
         </div>
       </div>
 
-      {/* Billing */}
-      <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
+      {/* Billing — only for Client-type accounts (vendors/tenants/leads do not have annual installments) */}
+      {account.account_type === 'Client' && (
+        <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
+      )}
 
       {/* Contacts */}
       <ContactsSection

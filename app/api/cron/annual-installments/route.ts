@@ -25,6 +25,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { logCron } from "@/lib/cron-log"
+import { defaultInstallmentAmount } from "@/lib/billing/installment-defaults"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -89,8 +90,7 @@ export async function GET(req: NextRequest) {
       }
 
       // Determine amount
-      const entityUpper = (acct.entity_type || "").toUpperCase()
-      const amount: number = acct.installment_2_amount || (entityUpper.includes("MULTI") || entityUpper.includes("MMLLC") ? 1250 : 1000)
+      const amount: number = acct.installment_2_amount || defaultInstallmentAmount(acct.entity_type)
 
       // Idempotency key — prevents the same installment being invoiced twice
       // (cron re-run, retry, concurrent fire). createTDInvoice will return the
