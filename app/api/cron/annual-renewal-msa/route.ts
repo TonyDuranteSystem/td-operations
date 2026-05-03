@@ -72,10 +72,20 @@ export async function GET(req: NextRequest) {
     const missingAmounts: string[] = []
 
     for (const acct of accounts) {
-      // Guard: must have installment amounts to generate a meaningful MSA
-      if (!acct.installment_1_amount) {
+      // Guard: must have BOTH installment amounts to generate a meaningful MSA.
+      // The MSA legally commits the client to two installments — emitting "$0"
+      // when an amount is null (the prior fallback) shipped a contract the
+      // client never agreed to. Skip + alert staff to set the missing values.
+      const missingFields: string[] = []
+      if (!acct.installment_1_amount) missingFields.push("installment_1_amount")
+      if (!acct.installment_2_amount) missingFields.push("installment_2_amount")
+      if (missingFields.length > 0) {
         missingAmounts.push(acct.company_name)
-        results.push({ company: acct.company_name, action: "skipped_no_amount", detail: "installment_1_amount not set" })
+        results.push({
+          company: acct.company_name,
+          action: "skipped_no_amount",
+          detail: `${missingFields.join(", ")} not set`,
+        })
         continue
       }
 
@@ -155,25 +165,25 @@ export async function GET(req: NextRequest) {
               ? [
                   {
                     label: "First Installment (June)",
-                    items: [{ name: "Annual Management", price: `$${acct.installment_1_amount?.toLocaleString()}` }],
-                    total: `$${acct.installment_1_amount?.toLocaleString()}`,
+                    items: [{ name: "Annual Management", price: `$${acct.installment_1_amount.toLocaleString()}` }],
+                    total: `$${acct.installment_1_amount.toLocaleString()}`,
                   },
                   {
                     label: "Second Installment (June — Year 3+)",
-                    items: [{ name: "Annual Management", price: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}` }],
-                    total: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}`,
+                    items: [{ name: "Annual Management", price: `$${acct.installment_2_amount.toLocaleString()}` }],
+                    total: `$${acct.installment_2_amount.toLocaleString()}`,
                   },
                 ]
               : [
                   {
                     label: "First Installment (January)",
-                    items: [{ name: "Annual Management", price: `$${acct.installment_1_amount?.toLocaleString()}` }],
-                    total: `$${acct.installment_1_amount?.toLocaleString()}`,
+                    items: [{ name: "Annual Management", price: `$${acct.installment_1_amount.toLocaleString()}` }],
+                    total: `$${acct.installment_1_amount.toLocaleString()}`,
                   },
                   {
                     label: "Second Installment (June)",
-                    items: [{ name: "Annual Management", price: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}` }],
-                    total: `$${acct.installment_2_amount?.toLocaleString() ?? "0"}`,
+                    items: [{ name: "Annual Management", price: `$${acct.installment_2_amount.toLocaleString()}` }],
+                    total: `$${acct.installment_2_amount.toLocaleString()}`,
                   },
                 ],
           })
