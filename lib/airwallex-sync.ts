@@ -14,12 +14,19 @@ import type { Json } from '@/lib/database.types'
 const AIRWALLEX_BASE = 'https://api.airwallex.com/api/v1'
 
 interface AirwallexDeposit {
-  id: string
+  // The API returns either `id` or `deposit_id` depending on endpoint version.
+  id?: string
+  deposit_id?: string
   amount: number
   currency: string
   status: string
   created_at: string
   deposited_at?: string
+  settled_at?: string
+  // Real API returns `payer_name` (top-level) and `statement_ref`.
+  // Older shapes used `sender.name` + `reference` — keep both as fallbacks.
+  payer_name?: string
+  statement_ref?: string
   sender?: {
     name?: string
     account_number?: string
@@ -113,16 +120,25 @@ export async function syncAirwallexDeposits(
           continue
         }
 
-        const externalId = `airwallex_${deposit.id}`
+        const depositId = deposit.deposit_id ?? deposit.id
+        if (!depositId) {
+          skipped++
+          continue
+        }
+        const externalId = `airwallex_${depositId}`
         const amount = Number(deposit.amount)
         if (!amount || amount <= 0) {
           skipped++
           continue
         }
 
-        const transactionDate = deposit.deposited_at
-          ? deposit.deposited_at.split('T')[0]
-          : deposit.created_at?.split('T')[0] ?? new Date().toISOString().split('T')[0]
+        // Prefer settled_at over deposited_at over created_at for transaction_date.
+        const transactionDate = (deposit.settled_at ?? deposit.deposited_at ?? deposit.created_at)
+          ?.split('T')[0] ?? new Date().toISOString().split('T')[0]
+
+        // Real API returns payer_name + statement_ref; legacy shape used sender.name + reference.
+        const senderName = deposit.payer_name ?? deposit.sender?.name ?? null
+        const senderReference = deposit.statement_ref ?? deposit.reference ?? null
 
         const { error: upsertErr } = await supabaseAdmin
           .from('td_bank_feeds')
@@ -132,21 +148,21 @@ export async function syncAirwallexDeposits(
             transaction_date: transactionDate,
             amount,
             currency: deposit.currency || 'EUR',
-            sender_name: deposit.sender?.name ?? null,
-            sender_reference: deposit.reference ?? null,
-            memo: [deposit.sender?.name, deposit.reference].filter(Boolean).join(' — '),
+            sender_name: senderName,
+            sender_reference: senderReference,
+            memo: [senderName, senderReference].filter(Boolean).join(' — '),
             raw_data: deposit as unknown as Json,
             status: 'unmatched',
           }, { onConflict: 'external_id' })
 
         if (upsertErr) {
-          console.error(`[airwallex-sync] Upsert error for ${deposit.id}:`, upsertErr.message)
+          console.error(`[airwallex-sync] Upsert error for ${depositId}:`, upsertErr.message)
           errors++
         } else {
           added++
         }
       } catch (err) {
-        console.error(`[airwallex-sync] Error processing deposit ${deposit.id}:`, err)
+        console.error(`[airwallex-sync] Error processing deposit ${deposit.deposit_id ?? deposit.id ?? '<no-id>'}:`, err)
         errors++
       }
     }
