@@ -272,7 +272,15 @@ function Section({ icon: Icon, title, children, badge, done, onToggleDone }: {
   )
 }
 
-function BillingCheckRow({ status, label, context }: { status: BillingCheckStatus; label: string; context: string }) {
+function BillingCheckRow({
+  status, label, context, paymentId, invoiceNumber,
+}: {
+  status: BillingCheckStatus
+  label: string
+  context: string
+  paymentId?: string | null
+  invoiceNumber?: string | null
+}) {
   const badge = cn(
     'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium shrink-0',
     status === 'ok'          && 'bg-emerald-100 text-emerald-700',
@@ -285,12 +293,40 @@ function BillingCheckRow({ status, label, context }: { status: BillingCheckStatu
     status === 'missing'     ? 'Missing' :
     status === 'not_yet_due' ? 'Not yet' :
     'N/A'
+
+  // If the context contains the invoice number, replace that span with a link
+  // to the staff PDF endpoint.
+  const renderContext = (): React.ReactNode => {
+    if (!context) return null
+    if (paymentId && invoiceNumber && context.includes(invoiceNumber)) {
+      const idx = context.indexOf(invoiceNumber)
+      const before = context.slice(0, idx)
+      const after = context.slice(idx + invoiceNumber.length)
+      return (
+        <span className="text-zinc-400 ml-1.5">
+          {before}
+          <a
+            href={`/api/invoices/${paymentId}/pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline font-mono"
+            title="Open invoice PDF"
+          >
+            {invoiceNumber}
+          </a>
+          {after}
+        </span>
+      )
+    }
+    return <span className="text-zinc-400 ml-1.5">{context}</span>
+  }
+
   return (
     <div className="flex items-start gap-2 text-xs py-0.5">
       <span className={badge}>{badgeText}</span>
       <div className="min-w-0">
         <span className="font-medium text-zinc-700">{label}</span>
-        {context && <span className="text-zinc-400 ml-1.5">{context}</span>}
+        {renderContext()}
       </div>
     </div>
   )
@@ -1902,7 +1938,14 @@ export function AuditPanel({
           {!dbLoading && billingStatus && (
             <div className="space-y-1">
               {billingStatus.checks.map(chk => (
-                <BillingCheckRow key={chk.key} status={chk.status} label={chk.label} context={chk.context} />
+                <BillingCheckRow
+                  key={chk.key}
+                  status={chk.status}
+                  label={chk.label}
+                  context={chk.context}
+                  paymentId={chk.paymentId ?? null}
+                  invoiceNumber={chk.invoiceNumber ?? null}
+                />
               ))}
             </div>
           )}
@@ -1979,7 +2022,19 @@ export function AuditPanel({
                   <tbody>
                     {dbData!.payments.map(p => (
                       <tr key={p.id} className="border-b border-zinc-50">
-                        <td className="py-1.5 pr-2 font-mono">{p.invoice_number ?? '—'}</td>
+                        <td className="py-1.5 pr-2 font-mono">
+                          {p.invoice_number ? (
+                            <a
+                              href={`/api/invoices/${p.id}/pdf`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline"
+                              title="Open invoice PDF"
+                            >
+                              {p.invoice_number}
+                            </a>
+                          ) : '—'}
+                        </td>
                         <td className="py-1.5 pr-2 max-w-[160px] truncate">
                           {p.description ?? p.installment ?? p.period ?? '—'}
                         </td>

@@ -30,6 +30,9 @@ export type BillingCheck = {
   /** Amount in dollars when relevant (installment invoices). */
   amount?: number | null
   invoiceNumber?: string | null
+  /** Payment id — set when the check refers to a specific invoice; UI wraps the
+   *  invoice number in the context with an anchor to /api/invoices/<id>/pdf. */
+  paymentId?: string | null
 }
 
 export type BillingStatusResult = {
@@ -43,6 +46,7 @@ export type BillingStatusResult = {
 // Minimal shapes — compatible with the full DB row types used in audit-panel.tsx
 
 export type BillingPaymentRow = {
+  id?: string
   installment: string | null
   description: string | null
   amount: number | string | null
@@ -152,6 +156,7 @@ export function computeBillingStatus(
              'No signed agreement',
     amount: inst1 ? Number(inst1.amount ?? 0) : null,
     invoiceNumber: inst1?.invoice_number ?? null,
+    paymentId: inst1?.id ?? null,
   })
 
   // ── Check 3: Installment 1 paid ──────────────────────────────────────────
@@ -170,6 +175,7 @@ export function computeBillingStatus(
           ? 'No invoice'
           : 'No signed agreement',
     invoiceNumber: inst1?.invoice_number ?? null,
+    paymentId: inst1?.id ?? null,
   })
 
   // ── Check 4: Installment 2 invoiced (Jun) ────────────────────────────────
@@ -189,6 +195,7 @@ export function computeBillingStatus(
           : 'June passed — no Installment 2 invoice found',
     amount: inst2 ? Number(inst2.amount ?? 0) : null,
     invoiceNumber: inst2?.invoice_number ?? null,
+    paymentId: inst2?.id ?? null,
   })
 
   // ── Check 5: Installment 2 paid ──────────────────────────────────────────
@@ -209,6 +216,7 @@ export function computeBillingStatus(
             ? `Status: ${inst2.invoice_status ?? '?'} — ${inst2.invoice_number ?? '—'}`
             : 'No invoice',
     invoiceNumber: inst2?.invoice_number ?? null,
+    paymentId: inst2?.id ?? null,
   })
 
   // ── Check 6: installment_2_amount configured ─────────────────────────────

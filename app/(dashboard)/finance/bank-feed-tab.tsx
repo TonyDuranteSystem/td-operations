@@ -9,7 +9,7 @@ import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
   Loader2, ArrowRight, CheckCircle2, AlertCircle,
-  Search,
+  Search, Building2, User,
 } from 'lucide-react'
 import { matchBankFeedToInvoice, ignoreBankFeed } from './actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -331,6 +331,11 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
 
 // ── Transaction Rows ──
 
+// Result shape from /api/accounts/search-for-feed-match
+type FeedMatchResult =
+  | { type: 'account'; id: string; name: string; status: string | null; contact_name?: string | null }
+  | { type: 'contact'; id: string; name: string; email?: string | null }
+
 function UnmatchedRow({
   feed, openInvoices, isMatching, onStartMatch, onCancelMatch,
 }: {
@@ -343,6 +348,33 @@ function UnmatchedRow({
   const [isPending, startTransition] = useTransition()
   const amount = Number(feed.amount)
 
+  // Client/contact search state
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<FeedMatchResult[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+
+  // Create-from-feed modal state
+  const [createForResult, setCreateForResult] = useState<FeedMatchResult | null>(null)
+  const [createDescription, setCreateDescription] = useState('')
+  const [createSubmitting, setCreateSubmitting] = useState(false)
+
+  // Debounced search — fires when user types 2+ chars
+  useEffect(() => {
+    if (!isMatching) return
+    const q = searchQuery.trim()
+    if (q.length < 2) { setSearchResults([]); return }
+    const t = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const res = await fetch(`/api/accounts/search-for-feed-match?q=${encodeURIComponent(q)}`)
+        const d = await res.json()
+        if (res.ok) setSearchResults(d.results ?? [])
+      } catch { /* ignore — empty list */ }
+      setSearchLoading(false)
+    }, 250)
+    return () => clearTimeout(t)
+  }, [searchQuery, isMatching])
+
   const handleMatch = (paymentId: string) => {
     startTransition(async () => {
       try {
@@ -354,6 +386,53 @@ function UnmatchedRow({
         toast.error(err instanceof Error ? err.message : 'Match failed')
       }
     })
+  }
+
+  const openCreateModal = (r: FeedMatchResult) => {
+    setCreateForResult(r)
+    setCreateDescription('')
+  }
+  const closeCreateModal = () => {
+    if (createSubmitting) return
+    setCreateForResult(null)
+    setCreateDescription('')
+  }
+  const submitCreate = async () => {
+    if (!createForResult) return
+    const description = createDescription.trim()
+    if (!description) {
+      toast.error('Description is required')
+      return
+    }
+    setCreateSubmitting(true)
+    try {
+      const body: Record<string, string> = {
+        feed_id: feed.id,
+        service_name: description,
+      }
+      if (createForResult.type === 'account') {
+        body.account_id = createForResult.id
+        body.service_type = description
+      } else {
+        body.contact_id = createForResult.id
+      }
+      const res = await fetch('/api/feed/create-from-feed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error ?? `Request failed (${res.status})`)
+      if (d.warning) toast.warning(d.warning)
+      else toast.success(`Invoice ${d.invoice_number ?? ''} created and feed matched`)
+      setCreateForResult(null)
+      setCreateDescription('')
+      onCancelMatch()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Create failed')
+    } finally {
+      setCreateSubmitting(false)
+    }
   }
 
   const [ignoreOpen, setIgnoreOpen] = useState(false)
@@ -430,8 +509,82 @@ function UnmatchedRow({
       </div>
 
       {isMatching && (
-        <div className="px-4 pb-3 pt-1">
-          <p className="text-xs text-muted-foreground mb-2">Select an invoice to match:</p>
+        <div className="px-4 pb-3 pt-1 space-y-3">
+          {/* ── Search by client/contact ─────────────────────────── */}
+          <div>
+            <p className="text-xs text-muted-foreground mb-1.5">Search by company or person:</p>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="e.g. Invictus, Mario Rossi…"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 text-xs border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+              {searchLoading && (
+                <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+              )}
+            </div>
+            {searchQuery.trim().length >= 2 && searchResults.length === 0 && !searchLoading && (
+              <p className="text-xs text-muted-foreground mt-1.5">No matches.</p>
+            )}
+            {searchResults.length > 0 && (
+              <div className="mt-1.5 space-y-1 max-h-56 overflow-y-auto">
+                {searchResults.map(r => {
+                  const matchingInvoices = r.type === 'account'
+                    ? openInvoices.filter(inv => inv.account_id === r.id)
+                    : []
+                  return (
+                    <div key={`${r.type}-${r.id}`} className="border rounded-md overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40 text-xs">
+                        {r.type === 'account' ? (
+                          <Building2 className="h-3 w-3 text-blue-600 shrink-0" />
+                        ) : (
+                          <User className="h-3 w-3 text-purple-600 shrink-0" />
+                        )}
+                        <span className="font-medium truncate flex-1">{r.name}</span>
+                        {r.type === 'account' && r.contact_name && (
+                          <span className="text-[10px] text-muted-foreground truncate">via {r.contact_name}</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openCreateModal(r)}
+                          className="text-[11px] px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 shrink-0"
+                        >
+                          + Create invoice from this feed
+                        </button>
+                      </div>
+                      {r.type === 'account' && matchingInvoices.length > 0 && (
+                        <div className="divide-y">
+                          {matchingInvoices.map(inv => {
+                            const invAmount = Number(inv.total ?? inv.amount ?? 0)
+                            return (
+                              <button
+                                key={inv.id}
+                                type="button"
+                                onClick={() => handleMatch(inv.id)}
+                                disabled={isPending}
+                                className="w-full flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-blue-50 disabled:opacity-50"
+                              >
+                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <span className="truncate flex-1 text-left">{inv.description ?? ''}</span>
+                                <span className="font-medium">{formatCurrency(invAmount, inv.amount_currency)}</span>
+                                <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="border-t pt-2">
+            <p className="text-xs text-muted-foreground mb-2">Or pick from suggestions by amount:</p>
           {suggestions.length === 0 ? (
             <p className="text-xs text-amber-600">No invoices with similar amount in {feed.currency}</p>
           ) : (
@@ -496,8 +649,91 @@ function UnmatchedRow({
               </div>
             </details>
           )}
+          </div>
         </div>
       )}
+
+      {/* Create-from-feed modal (search + create flow) */}
+      {createForResult && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={closeCreateModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900">
+                Create invoice from this feed
+              </h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Creates a paid TD invoice on{' '}
+                <span className="font-medium">
+                  {createForResult.type === 'account' ? '🏢' : '👤'} {createForResult.name}
+                </span>
+                {createForResult.type === 'account' && ' (also creates a Completed service delivery).'}
+                {createForResult.type === 'contact' && ' (contact-only — no service delivery).'}{' '}
+                Links the bank feed.
+              </p>
+            </div>
+
+            <div className="bg-zinc-50 rounded p-3 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Date</span>
+                <span className="font-medium tabular-nums">{formatDate(feed.transaction_date)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Amount</span>
+                <span className="font-medium tabular-nums">{formatCurrency(amount, feed.currency)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Sender</span>
+                <span className="font-medium truncate ml-2">{feed.sender_name ?? '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Source</span>
+                <span className="font-medium">{feed.source}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                {createForResult.type === 'account' ? 'Service / description' : 'Description'}
+              </label>
+              <input
+                value={createDescription}
+                onChange={e => setCreateDescription(e.target.value)}
+                placeholder={createForResult.type === 'account' ? 'e.g. Tax Return, ITIN, Custom' : 'e.g. Wire payment from Mario Rossi'}
+                className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={createSubmitting}
+                autoFocus
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={closeCreateModal}
+                disabled={createSubmitting}
+                className="px-3 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitCreate}
+                disabled={createSubmitting || !createDescription.trim()}
+                className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {createSubmitting && <Loader2 className="h-3 w-3 animate-spin" />}
+                Create invoice
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmDestructiveDialog
         open={ignoreOpen}
         onClose={() => setIgnoreOpen(false)}
