@@ -16,7 +16,7 @@ import { type AccountRow, type ContactRow } from './audit-shell'
 import { computeCompleteness, type CompletenessResult } from '@/lib/audit/completeness-rules'
 import { computeBillingStatus, type BillingStatusResult, type BillingCheckStatus } from '@/lib/audit/billing-status'
 import type { OrphanFeedMatch, MercuryDuplicate } from '@/lib/audit/bank-feed-cascade'
-import { ignoreBankFeed } from '@/app/(dashboard)/finance/actions'
+import { ignoreBankFeed, deleteDuplicateBankFeed } from '@/app/(dashboard)/finance/actions'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -349,6 +349,19 @@ function FeedCleanupSubsection({
     await refetchDbData()
   }
 
+  const handleDeleteDuplicate = async (feedId: string) => {
+    if (!window.confirm('Delete this Plaid duplicate? It is the redundant copy of a Mercury feed already in the system.')) {
+      return
+    }
+    const res = await deleteDuplicateBankFeed(feedId)
+    if (!res.success) {
+      toast.error(res.error ?? 'Failed to delete duplicate')
+      return
+    }
+    toast.success('Duplicate deleted')
+    await refetchDbData()
+  }
+
   const openCreateModal = (m: OrphanFeedMatch) => {
     setCreateForFeed(m)
     setCreateServiceType('')
@@ -399,10 +412,6 @@ function FeedCleanupSubsection({
     } finally {
       setCreateSubmitting(false)
     }
-  }
-
-  const stub = (label: string) => () => {
-    toast.info(`${label} — wired in a later step`)
   }
 
   return (
@@ -464,7 +473,7 @@ function FeedCleanupSubsection({
                         Ignore
                       </button>
                       <a
-                        href="/finance"
+                        href={`/finance?tab=bank&feed=${o.feed.id}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="px-2 py-0.5 rounded border border-zinc-200 text-zinc-700 hover:bg-zinc-50 inline-block"
@@ -516,13 +525,13 @@ function FeedCleanupSubsection({
                     </td>
                     <td className="py-1.5 text-right whitespace-nowrap">
                       <button
-                        onClick={stub('Delete duplicate')}
+                        onClick={() => handleDeleteDuplicate(d.plaid_feed.id)}
                         className="px-2 py-0.5 mr-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
                       >
                         Delete duplicate
                       </button>
                       <a
-                        href="/finance"
+                        href={`/finance?tab=bank&feed=${d.plaid_feed.id}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="px-2 py-0.5 rounded border border-zinc-200 text-zinc-700 hover:bg-zinc-50 inline-block"

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useTransition, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
@@ -575,7 +576,32 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   const [searchQuery, setSearchQuery] = useState('')
   const [matchingFeed, setMatchingFeed] = useState<string | null>(null)
   const [page, setPage] = useState(0)
+  const [highlightFeedId, setHighlightFeedId] = useState<string | null>(null)
   const pageSize = 50
+
+  // Deep-link from audit panel: ?feed=<uuid> opens this tab scrolled to the feed.
+  // Sets source filter from feed.source + search by amount + scrolls + 3s highlight.
+  const searchParams = useSearchParams()
+  const deepLinkFeedId = searchParams.get('feed')
+  useEffect(() => {
+    if (!deepLinkFeedId) return
+    const feed = bankFeeds.find(f => f.id === deepLinkFeedId)
+    if (!feed) {
+      toast.info('Feed not in current list — try Sync Now')
+      return
+    }
+    setFilter('all')
+    setSourceFilter([feed.source])
+    setSearchQuery(String(Number(feed.amount)))
+    setPage(0)
+    setHighlightFeedId(feed.id)
+    const t1 = setTimeout(() => {
+      const el = document.getElementById(`bank-feed-row-${feed.id}`)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+    const t2 = setTimeout(() => setHighlightFeedId(null), 3000)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [deepLinkFeedId, bankFeeds])
 
   // Filter and search
   const filtered = useMemo(() => {
@@ -714,22 +740,31 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
           </div>
         ) : (
           paginated.map(feed => {
-            if (feed.status === 'unmatched') {
-              return (
-                <UnmatchedRow
-                  key={feed.id}
-                  feed={feed}
-                  openInvoices={openInvoices}
-                  isMatching={matchingFeed === feed.id}
-                  onStartMatch={() => setMatchingFeed(feed.id)}
-                  onCancelMatch={() => setMatchingFeed(null)}
-                />
-              )
-            }
-            if (feed.status === 'matched') {
-              return <MatchedRow key={feed.id} feed={feed} />
-            }
-            return <IgnoredRow key={feed.id} feed={feed} />
+            const inner = feed.status === 'unmatched' ? (
+              <UnmatchedRow
+                feed={feed}
+                openInvoices={openInvoices}
+                isMatching={matchingFeed === feed.id}
+                onStartMatch={() => setMatchingFeed(feed.id)}
+                onCancelMatch={() => setMatchingFeed(null)}
+              />
+            ) : feed.status === 'matched' ? (
+              <MatchedRow feed={feed} />
+            ) : (
+              <IgnoredRow feed={feed} />
+            )
+            return (
+              <div
+                key={feed.id}
+                id={`bank-feed-row-${feed.id}`}
+                className={cn(
+                  'transition-shadow',
+                  highlightFeedId === feed.id && 'ring-2 ring-amber-400 ring-inset rounded'
+                )}
+              >
+                {inner}
+              </div>
+            )
           })
         )}
       </div>

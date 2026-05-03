@@ -612,6 +612,53 @@ export async function ignoreBankFeed(feedId: string): Promise<ActionResult> {
   })
 }
 
+export async function deleteDuplicateBankFeed(feedId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+
+    // Defensive: verify this row really is a Plaid-Mercury duplicate before deleting.
+    // Must be source='mercury' AND have a same-day same-amount mercury_api twin.
+    const { data: feed, error: feedErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id, source, transaction_date, amount, currency')
+      .eq('id', feedId)
+      .maybeSingle()
+    if (feedErr) throw new Error(`Failed to read bank feed: ${feedErr.message}`)
+    if (!feed) {
+      return // Already deleted by another session — treat as success.
+    }
+    if (feed.source !== 'mercury') {
+      throw new Error(`Refusing to delete: feed source is "${feed.source}", expected "mercury"`)
+    }
+    const { data: twins, error: twinErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id')
+      .eq('source', 'mercury_api')
+      .eq('transaction_date', feed.transaction_date)
+      .eq('amount', feed.amount)
+      .eq('currency', feed.currency)
+      .limit(1)
+    if (twinErr) throw new Error(`Failed to verify twin: ${twinErr.message}`)
+    if (!twins || twins.length === 0) {
+      throw new Error('Refusing to delete: no mercury_api twin found for this row')
+    }
+
+    const { error: delErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .delete()
+      .eq('id', feedId)
+    if (delErr) throw new Error(`Failed to delete duplicate: ${delErr.message}`)
+
+    revalidatePath('/finance')
+    revalidatePath('/reconciliation')
+  }, {
+    action_type: 'delete',
+    table_name: 'td_bank_feeds',
+    record_id: feedId,
+    summary: `Plaid-Mercury duplicate deleted (feed ${feedId})`,
+  })
+}
+
 export async function syncBankFeeds(): Promise<ActionResult> {
   return safeAction(async () => {
     const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/plaid/accounts`, {
