@@ -111,7 +111,7 @@ export async function GET(
   return new NextResponse(Buffer.from(pdfBytes), {
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${payment.invoice_number ?? 'invoice'}.pdf"`,
+      'Content-Disposition': `inline; filename="${payment.invoice_number ?? 'invoice'}.pdf"`,
     },
   })
 }
