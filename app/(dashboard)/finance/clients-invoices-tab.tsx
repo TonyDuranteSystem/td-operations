@@ -266,7 +266,15 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                           <td className="px-4 py-2.5 font-medium">
                             <div className="flex items-center gap-1.5">
                               {inv.parent_invoice_id && <SplitSquareHorizontal className="w-3 h-3 text-purple-500" />}
-                              {inv.invoice_number as string}
+                              <a
+                                href={`/api/portal/payments/${id}/pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline font-mono"
+                                title="Open invoice PDF"
+                              >
+                                {inv.invoice_number as string}
+                              </a>
                             </div>
                           </td>
                           <td className="px-4 py-2.5 text-muted-foreground">{(inv.issue_date as string) ?? '—'}</td>
@@ -359,7 +367,19 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                     )}
                     {paymentHistory.map(p => (
                       <tr key={p.id as string} className="border-b hover:bg-muted/30">
-                        <td className="px-4 py-2.5 font-medium">{(p.invoice_number as string) ?? '—'}</td>
+                        <td className="px-4 py-2.5 font-medium">
+                          {p.invoice_number ? (
+                            <a
+                              href={`/api/portal/payments/${p.id as string}/pdf`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline font-mono"
+                              title="Open invoice PDF"
+                            >
+                              {p.invoice_number as string}
+                            </a>
+                          ) : '—'}
+                        </td>
                         <td className="px-4 py-2.5 text-muted-foreground">{(p.paid_date as string) ?? '—'}</td>
                         <td className="px-4 py-2.5 text-right">${Number(p.amount_paid ?? p.amount ?? 0).toFixed(2)}</td>
                         <td className="px-4 py-2.5 text-muted-foreground">{(p.payment_method as string) ?? '—'}</td>

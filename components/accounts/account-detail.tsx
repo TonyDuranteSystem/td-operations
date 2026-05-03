@@ -42,13 +42,13 @@ import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
 
 const TABS = [
-  { key: 'panoramica', label: 'Overview', icon: Building2, adminOnly: false },
-  { key: 'servizi', label: 'Services', icon: Briefcase, adminOnly: false },
-  { key: 'pagamenti', label: 'Payments', icon: CreditCard, adminOnly: true },
+  { key: 'overview', label: 'Overview', icon: Building2, adminOnly: false },
+  { key: 'services', label: 'Services', icon: Briefcase, adminOnly: false },
+  { key: 'payments', label: 'Payments', icon: CreditCard, adminOnly: true },
   { key: 'tax', label: 'Tax Returns', icon: FileText, adminOnly: false },
-  { key: 'documenti', label: 'Documents', icon: FileText, adminOnly: false },
-  { key: 'corrispondenza', label: 'Correspondence', icon: Inbox, adminOnly: false },
-  { key: 'comunicazioni', label: 'Communications', icon: MessageSquare, adminOnly: false },
+  { key: 'documents', label: 'Documents', icon: FileText, adminOnly: false },
+  { key: 'correspondence', label: 'Correspondence', icon: Inbox, adminOnly: false },
+  { key: 'communications', label: 'Communications', icon: MessageSquare, adminOnly: false },
   { key: 'backend', label: 'Backend', icon: Activity, adminOnly: true },
 ]
 
@@ -454,7 +454,7 @@ function ContactsSection({
 
 export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [] }: AccountDetailProps) {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState('panoramica')
+  const [activeTab, setActiveTab] = useState('overview')
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
@@ -669,10 +669,10 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         <div className="flex gap-1 -mb-px overflow-x-auto">
           {TABS.filter(tab => !tab.adminOnly || isAdmin).map(tab => {
             const Icon = tab.icon
-            const count = tab.key === 'servizi' ? services.length :
-                         tab.key === 'pagamenti' ? payments.length :
+            const count = tab.key === 'services' ? services.length :
+                         tab.key === 'payments' ? payments.length :
                          tab.key === 'tax' ? taxReturns.length :
-                         tab.key === 'documenti' ? documents.length : null
+                         tab.key === 'documents' ? documents.length : null
             return (
               <button
                 key={tab.key}
@@ -698,27 +698,27 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       </div>
 
       {/* Tab content */}
-      {activeTab === 'panoramica' && (
+      {activeTab === 'overview' && (
         <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} />
       )}
-      {activeTab === 'servizi' && (
+      {activeTab === 'services' && (
         <ServiziTab services={services} today={today} accountId={account.id} />
       )}
-      {activeTab === 'pagamenti' && (
+      {activeTab === 'payments' && (
         <PagamentiTab payments={payments} today={today} />
       )}
       {activeTab === 'tax' && (
         <TaxTab taxReturns={taxReturns} today={today} />
       )}
-      {activeTab === 'documenti' && (
+      {activeTab === 'documents' && (
         <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
       )}
-      {activeTab === 'corrispondenza' && (
+      {activeTab === 'correspondence' && (
         <div className="p-4">
           <CorrespondenceUpload accountId={account.id} />
         </div>
       )}
-      {activeTab === 'comunicazioni' && (
+      {activeTab === 'communications' && (
         <AccountCommunications accountId={account.id} />
       )}
       {activeTab === 'backend' && (

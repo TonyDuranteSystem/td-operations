@@ -534,7 +534,19 @@ function MatchedRow({ feed }: { feed: BankFeedRecord }) {
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
       <span className="text-xs text-muted-foreground truncate">{feed.sender_name || '—'}</span>
       <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-      <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
+      {payment?.invoice_number && feed.matched_payment_id ? (
+        <a
+          href={`/api/portal/payments/${feed.matched_payment_id}/pdf`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-mono text-xs text-blue-600 hover:underline shrink-0"
+          title="Open invoice PDF"
+        >
+          {payment.invoice_number}
+        </a>
+      ) : (
+        <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
+      )}
       <span className="text-xs truncate">{getCompanyName(payment?.accounts)}</span>
       <span className={cn(
         'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',

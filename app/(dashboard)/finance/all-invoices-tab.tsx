@@ -261,9 +261,15 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                   className={`hover:bg-muted/30 transition-colors ${isOverdue ? 'bg-red-50/50' : ''}`}
                 >
                   <td className="px-4 py-3">
-                    <span className="font-mono text-blue-600 text-xs">
+                    <a
+                      href={`/api/portal/payments/${inv.id}/pdf`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-blue-600 text-xs hover:underline"
+                      title="Open invoice PDF"
+                    >
                       {inv.invoice_number}
-                    </span>
+                    </a>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
