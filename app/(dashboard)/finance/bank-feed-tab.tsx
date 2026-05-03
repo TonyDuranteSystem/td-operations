@@ -536,7 +536,7 @@ function MatchedRow({ feed }: { feed: BankFeedRecord }) {
       <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
       {payment?.invoice_number && feed.matched_payment_id ? (
         <a
-          href={`/api/portal/payments/${feed.matched_payment_id}/pdf`}
+          href={`/api/invoices/${feed.matched_payment_id}/pdf`}
           target="_blank"
           rel="noopener noreferrer"
           className="font-mono text-xs text-blue-600 hover:underline shrink-0"

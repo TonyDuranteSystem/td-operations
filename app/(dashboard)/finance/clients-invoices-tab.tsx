@@ -267,7 +267,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                             <div className="flex items-center gap-1.5">
                               {inv.parent_invoice_id && <SplitSquareHorizontal className="w-3 h-3 text-purple-500" />}
                               <a
-                                href={`/api/portal/payments/${id}/pdf`}
+                                href={`/api/invoices/${id}/pdf`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-blue-600 hover:underline font-mono"
@@ -370,7 +370,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                         <td className="px-4 py-2.5 font-medium">
                           {p.invoice_number ? (
                             <a
-                              href={`/api/portal/payments/${p.id as string}/pdf`}
+                              href={`/api/invoices/${p.id as string}/pdf`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-blue-600 hover:underline font-mono"

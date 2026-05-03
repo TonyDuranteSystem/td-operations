@@ -262,7 +262,7 @@ export function AllInvoicesTab({ invoices }: { invoices: InvoiceRecord[] }) {
                 >
                   <td className="px-4 py-3">
                     <a
-                      href={`/api/portal/payments/${inv.id}/pdf`}
+                      href={`/api/invoices/${inv.id}/pdf`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="font-mono text-blue-600 text-xs hover:underline"
