@@ -94,6 +94,7 @@ export default function TeamChatPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [showSoundSettings, setShowSoundSettings] = useState(false)
   const [senderSounds, setSenderSounds] = useState<Record<string, string>>({})
+  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; name: string }>>([])
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -123,17 +124,16 @@ export default function TeamChatPage() {
   // Keep ref in sync so the realtime closure always sees the current user
   useEffect(() => { currentUserIdRef.current = currentUserId }, [currentUserId])
 
-  // Load per-sender sound preferences from localStorage
+  // Load per-sender sound preferences from localStorage whenever team members are known
   useEffect(() => {
-    if (!currentUserId || messages.length === 0) return
-    const senders = Array.from(new Map(messages.map(m => [m.sender_id, m.sender_name])).keys()).filter(id => id !== currentUserId)
+    if (teamMembers.length === 0) return
     const sounds: Record<string, string> = {}
-    for (const id of senders) {
-      const stored = getSenderSoundId(id)
-      sounds[id] = stored ?? ''
+    for (const m of teamMembers) {
+      const stored = getSenderSoundId(m.id)
+      sounds[m.id] = stored ?? ''
     }
     setSenderSounds(sounds)
-  }, [currentUserId, messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [teamMembers])
 
   // Auto-grow textarea
   useEffect(() => {
@@ -166,6 +166,7 @@ export default function TeamChatPage() {
         setCurrentUserId(data.current_user_id)
         setCurrentUserIsAdmin(data.is_admin ?? false)
         setMessages(data.messages)
+        setTeamMembers(data.members ?? [])
       })
       .catch(() => toast.error('Failed to load team chat'))
       .finally(() => setLoading(false))
@@ -330,8 +331,6 @@ export default function TeamChatPage() {
     }
   }
 
-  const uniqueSenders = Array.from(new Map(messages.map(m => [m.sender_id, m.sender_name])).entries()).filter(([id]) => id !== currentUserId)
-
   // For read receipt: find last message sent by me
   const lastSentMsgId = [...messages].reverse().find(m => m.sender_id === currentUserId && !m.deleted_at)?.id
 
@@ -356,7 +355,7 @@ export default function TeamChatPage() {
             <p className="text-xs text-zinc-500">Internal — not visible to clients</p>
           </div>
         </div>
-        {uniqueSenders.length > 0 && (
+        {teamMembers.length > 0 && (
           <button
             onClick={() => setShowSoundSettings(v => !v)}
             className={cn(
@@ -371,11 +370,11 @@ export default function TeamChatPage() {
       </div>
 
       {/* Sound settings panel */}
-      {showSoundSettings && uniqueSenders.length > 0 && (
+      {showSoundSettings && teamMembers.length > 0 && (
         <div className="shrink-0 px-4 py-3 border-b border-zinc-100 bg-zinc-50">
           <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-3">Notification sounds</p>
           <div className="flex flex-col gap-3">
-            {uniqueSenders.map(([id, name]) => {
+            {teamMembers.map(({ id, name }) => {
               const currentSoundId = senderSounds[id] ?? ''
               return (
                 <div key={id} className="flex items-start gap-3">

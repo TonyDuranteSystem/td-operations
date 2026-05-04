@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
+import { isDashboardUser, isAdmin, isClient, getUserDisplayName } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import type { ChatAttachment } from '@/lib/types'
 
@@ -97,11 +97,18 @@ export async function GET() {
     .neq('sender_id', user.id)
     .is('seen_at', null)
 
+  // Fetch all team members except the current user for the sound picker
+  const { data: { users: allUsers } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 200 })
+  const teamMembers = (allUsers ?? [])
+    .filter(u => u.id !== user.id && !isClient(u))
+    .map(u => ({ id: u.id, name: getUserDisplayName(u) }))
+
   return NextResponse.json({
     thread_id: thread.id,
     current_user_id: user.id,
     current_user_name: getUserDisplayName(user),
     is_admin: isAdmin(user),
     messages: enriched,
+    members: teamMembers,
   })
 }
