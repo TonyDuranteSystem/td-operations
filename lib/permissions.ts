@@ -55,6 +55,7 @@ export type TeamAction =
   | "reassign_task"
   | "update_lead_status"
   | "record_ein_received"
+  | "materialize_company"
 
 export type CrmAction = AdminAction | TeamAction
 

@@ -1,7 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { Building2, CheckCircle2, ExternalLink, Loader2, AlertCircle, Plus, X } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { Building2, CheckCircle2, ExternalLink, Loader2, AlertCircle, Plus, X, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { mergeNames, type AdminAddedName, type UnifiedNameOption } from '@/lib/llc-name-helpers'
 
@@ -62,6 +62,11 @@ export function LlcNameSelectionCard({
   const [newName, setNewName] = useState('')
   const [adding, setAdding] = useState(false)
   const [removingName, setRemovingName] = useState<string | null>(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [formationDate, setFormationDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [filingId, setFilingId] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Find formation wizard that's been submitted
   const formationWizard = wizardProgress.find(
@@ -94,10 +99,54 @@ export function LlcNameSelectionCard({
   const state = (data.owner_state_province as string) || accounts[0]?.state_of_formation || ''
   const sosLink = SOS_LINKS[state]
 
-  // Already-selected detection: account exists with a name that matches chosen_name
-  const alreadySet = chosenName && accounts.some(a =>
-    a.company_name.toLowerCase().includes(chosenName.toLowerCase()),
-  )
+  // Already-selected detection: chosen_name has been recorded on the wizard.
+  // (Antonio's model: name confirmation is a marker; the account is created
+  // later when Articles of Organization are uploaded.)
+  const alreadySet = !!chosenName
+
+  // Materialization detection: a real account whose name matches the chosen
+  // name now exists, meaning Articles have been uploaded and the company is
+  // live in the CRM.
+  const materializedAccount = chosenName
+    ? accounts.find(a => a.company_name.toLowerCase().includes(chosenName.toLowerCase()))
+    : null
+
+  const handleUploadArticles = async () => {
+    const file = fileInputRef.current?.files?.[0]
+    if (!file) {
+      toast.error('Pick a PDF first')
+      return
+    }
+    if (!formationDate) {
+      toast.error('Set the formation date')
+      return
+    }
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('contact_id', contactId)
+      fd.append('formation_date', formationDate)
+      if (filingId.trim()) fd.append('filing_id', filingId.trim())
+      const res = await fetch('/api/crm/admin-actions/upload-articles', {
+        method: 'POST',
+        body: fd,
+      })
+      const result = await res.json().catch(() => ({}))
+      if (res.ok && result.success) {
+        toast.success(`Company created: ${result.account_id ? 'account ' + result.account_id.slice(0, 8) : 'see details'}`)
+        setUploadOpen(false)
+        window.location.reload()
+      } else {
+        const detail = result.error || 'Upload failed'
+        toast.error(detail)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Network error')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const handleAddName = async () => {
     const trimmed = newName.trim()
@@ -225,13 +274,39 @@ export function LlcNameSelectionCard({
       </div>
 
       {/* Already selected state */}
-      {alreadySet && (
+      {alreadySet && !materializedAccount && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+            <div className="flex-1">
+              <div className="text-sm font-medium text-emerald-800">{chosenName}</div>
+              <div className="text-xs text-emerald-600">Name recorded. Upload the Articles of Organization to create the company.</div>
+            </div>
+          </div>
+          <button
+            onClick={() => setUploadOpen(true)}
+            className="w-full inline-flex items-center justify-center gap-2 py-2 px-4 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          >
+            <Upload className="h-4 w-4" />
+            Upload Articles of Organization
+          </button>
+        </div>
+      )}
+
+      {/* Materialized state — company exists */}
+      {alreadySet && materializedAccount && (
         <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-lg border border-emerald-200">
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-          <div>
-            <div className="text-sm font-medium text-emerald-800">{chosenName}</div>
-            <div className="text-xs text-emerald-600">Name confirmed and account created</div>
+          <div className="flex-1">
+            <div className="text-sm font-medium text-emerald-800">{materializedAccount.company_name}</div>
+            <div className="text-xs text-emerald-600">Company created from Articles of Organization.</div>
           </div>
+          <a
+            href={`/accounts/${materializedAccount.id}`}
+            className="text-xs text-emerald-700 hover:text-emerald-900 underline shrink-0"
+          >
+            Open
+          </a>
         </div>
       )}
 
@@ -345,6 +420,70 @@ export function LlcNameSelectionCard({
         </div>
       )}
 
+      {/* Upload Articles Dialog */}
+      {uploadOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <h3 className="text-lg font-semibold">Upload Articles of Organization</h3>
+            <p className="text-sm text-zinc-600">
+              Uploading the Articles will create the CRM account for{' '}
+              <span className="font-semibold">{chosenName}</span> and migrate the contact&apos;s
+              Drive folder to the company folder. Members and service deliveries are linked
+              automatically. SS-4 is created in a follow-up step (set Registered Agent first).
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 mb-1">Articles PDF</label>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept="application/pdf,image/*"
+                  className="w-full text-sm border border-zinc-200 rounded-lg p-2 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-100 file:px-3 file:py-1 file:text-sm file:font-medium hover:file:bg-zinc-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 mb-1">Formation date (per state filing)</label>
+                <input
+                  type="date"
+                  value={formationDate}
+                  onChange={e => setFormationDate(e.target.value)}
+                  className="w-full text-sm border border-zinc-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 mb-1">SOS filing ID (optional)</label>
+                <input
+                  type="text"
+                  value={filingId}
+                  onChange={e => setFilingId(e.target.value)}
+                  placeholder="e.g. 7234567"
+                  className="w-full text-sm border border-zinc-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setUploadOpen(false)}
+                disabled={uploading}
+                className="px-4 py-2 text-sm rounded-lg border hover:bg-zinc-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUploadArticles}
+                disabled={uploading}
+                className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-2"
+              >
+                {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {uploading ? 'Creating company…' : 'Upload and create company'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Confirmation Dialog */}
       {confirmOpen && selected && selectedOption && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -364,10 +503,9 @@ export function LlcNameSelectionCard({
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
               <p className="font-medium mb-1">What happens:</p>
               <ul className="list-disc list-inside space-y-0.5 text-xs">
-                <li>Account will be created/updated with this name</li>
-                <li>Service delivery name will be updated</li>
-                <li>Google Drive company folder will be created</li>
-                <li>This cannot be easily undone</li>
+                <li>The chosen name is recorded on this contact for filing.</li>
+                <li>The Company Formation service delivery name is updated.</li>
+                <li><strong>The company itself is NOT created yet.</strong> File the LLC with the state, then upload the Articles of Organization here to create the company.</li>
               </ul>
             </div>
 

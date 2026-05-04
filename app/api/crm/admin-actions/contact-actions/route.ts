@@ -430,6 +430,17 @@ export async function POST(req: NextRequest) {
 
       // ─── SELECT LLC NAME (pick from wizard 3 + admin-added; triggers the activation pipeline) ───
       case "select_llc_name": {
+        // Antonio's architectural model (2026-05-03/04): name selection is a
+        // marker only. NO account is created here, NO Drive folder, NO
+        // account_contacts link. The chosen name is recorded on
+        // wizard_progress.data.chosen_name and the active Company Formation
+        // SD's service_name is updated for CRM display.
+        //
+        // The account is created later when Articles of Organization are
+        // uploaded — either via the Upload Articles button on the LLC Name
+        // Selection card (PR 3) or by the Drive detection cron. The
+        // materialization helper reads wizard_progress.data.chosen_name and
+        // formation_submissions.state to create the real account.
         const selectedName = (params?.selected_name as string ?? "").trim()
         const wizardProgressId = params?.wizard_progress_id as string
 
@@ -438,7 +449,6 @@ export async function POST(req: NextRequest) {
           break
         }
 
-        // Validate wizard progress
         const { data: wp, error: wpErr } = await supabaseAdmin
           .from("wizard_progress")
           .select("id, data, wizard_type, status, contact_id")
@@ -456,33 +466,6 @@ export async function POST(req: NextRequest) {
         const sideEffects: string[] = []
         const wizardData = (wp.data || {}) as Record<string, unknown>
 
-        // Formation state must come from formation_submissions.state — the explicit state
-        // chosen by Antonio when creating the formation form. Never use owner_state_province
-        // (the owner's personal address province, e.g. "italy") for LLC state_of_formation.
-        const VALID_FORMATION_STATES = ["NM", "WY", "FL", "DE"]
-
-        const { data: formSub } = await supabaseAdmin
-          .from("formation_submissions")
-          .select("state")
-          .eq("contact_id", wp.contact_id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        const rawFormState = (formSub?.state || "").toUpperCase().trim()
-        const stateCode = VALID_FORMATION_STATES.includes(rawFormState) ? rawFormState : null
-
-        if (!stateCode) {
-          // No formation_submissions record or state not in known list — use NM as controlled default
-          sideEffects.push(`WARNING: No explicit formation state found in formation_submissions for contact ${wp.contact_id}. Defaulting to NM. Verify with Antonio.`)
-        }
-        const state = stateCode ?? "NM"
-
-        const entityType = wizardData.entity_type === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
-
-        // Classify the source: wizard-original names get legacy " LLC" auto-append
-        // (backward compat with inconsistent client input); admin-added names
-        // are stored VERBATIM per R-discussion 2026-04-22 with Antonio.
         const additionalNamesRaw: AdminAddedName[] = Array.isArray(wizardData.additional_names)
           ? (wizardData.additional_names as AdminAddedName[])
           : []
@@ -497,148 +480,43 @@ export async function POST(req: NextRequest) {
         )
         const finalCompanyName = companyNameForAccount(selectedName, nameSource)
 
-        // Check if contact already has a linked account
-        const { data: existingLinks } = await supabaseAdmin
-          .from("account_contacts")
-          .select("account_id, accounts:account_id(id, company_name, status)")
-          .eq("contact_id", contact_id)
-
-        let accountId: string | null = null
-
-        if (existingLinks && existingLinks.length > 0) {
-          // Update existing account
-          const acct = existingLinks[0].accounts as unknown as { id: string; company_name: string } | null
-          if (acct) {
-            accountId = acct.id
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            await supabaseAdmin
-              .from("accounts")
-              .update({
-                company_name: finalCompanyName,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", accountId)
-            sideEffects.push(`Account updated: ${acct.company_name} → ${finalCompanyName}`)
-          }
-        } else {
-          // Create new account
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          const { data: newAccount, error: aErr } = await supabaseAdmin
-            .from("accounts")
-            .insert({
-              company_name: finalCompanyName,
-              entity_type: entityType,
-              state_of_formation: state === "NM" ? "New Mexico" : state === "WY" ? "Wyoming" : state === "DE" ? "Delaware" : state === "FL" ? "Florida" : state,
-              status: "Active",
-              account_type: "Client",
-            })
-            .select("id")
-            .single()
-
-          if (aErr || !newAccount) {
-            result = { success: false, detail: `Failed to create account: ${aErr?.message}` }
-            break
-          }
-          accountId = newAccount.id
-
-          // Link contact to account
-          await supabaseAdmin
-            .from("account_contacts")
-            .insert({
-              account_id: accountId,
-              contact_id: contact_id,
-              role: "Owner",
-            })
-          sideEffects.push(`Account created: ${finalCompanyName}`)
-          sideEffects.push("Contact linked to account as Owner")
-        }
-
-        // Update wizard_progress.data with chosen_name (verbatim selection — preserved
-        // for audit, matches what admin actually picked regardless of source).
+        // Record the chosen name on wizard_progress.data — this is the source
+        // of truth that the materialization helper reads at Articles upload.
         await supabaseAdmin
           .from("wizard_progress")
           .update({
-            data: { ...wizardData, chosen_name: selectedName },
+            data: { ...wizardData, chosen_name: selectedName, chosen_name_final: finalCompanyName },
             updated_at: new Date().toISOString(),
           })
           .eq("id", wizardProgressId)
-        sideEffects.push(`Wizard data updated with chosen_name: ${selectedName}`)
+        sideEffects.push(`Chosen name recorded: ${finalCompanyName}`)
 
-        // Update active Company Formation SD service_name if exists
-        if (accountId) {
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          const { data: updatedSds } = await supabaseAdmin
-            .from("service_deliveries")
-            .update({
-              service_name: `Company Formation - ${finalCompanyName}`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("account_id", accountId)
-            .eq("service_type", "Company Formation")
-            .eq("status", "active")
-            .select("id")
+        // Update the active Company Formation SD's service_name so the CRM
+        // displays the chosen name. The SD lives on the contact (post-PR1)
+        // or on a legacy placeholder account — either way contact_id matches.
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+        const { data: updatedSds } = await supabaseAdmin
+          .from("service_deliveries")
+          .update({
+            service_name: `Company Formation - ${finalCompanyName}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("contact_id", contact_id)
+          .eq("service_type", "Company Formation")
+          .eq("status", "active")
+          .select("id")
 
-          if (updatedSds && updatedSds.length > 0) {
-            sideEffects.push("Service delivery name updated")
-          }
+        if (updatedSds && updatedSds.length > 0) {
+          sideEffects.push("Service delivery name updated")
         }
 
-        // Create company Drive folder + migrate files from contact folder
-        if (accountId) {
-          try {
-            const { ensureCompanyFolder, migrateContactToCompany } = await import("@/lib/drive-folder-utils")
-
-            // Get owner name for folder naming
-            const { data: ownerContact } = await supabaseAdmin
-              .from("contacts")
-              .select("first_name, last_name, gdrive_folder_url")
-              .eq("id", contact_id)
-              .single()
-            const ownerName = ownerContact
-              ? [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ")
-              : ""
-
-            const stateForFolder = state === "NM" ? "New Mexico" : state === "WY" ? "Wyoming" : state === "DE" ? "Delaware" : state === "FL" ? "Florida" : state
-
-            const companyResult = await ensureCompanyFolder(
-              accountId,
-              finalCompanyName,
-              stateForFolder,
-              ownerName,
-            )
-
-            if (companyResult.created) {
-              sideEffects.push(`Company Drive folder created`)
-
-              // Migrate files from contact folder if it exists
-              if (ownerContact?.gdrive_folder_url) {
-                const contactFolderMatch = (ownerContact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-                if (contactFolderMatch) {
-                  const migrationResult = await migrateContactToCompany(contactFolderMatch[1], companyResult.folderId, contact_id)
-                  if (migrationResult.moved > 0) {
-                    sideEffects.push(`${migrationResult.moved} file(s) migrated from contact folder`)
-                  }
-                  if (migrationResult.errors.length > 0) {
-                    sideEffects.push(`Migration warnings: ${migrationResult.errors.length}`)
-                  }
-                }
-              }
-            } else {
-              sideEffects.push("Company Drive folder already exists")
-            }
-          } catch (driveErr) {
-            sideEffects.push(`Drive folder error: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
-          }
-        }
-
-        // Log — includes source classification + full candidate pool for audit
         await supabaseAdmin.from("action_log").insert({
           actor: "crm-admin",
           action_type: "select_llc_name",
-          table_name: "accounts",
-          record_id: accountId,
-          account_id: accountId,
-          summary: `LLC name selected: ${finalCompanyName} (source: ${nameSource})`,
+          table_name: "wizard_progress",
+          record_id: wizardProgressId,
+          contact_id,
+          summary: `LLC name selected: ${finalCompanyName} (source: ${nameSource}). Account will be created when Articles of Organization are uploaded.`,
           details: {
             selected_name: selectedName,
             final_company_name: finalCompanyName,
@@ -655,7 +533,7 @@ export async function POST(req: NextRequest) {
 
         result = {
           success: true,
-          detail: `LLC name set to "${finalCompanyName}"`,
+          detail: `LLC name set to "${finalCompanyName}". The company will be created when you upload the Articles of Organization.`,
           side_effects: sideEffects,
         }
         break
