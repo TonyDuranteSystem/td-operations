@@ -260,7 +260,7 @@ export async function materializeFormationCompany(
             const repName = m.member_rep_name ? String(m.member_rep_name).trim() : null
             const memberCompanyName = m.member_company_name ? String(m.member_company_name).trim() : `Company Member ${i + 1}`
 
-            await supabaseAdmin.from("members").upsert(
+            await supabaseAdmin.from("members").insert(
               {
                 account_id: accountId,
                 member_type: "company",
@@ -283,7 +283,6 @@ export async function materializeFormationCompany(
                 representative_address_country: m.member_rep_address_country ?? null,
                 updated_at: now,
               },
-              { onConflict: "account_id,company_name" },
             )
 
             // Find-or-create the representative contact for portal access.
@@ -373,7 +372,7 @@ export async function materializeFormationCompany(
                 { onConflict: "account_id,contact_id" },
               )
 
-              await supabaseAdmin.from("members").upsert(
+              await supabaseAdmin.from("members").insert(
                 {
                   account_id: accountId,
                   member_type: "individual",
@@ -390,7 +389,6 @@ export async function materializeFormationCompany(
                   contact_id: membContactId,
                   updated_at: now,
                 },
-                { onConflict: "account_id,contact_id" },
               )
 
               steps.push({ step: `member_${i + 1}_link`, status: "ok", detail: `${memberName}${isPrimary ? " [PRIMARY]" : ""}` })
@@ -424,7 +422,7 @@ export async function materializeFormationCompany(
       const ownerFullName = [ownerFirst, ownerLast].filter(Boolean).join(" ") || null
       const ownerEmail = submitted.owner_email ? String(submitted.owner_email).toLowerCase().trim() : null
       const ownerPct = Math.max(0, Math.round((100 - additionalPctSum) * 100) / 100)
-      await supabaseAdmin.from("members").upsert(
+      await supabaseAdmin.from("members").insert(
         {
           account_id: accountId,
           member_type: "individual",
@@ -441,7 +439,6 @@ export async function materializeFormationCompany(
           contact_id: params.contact_id,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "account_id,contact_id" },
       )
       steps.push({ step: "owner_member_row", status: "ok", detail: `Owner member row (${ownerPct}%)` })
     }
