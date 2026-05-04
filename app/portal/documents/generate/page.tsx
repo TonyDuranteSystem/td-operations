@@ -39,9 +39,11 @@ export default async function GenerateDocumentsPage() {
       .order('created_at', { ascending: false })
       .limit(20),
     supabaseAdmin
-      .from('contacts')
-      .select('first_name, last_name')
-      .eq('id', contactId)
+      .from('account_contacts')
+      .select('contacts(first_name, last_name)')
+      .eq('account_id', selectedAccountId)
+      .eq('role', 'owner')
+      .limit(1)
       .single(),
   ])
 
@@ -54,13 +56,18 @@ export default async function GenerateDocumentsPage() {
         role: m.role || 'owner',
         ownershipPct: m.ownership_pct ?? null,
       }))
-    : contactResult.data
-      ? [{
-          fullName: `${contactResult.data.first_name ?? ''} ${contactResult.data.last_name ?? ''}`.trim() || 'N/A',
+    : (() => {
+        // Fallback for older clients without members table rows.
+        // Use the account's owner contact (by role), not the logged-in user —
+        // authorized representatives may log in on behalf of the actual owner.
+        const ownerContact = contactResult.data?.contacts as { first_name: string | null; last_name: string | null } | null
+        if (!ownerContact) return []
+        return [{
+          fullName: `${ownerContact.first_name ?? ''} ${ownerContact.last_name ?? ''}`.trim() || 'N/A',
           role: 'owner',
           ownershipPct: null,
         }]
-      : []
+      })()
 
   return (
     <GenerateDocumentsClient
