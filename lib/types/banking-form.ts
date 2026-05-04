@@ -120,7 +120,7 @@ export interface UploadConfig {
 
 export const PAYSET_UPLOADS: UploadConfig[] = [
   { key: 'proof_of_address', required: true, accept: '.pdf,.jpg,.jpeg,.png' },
-  { key: 'business_bank_statement', required: true, accept: '.pdf,.jpg,.jpeg,.png' },
+  { key: 'business_bank_statement', required: false, accept: '.pdf,.jpg,.jpeg,.png' },
 ]
 
 export const RELAY_UPLOADS: UploadConfig[] = [

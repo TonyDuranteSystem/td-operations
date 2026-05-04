@@ -500,7 +500,7 @@ export const BANKING_PAYSET_FIELDS: Record<string, FieldConfig[]> = {
     ]},
     { name: 'monthly_volume', label: 'Expected Monthly Volume (EUR)', labelIt: 'Volume Mensile Previsto (EUR)', type: 'number', required: true },
     { name: 'proof_of_address', label: 'Proof of Address (utility bill or bank statement)', labelIt: 'Prova di Residenza (bolletta o estratto conto)', type: 'file', required: true },
-    { name: 'business_bank_statement', label: 'Business Bank Statement (last 3 months)', labelIt: 'Estratto Conto Aziendale (ultimi 3 mesi)', type: 'file', required: true },
+    { name: 'business_bank_statement', label: 'Business Bank Statement — last 3 months (optional)', labelIt: 'Estratto Conto Aziendale — ultimi 3 mesi (opzionale)', type: 'file', required: false },
     { name: 'disclaimer_accepted', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true, hint: 'I confirm that all information provided is accurate and complete.', hintIt: 'Confermo che tutte le informazioni fornite sono accurate e complete.' },
   ],
 }
@@ -540,15 +540,15 @@ export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'disclaimer_accepted', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true, hint: 'I confirm that all information provided is accurate and complete.', hintIt: 'Confermo che tutte le informazioni fornite sono accurate e complete.' },
   ],
   partner: [
-    { name: 'partner_first_name', label: 'Partner First Name', labelIt: 'Nome Socio', type: 'text', required: true },
-    { name: 'partner_last_name', label: 'Partner Last Name', labelIt: 'Cognome Socio', type: 'text', required: true },
-    { name: 'partner_street', label: 'Partner Address', labelIt: 'Indirizzo Socio', type: 'text', required: true },
-    { name: 'partner_city', label: 'Partner City', labelIt: 'Città Socio', type: 'text', required: true },
-    { name: 'partner_state', label: 'Partner State', labelIt: 'Stato Socio', type: 'text', required: true },
-    { name: 'partner_zip', label: 'Partner ZIP', labelIt: 'CAP Socio', type: 'text', required: true },
-    { name: 'partner_phone', label: 'Partner Phone', labelIt: 'Telefono Socio', type: 'tel', required: true },
-    { name: 'partner_email', label: 'Partner Email', labelIt: 'Email Socio', type: 'email', required: true },
-    { name: 'partner_equity_pct', label: 'Partner Ownership %', labelIt: 'Quota Socio %', type: 'number', required: true },
+    { name: 'partner_first_name', label: 'Partner First Name', labelIt: 'Nome Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_last_name', label: 'Partner Last Name', labelIt: 'Cognome Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_street', label: 'Partner Address', labelIt: 'Indirizzo Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_city', label: 'Partner City', labelIt: 'Città Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_state', label: 'Partner State', labelIt: 'Stato Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_zip', label: 'Partner ZIP', labelIt: 'CAP Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_phone', label: 'Partner Phone', labelIt: 'Telefono Socio', type: 'tel', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_email', label: 'Partner Email', labelIt: 'Email Socio', type: 'email', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
+    { name: 'partner_equity_pct', label: 'Partner Ownership %', labelIt: 'Quota Socio %', type: 'number', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
   ],
 }
 
