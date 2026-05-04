@@ -128,6 +128,7 @@ export default function PortalChatsPage() {
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
   const [internalUploading, setInternalUploading] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   // AI assistant panel
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [aiPanelMessages, setAiPanelMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([])
@@ -209,6 +210,10 @@ export default function PortalChatsPage() {
       setInternalPendingFile({ file })
     }
   }
+
+  useEffect(() => {
+    setIsMobile(window.matchMedia('(pointer: coarse)').matches)
+  }, [])
 
   // Request browser notification permission + register service worker for push
   useEffect(() => {
@@ -1631,7 +1636,7 @@ export default function PortalChatsPage() {
                 ref={internalInputRef}
                 value={internalReplyText}
                 onChange={e => setInternalReplyText(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInternalMessage() } }}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isMobile) { e.preventDefault(); sendInternalMessage() } }}
                 rows={1}
                 placeholder={internalIsRecording ? 'Recording...' : 'Team message...'}
                 className={cn(
@@ -2224,7 +2229,7 @@ export default function PortalChatsPage() {
                     ref={inputRef}
                     value={replyText}
                     onChange={e => setReplyText(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isMobile) { e.preventDefault(); handleSend() } }}
                     rows={1}
                     placeholder={isRecording ? 'Recording...' : 'Type a message...'}
                     className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[300px] placeholder:text-zinc-400"
