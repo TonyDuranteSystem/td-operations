@@ -6,14 +6,80 @@ import type { OwnerTransaction, OwnerCategory } from '@/lib/owner-finance'
 
 const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'fee', 'conversion', 'refund', 'uncategorized']
 
-const SUBCATEGORIES: Record<string, string[]> = {
-  income: ['consulting', 'tax_services', 'formation', 'renewal', 'other_income'],
-  cogs: ['contractor', 'payroll', 'subcontractor'],
-  expense: ['software', 'saas', 'payroll', 'marketing', 'legal', 'accounting', 'office', 'travel', 'meals', 'real_estate', 'vehicle', 'insurance', 'utilities', 'bank_fees', 'other_expense'],
-  distribution: ['owner_draw', 'partner_distribution'],
-  fee: ['bank_fee', 'processing_fee', 'wire_fee'],
-  conversion: ['fx_conversion', 'internal_transfer'],
-  refund: ['client_refund', 'vendor_refund'],
+const CATEGORY_LABELS: Record<string, string> = {
+  income: 'Income',
+  cogs: 'Cost of Goods (COGS)',
+  expense: 'Operating Expense',
+  distribution: 'Owner Distribution',
+  fee: 'Bank / Processing Fee',
+  conversion: 'Currency Conversion',
+  refund: 'Refund',
+  uncategorized: 'Uncategorized',
+}
+
+const SUBCATEGORIES: Record<string, { value: string; label: string }[]> = {
+  income: [
+    { value: 'consulting', label: 'Consulting' },
+    { value: 'tax_services', label: 'Tax Services' },
+    { value: 'formation', label: 'Formation' },
+    { value: 'renewal', label: 'Renewal' },
+    { value: 'sales', label: 'Sales' },
+    { value: 'services', label: 'Services' },
+    { value: 'general', label: 'General Income' },
+    { value: 'other_income', label: 'Other Income' },
+  ],
+  cogs: [
+    { value: 'contractor', label: 'Contractor' },
+    { value: 'payroll', label: 'Payroll' },
+    { value: 'subcontractor', label: 'Subcontractor' },
+  ],
+  expense: [
+    { value: 'accounting', label: 'Accounting' },
+    { value: 'advertising', label: 'Advertising & Promotion' },
+    { value: 'bank_fees', label: 'Bank Fees' },
+    { value: 'education', label: 'Education' },
+    { value: 'equipment', label: 'Equipment' },
+    { value: 'insurance', label: 'Insurance' },
+    { value: 'interest', label: 'Interest' },
+    { value: 'janitorial', label: 'Janitorial' },
+    { value: 'legal', label: 'Legal' },
+    { value: 'marketing', label: 'Marketing / Website Ads' },
+    { value: 'meals', label: 'Meals & Entertainment' },
+    { value: 'office', label: 'Office Supplies' },
+    { value: 'payment_fees', label: 'Payment Processing Fees' },
+    { value: 'payroll', label: 'Payroll / Salaries' },
+    { value: 'real_estate', label: 'Real Estate' },
+    { value: 'recruitment', label: 'Recruitment' },
+    { value: 'rent', label: 'Rent' },
+    { value: 'repairs', label: 'Repairs & Maintenance' },
+    { value: 'saas', label: 'SaaS / Subscriptions' },
+    { value: 'shipping', label: 'Shipping & Postage' },
+    { value: 'social_media', label: 'Social Media' },
+    { value: 'software', label: 'Software & Apps' },
+    { value: 'stripe_fees', label: 'Stripe Fees' },
+    { value: 'tax', label: 'Tax Payments' },
+    { value: 'travel', label: 'Travel' },
+    { value: 'utilities', label: 'Utilities' },
+    { value: 'vehicle', label: 'Vehicle' },
+    { value: 'other_expense', label: 'Other Expense' },
+  ],
+  distribution: [
+    { value: 'distribution', label: 'Owner Distribution' },
+    { value: 'contribution', label: 'Owner Contribution' },
+  ],
+  fee: [
+    { value: 'bank_fee', label: 'Bank Fee' },
+    { value: 'processing_fee', label: 'Processing Fee' },
+    { value: 'wire_fee', label: 'Wire Fee' },
+  ],
+  conversion: [
+    { value: 'fx_conversion', label: 'FX Conversion' },
+    { value: 'internal_transfer', label: 'Internal Transfer' },
+  ],
+  refund: [
+    { value: 'client_refund', label: 'Client Refund' },
+    { value: 'vendor_refund', label: 'Vendor Refund' },
+  ],
   uncategorized: [],
 }
 
@@ -26,6 +92,13 @@ interface TransactionsTabProps {
   initialTotal: number
 }
 
+interface ModalState {
+  tx: OwnerTransaction
+  category: OwnerCategory
+  subcategory: string
+  notes: string
+}
+
 export function TransactionsTab({ year, initialRows, initialTotal }: TransactionsTabProps) {
   const [rows, setRows] = useState<OwnerTransaction[]>(initialRows)
   const [total, setTotal] = useState(initialTotal)
@@ -33,10 +106,8 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
   const [search, setSearch] = useState('')
   const [filterCategory, setFilterCategory] = useState<OwnerCategory | ''>('uncategorized')
   const [offset, setOffset] = useState(0)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editValues, setEditValues] = useState<{ category: OwnerCategory; subcategory: string; notes: string }>({
-    category: 'uncategorized', subcategory: '', notes: '',
-  })
+  const [modal, setModal] = useState<ModalState | null>(null)
+  const [saving, setSaving] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkCategory, setBulkCategory] = useState<OwnerCategory>('expense')
   const [bulkSubcategory, setBulkSubcategory] = useState('')
@@ -61,24 +132,27 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }, [year, filterCategory, search])
 
-  function startEdit(tx: OwnerTransaction) {
-    setEditingId(tx.id)
-    setEditValues({ category: tx.category, subcategory: tx.subcategory ?? '', notes: tx.notes ?? '' })
+  function openModal(tx: OwnerTransaction) {
+    setModal({ tx, category: tx.category, subcategory: tx.subcategory ?? '', notes: tx.notes ?? '' })
   }
 
-  async function saveEdit(id: string) {
+  async function saveModal() {
+    if (!modal) return
+    setSaving(true)
     try {
       const res = await fetch('/api/owner/transactions', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, ...editValues }),
+        body: JSON.stringify({ id: modal.tx.id, category: modal.category, subcategory: modal.subcategory || null, notes: modal.notes || null }),
       })
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed') }
-      setRows(r => r.map(tx => tx.id === id ? { ...tx, ...editValues } : tx))
-      setEditingId(null)
-      toast.success('Saved')
+      toast.success('Categorized')
+      setModal(null)
+      load(offset)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -99,11 +173,82 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
     }
   }
 
-  const reviewed = rows.filter(r => r.category !== 'uncategorized').length
-  const progressPct = total > 0 ? Math.round((reviewed / total) * 100) : 0
+  const uncategorizedCount = rows.filter(r => r.category === 'uncategorized').length
 
   return (
     <div className="space-y-4">
+      {/* Categorize modal */}
+      {modal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={e => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl">
+            <h3 className="mb-1 text-base font-semibold text-zinc-900">Categorize Transaction</h3>
+            <p className="mb-4 text-sm text-zinc-500 truncate">{modal.tx.counterparty ?? modal.tx.description}</p>
+
+            <div className="mb-3 flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-2">
+              <span className="text-sm text-zinc-500">{modal.tx.transaction_date} · {modal.tx.bank_name}</span>
+              <span className={`text-sm font-semibold tabular-nums ${modal.tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {modal.tx.amount < 0 ? '-' : '+'}{fmt(modal.tx.amount)}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-600">Category</label>
+                <select
+                  value={modal.category}
+                  onChange={e => setModal(m => m ? { ...m, category: e.target.value as OwnerCategory, subcategory: '' } : null)}
+                  className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                >
+                  {CATEGORIES.map(c => (
+                    <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>
+                  ))}
+                </select>
+              </div>
+
+              {(SUBCATEGORIES[modal.category] ?? []).length > 0 && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-zinc-600">Subcategory</label>
+                  <select
+                    value={modal.subcategory}
+                    onChange={e => setModal(m => m ? { ...m, subcategory: e.target.value } : null)}
+                    className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                  >
+                    <option value="">— select subcategory —</option>
+                    {SUBCATEGORIES[modal.category].map(s => (
+                      <option key={s.value} value={s.value}>{s.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-600">Notes (optional)</label>
+                <input
+                  value={modal.notes}
+                  onChange={e => setModal(m => m ? { ...m, notes: e.target.value } : null)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveModal() }}
+                  placeholder="Add a note..."
+                  className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setModal(null)} className="rounded-md border border-zinc-200 px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
+                Cancel
+              </button>
+              <button
+                onClick={saveModal}
+                disabled={saving}
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <input
@@ -119,45 +264,41 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
           className="rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
         >
           <option value="">All categories</option>
-          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          {CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>)}
         </select>
         <span className="text-xs text-zinc-500">{total} transactions</span>
+        {filterCategory === 'uncategorized' && uncategorizedCount > 0 && (
+          <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+            {uncategorizedCount} need review
+          </span>
+        )}
       </div>
 
       {/* Bulk action bar */}
       {selected.size > 0 && (
-        <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
+        <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5">
           <span className="text-sm font-medium text-blue-800">{selected.size} selected</span>
           <select
             value={bulkCategory}
-            onChange={e => setBulkCategory(e.target.value as OwnerCategory)}
-            className="rounded border border-blue-200 bg-white px-2 py-1 text-sm"
+            onChange={e => { setBulkCategory(e.target.value as OwnerCategory); setBulkSubcategory('') }}
+            className="rounded border border-blue-200 bg-white px-2 py-1.5 text-sm"
           >
-            {CATEGORIES.filter(c => c !== 'uncategorized').map(c => <option key={c} value={c}>{c}</option>)}
+            {CATEGORIES.filter(c => c !== 'uncategorized').map(c => <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>)}
           </select>
-          <select
-            value={bulkSubcategory}
-            onChange={e => setBulkSubcategory(e.target.value)}
-            className="rounded border border-blue-200 bg-white px-2 py-1 text-sm"
-          >
-            <option value="">— subcategory —</option>
-            {(SUBCATEGORIES[bulkCategory] ?? []).map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-          </select>
-          <button onClick={bulkCategorize} className="rounded bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-700">Apply</button>
+          {(SUBCATEGORIES[bulkCategory] ?? []).length > 0 && (
+            <select
+              value={bulkSubcategory}
+              onChange={e => setBulkSubcategory(e.target.value)}
+              className="rounded border border-blue-200 bg-white px-2 py-1.5 text-sm"
+            >
+              <option value="">— subcategory —</option>
+              {SUBCATEGORIES[bulkCategory].map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+          )}
+          <button onClick={bulkCategorize} className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">
+            Apply to {selected.size}
+          </button>
           <button onClick={() => setSelected(new Set())} className="text-xs text-blue-600 hover:underline">Clear</button>
-        </div>
-      )}
-
-      {/* Progress bar for uncategorized filter */}
-      {filterCategory === 'uncategorized' && total > 0 && (
-        <div className="rounded-lg border border-zinc-200 bg-white p-3">
-          <div className="mb-1 flex justify-between text-xs text-zinc-500">
-            <span>Categorization progress</span>
-            <span>{reviewed} / {total} reviewed ({progressPct}%)</span>
-          </div>
-          <div className="h-2 w-full rounded-full bg-zinc-100">
-            <div className="h-2 rounded-full bg-green-500 transition-all" style={{ width: `${progressPct}%` }} />
-          </div>
         </div>
       )}
 
@@ -166,27 +307,27 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-zinc-100 bg-zinc-50">
-              <th className="w-8 px-3 py-2">
+              <th className="w-8 px-3 py-2.5">
                 <input
                   type="checkbox"
                   checked={selected.size === rows.length && rows.length > 0}
                   onChange={e => setSelected(e.target.checked ? new Set(rows.map(r => r.id)) : new Set())}
                 />
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">Date</th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">Bank</th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">Counterparty / Description</th>
-              <th className="px-3 py-2 text-right text-xs font-medium text-zinc-500">Amount</th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">Category</th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">Subcategory</th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-zinc-500">Notes</th>
-              <th className="px-3 py-2" />
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-zinc-500">Date</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-zinc-500">Bank</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-zinc-500">Counterparty / Description</th>
+              <th className="px-3 py-2.5 text-right text-xs font-medium text-zinc-500">Amount</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-zinc-500">Category</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-zinc-500">Subcategory</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-zinc-500">Notes</th>
+              <th className="px-3 py-2.5" />
             </tr>
           </thead>
           <tbody>
             {rows.map(tx => (
               <tr key={tx.id} className="border-b border-zinc-50 hover:bg-zinc-50">
-                <td className="px-3 py-2">
+                <td className="px-3 py-2.5">
                   <input
                     type="checkbox"
                     checked={selected.has(tx.id)}
@@ -197,71 +338,38 @@ export function TransactionsTab({ year, initialRows, initialTotal }: Transaction
                     }}
                   />
                 </td>
-                <td className="px-3 py-2 text-xs text-zinc-500 whitespace-nowrap">{tx.transaction_date}</td>
-                <td className="px-3 py-2 text-xs text-zinc-400">{tx.bank_name}</td>
-                <td className="px-3 py-2 max-w-[200px]">
+                <td className="px-3 py-2.5 text-xs text-zinc-500 whitespace-nowrap">{tx.transaction_date}</td>
+                <td className="px-3 py-2.5 text-xs text-zinc-400">{tx.bank_name}</td>
+                <td className="px-3 py-2.5 max-w-[200px]">
                   <div className="truncate font-medium text-zinc-800">{tx.counterparty ?? '—'}</div>
                   <div className="truncate text-xs text-zinc-400">{tx.description}</div>
                 </td>
-                <td className={`px-3 py-2 text-right font-mono text-xs font-medium tabular-nums ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                <td className={`px-3 py-2.5 text-right font-mono text-xs font-medium tabular-nums ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                   {tx.amount < 0 ? '-' : '+'}{fmt(tx.amount)}
                 </td>
-                {editingId === tx.id ? (
-                  <>
-                    <td className="px-2 py-1.5">
-                      <select
-                        value={editValues.category}
-                        onChange={e => setEditValues(v => ({ ...v, category: e.target.value as OwnerCategory, subcategory: '' }))}
-                        className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs"
-                        autoFocus
-                      >
-                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <select
-                        value={editValues.subcategory}
-                        onChange={e => setEditValues(v => ({ ...v, subcategory: e.target.value }))}
-                        className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs"
-                      >
-                        <option value="">—</option>
-                        {(SUBCATEGORIES[editValues.category] ?? []).map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <input
-                        value={editValues.notes}
-                        onChange={e => setEditValues(v => ({ ...v, notes: e.target.value }))}
-                        onKeyDown={e => { if (e.key === 'Enter') saveEdit(tx.id); if (e.key === 'Escape') setEditingId(null) }}
-                        className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs"
-                        placeholder="Notes..."
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-1">
-                        <button onClick={() => saveEdit(tx.id)} className="rounded bg-zinc-900 px-2 py-1 text-xs text-white hover:bg-zinc-700">✓</button>
-                        <button onClick={() => setEditingId(null)} className="rounded border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100">✕</button>
-                      </div>
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    <td className="px-3 py-2">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tx.category === 'uncategorized' ? 'bg-orange-100 text-orange-700' : 'bg-zinc-100 text-zinc-600'}`}>
-                        {tx.category}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-zinc-500">{tx.subcategory?.replace(/_/g, ' ') ?? '—'}</td>
-                    <td className="px-3 py-2 text-xs text-zinc-400 max-w-[120px] truncate">{tx.notes ?? ''}</td>
-                    <td className="px-3 py-2">
-                      <button onClick={() => startEdit(tx)} className="rounded border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100">Edit</button>
-                    </td>
-                  </>
-                )}
+                <td className="px-3 py-2.5">
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tx.category === 'uncategorized' ? 'bg-orange-100 text-orange-700' : 'bg-zinc-100 text-zinc-600'}`}>
+                    {CATEGORY_LABELS[tx.category] ?? tx.category}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 text-xs text-zinc-500">{tx.subcategory?.replace(/_/g, ' ') ?? '—'}</td>
+                <td className="px-3 py-2.5 text-xs text-zinc-400 max-w-[120px] truncate">{tx.notes ?? ''}</td>
+                <td className="px-3 py-2.5">
+                  <button
+                    onClick={() => openModal(tx)}
+                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                      tx.category === 'uncategorized'
+                        ? 'bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200'
+                        : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                    }`}
+                  >
+                    {tx.category === 'uncategorized' ? 'Categorize ↗' : 'Edit'}
+                  </button>
+                </td>
               </tr>
             ))}
             {loading && (
-              <tr><td colSpan={9} className="px-3 py-4 text-center text-sm text-zinc-400">Loading...</td></tr>
+              <tr><td colSpan={9} className="px-3 py-4 text-center text-sm text-zinc-400">Loading…</td></tr>
             )}
             {!loading && rows.length === 0 && (
               <tr><td colSpan={9} className="px-3 py-4 text-center text-sm text-zinc-400">No transactions found.</td></tr>
