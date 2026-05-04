@@ -26,8 +26,10 @@ export default async function GenerateDocumentsPage() {
 
   const locale = getLocale(user)
 
-  // Load account details and members in parallel
-  const [accountDetail, members, historyResult] = await Promise.all([
+  // Load account details, members, and history in parallel.
+  // Also fetch the contact as fallback for accounts without members table rows
+  // (older clients formed before April 2026).
+  const [accountDetail, members, historyResult, contactResult] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalMembers(selectedAccountId),
     supabaseAdmin
@@ -36,9 +38,29 @@ export default async function GenerateDocumentsPage() {
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(20),
+    supabaseAdmin
+      .from('contacts')
+      .select('first_name, last_name')
+      .eq('id', contactId)
+      .single(),
   ])
 
   if (!accountDetail) redirect('/portal')
+
+  const rawMembers = members || []
+  const mappedMembers = rawMembers.length > 0
+    ? rawMembers.map(m => ({
+        fullName: `${m.first_name} ${m.last_name}`.trim(),
+        role: m.role || 'owner',
+        ownershipPct: m.ownership_pct ?? null,
+      }))
+    : contactResult.data
+      ? [{
+          fullName: `${contactResult.data.first_name ?? ''} ${contactResult.data.last_name ?? ''}`.trim() || 'N/A',
+          role: 'owner',
+          ownershipPct: null,
+        }]
+      : []
 
   return (
     <GenerateDocumentsClient
@@ -52,11 +74,7 @@ export default async function GenerateDocumentsPage() {
         logoUrl: accountDetail.invoice_logo_url,
         entityType: accountDetail.entity_type,
       }}
-      members={(members || []).map(m => ({
-        fullName: `${m.first_name} ${m.last_name}`.trim(),
-        role: m.role || 'owner',
-        ownershipPct: m.ownership_pct ?? null,
-      }))}
+      members={mappedMembers}
       history={historyResult.data || []}
       locale={locale}
     />
