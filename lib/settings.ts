@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
  *  where it's consumed. */
 export type AppSettingKey =
   | "tax_season_paused" // boolean — when true, Tax Return banner + wizard + intake are gated.
+  | "renewal_banner_min_year" // number — minimum agreement_year for the portal renewal-MSA banner to show. Default 2027 (hides 2026 in purgatory). Bump higher to hide future years too.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,
@@ -47,4 +48,13 @@ export async function setAppSetting(
 export async function isTaxSeasonPaused(): Promise<boolean> {
   const v = await getAppSetting<boolean>("tax_season_paused", false)
   return v === true
+}
+
+/** Minimum agreement_year for the portal renewal-MSA banner to render.
+ *  Default 2027: hides 2026 banner during the legacy-payment purgatory year.
+ *  Antonio can override via Dev Tools → "Renewal banner min year". */
+export async function getRenewalBannerMinYear(): Promise<number> {
+  const v = await getAppSetting<number>("renewal_banner_min_year", 2027)
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : 2027
 }

@@ -25,6 +25,7 @@ import { AnnouncementBanners, type PortalAnnouncement } from '@/components/porta
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
+import { getRenewalBannerMinYear } from '@/lib/settings'
 
 function formatEin(ein: string | null): string {
   if (!ein) return '\u2014'
@@ -370,6 +371,13 @@ export default async function PortalDashboardPage() {
     )
   }
 
+  // Renewal-banner gate: show only when current calendar year >= app_settings
+  // 'renewal_banner_min_year' (default 2027). Hides 2026 banner during legacy
+  // payment purgatory; Antonio bumps higher in Dev Tools to extend the hide.
+  const renewalBannerMinYear = await getRenewalBannerMinYear()
+  const currentYear = new Date().getUTCFullYear()
+  const renewalBannerEnabled = currentYear >= renewalBannerMinYear
+
   // Fetch all data in parallel
   const [account, services, deadlines, payments, taxReturns, members, actionItems, profileBanner, renewalOffer] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
@@ -381,16 +389,19 @@ export default async function PortalDashboardPage() {
     getPortalActionItems(selectedAccountId, contactId || undefined),
     contactId ? getProfileBannerStatus(contactId) : Promise.resolve({ shouldShow: false, missingFields: [] as string[] }),
     // Unsigned annual agreement for active clients — shown as a banner until signed
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabaseAdmin as any)
-      .from('annual_agreements')
-      .select('token')
-      .eq('account_id', selectedAccountId)
-      .eq('agreement_year', new Date().getUTCFullYear())
-      .not('status', 'in', '("signed","completed","expired")')
-      .limit(1)
-      .maybeSingle()
-      .then((r: { data: { token: string } | null }) => r.data ?? null) as Promise<{ token: string } | null>,
+    // Skipped entirely when the year-gate is closed (renewalBannerEnabled=false).
+    !renewalBannerEnabled
+      ? Promise.resolve(null)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      : (supabaseAdmin as any)
+          .from('annual_agreements')
+          .select('token')
+          .eq('account_id', selectedAccountId)
+          .eq('agreement_year', currentYear)
+          .not('status', 'in', '("signed","completed","expired")')
+          .limit(1)
+          .maybeSingle()
+          .then((r: { data: { token: string } | null }) => r.data ?? null) as Promise<{ token: string } | null>,
   ])
   // Pending member info request — separate to avoid TypeScript tuple depth limit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

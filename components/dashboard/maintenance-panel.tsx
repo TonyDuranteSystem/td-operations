@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Wrench, Loader2, AlertTriangle, Banknote } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff } from 'lucide-react'
 
 type Result =
   | { kind: 'ok'; message: string }
@@ -10,6 +10,44 @@ type Result =
 export function MaintenancePanel() {
   const [airwallexLoading, setAirwallexLoading] = useState(false)
   const [airwallexResult, setAirwallexResult] = useState<Result | null>(null)
+
+  // Renewal-banner gate (app_settings.renewal_banner_min_year)
+  const [bannerYear, setBannerYear] = useState<string>('')
+  const [bannerLoaded, setBannerLoaded] = useState(false)
+  const [bannerSaving, setBannerSaving] = useState(false)
+  const [bannerResult, setBannerResult] = useState<Result | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/admin/renewal-banner-year')
+      .then(r => r.json())
+      .then(d => { if (!cancelled && typeof d.value === 'number') setBannerYear(String(d.value)) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setBannerLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleSaveBannerYear = async () => {
+    setBannerSaving(true)
+    setBannerResult(null)
+    try {
+      const res = await fetch('/api/admin/renewal-banner-year', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: Number(bannerYear) }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setBannerResult({ kind: 'error', message: data.error || 'Save failed' })
+      } else {
+        setBannerResult({ kind: 'ok', message: `Saved — banner shows only for agreement_year ≥ ${data.value}` })
+      }
+    } catch (err) {
+      setBannerResult({ kind: 'error', message: err instanceof Error ? err.message : 'Network error' })
+    } finally {
+      setBannerSaving(false)
+    }
+  }
 
   const handleAirwallexBackfill = async () => {
     setAirwallexLoading(true)
@@ -80,6 +118,46 @@ export function MaintenancePanel() {
         <div className="flex items-start gap-1.5 text-[10px] text-muted-foreground">
           <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
           <span>Backfill writes to td_bank_feeds via upsert on external_id — re-running won&apos;t duplicate rows.</span>
+        </div>
+
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <EyeOff className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Renewal banner gate</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            Portal renewal-MSA banner only renders when the current year is ≥ this value.
+            Default 2027 (hides 2026 during legacy-payment purgatory). Bump higher to extend the hide.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={2025}
+              max={2100}
+              value={bannerYear}
+              onChange={(e) => setBannerYear(e.target.value)}
+              disabled={!bannerLoaded || bannerSaving}
+              className="flex-1 px-2.5 py-1.5 text-xs border border-blue-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              placeholder="2027"
+            />
+            <button
+              onClick={handleSaveBannerYear}
+              disabled={!bannerLoaded || bannerSaving || !bannerYear}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              {bannerSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Save
+            </button>
+          </div>
+          {bannerResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              bannerResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {bannerResult.message}
+            </div>
+          )}
         </div>
       </div>
     </div>
