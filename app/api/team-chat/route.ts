@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isDashboardUser, isAdmin, isClient, getUserDisplayName } from '@/lib/auth'
+import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import type { ChatAttachment } from '@/lib/types'
 
@@ -97,11 +97,19 @@ export async function GET() {
     .neq('sender_id', user.id)
     .is('seen_at', null)
 
-  // Fetch all team members except the current user for the sound picker
-  const { data: { users: allUsers } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 200 })
-  const teamMembers = (allUsers ?? [])
-    .filter(u => u.id !== user.id && !isClient(u))
-    .map(u => ({ id: u.id, name: getUserDisplayName(u) }))
+  // Fetch team members from push subscriptions — distinct user_ids other than self
+  const { data: pushSubs } = await supabaseAdmin
+    .from('admin_push_subscriptions')
+    .select('user_id')
+    .neq('user_id', user.id)
+
+  const distinctIds = Array.from(new Set((pushSubs ?? []).map(s => s.user_id).filter(Boolean) as string[]))
+  const memberResults = await Promise.all(
+    distinctIds.map(uid => supabaseAdmin.auth.admin.getUserById(uid))
+  )
+  const teamMembers = memberResults
+    .filter(r => r.data?.user)
+    .map(r => ({ id: r.data.user!.id, name: getUserDisplayName(r.data.user!) }))
 
   return NextResponse.json({
     thread_id: thread.id,
