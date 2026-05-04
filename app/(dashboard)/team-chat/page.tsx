@@ -100,6 +100,8 @@ export default function TeamChatPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Ref keeps the realtime closure from capturing a stale currentUserId
+  const currentUserIdRef = useRef<string | null>(null)
   const { playSenderSound, previewSound } = useNotificationSound()
 
   const { isRecording, isTranscribing, startRecording, stopRecording, isSupported: voiceSupported } =
@@ -117,6 +119,9 @@ export default function TeamChatPage() {
   useEffect(() => {
     setIsMobile(window.matchMedia('(pointer: coarse)').matches)
   }, [])
+
+  // Keep ref in sync so the realtime closure always sees the current user
+  useEffect(() => { currentUserIdRef.current = currentUserId }, [currentUserId])
 
   // Load per-sender sound preferences from localStorage
   useEffect(() => {
@@ -183,7 +188,7 @@ export default function TeamChatPage() {
           if (prev.some(m => m.id === msg.id)) return prev
           return [...prev, { ...msg, reply_to_preview: null }]
         })
-        if (msg.sender_id !== currentUserId) {
+        if (msg.sender_id !== currentUserIdRef.current) {
           playSenderSound(msg.sender_id)
           // Mark as seen (fire and forget)
           fetch(`/api/internal/threads/${threadId}`, { method: 'GET' }).catch(() => {})
@@ -196,7 +201,7 @@ export default function TeamChatPage() {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [threadId, currentUserId, playSenderSound])
+  }, [threadId, playSenderSound])
 
   // Scroll on new messages
   useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])

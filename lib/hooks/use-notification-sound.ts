@@ -2,7 +2,17 @@
 
 import { useCallback, useRef } from "react"
 
-type Tone = { freq: number; start: number; dur: number }
+// Musical frequencies (equal temperament, A4=440Hz)
+// C4=261.6  E4=329.6  G4=392  A4=440
+// C5=523.3  E5=659.3  G5=784  A5=880
+// C6=1046.5 E6=1318.5
+
+type Tone = {
+  freq: number   // Hz
+  start: number  // seconds from note onset
+  dur: number    // total envelope duration in seconds
+  vol?: number   // relative volume (default 1.0)
+}
 
 export type Sound = { id: string; label: string; tones: Tone[] }
 
@@ -12,52 +22,87 @@ export const SOUND_LIBRARY: Sound[] = [
   {
     id: 'chime',
     label: 'Chime',
-    tones: [{ freq: 880, start: 0, dur: 0.12 }, { freq: 1100, start: 0.15, dur: 0.18 }],
+    // G5 → C6: ascending perfect 4th, like wind chimes
+    tones: [{ freq: 784, start: 0, dur: 0.5 }, { freq: 1046.5, start: 0.12, dur: 0.5 }],
   },
   {
     id: 'ping',
     label: 'Ping',
-    tones: [{ freq: 1200, start: 0, dur: 0.15 }],
+    // Clean single A5 with natural decay
+    tones: [{ freq: 880, start: 0, dur: 0.45 }],
   },
   {
     id: 'double',
     label: 'Double',
-    tones: [{ freq: 900, start: 0, dur: 0.08 }, { freq: 1100, start: 0.12, dur: 0.1 }],
-  },
-  {
-    id: 'bubble',
-    label: 'Bubble',
-    tones: [{ freq: 600, start: 0, dur: 0.05 }, { freq: 900, start: 0.05, dur: 0.08 }, { freq: 1200, start: 0.13, dur: 0.07 }],
-  },
-  {
-    id: 'bell',
-    label: 'Bell',
-    tones: [{ freq: 523, start: 0, dur: 0.35 }],
-  },
-  {
-    id: 'pop',
-    label: 'Pop',
-    tones: [{ freq: 400, start: 0, dur: 0.04 }, { freq: 800, start: 0.05, dur: 0.06 }],
-  },
-  {
-    id: 'drop',
-    label: 'Drop',
-    tones: [{ freq: 1100, start: 0, dur: 0.08 }, { freq: 800, start: 0.1, dur: 0.1 }, { freq: 500, start: 0.22, dur: 0.12 }],
+    // E5 → A5: rising perfect 4th
+    tones: [{ freq: 659.3, start: 0, dur: 0.28 }, { freq: 880, start: 0.2, dur: 0.35 }],
   },
   {
     id: 'triple',
     label: 'Triple',
-    tones: [{ freq: 700, start: 0, dur: 0.06 }, { freq: 700, start: 0.1, dur: 0.06 }, { freq: 1000, start: 0.2, dur: 0.08 }],
+    // C5 → E5 → G5 major arpeggio
+    tones: [
+      { freq: 523.3, start: 0, dur: 0.22 },
+      { freq: 659.3, start: 0.15, dur: 0.22 },
+      { freq: 784, start: 0.3, dur: 0.3 },
+    ],
   },
   {
-    id: 'ding',
-    label: 'Ding',
-    tones: [{ freq: 660, start: 0, dur: 0.18 }, { freq: 1320, start: 0.2, dur: 0.12 }],
+    id: 'bubble',
+    label: 'Bubble',
+    // Fast ascending C5→E5→G5→C6 like bubbles rising
+    tones: [
+      { freq: 523.3, start: 0, dur: 0.18 },
+      { freq: 659.3, start: 0.1, dur: 0.18 },
+      { freq: 784, start: 0.2, dur: 0.18 },
+      { freq: 1046.5, start: 0.3, dur: 0.25 },
+    ],
+  },
+  {
+    id: 'bell',
+    label: 'Bell',
+    // C5 sustained with soft A5 harmonic (bell-like)
+    tones: [
+      { freq: 523.3, start: 0, dur: 0.8 },
+      { freq: 880, start: 0, dur: 0.4, vol: 0.35 },
+    ],
   },
   {
     id: 'soft',
     label: 'Soft',
-    tones: [{ freq: 440, start: 0, dur: 0.22 }, { freq: 550, start: 0.25, dur: 0.15 }],
+    // A4 + E5 perfect 5th chord, very gentle
+    tones: [
+      { freq: 440, start: 0, dur: 0.55 },
+      { freq: 659.3, start: 0, dur: 0.55, vol: 0.5 },
+    ],
+  },
+  {
+    id: 'ding',
+    label: 'Ding',
+    // E5 with bright E6 octave — classic doorbell feel
+    tones: [
+      { freq: 659.3, start: 0, dur: 0.6 },
+      { freq: 1318.5, start: 0.02, dur: 0.35, vol: 0.45 },
+    ],
+  },
+  {
+    id: 'drop',
+    label: 'Drop',
+    // A5 → E5 → A4 descending
+    tones: [
+      { freq: 880, start: 0, dur: 0.22 },
+      { freq: 659.3, start: 0.2, dur: 0.25 },
+      { freq: 440, start: 0.4, dur: 0.3 },
+    ],
+  },
+  {
+    id: 'pop',
+    label: 'Pop',
+    // Short G5 burst with quick A5 follow — like a notification pop
+    tones: [
+      { freq: 784, start: 0, dur: 0.12 },
+      { freq: 880, start: 0.09, dur: 0.2 },
+    ],
   },
 ]
 
@@ -86,20 +131,26 @@ export function setSenderSoundId(senderId: string, soundId: string): void {
   localStorage.setItem(`tc-sound-${senderId}`, soundId)
 }
 
-function runTones(ctx: AudioContext, tones: Tone[], volume = 0.3): void {
+// Per-tone ADSR: fast linear attack → exponential release
+function runTones(ctx: AudioContext, tones: Tone[], masterVol = 0.22): void {
   const now = ctx.currentTime
-  const totalDur = Math.max(...tones.map(t => t.start + t.dur)) + 0.05
-  const gain = ctx.createGain()
-  gain.gain.setValueAtTime(volume, now)
-  gain.gain.exponentialRampToValueAtTime(0.01, now + totalDur)
-  gain.connect(ctx.destination)
+
   for (const tone of tones) {
+    const t0 = now + tone.start
+    const vol = masterVol * (tone.vol ?? 1.0)
+
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(0.0001, t0)
+    gain.gain.linearRampToValueAtTime(vol, t0 + 0.01)           // 10ms attack
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + tone.dur) // exponential release
+    gain.connect(ctx.destination)
+
     const osc = ctx.createOscillator()
     osc.type = 'sine'
-    osc.frequency.setValueAtTime(tone.freq, now + tone.start)
+    osc.frequency.setValueAtTime(tone.freq, t0)
     osc.connect(gain)
-    osc.start(now + tone.start)
-    osc.stop(now + tone.start + tone.dur)
+    osc.start(t0)
+    osc.stop(t0 + tone.dur + 0.02)
   }
 }
 
@@ -120,13 +171,9 @@ export function useNotificationSound() {
     if (ctx.state === 'suspended') { ctx.resume().then(doPlay) } else { doPlay() }
   }, [getContext])
 
-  const previewSound = useCallback((soundId: string) => {
-    play(soundId)
-  }, [play])
+  const previewSound = useCallback((soundId: string) => { play(soundId) }, [play])
 
-  const playSound = useCallback(() => {
-    play(SOUND_LIBRARY[0].id)
-  }, [play])
+  const playSound = useCallback(() => { play(SOUND_LIBRARY[0].id) }, [play])
 
   const playSenderSound = useCallback((senderId: string) => {
     const stored = getSenderSoundId(senderId)
