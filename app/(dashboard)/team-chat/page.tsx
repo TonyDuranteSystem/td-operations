@@ -100,6 +100,7 @@ export default function TeamChatPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const currentUserIdRef = useRef<string | null>(null)
   const { playSenderSound, previewSound } = useNotificationSound()
 
   const { isRecording, isTranscribing, startRecording, stopRecording, isSupported: voiceSupported } =
@@ -160,6 +161,7 @@ export default function TeamChatPage() {
       .then(data => {
         setThreadId(data.thread_id)
         setCurrentUserId(data.current_user_id)
+        currentUserIdRef.current = data.current_user_id
         setCurrentUserIsAdmin(data.is_admin ?? false)
         setMessages(data.messages)
       })
@@ -184,14 +186,12 @@ export default function TeamChatPage() {
           if (prev.some(m => m.id === msg.id)) return prev
           return [...prev, { ...msg, reply_to_preview: null }]
         })
-        // Use session directly — avoids any React state/ref timing issues
-        supabase.auth.getSession().then(({ data: { session } }) => {
-          if (session?.user && msg.sender_id !== session.user.id) {
-            playSenderSound(msg.sender_id)
-            // Mark as seen (fire and forget)
-            fetch(`/api/internal/threads/${threadId}`, { method: 'GET' }).catch(() => {})
-          }
-        })
+        // currentUserIdRef is set synchronously on initial load — no async needed
+        if (currentUserIdRef.current && msg.sender_id !== currentUserIdRef.current) {
+          playSenderSound(msg.sender_id)
+          // Mark as seen (fire and forget)
+          fetch(`/api/internal/threads/${threadId}`, { method: 'GET' }).catch(() => {})
+        }
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'internal_messages', filter: `thread_id=eq.${threadId}` }, (payload) => {
         const updated = payload.new as InternalMsg
