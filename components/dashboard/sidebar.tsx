@@ -97,6 +97,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, and financial overview. Create and manage client billing.' },
+  { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
