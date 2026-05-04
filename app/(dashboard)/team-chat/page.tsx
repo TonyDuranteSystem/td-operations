@@ -94,7 +94,6 @@ export default function TeamChatPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [showSoundSettings, setShowSoundSettings] = useState(false)
   const [senderSounds, setSenderSounds] = useState<Record<string, string>>({})
-  const [teamMembers, setTeamMembers] = useState<Array<{ id: string; name: string }>>([])
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -119,16 +118,18 @@ export default function TeamChatPage() {
     setIsMobile(window.matchMedia('(pointer: coarse)').matches)
   }, [])
 
-  // Load per-sender sound preferences from localStorage whenever team members are known
+  // Load per-sender sound prefs from localStorage when we first know who the other senders are
   useEffect(() => {
-    if (teamMembers.length === 0) return
+    if (!currentUserId || messages.length === 0) return
+    const senderIds = Array.from(new Set(messages.filter(m => m.sender_id !== currentUserId).map(m => m.sender_id)))
+    if (senderIds.length === 0) return
     const sounds: Record<string, string> = {}
-    for (const m of teamMembers) {
-      const stored = getSenderSoundId(m.id)
-      sounds[m.id] = stored ?? ''
+    for (const id of senderIds) {
+      sounds[id] = getSenderSoundId(id) ?? ''
     }
     setSenderSounds(sounds)
-  }, [teamMembers])
+  }, [currentUserId, messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // Auto-grow textarea
   useEffect(() => {
@@ -161,7 +162,6 @@ export default function TeamChatPage() {
         setCurrentUserId(data.current_user_id)
         setCurrentUserIsAdmin(data.is_admin ?? false)
         setMessages(data.messages)
-        setTeamMembers(data.members ?? [])
       })
       .catch(() => toast.error('Failed to load team chat'))
       .finally(() => setLoading(false))
@@ -329,6 +329,15 @@ export default function TeamChatPage() {
     }
   }
 
+  // Members for the sound picker — derived directly from message history (no API needed)
+  const pickerMembers = Array.from(
+    new Map(
+      messages
+        .filter(m => m.sender_id !== currentUserId && m.sender_id)
+        .map(m => [m.sender_id, m.sender_name])
+    ).entries()
+  ).map(([id, name]) => ({ id, name }))
+
   // For read receipt: find last message sent by me
   const lastSentMsgId = [...messages].reverse().find(m => m.sender_id === currentUserId && !m.deleted_at)?.id
 
@@ -353,7 +362,7 @@ export default function TeamChatPage() {
             <p className="text-xs text-zinc-500">Internal — not visible to clients</p>
           </div>
         </div>
-        {teamMembers.length > 0 && (
+        {!loading && (
           <button
             onClick={() => setShowSoundSettings(v => !v)}
             className={cn(
@@ -368,11 +377,14 @@ export default function TeamChatPage() {
       </div>
 
       {/* Sound settings panel */}
-      {showSoundSettings && teamMembers.length > 0 && (
+      {showSoundSettings && (
         <div className="shrink-0 px-4 py-3 border-b border-zinc-100 bg-zinc-50">
           <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-3">Notification sounds</p>
+          {pickerMembers.length === 0 ? (
+            <p className="text-xs text-zinc-400">No team messages yet — sounds will appear here once a teammate writes.</p>
+          ) : (
           <div className="flex flex-col gap-3">
-            {teamMembers.map(({ id, name }) => {
+            {pickerMembers.map(({ id, name }) => {
               const currentSoundId = senderSounds[id] ?? ''
               return (
                 <div key={id} className="flex items-start gap-3">
@@ -420,6 +432,7 @@ export default function TeamChatPage() {
               )
             })}
           </div>
+          )}
         </div>
       )}
 

@@ -97,26 +97,11 @@ export async function GET() {
     .neq('sender_id', user.id)
     .is('seen_at', null)
 
-  // Fetch team members from push subscriptions — distinct user_ids other than self
-  const { data: pushSubs } = await supabaseAdmin
-    .from('admin_push_subscriptions')
-    .select('user_id')
-    .neq('user_id', user.id)
-
-  const distinctIds = Array.from(new Set((pushSubs ?? []).map(s => s.user_id).filter(Boolean) as string[]))
-  const memberResults = await Promise.all(
-    distinctIds.map(uid => supabaseAdmin.auth.admin.getUserById(uid))
-  )
-  const teamMembers = memberResults
-    .filter(r => r.data?.user)
-    .map(r => ({ id: r.data.user!.id, name: getUserDisplayName(r.data.user!) }))
-
   return NextResponse.json({
     thread_id: thread.id,
     current_user_id: user.id,
     current_user_name: getUserDisplayName(user),
     is_admin: isAdmin(user),
     messages: enriched,
-    members: teamMembers,
   })
 }
