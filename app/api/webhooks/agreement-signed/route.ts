@@ -34,12 +34,42 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Agreement not found" }, { status: 404 })
     }
 
-    if (agreement.status !== "signed") {
-      return NextResponse.json({ error: "Agreement not signed" }, { status: 403 })
-    }
-
     if (!agreement.account_id) {
       return NextResponse.json({ error: "Agreement has no account_id" }, { status: 400 })
+    }
+
+    // Precondition: a `contracts` row must already exist for this token. The
+    // renewal-agreement client component inserts the signed PDF + contracts
+    // row BEFORE calling this webhook, so the contracts row is the
+    // signature-of-record.
+    //
+    // Why not check `annual_agreements.status === 'signed'` (the prior
+    // precondition)? Production RLS on `annual_agreements` allows reads but
+    // NOT writes from the public anon role used by the contract page. So
+    // the client-side `update({status:'signed'})` silently fails (RLS
+    // filters the row), the agreement stays at 'draft', and the prior
+    // precondition rejected every legitimate signing. Switching to the
+    // contracts-existence check matches the actual signature-of-record
+    // and works regardless of who can write annual_agreements.
+    const { count: contractCount } = await supabaseAdmin
+      .from("contracts")
+      .select("id", { count: "exact", head: true })
+      .eq("offer_token", agreement.token)
+    if (!contractCount || contractCount === 0) {
+      return NextResponse.json(
+        { error: "No signed contract found for this agreement token" },
+        { status: 403 },
+      )
+    }
+
+    // Flip annual_agreements to signed via service_role (bypasses RLS).
+    // Idempotent — no-op if already signed/completed.
+    if (agreement.status !== "signed" && agreement.status !== "completed") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabaseAdmin as any)
+        .from("annual_agreements")
+        .update({ status: "signed", signed_at: new Date().toISOString() })
+        .eq("token", agreement_token)
     }
 
     const year: number = agreement.agreement_year
