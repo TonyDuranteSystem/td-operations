@@ -62,7 +62,7 @@ export function OwnerDashboard({
           onChange={e => router.push(`${pathname}?tab=${currentTab}&year=${e.target.value}`)}
           className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700"
         >
-          {[2025, 2024, 2023].map(y => (
+          {[2026, 2025, 2024, 2023].map(y => (
             <option key={y} value={y}>{y}</option>
           ))}
         </select>
