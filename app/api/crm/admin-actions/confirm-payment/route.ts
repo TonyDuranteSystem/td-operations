@@ -20,7 +20,6 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
-import { PAYMENT_STATUS } from "@/lib/constants"
 import { INTERNAL_BASE_URL } from "@/lib/config"
 
 interface ConfirmPaymentBody {
@@ -251,8 +250,9 @@ export async function POST(request: Request) {
     }
 
     // 5. Create payment record
-    // Find account_id if a contact already exists for this lead
+    // Find contact + account if either already exists for this lead
     let accountId: string | null = null
+    let contactId: string | null = null
     if (lead.email) {
       const { data: contact } = await supabaseAdmin
         .from("contacts")
@@ -262,6 +262,7 @@ export async function POST(request: Request) {
         .maybeSingle()
 
       if (contact) {
+        contactId = contact.id
         const { data: ac } = await supabaseAdmin
           .from("account_contacts")
           .select("account_id")
@@ -272,46 +273,49 @@ export async function POST(request: Request) {
       }
     }
 
-    // Skip the raw payments insert when an existing draft invoice is linked
-    // to the activation. activate-service (called below) flips that draft to
-    // Paid via syncInvoiceStatus('payment', ...), which is the canonical path.
-    // Inserting here would create a duplicate Paid row with no invoice_number
-    // and no client_expenses mirror.
+    // Skip when an existing draft invoice is already linked to the activation
+    // (offer-signed created it). activate-service flips that draft to Paid via
+    // syncInvoiceStatus('payment', ...) — the canonical path. Doing anything
+    // here would create a duplicate Paid row.
     //
-    // For Mode 2 (legacy lead, no offer, no draft) we keep the raw insert as
-    // a fallback record. Replacing it with createTDInvoice is tracked for the
-    // PR 1 architecture pass (sysdoc 'ops-2026-05-03-formation-architecture-decision-and-plan'
-    // Step 8).
+    // For Mode 2 (legacy lead, no offer, no draft) we route through
+    // createTDInvoice — the same canonical helper used by offer-signed and
+    // every other invoice creation path. This produces a proper invoice with
+    // an invoice_number, the client_expenses mirror, and an idempotency_key
+    // tied to (lead_id + payment_date + amount) so retrying the button does
+    // not double-charge or double-record.
     if (!existingActivation?.portal_invoice_id) {
-      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.insert; extract to lib/operations/payment.ts per dev_task 98484283
-      const { error: paymentErr } = await supabaseAdmin
-        .from("payments")
-        .insert({
-          account_id: accountId,
-          description: `${contract_type} - ${lead.full_name} (admin confirmed)`,
-          amount,
-          amount_currency: currency,
+      try {
+        const { createTDInvoice } = await import("@/lib/portal/td-invoice")
+        const paidDate = payment_date || new Date().toISOString().split("T")[0]
+        const noteParts = [
+          payment_reference ? `Ref: ${payment_reference}` : null,
+          paid_by_name ? `Paid by: ${paid_by_name}` : null,
+          `Admin-confirmed payment for legacy lead.`,
+        ].filter(Boolean)
+        await createTDInvoice({
+          account_id: accountId || undefined,
+          contact_id: contactId || undefined,
+          line_items: [{
+            description: `${contract_type} - ${lead.full_name} (admin confirmed)`,
+            unit_price: amount,
+            quantity: 1,
+          }],
+          currency,
+          mark_as_paid: true,
+          paid_date: paidDate,
           payment_method: payment_method || "wire",
-          paid_date: payment_date || new Date().toISOString().split("T")[0],
-          status: "Paid" satisfies (typeof PAYMENT_STATUS)[number],
-          notes: [
-            payment_reference ? `Ref: ${payment_reference}` : null,
-            paid_by_name ? `Paid by: ${paid_by_name}` : null,
-          ].filter(Boolean).join(". ") || undefined,
-          paid_by_name: paid_by_name || null,
-          is_test: lead.is_test || false,
+          notes: noteParts.join(". "),
+          idempotency_key: `manual-confirm-payment:${lead_id}:${paidDate}:${amount}`,
         })
-
-      if (paymentErr) {
-        console.error("[confirm-payment] Payment insert error:", paymentErr.message)
-        // Continue anyway — payment record is secondary, activation is critical
-        // But log it so admin knows
+      } catch (invErr) {
+        console.error("[confirm-payment] createTDInvoice failed:", invErr)
         logAction({
           actor: "crm-admin",
           action_type: "error",
           table_name: "payments",
-          summary: `Payment record failed for ${lead.full_name}: ${paymentErr.message}`,
-          details: { lead_id, error: paymentErr.message },
+          summary: `Invoice creation failed for ${lead.full_name}: ${invErr instanceof Error ? invErr.message : String(invErr)}`,
+          details: { lead_id, error: invErr instanceof Error ? invErr.message : String(invErr) },
         })
       }
     }
@@ -345,6 +349,68 @@ export async function POST(request: Request) {
       activationResult = { error: err instanceof Error ? err.message : String(err) }
     }
 
+    // 7b. Bank-feed linker (PR 1 Step 7) — wire-only, single-match.
+    // After activate-service runs successfully and the invoice is marked Paid,
+    // try to attach the unmatched bank feed row to that invoice. Avoids the
+    // manual "go to bank-feed UI and click Match" step for the common case.
+    //
+    // Conservative rules: only fire for wire payments, only link when exactly
+    // one feed matches (amount within 5%, name fuzzy match on client_name's
+    // first word, transaction_date within ±30 days of payment_date). Anything
+    // ambiguous stays unmatched and is handled by the existing bank-feed UI.
+    let feedLinkResult: { linked: boolean; feed_id?: string; reason?: string } | null = null
+    const isWire = (payment_method || "").toLowerCase() === "wire" || (payment_method || "").toLowerCase() === "bank_transfer"
+    const activationOkInline = activationResult && !activationResult.error
+    if (isWire && activationOkInline && existingActivation?.portal_invoice_id) {
+      try {
+        const paymentDateStr = payment_date || new Date().toISOString().split("T")[0]
+        const paymentDateObj = new Date(paymentDateStr)
+        const fromDate = new Date(paymentDateObj.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+        const toDate = new Date(paymentDateObj.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+        const tolerance = amount * 0.05
+        const minAmount = amount - tolerance
+        const maxAmount = amount + tolerance
+        const clientFirstWord = (lead.full_name || "").split(/\s+/)[0]?.toLowerCase() || ""
+
+        const { data: candidates } = await supabaseAdmin
+          .from("td_bank_feeds")
+          .select("id, amount, sender_name, sender_reference, memo, transaction_date")
+          .eq("status", "unmatched")
+          .gte("transaction_date", fromDate)
+          .lte("transaction_date", toDate)
+          .gte("amount", minAmount)
+          .lte("amount", maxAmount)
+
+        const matches = (candidates || []).filter(c => {
+          if (!clientFirstWord) return false
+          const haystack = `${c.sender_name || ""} ${c.sender_reference || ""} ${c.memo || ""}`.toLowerCase()
+          return haystack.includes(clientFirstWord)
+        })
+
+        if (matches.length === 1) {
+          const feed = matches[0]
+          await supabaseAdmin
+            .from("td_bank_feeds")
+            .update({
+              status: "matched",
+              matched_payment_id: existingActivation.portal_invoice_id,
+              matched_by: "confirm_payment_auto",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", feed.id)
+            .eq("status", "unmatched")
+          feedLinkResult = { linked: true, feed_id: feed.id }
+        } else if (matches.length === 0) {
+          feedLinkResult = { linked: false, reason: "no candidate feed matched amount + name + date window" }
+        } else {
+          feedLinkResult = { linked: false, reason: `${matches.length} candidate feeds matched — manual review required` }
+        }
+      } catch (linkerErr) {
+        console.error("[confirm-payment] bank-feed linker failed:", linkerErr)
+        feedLinkResult = { linked: false, reason: linkerErr instanceof Error ? linkerErr.message : "unknown error" }
+      }
+    }
+
     // 8. Log to action_log
     logAction({
       actor: "crm-admin",
@@ -366,6 +432,7 @@ export async function POST(request: Request) {
         bundled_pipelines,
         reason,
         activation_result: activationResult,
+        feed_link_result: feedLinkResult,
         admin_email: user?.email,
       },
     })
@@ -379,6 +446,7 @@ export async function POST(request: Request) {
       activation_id: activationId,
       activation_result: activationResult,
       activation_ok: activationOk,
+      feed_link_result: feedLinkResult,
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

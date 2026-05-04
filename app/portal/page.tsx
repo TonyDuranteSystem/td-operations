@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus, getFormationAccount } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus, getFormationAccount, getFormationContext } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -127,9 +127,17 @@ export default async function PortalDashboardPage() {
       }
     }
 
-    // Formation tier with no Active/Suspended account: the client has a
-    // 'Pending Formation' account (excluded from getPortalAccounts) — render
-    // the formation-specific dashboard with full progress tracking.
+    // Formation tier with no Active/Suspended account.
+    //
+    // Two modes:
+    //   1. Legacy: a 'Pending Formation' placeholder account exists from the
+    //      old activate-service flow (excluded from getPortalAccounts which
+    //      only returns Active/Suspended). Query progress by account_id.
+    //   2. Post-PR1 (Antonio's model): no account exists at all until Articles
+    //      of Organization arrive in Drive. Query progress by contact_id.
+    //
+    // Either way we render the same FormationDashboard. The component already
+    // accepts account=null.
     if (authTier === 'formation' && contactId) {
       const formationAccount = await getFormationAccount(contactId)
       if (formationAccount) {
@@ -176,6 +184,20 @@ export default async function PortalDashboardPage() {
           />
         )
       }
+
+      // Post-PR1 path: no account, contact-scoped reads.
+      const ctx = await getFormationContext(contactId)
+      return (
+        <FormationDashboard
+          firstName={firstName}
+          locale={locale}
+          account={null}
+          wizardData={ctx.wizard}
+          ss4Data={ctx.ss4}
+          oaData={ctx.oa}
+          leaseData={ctx.lease}
+        />
+      )
     }
 
     // Check if an onboarding wizard submission is already in for this contact —

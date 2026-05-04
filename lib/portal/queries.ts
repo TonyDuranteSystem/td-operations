@@ -66,6 +66,53 @@ export async function getFormationAccount(contactId: string) {
   return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address) }
 }
 
+/**
+ * Contact-scoped formation state for clients in the gap between offer-paid
+ * and Articles-of-Organization arrival (Antonio's architectural model,
+ * 2026-05-03/04). No company exists yet, so wizard/SS-4/OA/lease are queried
+ * by contact_id instead of account_id. Returns null fields when nothing has
+ * happened yet (e.g., before wizard submission).
+ */
+export async function getFormationContext(contactId: string) {
+  const [wizardRes, ss4Res, oaRes, leaseRes] = await Promise.all([
+    supabaseAdmin
+      .from('wizard_progress')
+      .select('id, status')
+      .eq('contact_id', contactId)
+      .eq('wizard_type', 'formation')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('ss4_applications')
+      .select('id, status')
+      .eq('contact_id', contactId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('oa_agreements')
+      .select('id, status')
+      .eq('contact_id', contactId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('lease_agreements')
+      .select('id, status')
+      .eq('contact_id', contactId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+  return {
+    wizard: wizardRes.data,
+    ss4: ss4Res.data,
+    oa: oaRes.data,
+    lease: leaseRes.data,
+  }
+}
+
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')

@@ -1,26 +1,31 @@
 /**
  * Job Handler: formation_setup
  *
- * Auto-chain for formation wizard submissions:
- * - Data validation (required fields)
- * - Contact update with submitted data
- * - CRM Account creation (LLC placeholder — EIN/formation_date added later)
- * - Service Delivery creation (Company Formation, Stage 1)
- * - Form → reviewed
- * - Email notification to support@ (client completed form)
- * - CRM task for Luca (WhatsApp follow-up)
- * - Portal notification to Contact
+ * Auto-chain for formation wizard submissions (Antonio's architectural model,
+ * 2026-05-03/04). After this handler runs, the formation client has:
+ * - Updated contact (DOB, address, passport_on_file)
+ * - Contact-level Drive folder (Contacts/{Name}/) with passport uploaded
+ * - "Company Formation" Service Delivery on the contact (no account_id)
+ * - Email to support@, Luca WhatsApp task, portal notification
+ *
+ * What this handler does NOT do (deferred to Articles arrival):
+ * - Create the CRM account
+ * - Write members rows (data stays on formation_submissions.submitted_data)
+ * - Upload additional MMLLC member passports to Drive
+ * - Migrate the contact Drive folder to a company folder
+ *
+ * The materialization at Articles upload (PR 3) reads formation_submissions
+ * to create account + account_contacts + members + Drive migration + SS-4.
  *
  * Triggered by:
- * 1. Portal wizard-submit (source: 'portal_wizard')
- * 2. MCP formation_form_review (source: undefined)
+ * 1. Portal wizard-submit (source: 'portal_wizard') — primary path
+ * 2. MCP formation_form_review (source: undefined) — legacy admin path
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
-import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 
 interface FormationPayload {
   token: string
@@ -29,14 +34,6 @@ interface FormationPayload {
   lead_id: string | null
   submitted_data: Record<string, unknown>
   source?: "portal_wizard" | string
-}
-
-// State name → code mapping for formation
-const STATE_CODE_MAP: Record<string, string> = {
-  "New Mexico": "NM", "NM": "NM",
-  "Wyoming": "WY", "WY": "WY",
-  "Florida": "FL", "FL": "FL",
-  "Delaware": "DE", "DE": "DE",
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -127,105 +124,20 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // ─── 2. LEAD CONVERSION — SKIPPED (now happens at payment in whop webhook / check-wire-payments) ───
   result.steps.push(step("lead_converted", "skipped", "Moved to payment confirmation (Change 1.1)"))
 
-  // ─── 2a. CREATE CRM ACCOUNT (LLC placeholder — EIN/formation_date added later) ───
-  let accountId: string | null = null
-  const companyName = String(submitted.llc_name_1 || "").trim()
-
-  if (companyName && p.contact_id) {
-    try {
-      // Fetch submission for entity_type and state
-      const { data: formSub } = await supabaseAdmin
-        .from("formation_submissions")
-        .select("entity_type, state")
-        .eq("id", p.submission_id)
-        .single()
-
-      const entityType = formSub?.entity_type || "SMLLC"
-      const stateRaw = formSub?.state || ""
-      const stateCode = STATE_CODE_MAP[stateRaw] || stateRaw
-
-      // Check if account already exists for this company name
-      const { data: existingAcct } = await supabaseAdmin
-        .from("accounts")
-        .select("id")
-        .ilike("company_name", companyName)
-        .limit(1)
-
-      if (existingAcct?.length) {
-        accountId = existingAcct[0].id
-        result.steps.push(step("account_create", "skipped", `Already exists: ${accountId}`))
-      } else {
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        const { data: newAcct, error: acctErr } = await supabaseAdmin
-          .from("accounts")
-          .insert({
-            company_name: companyName,
-            entity_type: entityType as never,
-            state_of_formation: stateCode,
-            account_type: "Formation",
-            status: "Pending Formation",
-            // EIN, formation_date, registered_agent — filled later when state confirms
-          })
-          .select("id")
-          .single()
-
-        if (acctErr || !newAcct) {
-          result.steps.push(step("account_create", "error", acctErr?.message || "insert failed"))
-        } else {
-          accountId = newAcct.id
-
-          // Link contact to account
-          const { error: linkErr } = await supabaseAdmin
-            .from("account_contacts")
-            .insert({
-              account_id: newAcct.id,
-              contact_id: p.contact_id,
-              role: "Owner",
-            })
-
-          if (linkErr && !linkErr.message.includes("duplicate")) {
-            result.steps.push(step("account_create", "ok", `${companyName} (${entityType}, ${stateCode}) — link error: ${linkErr.message}`))
-          } else {
-            result.steps.push(step("account_create", "ok", `${companyName} (${entityType}, ${stateCode}) → linked to contact`))
-          }
-        }
-      }
-
-      // Also link to submission for traceability
-      if (accountId) {
-        await supabaseAdmin
-          .from("formation_submissions")
-          // @ts-expect-error account_id may exist as DB column not in generated types
-          .update({ account_id: accountId })
-          .eq("id", p.submission_id)
-
-        // Backfill account_id on contact-only invoices (created at signing, before account existed)
-        if (p.contact_id) {
-          const { count: backfilledInv } = await supabaseAdmin
-            .from("client_invoices")
-            .update({ account_id: accountId, updated_at: new Date().toISOString() })
-            .eq("contact_id", p.contact_id)
-            .is("account_id", null)
-
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          const { count: backfilledPay } = await supabaseAdmin
-            .from("payments")
-            .update({ account_id: accountId, updated_at: new Date().toISOString() })
-            .eq("contact_id", p.contact_id)
-            .is("account_id", null)
-
-          if ((backfilledInv ?? 0) > 0 || (backfilledPay ?? 0) > 0) {
-            result.steps.push(step("invoice_backfill", "ok", `Backfilled account_id on ${backfilledInv ?? 0} invoices, ${backfilledPay ?? 0} payments`))
-          }
-        }
-      }
-    } catch (e) {
-      result.steps.push(step("account_create", "error", e instanceof Error ? e.message : String(e)))
-    }
-    await updateJobProgress(job.id, result)
-  } else {
-    result.steps.push(step("account_create", "skipped", companyName ? "No contact_id" : "No LLC name in submitted data"))
-  }
+  // ─── 2a. NO ACCOUNT CREATION AT WIZARD SUBMIT (Antonio's model, 2026-05-03/04) ───
+  // The account is created when Articles of Organization arrive in Drive.
+  // Until then, all data attaches to the contact, and member info stays on
+  // formation_submissions.submitted_data. The materialization at Articles
+  // upload reads the submission and creates account + account_contacts +
+  // members + Drive migration + SS-4 fire in one atomic helper.
+  //
+  // See sysdoc 'ops-2026-05-03-formation-architecture-decision-and-plan'.
+  const accountId: string | null = null
+  result.steps.push(step(
+    "account_create",
+    "skipped",
+    "Formation account deferred — created when Articles of Organization arrive in Drive",
+  ))
 
   // ─── 2a.1. DRIVE FOLDER + PASSPORT PROCESSING ───
   // Phase 1: Create contact-level Drive folder (Contacts/{Name}/)
@@ -310,303 +222,21 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     await updateJobProgress(job.id, result)
   }
 
-  // ─── 2b. CREATE / UPDATE CONTACTS FOR ADDITIONAL MMLLC MEMBERS ───
-  const additionalMembers = extractMembersFromWizardData(submitted as Record<string, unknown>)
-
-  if (additionalMembers.length > 0 && accountId) {
-    const primaryMemberIndex = typeof submitted.primary_member_index === 'number'
-      ? submitted.primary_member_index : 0
-
-    // Fetch upload_paths from DB (not in job payload)
-    const { data: subForPaths } = p.submission_id
-      ? await supabaseAdmin.from('formation_submissions').select('upload_paths').eq('id', p.submission_id).single()
-      : { data: null }
-    const uploadPaths: string[] = (subForPaths?.upload_paths as string[]) ?? []
-
-    // Update owner's is_primary on account_contacts
-    if (p.contact_id) {
-      await supabaseAdmin.from('account_contacts')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary added via script 28c, not yet in generated types
-        .update({ is_primary: primaryMemberIndex === 0 } as any)
-        .eq('account_id', accountId)
-        .eq('contact_id', p.contact_id)
-    }
-
-    for (let i = 0; i < additionalMembers.length; i++) {
-      const m = additionalMembers[i]
-      const isPrimary = primaryMemberIndex === i + 1
-      try {
-        const ownershipPct = m.member_ownership_pct
-
-        if (m.member_type === 'company') {
-          // ── Company member: representative gets portal access, company gets members row ──
-          const repEmail = m.member_rep_email ? String(m.member_rep_email).toLowerCase().trim() : null
-          const repName = m.member_rep_name ? String(m.member_rep_name).trim() : null
-          const companyName = m.member_company_name ? String(m.member_company_name).trim() : `Company Member ${i + 1}`
-
-          // Write company row to members table
-          await supabaseAdmin.from('members').upsert(
-            {
-              account_id: accountId,
-              member_type: 'company',
-              company_name: companyName,
-              ein: m.member_company_ein ? String(m.member_company_ein) : null,
-              address_street: m.member_company_street ? String(m.member_company_street) : null,
-              address_city: m.member_company_city ? String(m.member_company_city) : null,
-              address_state: m.member_company_state ? String(m.member_company_state) : null,
-              address_zip: m.member_company_zip ? String(m.member_company_zip) : null,
-              address_country: m.member_company_country ? String(m.member_company_country) : null,
-              ownership_pct: ownershipPct,
-              is_primary: false,
-              is_signer: false,
-              representative_name: repName,
-              representative_email: repEmail,
-              representative_address_street: m.member_rep_address_street ? String(m.member_rep_address_street) : null,
-              representative_address_city: m.member_rep_address_city ? String(m.member_rep_address_city) : null,
-              representative_address_state: m.member_rep_address_state ? String(m.member_rep_address_state) : null,
-              representative_address_zip: m.member_rep_address_zip ? String(m.member_rep_address_zip) : null,
-              representative_address_country: m.member_rep_address_country ? String(m.member_rep_address_country) : null,
-              updated_at: now,
-            },
-            { onConflict: 'account_id,company_name' }
-          )
-
-          // Find or create representative contact for portal access
-          if (repEmail) {
-            let repContactId: string | null = null
-            const { data: existingRep } = await supabaseAdmin
-              .from('contacts').select('id').eq('email', repEmail).limit(1)
-
-            if (existingRep?.length) {
-              repContactId = existingRep[0].id
-            } else {
-              // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
-              const { data: newRep } = await supabaseAdmin.from('contacts').insert({
-                email: repEmail,
-                full_name: repName ?? repEmail,
-                created_at: now,
-                updated_at: now,
-              } as any).select('id').single()
-              repContactId = newRep?.id ?? null
-            }
-
-            if (repContactId) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary not in types
-              await supabaseAdmin.from('account_contacts').upsert(
-                { account_id: accountId, contact_id: repContactId, role: 'Member', is_primary: false, ...(ownershipPct !== null && { ownership_pct: ownershipPct }) } as any,
-                { onConflict: 'account_id,contact_id' }
-              )
-              result.steps.push(step(`member_${i + 1}_link`, 'ok', `${companyName} (rep: ${repName ?? repEmail})`))
-            } else {
-              result.steps.push(step(`member_${i + 1}_link`, 'skipped', `${companyName} — could not create representative contact`))
-            }
-          } else {
-            result.steps.push(step(`member_${i + 1}_link`, 'ok', `${companyName} (no representative email)`))
-          }
-        } else {
-          // ── Individual member: existing flow + write to members table ──
-          const memberEmail = m.member_email ? String(m.member_email).toLowerCase().trim() : null
-          const memberName = [m.member_first_name, m.member_last_name].filter(Boolean).map(String).join(' ') || memberEmail || `Member ${i + 1}`
-
-          // Find or create contact by email
-          let membContactId: string | null = null
-          if (memberEmail) {
-            const { data: existingC } = await supabaseAdmin
-              .from('contacts').select('id').eq('email', memberEmail).limit(1)
-
-            if (existingC?.length) {
-              membContactId = existingC[0].id
-            } else {
-              const contactInsert: Record<string, unknown> = {
-                email: memberEmail,
-                full_name: memberName,
-                first_name: m.member_first_name ? String(m.member_first_name) : undefined,
-                last_name: m.member_last_name ? String(m.member_last_name) : undefined,
-                created_at: now,
-                updated_at: now,
-              }
-              // eslint-disable-next-line no-restricted-syntax, @typescript-eslint/no-explicit-any -- deferred migration, dev_task 7ebb1e0c
-              const { data: newC } = await supabaseAdmin.from('contacts').insert(contactInsert as any).select('id').single()
-              membContactId = newC?.id ?? null
-            }
-          }
-
-          if (membContactId) {
-            // Update contact fields
-            const upd: Record<string, unknown> = { updated_at: now }
-            if (m.member_first_name) upd.first_name = String(m.member_first_name)
-            if (m.member_last_name) upd.last_name = String(m.member_last_name)
-            if (m.member_dob) upd.date_of_birth = String(m.member_dob)
-            if (m.member_nationality) upd.citizenship = String(m.member_nationality)
-            if (m.member_street) upd.address_line1 = String(m.member_street)
-            if (m.member_city) upd.address_city = String(m.member_city)
-            if (m.member_state_province) upd.address_state = String(m.member_state_province)
-            if (m.member_zip) upd.address_zip = String(m.member_zip)
-            if (m.member_country) upd.address_country = String(m.member_country)
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            await supabaseAdmin.from('contacts').update(upd).eq('id', membContactId)
-
-            // Link to account with role=Member + is_primary + ownership_pct
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- is_primary added via script 28c, not yet in generated types
-            const { error: acLinkErr } = await supabaseAdmin
-              .from('account_contacts')
-              .upsert(
-                { account_id: accountId, contact_id: membContactId, role: 'Member', is_primary: isPrimary, ...(ownershipPct !== null && { ownership_pct: ownershipPct }) } as any,
-                { onConflict: 'account_id,contact_id' }
-              )
-
-            if (acLinkErr && !acLinkErr.message.includes('duplicate')) {
-              result.steps.push(step(`member_${i + 1}_link`, 'error', acLinkErr.message))
-            } else {
-              result.steps.push(step(`member_${i + 1}_link`, 'ok', `${memberName}${isPrimary ? ' [PRIMARY]' : ''}`))
-            }
-
-            // Write individual row to members table
-            await supabaseAdmin.from('members').upsert(
-              {
-                account_id: accountId,
-                member_type: 'individual',
-                full_name: memberName,
-                email: memberEmail,
-                address_street: m.member_street ? String(m.member_street) : null,
-                address_city: m.member_city ? String(m.member_city) : null,
-                address_state: m.member_state_province ? String(m.member_state_province) : null,
-                address_zip: m.member_zip ? String(m.member_zip) : null,
-                address_country: m.member_country ? String(m.member_country) : null,
-                ownership_pct: ownershipPct,
-                is_primary: isPrimary,
-                is_signer: false,
-                contact_id: membContactId,
-                updated_at: now,
-              },
-              { onConflict: 'account_id,contact_id' }
-            )
-
-            // Passport: find path in upload_paths by key pattern passport_member_${i}
-            const passportPath = uploadPaths.find(p => p.includes(`passport_member_${i}`))
-            if (passportPath && contactDriveFolderId) {
-              try {
-                const cleanPath = passportPath.replace(/^\/+/, '')
-                const { data: blob, error: dlErr } = await supabaseAdmin.storage
-                  .from('onboarding-uploads')
-                  .download(cleanPath)
-
-                if (dlErr || !blob) {
-                  result.steps.push(step(`member_${i + 1}_passport`, 'error', dlErr?.message || 'Download failed'))
-                } else {
-                  const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-                  const fileName = cleanPath.split('/').pop() || `passport_member_${i + 1}.pdf`
-                  const buffer = Buffer.from(await blob.arrayBuffer())
-                  const mimeType = blob.type || 'application/octet-stream'
-
-                  const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, contactDriveFolderId) as { id: string; name: string }
-
-                  const { extractAndStorePassportData } = await import('@/lib/jobs/passport-writeback')
-                  const passRes = await extractAndStorePassportData({
-                    contact_id: membContactId,
-                    drive_file_id: driveFile.id,
-                    mime_type: mimeType,
-                    skip_dob: !!m.member_dob,
-                    contact_name: memberName,
-                    account_id: accountId,
-                  })
-                  result.steps.push(step(`member_${i + 1}_passport_ocr`, passRes.status, passRes.detail))
-
-                  await supabaseAdmin.from('documents').insert({
-                    file_name: fileName,
-                    drive_file_id: driveFile.id,
-                    drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
-                    document_type_name: 'Passport',
-                    category: 2,
-                    category_name: 'Contacts',
-                    status: 'classified',
-                    contact_id: membContactId,
-                    account_id: accountId,
-                    portal_visible: true,
-                  })
-                }
-              } catch (passErr) {
-                result.steps.push(step(`member_${i + 1}_passport`, 'error', passErr instanceof Error ? passErr.message : String(passErr)))
-              }
-            }
-          } else {
-            result.steps.push(step(`member_${i + 1}_link`, 'skipped', 'No email — cannot create/find contact'))
-          }
-        }
-      } catch (membErr) {
-        result.steps.push(step(`member_${i + 1}`, 'error', membErr instanceof Error ? membErr.message : String(membErr)))
-      }
-    }
-
-    // Set owner's ownership_pct = 100 - sum(additional members' pcts)
-    if (p.contact_id && accountId) {
-      const additionalPctSum = additionalMembers.reduce((sum, m) => {
-        const pct = m.member_ownership_pct ?? 0
-        return sum + (isNaN(pct) ? 0 : pct)
-      }, 0)
-      const ownerPct = Math.max(0, Math.round((100 - additionalPctSum) * 100) / 100)
-      await supabaseAdmin.from('account_contacts')
-        .update({ ownership_pct: ownerPct })
-        .eq('account_id', accountId)
-        .eq('contact_id', p.contact_id)
-      result.steps.push(step('owner_pct', 'ok', `Owner ownership_pct = ${ownerPct}%`))
-
-      // Write primary owner to members table
-      if (p.contact_id) {
-        const ownerFirst = submitted.owner_first_name ? String(submitted.owner_first_name) : null
-        const ownerLast = submitted.owner_last_name ? String(submitted.owner_last_name) : null
-        const ownerFullName = [ownerFirst, ownerLast].filter(Boolean).join(' ') || null
-        const ownerEmail = submitted.owner_email ? String(submitted.owner_email).toLowerCase().trim() : null
-        await supabaseAdmin.from('members').upsert(
-          {
-            account_id: accountId,
-            member_type: 'individual',
-            full_name: ownerFullName,
-            email: ownerEmail,
-            address_street: submitted.owner_street ? String(submitted.owner_street) : null,
-            address_city: submitted.owner_city ? String(submitted.owner_city) : null,
-            address_state: submitted.owner_state_province ? String(submitted.owner_state_province) : null,
-            address_zip: submitted.owner_zip ? String(submitted.owner_zip) : null,
-            address_country: submitted.owner_country ? String(submitted.owner_country) : null,
-            ownership_pct: ownerPct,
-            is_primary: primaryMemberIndex === 0,
-            is_signer: false,
-            contact_id: p.contact_id,
-            updated_at: now,
-          },
-          { onConflict: 'account_id,contact_id' }
-        )
-        result.steps.push(step('owner_members_row', 'ok', `Owner written to members table (${ownerPct}%)`))
-      }
-    }
-
-    // ─── Post-loop tasks ───
-    // Portal invite reminder for all MMLLC members (after LLC is formed, not now)
-    if (additionalMembers.length > 0 && accountId) {
-      const memberNames = additionalMembers.map((m, i) =>
-        m.member_type === 'company'
-          ? (m.member_company_name ?? `Company Member ${i + 1}`)
-          : ([m.member_first_name, m.member_last_name].filter(Boolean).join(' ') || `Member ${i + 1}`)
-      ).join(', ')
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      await supabaseAdmin.from('tasks').insert({
-        task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
-        description: `Once the LLC is confirmed by the state, create portal accounts for:\n${additionalMembers.map(m => {
-          if (m.member_type === 'company') return `• ${m.member_company_name ?? 'Company'} (rep: ${m.member_rep_email ?? 'no email'})`
-          return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
-        }).join('\n')}\n\nUse portal_create_user(contact_id=..., portal_tier='active') for each member.`,
-        assigned_to: 'Luca',
-        priority: 'Low',
-        category: 'Formation',
-        status: 'To Do',
-        ...(accountId ? { account_id: accountId } : {}),
-      })
-      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
-    }
-
-
-    await updateJobProgress(job.id, result)
-  }
+  // ─── 2b. MMLLC MEMBER PROCESSING DEFERRED (Antonio's model, 2026-05-03/04) ───
+  // Additional MMLLC members are NOT processed here. Their data lives on
+  // formation_submissions.submitted_data (member_first_name, member_email,
+  // ownership_pct, etc.) and their passports stay in Supabase storage under
+  // formation_submissions.upload_paths.
+  //
+  // The materialization at Articles upload (PR 3) reads the submission and:
+  //   - creates a contact for each additional member (find-or-create by email)
+  //   - inserts members rows on the new account
+  //   - upserts account_contacts (Member role)
+  //   - copies each member passport from storage → Drive
+  //   - creates documents rows
+  //
+  // For SMLLC: nothing to defer — only the owner exists. The owner's contact
+  // updates + passport + members row (if any) are handled at materialization.
 
   // ─── 2c. CREATE SERVICE DELIVERY (Company Formation pipeline, Stage 1: Data Collection) ───
   try {
@@ -624,7 +254,14 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       if (existingSd && existingSd.length > 0) {
         result.steps.push(step("service_delivery", "skipped", `Already exists: ${existingSd[0].id}`))
       } else {
-        const sdName = companyName ? `Company Formation - ${companyName}` : "Company Formation"
+        // SD is contact-only at wizard submit per Antonio's model. The first
+        // candidate LLC name is appended to the SD name purely for human
+        // readability in the CRM — it is NOT a commitment to that name. The
+        // chosen name is recorded separately on wizard data via the LLC Name
+        // Selection card; the SD's service_name is updated when the company
+        // is materialized at Articles upload.
+        const llcCandidate = String(submitted.llc_name_1 || "").trim()
+        const sdName = llcCandidate ? `Company Formation - ${llcCandidate}` : "Company Formation"
         // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { data: sd, error: sdErr } = await supabaseAdmin
           .from("service_deliveries")
@@ -637,7 +274,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             stage_entered_at: now,
             stage_history: JSON.stringify([{ stage: "Data Collection", entered_at: now, by: "formation_setup" }]),
             contact_id: sdContactId,
-            account_id: accountId, // Now linked to CRM account
+            account_id: null, // Antonio's model: SD attaches to the buyer (contact) until/unless the company materializes.
             status: "active",
             start_date: now.slice(0, 10),
             assigned_to: "Luca",
@@ -648,7 +285,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         if (sdErr) {
           result.steps.push(step("service_delivery", "error", sdErr.message))
         } else {
-          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection${accountId ? ", linked to account" : ""})`))
+          result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection, contact-scoped)`))
         }
       }
     } else {

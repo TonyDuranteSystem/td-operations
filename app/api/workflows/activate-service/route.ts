@@ -344,33 +344,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── STEP 1.5: Ensure Minimal Account (AUTO, formation/onboarding) ──
+    // ─── STEP 1.5: Ensure Minimal Account (AUTO) ──
     let autoAccountId: string | null = offer?.account_id || null
     let isStandaloneBusinessTR = false
 
+    // Formation excluded (Antonio's architectural model, 2026-05-03/04): when an
+    // individual pays for a formation, no LLC exists yet. The account is created
+    // when Articles of Organization are uploaded after state filing — either via
+    // the Upload Articles button on the LLC Name Selection card or by the Drive
+    // detection cron. Invoice + service deliveries + (later) members all attach
+    // to the contact until then.
+    //
+    // See sysdoc 'ops-2026-05-03-formation-architecture-decision-and-plan'.
+    //
     // Onboarding excluded per SOP v7.2 Phase 0: "NO CRM Account exists yet.
     // Only Lead (Converted) + Contact. The wizard creates the CRM Account
     // automatically when the Contact submits." Account is created by
     // lib/jobs/handlers/onboarding-setup.ts (createAccountFromWizard) instead.
     if (!autoAccountId && contactId && contractType === "formation") {
-      const accountResult = await ensureMinimalAccount({
-        contactId,
-        clientName: activation.client_name,
-        contractType,
-        offerToken: activation.offer_token,
-        leadId: leadId || undefined,
-        tier: 'formation',
+      steps.push({
+        step: "ensure_account",
+        status: "skipped",
+        detail: "formation — account deferred until Articles of Organization arrive in Drive",
       })
-      if (accountResult.accountId) {
-        autoAccountId = accountResult.accountId
-        steps.push({
-          step: "ensure_account",
-          status: accountResult.created ? "created" : "existing",
-          detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created" : "already linked"})`,
-        })
-      } else {
-        steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
-      }
     } else if (!autoAccountId && contactId && contractType !== "onboarding") {
       // For other contract types (tax_return / itin / etc.): check if any
       // pipeline is business-context. Onboarding is excluded here too per
@@ -439,32 +435,15 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── STEP 1.6: Auto-upgrade account_type if offer has annual services ──
+    // Formation removed (Antonio's architectural model, 2026-05-03/04): formation
+    // does not own an account at payment time, so there is no account_type to
+    // bump here. The account is created later when Articles arrive (Upload
+    // Articles button or Drive cron), and account_type is set there from the
+    // contract data.
+    //
     // Onboarding excluded per SOP v7.2 — no account exists at payment; wizard
     // submit creates it with the correct account_type already derived from
     // contract rates (Client if annual, One-Time if no installments).
-    if (autoAccountId && contractType === "formation") {
-      const { data: currentAcct } = await supabase
-        .from("accounts")
-        .select("account_type")
-        .eq("id", autoAccountId)
-        .single()
-
-      if (currentAcct && currentAcct.account_type !== "Client") {
-        await dbWrite(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/ per dev_task fda76fd3
-          supabase
-            .from("accounts")
-            .update({ account_type: "Client", updated_at: new Date().toISOString() })
-            .eq("id", autoAccountId),
-          "accounts.update"
-        )
-        steps.push({
-          step: "upgrade_account_type",
-          status: "done",
-          detail: `Account type changed from "${currentAcct.account_type}" to "Client" (annual management offer)`,
-        })
-      }
-    }
 
     // ─── STEP 2: Service Deliveries from bundled_pipelines (AUTO) ─────
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
