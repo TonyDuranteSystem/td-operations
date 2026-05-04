@@ -21,10 +21,19 @@ export function RealtimeNotifications() {
   const router = useRouter()
   const pathnameRef = useRef(pathname)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  const currentUserIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     pathnameRef.current = pathname
   }, [pathname])
+
+  // Fetch the current user ID once so we can filter out own messages
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.auth.getUser().then(({ data }) => {
+      currentUserIdRef.current = data.user?.id ?? null
+    })
+  }, [])
 
   const playSound = useCallback(() => {
     try {
@@ -149,27 +158,33 @@ export function RealtimeNotifications() {
           table: 'internal_messages',
         },
         (payload) => {
-          const isOnChats = pathnameRef.current === '/portal-chats'
+          // Don't notify if already on the page that handles this thread
+          const p = pathnameRef.current
+          const isOnTeamChat = p === '/team-chat' || p.startsWith('/team-chat/')
+          const isOnPortalChats = p === '/portal-chats'
+          if (isOnTeamChat || isOnPortalChats) return
+
+          // Don't notify for own messages
+          if (payload.new?.sender_id && payload.new.sender_id === currentUserIdRef.current) return
+
           const senderName = payload.new?.sender_name || 'Team member'
 
-          if (!isOnChats) {
-            playSound()
+          playSound()
 
-            toast(
-              `Team: ${senderName}`,
-              {
-                description: typeof payload.new?.message === 'string'
-                  ? payload.new.message.slice(0, 80)
-                  : 'New team message',
-                icon: <MessageSquare className="h-4 w-4 text-orange-500" />,
-                duration: 6000,
-                action: {
-                  label: 'Open',
-                  onClick: () => router.push('/portal-chats'),
-                },
-              }
-            )
-          }
+          toast(
+            `Team: ${senderName}`,
+            {
+              description: typeof payload.new?.message === 'string'
+                ? payload.new.message.slice(0, 80)
+                : 'New team message',
+              icon: <MessageSquare className="h-4 w-4 text-orange-500" />,
+              duration: 6000,
+              action: {
+                label: 'Open',
+                onClick: () => router.push('/team-chat'),
+              },
+            }
+          )
         }
       )
       .subscribe()
