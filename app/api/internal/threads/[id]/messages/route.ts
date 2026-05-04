@@ -2,11 +2,12 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
+import type { ChatAttachment } from '@/lib/types'
 
 /**
  * POST /api/internal/threads/[id]/messages
  * Send a message in an internal thread.
- * Body: { message }
+ * Body: { message, reply_to_id?, attachments?, attachment_url?, attachment_name? }
  */
 export async function POST(
   request: NextRequest,
@@ -20,11 +21,14 @@ export async function POST(
 
   const { id: threadId } = await params
   const body = await request.json()
-  const message = body.message?.trim() ?? ''
-  const attachmentUrl = body.attachment_url ?? null
-  const attachmentName = body.attachment_name ?? null
+  const message: string = body.message?.trim() ?? ''
+  const replyToId: string | null = body.reply_to_id ?? null
+  const attachments: ChatAttachment[] | null = body.attachments ?? null
+  const attachmentUrl: string | null = body.attachment_url ?? null
+  const attachmentName: string | null = body.attachment_name ?? null
 
-  if (!message && !attachmentUrl) {
+  const hasContent = message || attachments?.length || attachmentUrl
+  if (!hasContent) {
     return NextResponse.json({ error: 'message or attachment required' }, { status: 400 })
   }
 
@@ -43,18 +47,34 @@ export async function POST(
     return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
   }
 
+  // Verify reply_to_id belongs to the same thread
+  if (replyToId) {
+    const { data: parent } = await supabaseAdmin
+      .from('internal_messages')
+      .select('id')
+      .eq('id', replyToId)
+      .eq('thread_id', threadId)
+      .single()
+    if (!parent) {
+      return NextResponse.json({ error: 'reply_to_id not found in this thread' }, { status: 400 })
+    }
+  }
+
   const displayName = getUserDisplayName(user)
 
-  const { data: msg, error } = await supabaseAdmin
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: msg, error } = await (supabaseAdmin as any)
     .from('internal_messages')
     .insert({
       thread_id: threadId,
       sender_id: user.id,
       sender_name: displayName,
       message,
+      reply_to_id: replyToId,
+      attachments: attachments?.length ? attachments : null,
       attachment_url: attachmentUrl,
       attachment_name: attachmentName,
-      read_at: new Date().toISOString(), // sender has already "read" their own message
+      read_at: new Date().toISOString(),
     })
     .select()
     .single()
@@ -74,7 +94,7 @@ export async function POST(
     const { sendPushToAdmin } = await import('@/lib/portal/web-push')
     await sendPushToAdmin({
       title: `${displayName} — ${account?.company_name ?? 'Team'}`,
-      body: message.slice(0, 100),
+      body: message.slice(0, 100) || (attachments?.length ? `📎 ${attachments[0].name}` : '📎 File'),
       url: `/portal-chats?view=internal`,
       tag: `internal-thread-${threadId}`,
     })

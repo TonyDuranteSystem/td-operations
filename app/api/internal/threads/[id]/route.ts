@@ -63,20 +63,43 @@ export async function GET(
     sourceMessage = srcMsg?.message ?? null
   }
 
-  // Get all messages
-  const { data: messages } = await supabaseAdmin
+  // Get all messages (including deleted — caller renders tombstones)
+  const { data: rawMessages } = await supabaseAdmin
     .from('internal_messages')
     .select('*')
     .eq('thread_id', id)
     .order('created_at', { ascending: true })
 
-  // Mark unread messages from other senders as read
-  await supabaseAdmin
+  const messages = rawMessages ?? []
+
+  // Enrich with reply_to previews
+  type ReplyParent = { id: string; message: string; sender_name: string; deleted_at: string | null }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const msgs = messages as any[]
+  const replyToIds = Array.from(new Set(msgs.filter((m) => m.reply_to_id).map((m) => m.reply_to_id as string)))
+  const parentMap = new Map<string, ReplyParent>()
+  if (replyToIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: parents } = await (supabaseAdmin as any)
+      .from('internal_messages')
+      .select('id, message, sender_name, deleted_at')
+      .in('id', replyToIds)
+    ;(parents ?? []).forEach((p: ReplyParent) => parentMap.set(p.id, p))
+  }
+
+  const enriched = msgs.map((m) => ({
+    ...m,
+    reply_to_preview: m.reply_to_id ? (parentMap.get(m.reply_to_id) ?? null) : null,
+  }))
+
+  // Mark messages from other senders as seen
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabaseAdmin as any)
     .from('internal_messages')
-    .update({ read_at: new Date().toISOString() })
+    .update({ seen_at: new Date().toISOString() })
     .eq('thread_id', id)
     .neq('sender_id', user.id)
-    .is('read_at', null)
+    .is('seen_at', null)
 
   return NextResponse.json({
     thread: {
@@ -84,7 +107,7 @@ export async function GET(
       company_name: companyName ?? thread.title ?? 'Team Discussion',
       source_message: sourceMessage,
     },
-    messages: messages ?? [],
+    messages: enriched,
   })
 }
 
