@@ -132,7 +132,8 @@ export function setSenderSoundId(senderId: string, soundId: string): void {
 }
 
 // Per-tone ADSR: fast linear attack → exponential release
-function runTones(ctx: AudioContext, tones: Tone[], masterVol = 0.22): void {
+function runTones(ctx: AudioContext, tones: Tone[], masterVol = 0.22, debugId?: string): void {
+  console.warn('[SOUND PLAYED]', debugId ?? 'unknown', new Error().stack?.split('\n').slice(1, 4).join(' | '))
   const now = ctx.currentTime
 
   for (const tone of tones) {
@@ -162,23 +163,23 @@ export function useNotificationSound() {
     return ctxRef.current
   }, [])
 
-  const play = useCallback((soundId: string) => {
+  const play = useCallback((soundId: string, debugId?: string) => {
     if (soundId === SOUND_NONE) return
     const sound = SOUND_MAP.get(soundId)
     if (!sound) return
     const ctx = getContext()
-    const doPlay = () => runTones(ctx, sound.tones)
+    const doPlay = () => runTones(ctx, sound.tones, 0.22, debugId)
     if (ctx.state === 'suspended') { ctx.resume().then(doPlay) } else { doPlay() }
   }, [getContext])
 
-  const previewSound = useCallback((soundId: string) => { play(soundId) }, [play])
+  const previewSound = useCallback((soundId: string) => { play(soundId, 'preview') }, [play])
 
-  const playSound = useCallback(() => { play(SOUND_LIBRARY[0].id) }, [play])
+  const playSound = useCallback(() => { play(SOUND_LIBRARY[0].id, 'playSound') }, [play])
 
   const playSenderSound = useCallback((senderId: string) => {
     const stored = getSenderSoundId(senderId)
     if (stored === SOUND_NONE) return
-    play(stored && SOUND_MAP.has(stored) ? stored : fallbackSoundId(senderId))
+    play(stored && SOUND_MAP.has(stored) ? stored : fallbackSoundId(senderId), `playSenderSound:${senderId.slice(0, 8)}`)
   }, [play])
 
   return { playSound, playSenderSound, previewSound }
