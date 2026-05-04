@@ -88,7 +88,13 @@ export function EditableField({
       <div className="flex items-center gap-2 group">
         {Icon && <Icon className="h-4 w-4 text-muted-foreground shrink-0" />}
         {label && <span className="text-muted-foreground min-w-[100px] text-sm">{label}</span>}
-        <span className={cn("font-medium text-sm flex-1", className)}>{type === 'date' ? formatDisplayDate(value) : (value || '\u2014')}</span>
+        <span className={cn("font-medium text-sm flex-1", className)}>
+          {type === 'date'
+            ? formatDisplayDate(value)
+            : type === 'select' && options
+              ? (options.find(o => o.value === value)?.label || value || '\u2014')
+              : (value || '\u2014')}
+        </span>
         {!readOnly && (
           <button
             onClick={() => setEditing(true)}
