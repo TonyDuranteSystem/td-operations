@@ -5,9 +5,9 @@ import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import {
   Send, Loader2, Users, Paperclip, Smile, Wand2, Mic, MicOff,
-  FileText, X, CornerUpLeft, Trash2, CheckCheck, Check,
+  FileText, X, CornerUpLeft, Trash2, CheckCheck, Check, Settings,
 } from 'lucide-react'
-import { useNotificationSound, senderPatternIndex } from '@/lib/hooks/use-notification-sound'
+import { useNotificationSound, SOUND_LIBRARY, SOUND_NONE, getSenderSoundId, setSenderSoundId } from '@/lib/hooks/use-notification-sound'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import EmojiPicker from 'emoji-picker-react'
 import { format, isToday, isYesterday } from 'date-fns'
@@ -92,13 +92,15 @@ export default function TeamChatPage() {
   const [isMobile, setIsMobile] = useState(false)
   const [polishing, setPolishing] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [showSoundSettings, setShowSoundSettings] = useState(false)
+  const [senderSounds, setSenderSounds] = useState<Record<string, string>>({})
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const { playSenderSound } = useNotificationSound()
+  const { playSenderSound, previewSound } = useNotificationSound()
 
   const { isRecording, isTranscribing, startRecording, stopRecording, isSupported: voiceSupported } =
     useVoiceInput({
@@ -115,6 +117,18 @@ export default function TeamChatPage() {
   useEffect(() => {
     setIsMobile(window.matchMedia('(pointer: coarse)').matches)
   }, [])
+
+  // Load per-sender sound preferences from localStorage
+  useEffect(() => {
+    if (!currentUserId || messages.length === 0) return
+    const senders = Array.from(new Map(messages.map(m => [m.sender_id, m.sender_name])).keys()).filter(id => id !== currentUserId)
+    const sounds: Record<string, string> = {}
+    for (const id of senders) {
+      const stored = getSenderSoundId(id)
+      sounds[id] = stored ?? ''
+    }
+    setSenderSounds(sounds)
+  }, [currentUserId, messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-grow textarea
   useEffect(() => {
@@ -311,7 +325,6 @@ export default function TeamChatPage() {
     }
   }
 
-  const PATTERN_LABELS = ['Rising ♪♪', 'Low→High ♩♪', 'Three pings ♩♩♩', 'Descending ♪♩♩', 'Chime ♩♪']
   const uniqueSenders = Array.from(new Map(messages.map(m => [m.sender_id, m.sender_name])).entries()).filter(([id]) => id !== currentUserId)
 
   // For read receipt: find last message sent by me
@@ -339,18 +352,74 @@ export default function TeamChatPage() {
           </div>
         </div>
         {uniqueSenders.length > 0 && (
-          <div className="flex items-center gap-3">
-            {uniqueSenders.map(([id, name]) => (
-              <div key={id} className="flex items-center gap-1.5 text-xs text-zinc-500">
-                <span className={`w-5 h-5 rounded-full ${senderColor(id)} flex items-center justify-center text-[9px] font-bold text-white`}>
-                  {initials(name)}
-                </span>
-                <span className="hidden sm:inline">{name.split(' ')[0]}: {PATTERN_LABELS[senderPatternIndex(id)]}</span>
-              </div>
-            ))}
-          </div>
+          <button
+            onClick={() => setShowSoundSettings(v => !v)}
+            className={cn(
+              'p-2 rounded-lg transition-colors text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100',
+              showSoundSettings && 'bg-zinc-100 text-zinc-700'
+            )}
+            title="Notification sounds"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
         )}
       </div>
+
+      {/* Sound settings panel */}
+      {showSoundSettings && uniqueSenders.length > 0 && (
+        <div className="shrink-0 px-4 py-3 border-b border-zinc-100 bg-zinc-50">
+          <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide mb-3">Notification sounds</p>
+          <div className="flex flex-col gap-3">
+            {uniqueSenders.map(([id, name]) => {
+              const currentSoundId = senderSounds[id] ?? ''
+              return (
+                <div key={id} className="flex items-start gap-3">
+                  <div className="flex items-center gap-2 w-24 shrink-0 pt-0.5">
+                    <div className={`w-6 h-6 rounded-full ${senderColor(id)} flex items-center justify-center text-[9px] font-bold text-white shrink-0`}>
+                      {initials(name)}
+                    </div>
+                    <span className="text-xs text-zinc-700 font-medium truncate">{name.split(' ')[0]}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SOUND_LIBRARY.map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => {
+                          previewSound(s.id)
+                          setSenderSoundId(id, s.id)
+                          setSenderSounds(prev => ({ ...prev, [id]: s.id }))
+                        }}
+                        className={cn(
+                          'text-[11px] px-2.5 py-0.5 rounded-full border transition-colors',
+                          currentSoundId === s.id
+                            ? 'bg-zinc-800 text-white border-zinc-800'
+                            : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-400 hover:text-zinc-800'
+                        )}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => {
+                        setSenderSoundId(id, SOUND_NONE)
+                        setSenderSounds(prev => ({ ...prev, [id]: SOUND_NONE }))
+                      }}
+                      className={cn(
+                        'text-[11px] px-2.5 py-0.5 rounded-full border transition-colors',
+                        currentSoundId === SOUND_NONE
+                          ? 'bg-zinc-800 text-white border-zinc-800'
+                          : 'bg-white text-zinc-400 border-zinc-200 hover:border-zinc-400 hover:text-zinc-600'
+                      )}
+                    >
+                      Silent
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">

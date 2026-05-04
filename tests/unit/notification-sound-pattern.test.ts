@@ -1,33 +1,35 @@
 import { describe, it, expect } from 'vitest'
-import { senderPatternIndex } from '@/lib/hooks/use-notification-sound'
+import { SOUND_LIBRARY, SOUND_NONE } from '@/lib/hooks/use-notification-sound'
 
-describe('senderPatternIndex', () => {
-  it('returns a number in [0, 4]', () => {
-    const ids = [
-      'abc123',
-      '00000000-0000-0000-0000-000000000000',
-      'user-antonio',
-      'user-luca',
-      '',
-    ]
-    for (const id of ids) {
-      const idx = senderPatternIndex(id)
-      expect(idx).toBeGreaterThanOrEqual(0)
-      expect(idx).toBeLessThan(5)
+describe('SOUND_LIBRARY', () => {
+  it('has at least 5 sounds', () => {
+    expect(SOUND_LIBRARY.length).toBeGreaterThanOrEqual(5)
+  })
+
+  it('every sound has an id, label, and at least one tone', () => {
+    for (const s of SOUND_LIBRARY) {
+      expect(s.id).toBeTruthy()
+      expect(s.label).toBeTruthy()
+      expect(s.tones.length).toBeGreaterThanOrEqual(1)
     }
   })
 
-  it('is deterministic — same input always returns same output', () => {
-    const id = 'test-sender-id-xyz'
-    expect(senderPatternIndex(id)).toBe(senderPatternIndex(id))
-    expect(senderPatternIndex(id)).toBe(senderPatternIndex(id))
+  it('every tone has a positive frequency and duration', () => {
+    for (const s of SOUND_LIBRARY) {
+      for (const t of s.tones) {
+        expect(t.freq).toBeGreaterThan(0)
+        expect(t.dur).toBeGreaterThan(0)
+        expect(t.start).toBeGreaterThanOrEqual(0)
+      }
+    }
   })
 
-  it('gives different senders different patterns most of the time', () => {
-    const senders = ['antonio', 'luca', 'maria', 'giuseppe', 'sara', 'marco', 'elena', 'davide']
-    const patterns = senders.map(senderPatternIndex)
-    const unique = new Set(patterns)
-    // With 8 senders and 5 patterns, we expect some variety (at least 2 distinct values)
-    expect(unique.size).toBeGreaterThanOrEqual(2)
+  it('all ids are unique', () => {
+    const ids = SOUND_LIBRARY.map(s => s.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('SOUND_NONE is not an id in SOUND_LIBRARY', () => {
+    expect(SOUND_LIBRARY.every(s => s.id !== SOUND_NONE)).toBe(true)
   })
 })
