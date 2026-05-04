@@ -168,6 +168,49 @@ export async function sendPushToAdmin(
 }
 
 /**
+ * Send push notification to all admin subscriptions except a specific user.
+ * Used for team-to-team messages so the sender doesn't notify themselves.
+ */
+export async function sendPushToAdminExcluding(
+  excludeUserId: string,
+  payload: { title: string; body: string; url?: string; tag?: string }
+) {
+  try {
+    initWebPush()
+  } catch {
+    return { sent: 0, failed: 0 }
+  }
+
+  const { data: subscriptions } = await supabaseAdmin
+    .from('admin_push_subscriptions')
+    .select('id, user_id, endpoint, p256dh, auth_key')
+    .neq('user_id', excludeUserId)
+
+  if (!subscriptions?.length) return { sent: 0, failed: 0 }
+
+  let sent = 0
+  let failed = 0
+
+  for (const sub of subscriptions) {
+    try {
+      await webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
+        JSON.stringify(payload)
+      )
+      sent++
+    } catch (err: unknown) {
+      const statusCode = (err as { statusCode?: number })?.statusCode
+      if (statusCode === 410 || statusCode === 404) {
+        await supabaseAdmin.from('admin_push_subscriptions').delete().eq('id', sub.id)
+      }
+      failed++
+    }
+  }
+
+  return { sent, failed }
+}
+
+/**
  * Get the VAPID public key for client-side subscription
  */
 export function getVapidPublicKey(): string | null {

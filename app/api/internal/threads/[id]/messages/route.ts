@@ -83,21 +83,33 @@ export async function POST(
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Push notification to other admins
+  // Push notification to other admins (never to the sender)
   try {
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('company_name')
-      .eq('id', thread.account_id)
-      .single()
+    const { sendPushToAdminExcluding } = await import('@/lib/portal/web-push')
+    const body = message.slice(0, 100) || (attachments?.length ? `📎 ${attachments[0].name}` : '📎 File')
 
-    const { sendPushToAdmin } = await import('@/lib/portal/web-push')
-    await sendPushToAdmin({
-      title: `${displayName} — ${account?.company_name ?? 'Team'}`,
-      body: message.slice(0, 100) || (attachments?.length ? `📎 ${attachments[0].name}` : '📎 File'),
-      url: `/portal-chats?view=internal`,
-      tag: `internal-thread-${threadId}`,
-    })
+    if (thread.account_id) {
+      // Client-linked thread — include the account name in the title
+      const { data: account } = await supabaseAdmin
+        .from('accounts')
+        .select('company_name')
+        .eq('id', thread.account_id)
+        .single()
+      await sendPushToAdminExcluding(user.id, {
+        title: `${displayName} — ${account?.company_name ?? 'Team'}`,
+        body,
+        url: `/portal-chats?view=internal`,
+        tag: `internal-thread-${threadId}`,
+      })
+    } else {
+      // Team general thread — "Antonio: message" or "Luca: message"
+      await sendPushToAdminExcluding(user.id, {
+        title: displayName,
+        body,
+        url: `/team-chat`,
+        tag: `team-chat-${threadId}`,
+      })
+    }
   } catch {
     // Non-critical
   }
