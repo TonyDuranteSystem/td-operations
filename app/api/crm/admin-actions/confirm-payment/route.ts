@@ -131,10 +131,13 @@ export async function POST(request: Request) {
     // 3. Handle pending_activation with pessimistic lock
     let activationId: string | null = null
 
-    // Check if pending_activation exists for this lead
+    // Check if pending_activation exists for this lead.
+    // portal_invoice_id is read so the raw payments insert below can be skipped
+    // when offer-signed already created a draft invoice (activate-service flips
+    // it to Paid; inserting again creates a duplicate).
     const { data: existingActivation } = await supabaseAdmin
       .from("pending_activations")
-      .select("id, status")
+      .select("id, status, portal_invoice_id")
       .eq("lead_id", lead_id)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -269,36 +272,48 @@ export async function POST(request: Request) {
       }
     }
 
-    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.insert; extract to lib/operations/payment.ts per dev_task 98484283
-    const { error: paymentErr } = await supabaseAdmin
-      .from("payments")
-      .insert({
-        account_id: accountId,
-        description: `${contract_type} - ${lead.full_name} (admin confirmed)`,
-        amount,
-        amount_currency: currency,
-        payment_method: payment_method || "wire",
-        paid_date: payment_date || new Date().toISOString().split("T")[0],
-        status: "Paid" satisfies (typeof PAYMENT_STATUS)[number],
-        notes: [
-          payment_reference ? `Ref: ${payment_reference}` : null,
-          paid_by_name ? `Paid by: ${paid_by_name}` : null,
-        ].filter(Boolean).join(". ") || undefined,
-        paid_by_name: paid_by_name || null,
-        is_test: lead.is_test || false,
-      })
+    // Skip the raw payments insert when an existing draft invoice is linked
+    // to the activation. activate-service (called below) flips that draft to
+    // Paid via syncInvoiceStatus('payment', ...), which is the canonical path.
+    // Inserting here would create a duplicate Paid row with no invoice_number
+    // and no client_expenses mirror.
+    //
+    // For Mode 2 (legacy lead, no offer, no draft) we keep the raw insert as
+    // a fallback record. Replacing it with createTDInvoice is tracked for the
+    // PR 1 architecture pass (sysdoc 'ops-2026-05-03-formation-architecture-decision-and-plan'
+    // Step 8).
+    if (!existingActivation?.portal_invoice_id) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw payments.insert; extract to lib/operations/payment.ts per dev_task 98484283
+      const { error: paymentErr } = await supabaseAdmin
+        .from("payments")
+        .insert({
+          account_id: accountId,
+          description: `${contract_type} - ${lead.full_name} (admin confirmed)`,
+          amount,
+          amount_currency: currency,
+          payment_method: payment_method || "wire",
+          paid_date: payment_date || new Date().toISOString().split("T")[0],
+          status: "Paid" satisfies (typeof PAYMENT_STATUS)[number],
+          notes: [
+            payment_reference ? `Ref: ${payment_reference}` : null,
+            paid_by_name ? `Paid by: ${paid_by_name}` : null,
+          ].filter(Boolean).join(". ") || undefined,
+          paid_by_name: paid_by_name || null,
+          is_test: lead.is_test || false,
+        })
 
-    if (paymentErr) {
-      console.error("[confirm-payment] Payment insert error:", paymentErr.message)
-      // Continue anyway — payment record is secondary, activation is critical
-      // But log it so admin knows
-      logAction({
-        actor: "crm-admin",
-        action_type: "error",
-        table_name: "payments",
-        summary: `Payment record failed for ${lead.full_name}: ${paymentErr.message}`,
-        details: { lead_id, error: paymentErr.message },
-      })
+      if (paymentErr) {
+        console.error("[confirm-payment] Payment insert error:", paymentErr.message)
+        // Continue anyway — payment record is secondary, activation is critical
+        // But log it so admin knows
+        logAction({
+          actor: "crm-admin",
+          action_type: "error",
+          table_name: "payments",
+          summary: `Payment record failed for ${lead.full_name}: ${paymentErr.message}`,
+          details: { lead_id, error: paymentErr.message },
+        })
+      }
     }
 
     // 6. Update lead status

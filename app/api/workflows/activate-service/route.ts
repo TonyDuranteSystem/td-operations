@@ -813,10 +813,15 @@ export async function POST(req: NextRequest) {
     // Creates in BOTH client_invoices (portal) and payments (CRM), linked by FK
     // DEDUP: If offer-signed already created an invoice (portal_invoice_id on activation), skip creation and just mark it Paid
     if (activation.portal_invoice_id) {
-      // Invoice already created at signing — just mark it Paid now
+      // Invoice already created at signing — just mark it Paid now.
+      // pending_activations.portal_invoice_id references a payments.id (createTDInvoice
+      // writes TD invoices to payments + client_expenses, NOT client_invoices). Use
+      // syncInvoiceStatus('payment', ...) so the payments row + client_expenses mirror
+      // both flip to Paid. The 'invoice' source updates client_invoices, which has no
+      // matching row for TD invoices — silent no-op.
       try {
         const today = new Date().toISOString().split("T")[0]
-        await syncInvoiceStatus("invoice", activation.portal_invoice_id, "Paid", today, Number(activation.amount) || undefined)
+        await syncInvoiceStatus("payment", activation.portal_invoice_id, "Paid", today, Number(activation.amount) || undefined)
 
         // Backfill account_id on the existing invoice if we now have one
         if (autoAccountId) {
