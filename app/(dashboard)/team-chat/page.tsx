@@ -191,7 +191,6 @@ export default function TeamChatPage() {
         const sentByMe = sentByMeIds.current.has(msg.id)
         if (sentByMe) sentByMeIds.current.delete(msg.id)
         const isOwnMessage = sentByMe || msg.sender_id === currentUserId
-        console.warn('[TC-RT]', { msgSender: msg.sender_id, currentUser: currentUserId, sentByMe, isOwnMessage })
         if (!isOwnMessage) {
           playSenderSound(msg.sender_id)
           fetch(`/api/internal/threads/${threadId}`, { method: 'GET' }).catch(() => {})
