@@ -27,7 +27,7 @@ import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
@@ -206,6 +206,21 @@ function ContactsSection({
   const [newEmail, setNewEmail] = useState('')
   const [creating, setCreating] = useState(false)
   const [unlinkTarget, setUnlinkTarget] = useState<{ id: string; name: string; role: string | null } | null>(null)
+
+  const CONTACT_ROLE_OPTIONS = [
+    { label: '—', value: '' },
+    { label: 'Owner / Sole Member', value: 'owner' },
+    { label: 'Authorized Representative', value: 'authorized_representative' },
+    { label: 'Manager', value: 'manager' },
+    { label: 'Accountant', value: 'accountant' },
+  ]
+
+  const makeRoleSaver = (contactId: string) => async (value: string) => {
+    const result = await updateAccountContactRole(account.id, contactId, value)
+    if (result.success) toast.success('Role updated')
+    else toast.error(result.error ?? 'Failed')
+    return result
+  }
 
   const handleUnlinkConfirm = async () => {
     if (!unlinkTarget) return { success: false, error: 'No contact selected' }
@@ -408,7 +423,6 @@ function ContactsSection({
                 <Link href={`/contacts/${c.id}`} className="font-medium text-sm text-blue-600 hover:underline">
                   {c.full_name}
                 </Link>
-                {c.role && <span className="text-xs text-muted-foreground">({c.role})</span>}
                 <button
                   onClick={() => setUnlinkTarget({ id: c.id, name: c.full_name, role: c.role ?? null })}
                   className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
@@ -418,6 +432,7 @@ function ContactsSection({
                 </button>
               </div>
               <div className="pl-9 grid gap-1.5">
+                <EditableField icon={Users} label="Role" type="select" options={CONTACT_ROLE_OPTIONS} value={c.role ?? ''} onSave={makeRoleSaver(c.id)} />
                 <EditableField icon={Mail} label="Email" value={c.email ?? ''} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
                 <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
                 <EditableField icon={Globe} label="Language" type="select" options={[{ label: '', value: '' }, { label: 'English', value: 'English' }, { label: 'Italian', value: 'Italian' }]} value={c.language ?? ''} onSave={makeContactSaver(c.id, 'language', c.updated_at)} />

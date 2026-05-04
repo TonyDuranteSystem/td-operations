@@ -136,6 +136,33 @@ export async function updateContactField(
   })
 }
 
+const ACCOUNT_CONTACT_ROLES = ['', 'owner', 'authorized_representative', 'manager', 'accountant']
+
+export async function updateAccountContactRole(
+  accountId: string,
+  contactId: string,
+  role: string
+): Promise<ActionResult> {
+  if (!ACCOUNT_CONTACT_ROLES.includes(role)) {
+    return { success: false, error: `Invalid role: ${role}` }
+  }
+
+  return safeAction(async () => {
+    const { error } = await supabaseAdmin
+      .from('account_contacts')
+      .update({ role: role || null })
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+    if (error) throw new Error(error.message)
+    revalidatePath(`/accounts/${accountId}`)
+    revalidatePath(`/contacts/${contactId}`)
+  }, {
+    action_type: 'update', table_name: 'account_contacts', record_id: contactId,
+    summary: `Contact role updated to ${role || '(none)'}`,
+    details: { accountId, contactId, role },
+  })
+}
+
 export async function createAccount(
   input: CreateAccountInput
 ): Promise<ActionResult<{ id: string }>> {

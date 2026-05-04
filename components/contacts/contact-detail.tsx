@@ -30,6 +30,7 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
+import { updateAccountContactRole } from '@/app/(dashboard)/accounts/actions'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 
@@ -537,35 +538,55 @@ function OverviewTab({
         ) : (
           <div className="space-y-2">
             {accounts.map(acc => (
-              <Link
-                key={acc.id}
-                href={`/accounts/${acc.id}`}
-                className="flex items-center justify-between p-3 rounded-lg border hover:bg-zinc-50 transition-colors group"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">{acc.company_name}</p>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {acc.entity_type && <span>{acc.entity_type === 'Single Member LLC' ? 'SMLLC' : acc.entity_type === 'Multi Member LLC' ? 'MMLLC' : acc.entity_type}</span>}
-                      {acc.state_of_formation && <span>· {acc.state_of_formation}</span>}
-                      {acc.role && <span>· {acc.role}</span>}
-                      {acc.ownership_pct != null && <span>· {acc.ownership_pct}%</span>}
+              <div key={acc.id} className="rounded-lg border overflow-hidden">
+                <Link
+                  href={`/accounts/${acc.id}`}
+                  className="flex items-center justify-between p-3 hover:bg-zinc-50 transition-colors group"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{acc.company_name}</p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {acc.entity_type && <span>{acc.entity_type === 'Single Member LLC' ? 'SMLLC' : acc.entity_type === 'Multi Member LLC' ? 'MMLLC' : acc.entity_type}</span>}
+                        {acc.state_of_formation && <span>· {acc.state_of_formation}</span>}
+                        {acc.ownership_pct != null && <span>· {acc.ownership_pct}%</span>}
+                      </div>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    {acc.status && (
+                      <span className={cn(
+                        'text-xs font-medium px-1.5 py-0.5 rounded',
+                        acc.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-500'
+                      )}>
+                        {acc.status}
+                      </span>
+                    )}
+                    <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                </Link>
+                <div className="px-3 pb-3 pt-0 border-t bg-zinc-50/50">
+                  <EditableField
+                    label="Role"
+                    value={acc.role ?? ''}
+                    type="select"
+                    options={[
+                      { label: '—', value: '' },
+                      { label: 'Owner / Sole Member', value: 'owner' },
+                      { label: 'Authorized Representative', value: 'authorized_representative' },
+                      { label: 'Manager', value: 'manager' },
+                      { label: 'Accountant', value: 'accountant' },
+                    ]}
+                    onSave={async (value) => {
+                      const result = await updateAccountContactRole(acc.id, contact.id, value)
+                      if (result.success) toast.success('Role updated')
+                      else toast.error(result.error ?? 'Failed')
+                      return result
+                    }}
+                  />
                 </div>
-                <div className="flex items-center gap-2">
-                  {acc.status && (
-                    <span className={cn(
-                      'text-xs font-medium px-1.5 py-0.5 rounded',
-                      acc.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-500'
-                    )}>
-                      {acc.status}
-                    </span>
-                  )}
-                  <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}
