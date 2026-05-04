@@ -568,26 +568,61 @@ export default function ContractPage() {
         }
       }
 
-      // Update offer status + recalculated bank amount (retry)
-      const bankUpdate = correctTotal > 0 && offer.bank_details
-        ? { bank_details: { ...offer.bank_details, amount: `${correctCurrency}${correctTotal.toLocaleString('en-US')}` } }
-        : {}
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed', payment_links: null, ...bankUpdate }).eq('token', offer.token)
-          if (!pErr) break
-        } catch { /* retry */ }
-      }
+      // Branch on renewal vs new contract.
+      // Renewal MSA lives in `annual_agreements` (the new dedicated table).
+      // New contracts (formation/onboarding/tax_return/itin) live in `offers`.
+      // The two flows do NOT share a webhook — sending a renewal through
+      // `offer-signed` produces phantom Paid invoices via activate-service.
+      const isRenewal = (offer as any).contract_type === 'renewal' // eslint-disable-line @typescript-eslint/no-explicit-any
 
-      // Notify backend that contract was signed → creates pending_activation
-      try {
-        await fetch('/api/webhooks/offer-signed', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offer_token: offer.token })
-        })
-      } catch (e) {
-        console.warn('[contract] Failed to notify offer-signed webhook:', e)
+      if (isRenewal) {
+        // Mark the annual_agreements row signed (the canonical source).
+        // Try a few times in case of transient network issues.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const { error: aaErr } = await supabasePublic
+              .from('annual_agreements')
+              .update({ status: 'signed', signed_at: new Date().toISOString() })
+              .eq('token', offer.token)
+            if (!aaErr) break
+          } catch { /* retry */ }
+        }
+
+        // Fire the dedicated renewal webhook — it creates the proper
+        // "1st Installment <year> — LLC Annual Management" Sent invoice
+        // with idempotency_key 'renewal-1st:<account>:<year>' and
+        // auto-sends to the portal so the client sees Pay Invoice.
+        try {
+          await fetch('/api/webhooks/agreement-signed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agreement_token: offer.token })
+          })
+        } catch (e) {
+          console.warn('[contract] Failed to notify agreement-signed webhook:', e)
+        }
+      } else {
+        // New contract path (formation/onboarding/tax_return/itin) —
+        // unchanged: update offers, fire offer-signed.
+        const bankUpdate = correctTotal > 0 && offer.bank_details
+          ? { bank_details: { ...offer.bank_details, amount: `${correctCurrency}${correctTotal.toLocaleString('en-US')}` } }
+          : {}
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed', payment_links: null, ...bankUpdate }).eq('token', offer.token)
+            if (!pErr) break
+          } catch { /* retry */ }
+        }
+
+        try {
+          await fetch('/api/webhooks/offer-signed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ offer_token: offer.token })
+          })
+        } catch (e) {
+          console.warn('[contract] Failed to notify offer-signed webhook:', e)
+        }
       }
 
       // Post-sign behavior — show payment choice buttons

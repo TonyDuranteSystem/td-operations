@@ -176,6 +176,39 @@ export async function POST(req: NextRequest) {
 
     const contractType = offer?.contract_type || "formation"
 
+    // Defense-in-depth: refuse renewals.
+    //
+    // Renewal MSAs live entirely in the annual_agreements + agreement-signed
+    // pipeline. activate-service is for NEW contracts only (formation,
+    // onboarding, tax_return, itin). If a renewal pending_activation reaches
+    // here, the legacy code path produces phantom Paid invoices labeled
+    // "Service Package - <Contact>" with no idempotency key. Mark the
+    // activation activated so callers don't retry, log a warning, and exit.
+    if (contractType === "renewal") {
+      console.warn(
+        `[activate-service] Refusing renewal contract — pending_activation ${pending_activation_id} ` +
+        `(offer ${activation.offer_token}). Renewals are handled by /api/webhooks/agreement-signed; ` +
+        `activate-service does not invoice them.`
+      )
+      await dbWriteSafe(
+        supabase
+          .from("pending_activations")
+          .update({
+            status: "activated",
+            confirmation_mode: "auto",
+            activated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", pending_activation_id),
+        "pending_activations.update"
+      )
+      return NextResponse.json({
+        ok: true,
+        contract_type: "renewal",
+        skipped: "renewal — handled by agreement-signed pipeline",
+      })
+    }
+
     // Always auto-execute — supervised mode removed (caused silent failures)
     const isAutoMode = AUTO_MODE_ALWAYS
 
