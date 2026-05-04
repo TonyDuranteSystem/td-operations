@@ -101,6 +101,7 @@ export default function TeamChatPage() {
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const currentUserIdRef = useRef<string | null>(null)
+  const sentByMeIds = useRef<Set<string>>(new Set())
   const { playSenderSound, previewSound } = useNotificationSound()
 
   const { isRecording, isTranscribing, startRecording, stopRecording, isSupported: voiceSupported } =
@@ -186,8 +187,12 @@ export default function TeamChatPage() {
           if (prev.some(m => m.id === msg.id)) return prev
           return [...prev, { ...msg, reply_to_preview: null }]
         })
-        // currentUserIdRef is set synchronously on initial load — no async needed
-        if (currentUserIdRef.current && msg.sender_id !== currentUserIdRef.current) {
+        // Skip sound for messages sent by this browser session (primary guard)
+        // or by the current user (fallback guard)
+        const sentByMe = sentByMeIds.current.has(msg.id)
+        if (sentByMe) sentByMeIds.current.delete(msg.id)
+        const isOwnMessage = sentByMe || (currentUserIdRef.current && msg.sender_id === currentUserIdRef.current)
+        if (!isOwnMessage) {
           playSenderSound(msg.sender_id)
           // Mark as seen (fire and forget)
           fetch(`/api/internal/threads/${threadId}`, { method: 'GET' }).catch(() => {})
@@ -274,6 +279,9 @@ export default function TeamChatPage() {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Failed to send')
       }
+      // Track this message ID so the Realtime handler knows not to play a sound
+      const sent = await res.json().catch(() => null)
+      if (sent?.message?.id) sentByMeIds.current.add(sent.message.id)
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to send message')
       setText(sentText)
