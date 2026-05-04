@@ -146,7 +146,7 @@ export default function PortalChatsPage() {
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const adminFileRef = useRef<HTMLInputElement>(null)
-  const prevTotalUnreadRef = useRef(0)
+  const prevTotalUnreadRef = useRef(-1)
   const lastSuggestedMsgRef = useRef<string | null>(null)
   const lastSentTextRef = useRef<string>('')
   const queryClient = useQueryClient()
