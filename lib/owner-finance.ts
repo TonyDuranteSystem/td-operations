@@ -176,7 +176,7 @@ export async function getOwnerPnL(year: number): Promise<OwnerPnL> {
   }
 
   pnl.gross_profit = pnl.income - pnl.cogs
-  pnl.net_profit = pnl.gross_profit - pnl.expenses
+  pnl.net_profit = pnl.gross_profit - pnl.expenses + pnl.uncategorized_income - pnl.uncategorized_expense
 
   for (let m = 1; m <= 12; m++) {
     const mb = monthlyMap[m]
