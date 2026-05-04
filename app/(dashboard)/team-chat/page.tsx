@@ -176,8 +176,9 @@ export default function TeamChatPage() {
   }, [loading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Realtime subscription (INSERT + UPDATE)
+  // currentUserId is in deps so the closure always has the fresh value (no stale state)
   useEffect(() => {
-    if (!threadId) return
+    if (!threadId || !currentUserId) return
     const supabase = createClient()
     const channel = supabase
       .channel(`team-chat-${threadId}`)
@@ -187,14 +188,12 @@ export default function TeamChatPage() {
           if (prev.some(m => m.id === msg.id)) return prev
           return [...prev, { ...msg, reply_to_preview: null }]
         })
-        // Skip sound for messages sent by this browser session (primary guard)
-        // or by the current user (fallback guard)
         const sentByMe = sentByMeIds.current.has(msg.id)
         if (sentByMe) sentByMeIds.current.delete(msg.id)
-        const isOwnMessage = sentByMe || (currentUserIdRef.current && msg.sender_id === currentUserIdRef.current)
+        const isOwnMessage = sentByMe || msg.sender_id === currentUserId
+        console.warn('[TC-RT]', { msgSender: msg.sender_id, currentUser: currentUserId, sentByMe, isOwnMessage })
         if (!isOwnMessage) {
           playSenderSound(msg.sender_id)
-          // Mark as seen (fire and forget)
           fetch(`/api/internal/threads/${threadId}`, { method: 'GET' }).catch(() => {})
         }
       })
@@ -205,7 +204,7 @@ export default function TeamChatPage() {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [threadId, playSenderSound])
+  }, [threadId, currentUserId, playSenderSound])
 
   // Scroll on new messages
   useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
