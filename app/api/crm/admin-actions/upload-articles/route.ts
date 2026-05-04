@@ -83,39 +83,44 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 2. Ensure contact-level folder exists, then find its "1. Company" subfolder.
-    const folderResult = await ensureContactFolder(contactId, contactName)
-    const companySubfolderId = folderResult.subfolders["1. Company"]
-    if (!companySubfolderId) {
-      return NextResponse.json(
-        { error: "Contact Drive folder is missing the '1. Company' subfolder." },
-        { status: 500 },
-      )
-    }
-
-    // 3. Upload the file.
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const mimeType = file.type || "application/pdf"
+    // 2-4. Drive: ensure contact folder, upload Articles, insert documents row.
+    // In sandbox (SANDBOX_MODE=1), Drive writes are mocked and listFiles on the
+    // mock id 404s — same pattern formation-setup handles by catching and
+    // continuing. In production, Drive failure here is a real error; surface it.
+    const isSandbox = process.env.SANDBOX_MODE === '1'
     const safeChosen = chosenName.replace(/[^A-Za-z0-9_ -]/g, "").trim()
     const fileName = `Articles of Organization - ${safeChosen || "LLC"}.pdf`
-    const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, companySubfolderId) as { id: string }
+    let driveFileId: string | null = null
+    try {
+      const folderResult = await ensureContactFolder(contactId, contactName)
+      const companySubfolderId = folderResult.subfolders["1. Company"]
+      if (!companySubfolderId) {
+        throw new Error("Contact Drive folder is missing the '1. Company' subfolder.")
+      }
+      const buffer = Buffer.from(await file.arrayBuffer())
+      const mimeType = file.type || "application/pdf"
+      const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, companySubfolderId) as { id: string }
+      driveFileId = driveFile.id
 
-    // 4. Documents row — linked to contact for now. Materialization migrates
-    // the underlying Drive file into the company folder as part of its
-    // contact-folder → company-folder migration; the documents row's
-    // drive_file_id remains valid (Drive moves files in place).
-    await supabaseAdmin.from("documents").insert({
-      file_name: fileName,
-      drive_file_id: driveFile.id,
-      drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
-      document_type_name: "Articles of Organization",
-      category: 1,
-      category_name: "Company",
-      status: "classified",
-      contact_id: contactId,
-      account_id: null,
-      portal_visible: true,
-    })
+      await supabaseAdmin.from("documents").insert({
+        file_name: fileName,
+        drive_file_id: driveFile.id,
+        drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
+        document_type_name: "Articles of Organization",
+        category: 1,
+        category_name: "Company",
+        status: "classified",
+        contact_id: contactId,
+        account_id: null,
+        portal_visible: true,
+      })
+    } catch (driveErr) {
+      const msg = driveErr instanceof Error ? driveErr.message : String(driveErr)
+      if (!isSandbox) {
+        return NextResponse.json({ error: `Drive upload failed: ${msg}` }, { status: 500 })
+      }
+      console.warn("[upload-articles] Sandbox Drive failure (expected — Drive writes blocked in sandbox):", msg)
+    }
 
     // 5. Materialize the company.
     const result = await materializeFormationCompany({
@@ -132,18 +137,18 @@ export async function POST(req: NextRequest) {
           error: result.error || `Materialization failed (${result.outcome})`,
           outcome: result.outcome,
           steps: result.steps,
-          drive_file_id: driveFile.id,
+          drive_file_id: driveFileId,
         },
         { status: 500 },
       )
     }
 
     // Backfill documents row with the new account_id once we have it.
-    if (result.account_id) {
+    if (result.account_id && driveFileId) {
       await supabaseAdmin
         .from("documents")
         .update({ account_id: result.account_id, updated_at: new Date().toISOString() })
-        .eq("drive_file_id", driveFile.id)
+        .eq("drive_file_id", driveFileId)
     }
 
     return NextResponse.json({
@@ -151,8 +156,9 @@ export async function POST(req: NextRequest) {
       outcome: result.outcome,
       account_id: result.account_id,
       steps: result.steps,
-      drive_file_id: driveFile.id,
-      drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
+      drive_file_id: driveFileId,
+      drive_link: driveFileId ? `https://drive.google.com/file/d/${driveFileId}/view` : null,
+      sandbox_drive_skipped: isSandbox && !driveFileId ? true : undefined,
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
