@@ -196,12 +196,12 @@ async function _sendNotificationEmailToContact(contactId: string, title: string,
   }
 }
 
-// Throttle: 1 email per conversation per 5 minutes (avoids spam when admin sends multiple messages)
+// Throttle: 1 email per conversation per 2 hours (avoids spam when admin sends multiple messages)
 const recentClientNotifications = new Map<string, number>()
 
 /**
  * Send an email to the client when an admin sends a portal chat message.
- * Throttled: max 1 email per conversation per 5 minutes.
+ * Throttled: max 1 email per conversation per 2 hours.
  * Called by the API route and the portal_chat_send MCP tool.
  */
 export async function notifyClientOfAdminMessage({
@@ -217,7 +217,7 @@ export async function notifyClientOfAdminMessage({
   if (!throttleKey) return
 
   const lastSent = recentClientNotifications.get(throttleKey) ?? 0
-  if (Date.now() - lastSent < 5 * 60 * 1000) return
+  if (Date.now() - lastSent < 2 * 60 * 60 * 1000) return
   recentClientNotifications.set(throttleKey, Date.now())
 
   // Resolve contact: email, name, language
