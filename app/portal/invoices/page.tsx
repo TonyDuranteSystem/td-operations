@@ -113,7 +113,9 @@ export default async function PortalInvoicesPage({
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale)}</h1>
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">
-            {activeTab === 'sales' ? t('invoices.salesSubtitle', locale) : t('invoices.expensesSubtitle', locale)}
+            {!selectedAccountId
+              ? (locale === 'it' ? 'Le tue spese personali' : 'Your personal expenses')
+              : activeTab === 'sales' ? t('invoices.salesSubtitle', locale) : t('invoices.expensesSubtitle', locale)}
           </p>
         </div>
         {activeTab === 'sales' && selectedAccountId && (

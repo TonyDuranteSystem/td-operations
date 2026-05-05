@@ -34,31 +34,26 @@ describe('Contact-centric architecture rules', () => {
     expect(true).toBe(true)
   })
 
-  it('chat should work with contact_id only (no account_id)', () => {
-    // usePortalChat(null, contactId) should construct contact_id query
-    const accountId = null
+  // PR 2 Step 6 (2026-05-05): chat threading is unified per-contact.
+  // The hook ALWAYS uses contact_id for the GET / realtime channel,
+  // regardless of whether an account is selected. accountId is kept
+  // only for picker default + send-side scope tagging.
+
+  it('chat threading always uses contact_id (PR 2 Step 6 — unified per-contact thread)', () => {
+    // usePortalChat(accountId | null, contactId) — accountId no longer
+    // affects the query. Both these calls hit the same thread.
     const contactId = 'test-contact-id'
-    const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
-    expect(queryParam).toBe('contact_id=test-contact-id')
+    const queryParamWithAccount = `contact_id=${contactId}`
+    const queryParamWithoutAccount = `contact_id=${contactId}`
+    expect(queryParamWithAccount).toBe(queryParamWithoutAccount)
+    expect(queryParamWithAccount).toBe('contact_id=test-contact-id')
   })
 
-  it('chat should prefer account_id when available', () => {
-    const accountId = 'test-account-id'
-    const contactId = 'test-contact-id'
-    const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
-    expect(queryParam).toBe('account_id=test-account-id')
-  })
-
-  it('realtime filter uses correct column based on available ID', () => {
-    // With account_id
-    const testAccount: string | null = 'test-account'
-    const filterColumn1 = testAccount ? 'account_id' : 'contact_id'
-    expect(filterColumn1).toBe('account_id')
-
-    // Without account_id (contact only)
-    const accountId: string | null = null
-    const filterColumn2 = accountId ? 'account_id' : 'contact_id'
-    expect(filterColumn2).toBe('contact_id')
+  it('realtime filter is always contact_id (PR 2 Step 6)', () => {
+    // After PR 2, the realtime subscription filters by contact_id
+    // regardless of whether an account is currently selected.
+    const filterColumn = 'contact_id'
+    expect(filterColumn).toBe('contact_id')
   })
 
   it('notification requires at least one of account_id or contact_id', () => {

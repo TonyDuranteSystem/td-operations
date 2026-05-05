@@ -125,6 +125,7 @@ export async function POST(request: NextRequest) {
   // PR 2 Step 6 — sender_context: 'person' | 'company' | null. NULL is
   // accepted (legacy callers / admin replies that don't pass a tag).
   // 'company' requires account_id to be set.
+  // 'person' implies account_id=NULL — enforced below at insert time.
   let sender_context: 'person' | 'company' | null = null
   if (rawSenderContext === 'person' || rawSenderContext === 'company') {
     sender_context = rawSenderContext
@@ -133,6 +134,9 @@ export async function POST(request: NextRequest) {
   }
   if (sender_context === 'company' && !account_id) {
     return NextResponse.json({ error: 'sender_context=company requires account_id' }, { status: 400 })
+  }
+  if (sender_context === 'person' && account_id) {
+    return NextResponse.json({ error: 'sender_context=person must not include account_id' }, { status: 400 })
   }
 
   // Input validation: max message length

@@ -91,6 +91,8 @@ export type Database = {
           audit_reviewed_by: string | null
           audit_sections: Json | null
           bank_details: Json | null
+          business_legal_address_id: string | null
+          business_mailing_address_id: string | null
           cancellation_date: string | null
           cancellation_requested: boolean | null
           client_health: string | null
@@ -120,6 +122,8 @@ export type Database = {
           is_test: boolean | null
           kb_folder_path: string | null
           lead_source: string | null
+          legal_link_verified: boolean
+          mailing_link_verified: boolean
           notes: string | null
           onboarding_date: string | null
           partner_id: string | null
@@ -131,12 +135,14 @@ export type Database = {
           portal_created_date: string | null
           portal_tier: string | null
           qb_customer_id: string | null
+          ra_link_verified: boolean
           ra_renewal_date: string | null
           referral_commission_pct: number | null
           referral_status: string | null
           referred_by: string | null
           referrer: string | null
           registered_agent_address: string | null
+          registered_agent_id: string | null
           registered_agent_provider: string | null
           services_bundle: string[] | null
           setup_fee_amount: number | null
@@ -159,6 +165,8 @@ export type Database = {
           audit_reviewed_by?: string | null
           audit_sections?: Json | null
           bank_details?: Json | null
+          business_legal_address_id?: string | null
+          business_mailing_address_id?: string | null
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
           client_health?: string | null
@@ -192,6 +200,8 @@ export type Database = {
           is_test?: boolean | null
           kb_folder_path?: string | null
           lead_source?: string | null
+          legal_link_verified?: boolean
+          mailing_link_verified?: boolean
           notes?: string | null
           onboarding_date?: string | null
           partner_id?: string | null
@@ -203,12 +213,14 @@ export type Database = {
           portal_created_date?: string | null
           portal_tier?: string | null
           qb_customer_id?: string | null
+          ra_link_verified?: boolean
           ra_renewal_date?: string | null
           referral_commission_pct?: number | null
           referral_status?: string | null
           referred_by?: string | null
           referrer?: string | null
           registered_agent_address?: string | null
+          registered_agent_id?: string | null
           registered_agent_provider?: string | null
           services_bundle?: string[] | null
           setup_fee_amount?: number | null
@@ -231,6 +243,8 @@ export type Database = {
           audit_reviewed_by?: string | null
           audit_sections?: Json | null
           bank_details?: Json | null
+          business_legal_address_id?: string | null
+          business_mailing_address_id?: string | null
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
           client_health?: string | null
@@ -264,6 +278,8 @@ export type Database = {
           is_test?: boolean | null
           kb_folder_path?: string | null
           lead_source?: string | null
+          legal_link_verified?: boolean
+          mailing_link_verified?: boolean
           notes?: string | null
           onboarding_date?: string | null
           partner_id?: string | null
@@ -275,12 +291,14 @@ export type Database = {
           portal_created_date?: string | null
           portal_tier?: string | null
           qb_customer_id?: string | null
+          ra_link_verified?: boolean
           ra_renewal_date?: string | null
           referral_commission_pct?: number | null
           referral_status?: string | null
           referred_by?: string | null
           referrer?: string | null
           registered_agent_address?: string | null
+          registered_agent_id?: string | null
           registered_agent_provider?: string | null
           services_bundle?: string[] | null
           setup_fee_amount?: number | null
@@ -296,10 +314,31 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "accounts_business_legal_address_id_fkey"
+            columns: ["business_legal_address_id"]
+            isOneToOne: false
+            referencedRelation: "addresses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "accounts_business_mailing_address_id_fkey"
+            columns: ["business_mailing_address_id"]
+            isOneToOne: false
+            referencedRelation: "addresses"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "accounts_partner_id_fkey"
             columns: ["partner_id"]
             isOneToOne: false
             referencedRelation: "client_partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "accounts_registered_agent_id_fkey"
+            columns: ["registered_agent_id"]
+            isOneToOne: false
+            referencedRelation: "addresses"
             referencedColumns: ["id"]
           },
         ]
@@ -395,6 +434,69 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      addresses: {
+        Row: {
+          active: boolean
+          address_line1: string
+          address_line2: string | null
+          agent_name: string | null
+          city: string
+          country: string
+          county: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          is_td_provided: boolean
+          kind: string
+          name: string
+          notes: string | null
+          provider: string | null
+          state: string
+          updated_at: string
+          zip: string
+        }
+        Insert: {
+          active?: boolean
+          address_line1: string
+          address_line2?: string | null
+          agent_name?: string | null
+          city: string
+          country?: string
+          county?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_td_provided?: boolean
+          kind: string
+          name: string
+          notes?: string | null
+          provider?: string | null
+          state: string
+          updated_at?: string
+          zip: string
+        }
+        Update: {
+          active?: boolean
+          address_line1?: string
+          address_line2?: string | null
+          agent_name?: string | null
+          city?: string
+          country?: string
+          county?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_td_provided?: boolean
+          kind?: string
+          name?: string
+          notes?: string | null
+          provider?: string | null
+          state?: string
+          updated_at?: string
+          zip?: string
+        }
+        Relationships: []
       }
       admin_push_subscriptions: {
         Row: {
@@ -1011,6 +1113,45 @@ export type Database = {
           title?: string
           updated_at?: string | null
           usage_count?: number | null
+        }
+        Relationships: []
+      }
+      audit_flags: {
+        Row: {
+          entity_id: string
+          entity_type: string
+          field_name: string
+          flag_type: string
+          id: string
+          marked_at: string
+          marked_by: string
+          note: string | null
+          reversed_at: string | null
+          reversed_by: string | null
+        }
+        Insert: {
+          entity_id: string
+          entity_type: string
+          field_name: string
+          flag_type: string
+          id?: string
+          marked_at?: string
+          marked_by: string
+          note?: string | null
+          reversed_at?: string | null
+          reversed_by?: string | null
+        }
+        Update: {
+          entity_id?: string
+          entity_type?: string
+          field_name?: string
+          flag_type?: string
+          id?: string
+          marked_at?: string
+          marked_by?: string
+          note?: string | null
+          reversed_at?: string | null
+          reversed_by?: string | null
         }
         Relationships: []
       }
@@ -4675,10 +4816,15 @@ export type Database = {
         Row: {
           attachment_name: string | null
           attachment_url: string | null
+          attachments: Json | null
           created_at: string | null
+          deleted_at: string | null
+          deleted_by: string | null
           id: string
           message: string
           read_at: string | null
+          reply_to_id: string | null
+          seen_at: string | null
           sender_id: string
           sender_name: string
           thread_id: string
@@ -4686,10 +4832,15 @@ export type Database = {
         Insert: {
           attachment_name?: string | null
           attachment_url?: string | null
+          attachments?: Json | null
           created_at?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
           message: string
           read_at?: string | null
+          reply_to_id?: string | null
+          seen_at?: string | null
           sender_id: string
           sender_name: string
           thread_id: string
@@ -4697,15 +4848,27 @@ export type Database = {
         Update: {
           attachment_name?: string | null
           attachment_url?: string | null
+          attachments?: Json | null
           created_at?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
           message?: string
           read_at?: string | null
+          reply_to_id?: string | null
+          seen_at?: string | null
           sender_id?: string
           sender_name?: string
           thread_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "internal_messages_reply_to_id_fkey"
+            columns: ["reply_to_id"]
+            isOneToOne: false
+            referencedRelation: "internal_messages"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "internal_messages_thread_id_fkey"
             columns: ["thread_id"]
@@ -7805,6 +7968,7 @@ export type Database = {
           account_id: string | null
           attachment_name: string | null
           attachment_url: string | null
+          attachments: Json
           contact_id: string | null
           created_at: string | null
           deleted_at: string | null
@@ -7820,6 +7984,7 @@ export type Database = {
           account_id?: string | null
           attachment_name?: string | null
           attachment_url?: string | null
+          attachments?: Json
           contact_id?: string | null
           created_at?: string | null
           deleted_at?: string | null
@@ -7835,6 +8000,7 @@ export type Database = {
           account_id?: string | null
           attachment_name?: string | null
           attachment_url?: string | null
+          attachments?: Json
           contact_id?: string | null
           created_at?: string | null
           deleted_at?: string | null
