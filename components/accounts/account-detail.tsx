@@ -900,9 +900,19 @@ type CrmMember = {
   is_primary: boolean | null
   is_signer: boolean
   contact_id: string | null
+  address_street: string | null
+  address_city: string | null
+  address_state: string | null
+  address_zip: string | null
+  address_country: string | null
   representative_name: string | null
   representative_email: string | null
   representative_phone: string | null
+  representative_address_street: string | null
+  representative_address_city: string | null
+  representative_address_state: string | null
+  representative_address_zip: string | null
+  representative_address_country: string | null
 }
 
 function MembersSection({ accountId, accountCompanyName }: { accountId: string; accountCompanyName: string }) {
@@ -1044,6 +1054,11 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
               <input placeholder="Email" className={inputCls} value={String(addDraft.email ?? '')} onChange={e => setAddDraft(d => ({ ...d, email: e.target.value }))} />
               <input placeholder="Phone" className={inputCls} value={String(addDraft.phone ?? '')} onChange={e => setAddDraft(d => ({ ...d, phone: e.target.value }))} />
               <input placeholder="Ownership %" type="number" min={0} max={100} className={inputCls} value={addDraft.ownership_pct ?? ''} onChange={e => setAddDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+              <input placeholder="Street address" className={`${inputCls} col-span-2`} value={String(addDraft.address_street ?? '')} onChange={e => setAddDraft(d => ({ ...d, address_street: e.target.value }))} />
+              <input placeholder="City" className={inputCls} value={String(addDraft.address_city ?? '')} onChange={e => setAddDraft(d => ({ ...d, address_city: e.target.value }))} />
+              <input placeholder="State / Province" className={inputCls} value={String(addDraft.address_state ?? '')} onChange={e => setAddDraft(d => ({ ...d, address_state: e.target.value }))} />
+              <input placeholder="ZIP / Postal code" className={inputCls} value={String(addDraft.address_zip ?? '')} onChange={e => setAddDraft(d => ({ ...d, address_zip: e.target.value }))} />
+              <input placeholder="Country" className={inputCls} value={String(addDraft.address_country ?? '')} onChange={e => setAddDraft(d => ({ ...d, address_country: e.target.value }))} />
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2">
@@ -1053,6 +1068,11 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
               <input placeholder="Representative email" className={inputCls} value={String(addDraft.representative_email ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_email: e.target.value }))} />
               <input placeholder="Representative phone" className={inputCls} value={String(addDraft.representative_phone ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_phone: e.target.value }))} />
               <input placeholder="Ownership %" type="number" min={0} max={100} className={inputCls} value={addDraft.ownership_pct ?? ''} onChange={e => setAddDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+              <input placeholder="Rep street address" className={`${inputCls} col-span-2`} value={String(addDraft.representative_address_street ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_street: e.target.value }))} />
+              <input placeholder="Rep city" className={inputCls} value={String(addDraft.representative_address_city ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_city: e.target.value }))} />
+              <input placeholder="Rep state / province" className={inputCls} value={String(addDraft.representative_address_state ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_state: e.target.value }))} />
+              <input placeholder="Rep ZIP / postal code" className={inputCls} value={String(addDraft.representative_address_zip ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_zip: e.target.value }))} />
+              <input placeholder="Rep country" className={inputCls} value={String(addDraft.representative_address_country ?? '')} onChange={e => setAddDraft(d => ({ ...d, representative_address_country: e.target.value }))} />
             </div>
           )}
           <div className="flex gap-2">
@@ -1102,6 +1122,11 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
                   {m.member_type === 'individual' && (m.email || m.phone) && (
                     <p className="text-xs text-muted-foreground pl-8">{[m.email, m.phone].filter(Boolean).join(' · ')}</p>
                   )}
+                  {m.member_type === 'individual' && (m.address_street || m.address_city || m.address_country) && (
+                    <p className="text-xs text-muted-foreground pl-8">
+                      {[m.address_street, m.address_city, m.address_state, m.address_zip, m.address_country].filter(Boolean).join(', ')}
+                    </p>
+                  )}
                   {m.member_type === 'company' && m.representative_name && (
                     <p className="text-xs text-muted-foreground pl-8">
                       Rep: {m.representative_name}{m.representative_email ? ` · ${m.representative_email}` : ''}{m.representative_phone ? ` · ${m.representative_phone}` : ''}
@@ -1130,6 +1155,26 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
                         <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Ownership %</p>
                         <input type="number" min={0} max={100} className={inputCls} value={editDraft.ownership_pct ?? ''} onChange={e => setEditDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
                       </div>
+                      <div className="col-span-2">
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Street Address</p>
+                        <input className={inputCls} value={String(editDraft.address_street ?? '')} onChange={e => setEditDraft(d => ({ ...d, address_street: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">City</p>
+                        <input className={inputCls} value={String(editDraft.address_city ?? '')} onChange={e => setEditDraft(d => ({ ...d, address_city: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">State / Province</p>
+                        <input className={inputCls} value={String(editDraft.address_state ?? '')} onChange={e => setEditDraft(d => ({ ...d, address_state: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">ZIP / Postal Code</p>
+                        <input className={inputCls} value={String(editDraft.address_zip ?? '')} onChange={e => setEditDraft(d => ({ ...d, address_zip: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Country</p>
+                        <input className={inputCls} value={String(editDraft.address_country ?? '')} onChange={e => setEditDraft(d => ({ ...d, address_country: e.target.value }))} />
+                      </div>
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2">
@@ -1156,6 +1201,26 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
                       <div>
                         <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Ownership %</p>
                         <input type="number" min={0} max={100} className={inputCls} value={editDraft.ownership_pct ?? ''} onChange={e => setEditDraft(d => ({ ...d, ownership_pct: e.target.value === '' ? null : Number(e.target.value) }))} />
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep Street Address</p>
+                        <input className={inputCls} value={String(editDraft.representative_address_street ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_address_street: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep City</p>
+                        <input className={inputCls} value={String(editDraft.representative_address_city ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_address_city: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep State / Province</p>
+                        <input className={inputCls} value={String(editDraft.representative_address_state ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_address_state: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep ZIP / Postal Code</p>
+                        <input className={inputCls} value={String(editDraft.representative_address_zip ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_address_zip: e.target.value }))} />
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-zinc-500 uppercase font-medium tracking-wide mb-0.5">Rep Country</p>
+                        <input className={inputCls} value={String(editDraft.representative_address_country ?? '')} onChange={e => setEditDraft(d => ({ ...d, representative_address_country: e.target.value }))} />
                       </div>
                     </div>
                   )}
