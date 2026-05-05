@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { matchBankFeedToInvoice, ignoreBankFeed } from './actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 
 // ── Types ──
 
@@ -336,6 +337,16 @@ type FeedMatchResult =
   | { type: 'account'; id: string; name: string; status: string | null; contact_name?: string | null }
   | { type: 'contact'; id: string; name: string; email?: string | null }
 
+// Existing-service shape returned from /api/feed/target-services
+interface TargetServiceDelivery {
+  id: string
+  service_type: string
+  service_name: string
+  stage: string | null
+  status: string
+  start_date: string | null
+}
+
 function UnmatchedRow({
   feed, openInvoices, isMatching, onStartMatch, onCancelMatch,
 }: {
@@ -353,9 +364,15 @@ function UnmatchedRow({
   const [searchResults, setSearchResults] = useState<FeedMatchResult[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
 
-  // Create-from-feed modal state
+  // Create-from-feed modal state (Bank-feed Tier B redesign 2026-05-05)
+  // Two branches: attach payment to an existing active SD, or create a new
+  // backfilled SD from a strict service_type picker.
   const [createForResult, setCreateForResult] = useState<FeedMatchResult | null>(null)
   const [createDescription, setCreateDescription] = useState('')
+  const [createServiceType, setCreateServiceType] = useState('')
+  const [createSelectedSdId, setCreateSelectedSdId] = useState<string | null>(null)
+  const [targetServices, setTargetServices] = useState<TargetServiceDelivery[]>([])
+  const [loadingTargetServices, setLoadingTargetServices] = useState(false)
   const [createSubmitting, setCreateSubmitting] = useState(false)
 
   // Debounced search — fires when user types 2+ chars
@@ -388,33 +405,88 @@ function UnmatchedRow({
     })
   }
 
-  const openCreateModal = (r: FeedMatchResult) => {
+  const openCreateModal = async (r: FeedMatchResult) => {
     setCreateForResult(r)
     setCreateDescription('')
+    setCreateServiceType('')
+    setCreateSelectedSdId(null)
+    setTargetServices([])
+    // Fetch existing active SDs on this target so the user can attach the
+    // payment to one of them instead of creating a duplicate "Delivered" SD.
+    setLoadingTargetServices(true)
+    try {
+      const param = r.type === 'account' ? `account_id=${r.id}` : `contact_id=${r.id}`
+      const res = await fetch(`/api/feed/target-services?${param}`)
+      if (res.ok) {
+        const d = await res.json()
+        const services: TargetServiceDelivery[] = d.services ?? []
+        setTargetServices(services)
+        // If exactly one open SD exists, pre-select it for one-click confirm.
+        if (services.length === 1) {
+          setCreateSelectedSdId(services[0].id)
+        }
+      }
+    } catch {
+      // Lookup is best-effort; user can still use the create-new path
+    }
+    setLoadingTargetServices(false)
   }
   const closeCreateModal = () => {
     if (createSubmitting) return
     setCreateForResult(null)
     setCreateDescription('')
+    setCreateServiceType('')
+    setCreateSelectedSdId(null)
+    setTargetServices([])
   }
+
+  // Picking an existing SD switches to "attach" mode and clears the
+  // create-new fields (mutually exclusive — submit decides which branch
+  // to call based on which side is filled).
+  const handleSelectExistingSd = (sdId: string) => {
+    setCreateSelectedSdId(prev => (prev === sdId ? null : sdId))
+    setCreateServiceType('')
+  }
+  // Typing in either create-new field clears any attach selection.
+  const handleCreateServiceTypeChange = (value: string) => {
+    setCreateServiceType(value)
+    if (value) setCreateSelectedSdId(null)
+  }
+  const handleCreateDescriptionChange = (value: string) => {
+    setCreateDescription(value)
+    if (value && createSelectedSdId) setCreateSelectedSdId(null)
+  }
+
   const submitCreate = async () => {
     if (!createForResult) return
+    const isAttach = !!createSelectedSdId
     const description = createDescription.trim()
-    if (!description) {
-      toast.error('Description is required')
-      return
+    const serviceType = createServiceType.trim()
+
+    if (!isAttach) {
+      if (!serviceType) {
+        toast.error('Pick a service type, or attach to an existing service above')
+        return
+      }
+      if (!VALID_SERVICE_TYPES.includes(serviceType as (typeof VALID_SERVICE_TYPES)[number])) {
+        toast.error('Invalid service type — pick from the list')
+        return
+      }
     }
+
     setCreateSubmitting(true)
     try {
-      const body: Record<string, string> = {
-        feed_id: feed.id,
-        service_name: description,
-      }
+      const body: Record<string, string> = { feed_id: feed.id }
       if (createForResult.type === 'account') {
         body.account_id = createForResult.id
-        body.service_type = description
       } else {
         body.contact_id = createForResult.id
+      }
+      if (isAttach) {
+        body.service_delivery_id = createSelectedSdId!
+      } else {
+        body.service_type = serviceType
+        body.service_name = description || serviceType
       }
       const res = await fetch('/api/feed/create-from-feed', {
         method: 'POST',
@@ -424,9 +496,9 @@ function UnmatchedRow({
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error ?? `Request failed (${res.status})`)
       if (d.warning) toast.warning(d.warning)
+      else if (isAttach) toast.success(`Invoice ${d.invoice_number ?? ''} created and attached`)
       else toast.success(`Invoice ${d.invoice_number ?? ''} created and feed matched`)
-      setCreateForResult(null)
-      setCreateDescription('')
+      closeCreateModal()
       onCancelMatch()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Create failed')
@@ -653,14 +725,14 @@ function UnmatchedRow({
         </div>
       )}
 
-      {/* Create-from-feed modal (search + create flow) */}
+      {/* Create-from-feed modal — Tier B target-agnostic redesign 2026-05-05 */}
       {createForResult && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
           onClick={closeCreateModal}
         >
           <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-4"
+            className="bg-white rounded-lg shadow-xl w-full max-w-lg p-5 space-y-4 max-h-[90vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}
           >
             <div>
@@ -668,13 +740,10 @@ function UnmatchedRow({
                 Create invoice from this feed
               </h3>
               <p className="text-xs text-zinc-500 mt-0.5">
-                Creates a paid TD invoice on{' '}
+                Target:{' '}
                 <span className="font-medium">
                   {createForResult.type === 'account' ? '🏢' : '👤'} {createForResult.name}
                 </span>
-                {createForResult.type === 'account' && ' (also creates a Completed service delivery).'}
-                {createForResult.type === 'contact' && ' (contact-only — no service delivery).'}{' '}
-                Links the bank feed.
               </p>
             </div>
 
@@ -697,18 +766,85 @@ function UnmatchedRow({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
-                {createForResult.type === 'account' ? 'Service / description' : 'Description'}
-              </label>
-              <input
-                value={createDescription}
-                onChange={e => setCreateDescription(e.target.value)}
-                placeholder={createForResult.type === 'account' ? 'e.g. Tax Return, ITIN, Custom' : 'e.g. Wire payment from Mario Rossi'}
-                className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={createSubmitting}
-                autoFocus
-              />
+            {/* Branch A — attach to existing active SD ─────────────── */}
+            {loadingTargetServices ? (
+              <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+                <Loader2 className="h-3 w-3 animate-spin" /> Looking up existing services…
+              </div>
+            ) : targetServices.length > 0 ? (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-zinc-700">
+                  Attach payment to an existing service this client is currently working on:
+                </p>
+                <div className="space-y-1">
+                  {targetServices.map(sd => {
+                    const selected = createSelectedSdId === sd.id
+                    return (
+                      <button
+                        key={sd.id}
+                        type="button"
+                        onClick={() => handleSelectExistingSd(sd.id)}
+                        disabled={createSubmitting}
+                        className={cn(
+                          'w-full text-left px-3 py-2 text-xs border rounded-md flex items-center gap-2 transition-colors disabled:opacity-50',
+                          selected
+                            ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-200'
+                            : 'border-zinc-200 hover:border-emerald-300 hover:bg-emerald-50/30',
+                        )}
+                      >
+                        <span className="font-medium truncate flex-1">{sd.service_name}</span>
+                        <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{sd.service_type}</span>
+                        {sd.stage && (
+                          <span className="text-[10px] bg-zinc-100 text-zinc-700 px-1.5 py-0.5 rounded">
+                            {sd.stage}
+                          </span>
+                        )}
+                        {selected && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+                <AlertCircle className="h-3 w-3" />
+                No active services on this client. Record a one-off below.
+              </div>
+            )}
+
+            {/* Branch B — create a new backfilled SD ────────────────── */}
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-xs font-medium text-zinc-700">
+                {targetServices.length > 0 ? 'Or record a new one-off / past service:' : 'Record service for this payment:'}
+              </p>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">
+                  Service type
+                </label>
+                <select
+                  value={createServiceType}
+                  onChange={e => handleCreateServiceTypeChange(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  disabled={createSubmitting}
+                >
+                  <option value="">— pick a service type —</option>
+                  {VALID_SERVICE_TYPES.map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">
+                  Description (optional)
+                </label>
+                <input
+                  value={createDescription}
+                  onChange={e => handleCreateDescriptionChange(e.target.value)}
+                  placeholder={createServiceType ? `e.g. ${createServiceType} 2025` : 'Short description for the invoice line'}
+                  className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={createSubmitting}
+                />
+              </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
@@ -723,11 +859,11 @@ function UnmatchedRow({
               <button
                 type="button"
                 onClick={submitCreate}
-                disabled={createSubmitting || !createDescription.trim()}
+                disabled={createSubmitting || (!createSelectedSdId && !createServiceType.trim())}
                 className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
               >
                 {createSubmitting && <Loader2 className="h-3 w-3 animate-spin" />}
-                Create invoice
+                {createSelectedSdId ? 'Attach payment' : 'Create invoice'}
               </button>
             </div>
           </div>
