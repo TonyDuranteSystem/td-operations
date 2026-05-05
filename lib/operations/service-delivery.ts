@@ -40,6 +40,15 @@ import {
   type AdvanceStageParams,
   type AdvanceStageResult,
 } from "@/lib/service-delivery"
+import {
+  VALID_SERVICE_TYPES,
+  isValidServiceType,
+  type ValidServiceType,
+} from "@/lib/operations/service-types"
+
+// Re-export so existing import paths keep working.
+export { VALID_SERVICE_TYPES, isValidServiceType }
+export type { ValidServiceType }
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -259,7 +268,10 @@ export async function createSD(
 // ─── createBackfilledSD ────────────────────────────────
 
 export interface CreateBackfilledSDParams {
-  account_id: string
+  /** Exactly one of account_id / contact_id must be set. */
+  account_id?: string
+  /** Exactly one of account_id / contact_id must be set. */
+  contact_id?: string
   service_type: string
   service_name?: string
   amount: number
@@ -276,30 +288,73 @@ export interface CreateBackfilledSDResult {
 }
 
 /**
- * Backfill a Completed/Delivered service delivery for a historical paid event
- * (used by the audit panel's "Create service from bank feed" flow).
+ * Backfill a completed/Delivered service delivery for a historical paid event.
+ *
+ * Used by:
+ *   - The audit panel's "Create service from bank feed" flow (account-scoped).
+ *   - The bank-feed-tab modal's "Create new service" branch (account or
+ *     contact target — Bank-feed Tier B redesign 2026-05-05).
  *
  * Differs from `createSD` in three ways:
  *   1. Does NOT consult `pipeline_stages` — the caller may pass a service_type
- *      that has no pipeline (free-text, e.g. "Shipping" surfaced from a feed).
- *   2. Inserts directly at status='Completed', stage='Delivered'.
+ *      that has no pipeline (e.g. "Shipping", "Public Notary", "Support" —
+ *      one-off services that never enter a tracked pipeline).
+ *   2. Inserts directly at status='completed' (lowercase, per
+ *      `chk_sd_status`), stage='Delivered' (free-text marker — no
+ *      stage constraint exists).
  *   3. Carries amount + currency from the originating event.
  *
- * The `is_test` flag is propagated from the parent account so test SDs stay
- * filterable.
+ * Validates `service_type` against `VALID_SERVICE_TYPES` server-side as
+ * defense-in-depth so a UI bypass cannot reach the DB constraint and produce
+ * a confusing 23514 error. Also enforces the account_id XOR contact_id rule
+ * — exactly one must be set, mirroring the table's nullable column shape and
+ * the formation architecture rule "ownership = whoever paid, never migrates".
+ *
+ * The `is_test` flag is propagated from whichever parent entity is set so
+ * test-target SDs stay filterable by the standard `excludeTestRecords` helper.
  */
 export async function createBackfilledSD(
   params: CreateBackfilledSDParams,
 ): Promise<CreateBackfilledSDResult> {
+  // XOR validation — exactly one target id must be set.
+  const hasAccount = typeof params.account_id === "string" && params.account_id.length > 0
+  const hasContact = typeof params.contact_id === "string" && params.contact_id.length > 0
+  if (hasAccount && hasContact) {
+    throw new Error(
+      "[createBackfilledSD] pass account_id OR contact_id, not both",
+    )
+  }
+  if (!hasAccount && !hasContact) {
+    throw new Error(
+      "[createBackfilledSD] account_id or contact_id required",
+    )
+  }
+
+  if (!isValidServiceType(params.service_type)) {
+    throw new Error(
+      `[createBackfilledSD] invalid service_type "${params.service_type}". ` +
+        `Allowed: ${VALID_SERVICE_TYPES.join(", ")}`,
+    )
+  }
+
   const service_name = params.service_name || params.service_type
 
   let is_test = false
-  const { data: acct } = await supabaseAdmin
-    .from("accounts")
-    .select("is_test")
-    .eq("id", params.account_id)
-    .maybeSingle()
-  if (acct?.is_test === true) is_test = true
+  if (hasAccount) {
+    const { data: acct } = await supabaseAdmin
+      .from("accounts")
+      .select("is_test")
+      .eq("id", params.account_id!)
+      .maybeSingle()
+    if (acct?.is_test === true) is_test = true
+  } else {
+    const { data: c } = await supabaseAdmin
+      .from("contacts")
+      .select("is_test")
+      .eq("id", params.contact_id!)
+      .maybeSingle()
+    if (c?.is_test === true) is_test = true
+  }
 
   const row = await dbWrite(
     supabaseAdmin
@@ -307,8 +362,9 @@ export async function createBackfilledSD(
       .insert({
         service_type: params.service_type,
         service_name,
-        account_id: params.account_id,
-        status: "Completed",
+        account_id: params.account_id ?? null,
+        contact_id: params.contact_id ?? null,
+        status: "completed",
         stage: "Delivered",
         start_date: params.delivered_on,
         end_date: params.delivered_on,

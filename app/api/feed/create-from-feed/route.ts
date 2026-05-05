@@ -1,114 +1,198 @@
 /**
  * POST /api/feed/create-from-feed
  *
- * Bank-Feed-tab variant of the Step 14 create-service-from-feed flow. Where
- * the audit-panel version is account-scoped via URL path
- * (/api/clients/audit/[id]/create-service-from-feed), this one accepts EITHER
- * an account_id OR a contact_id in the body — so a wire from an individual
- * (e.g. Mario Rossi) can be invoiced on the contact alone, even when the
- * contact has no linked account.
+ * Bank-feed-tab variant of the Step 14 create-service-from-feed flow.
  *
- * Body:
- *   {
- *     feed_id: string                            // required
- *     account_id?: string                        // either this
- *     contact_id?: string                        // ...or this (XOR enforced)
- *     service_type?: string                      // required when account_id (creates SD)
- *     service_name?: string                      // optional, falls back to service_type
- *   }
+ * Two branches keyed on the request body:
  *
- * Behavior:
- *   - account_id: createBackfilledSD + createTDInvoice + manualMatch (Step 14 flow)
- *   - contact_id: createTDInvoice (no SD — service_deliveries are account-scoped)
- *                 + manualMatch
+ *   Branch A — ATTACH to an existing active service delivery on the target.
+ *     Body: { feed_id, account_id|contact_id, service_delivery_id }
+ *     Behavior: createTDInvoice + manualMatch. NO new SD created. Used when
+ *     the target client already has an active SD that this payment relates to
+ *     (e.g. a Tax Return SD mid-pipeline).
  *
- * Idempotency: payments.idempotency_key = `feed-flow-create:<feed_id>`
+ *   Branch B — CREATE a new backfilled service delivery + invoice.
+ *     Body: { feed_id, account_id|contact_id, service_type, service_name? }
+ *     Behavior: createBackfilledSD + createTDInvoice + manualMatch. Used for
+ *     genuine one-off services (Public Notary, Shipping, Support) where no
+ *     pipeline SD exists.
  *
- * Auth: dashboard session (admin staff use the bank-feed UI)
+ * Target selection is account-OR-contact (XOR). Both branches work for both
+ * target types — contact targets are first-class per the formation
+ * architecture model "ownership = whoever paid, never migrates".
+ *
+ * Idempotency: payments.idempotency_key = `feed-flow-create:<feed_id>`.
+ *
+ * Auth: dashboard session (admin staff use the bank-feed UI).
  */
-import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
-import { createTDInvoice } from '@/lib/portal/td-invoice'
-import { manualMatch } from '@/lib/bank-feed-matcher'
-import { createBackfilledSD } from '@/lib/operations/service-delivery'
-import { createClient } from '@/lib/supabase/server'
+import { NextRequest, NextResponse } from "next/server"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { manualMatch } from "@/lib/bank-feed-matcher"
+import {
+  createBackfilledSD,
+  isValidServiceType,
+} from "@/lib/operations/service-delivery"
+import { createClient } from "@/lib/supabase/server"
 
-export const dynamic = 'force-dynamic'
+export const dynamic = "force-dynamic"
 
 interface Body {
   feed_id?: string
   account_id?: string
   contact_id?: string
+  /** Branch B only — required when service_delivery_id is absent. */
   service_type?: string
+  /** Branch B only — defaults to service_type. */
   service_name?: string
+  /** Branch A — when set, attach payment to this SD instead of creating one. */
+  service_delivery_id?: string
 }
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
 
   let body: Body
   try {
     body = (await req.json()) as Body
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
   const feedId = body.feed_id?.trim()
   const accountId = body.account_id?.trim()
   const contactId = body.contact_id?.trim()
+  const serviceDeliveryId = body.service_delivery_id?.trim()
   const serviceType = body.service_type?.trim()
-  const serviceName = (body.service_name?.trim() || serviceType || '').slice(0, 200)
+  const serviceName = (body.service_name?.trim() || serviceType || "").slice(0, 200)
 
-  if (!feedId) return NextResponse.json({ error: 'feed_id is required' }, { status: 400 })
+  // ── Validation ──────────────────────────────────────────────────────
+  if (!feedId) {
+    return NextResponse.json({ error: "feed_id is required" }, { status: 400 })
+  }
   if (!accountId && !contactId) {
-    return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
+    return NextResponse.json(
+      { error: "account_id or contact_id required" },
+      { status: 400 },
+    )
   }
   if (accountId && contactId) {
-    return NextResponse.json({ error: 'pass account_id OR contact_id, not both' }, { status: 400 })
-  }
-  if (accountId && !serviceType) {
-    return NextResponse.json({ error: 'service_type required when creating on an account (drives the SD)' }, { status: 400 })
+    return NextResponse.json(
+      { error: "pass account_id OR contact_id, not both" },
+      { status: 400 },
+    )
   }
 
-  // 1. Fetch the feed
+  const isAttachBranch = !!serviceDeliveryId
+  if (!isAttachBranch) {
+    // Branch B requires service_type; service_type must be canonical.
+    if (!serviceType) {
+      return NextResponse.json(
+        {
+          error:
+            "service_type is required (or pass service_delivery_id to attach to an existing service)",
+        },
+        { status: 400 },
+      )
+    }
+    if (!isValidServiceType(serviceType)) {
+      return NextResponse.json(
+        {
+          error: `Invalid service_type "${serviceType}". Pick one from the dropdown.`,
+        },
+        { status: 400 },
+      )
+    }
+  }
+
+  // ── Fetch feed ──────────────────────────────────────────────────────
   const { data: feed, error: feedErr } = await supabaseAdmin
-    .from('td_bank_feeds')
-    .select('id, source, transaction_date, amount, currency, sender_name, status, matched_payment_id')
-    .eq('id', feedId)
+    .from("td_bank_feeds")
+    .select(
+      "id, source, transaction_date, amount, currency, sender_name, status, matched_payment_id",
+    )
+    .eq("id", feedId)
     .single()
   if (feedErr || !feed) {
-    return NextResponse.json({ error: `Bank feed not found: ${feedErr?.message ?? 'no row'}` }, { status: 404 })
+    return NextResponse.json(
+      { error: `Bank feed not found: ${feedErr?.message ?? "no row"}` },
+      { status: 404 },
+    )
   }
-  if (feed.status === 'matched' && feed.matched_payment_id) {
-    return NextResponse.json({ error: 'Bank feed already matched to a payment' }, { status: 409 })
+  if (feed.status === "matched" && feed.matched_payment_id) {
+    return NextResponse.json(
+      { error: "Bank feed already matched to a payment" },
+      { status: 409 },
+    )
+  }
+
+  // ── Validate the SD belongs to the chosen target (Branch A) ────────
+  if (isAttachBranch) {
+    const { data: sd, error: sdErr } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("id, account_id, contact_id, status")
+      .eq("id", serviceDeliveryId!)
+      .maybeSingle()
+    if (sdErr || !sd) {
+      return NextResponse.json(
+        { error: `Service delivery not found: ${sdErr?.message ?? "no row"}` },
+        { status: 404 },
+      )
+    }
+    const sdMatchesTarget =
+      (accountId && sd.account_id === accountId) ||
+      (contactId && sd.contact_id === contactId && sd.account_id === null)
+    if (!sdMatchesTarget) {
+      return NextResponse.json(
+        { error: "Service delivery does not belong to the chosen target" },
+        { status: 400 },
+      )
+    }
+    if (sd.status !== "active") {
+      return NextResponse.json(
+        { error: `Service delivery is ${sd.status}, only active SDs can be attached` },
+        { status: 400 },
+      )
+    }
   }
 
   const idempotencyKey = `feed-flow-create:${feedId}`
 
-  // 2. Idempotency guard
+  // ── Idempotency guard ──────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existingPayment } = await (supabaseAdmin as any)
-    .from('payments')
-    .select('id')
-    .eq('idempotency_key', idempotencyKey)
+    .from("payments")
+    .select("id")
+    .eq("idempotency_key", idempotencyKey)
     .maybeSingle()
   if (existingPayment?.id) {
-    return NextResponse.json({ payment_id: existingPayment.id, idempotent: true })
+    return NextResponse.json({
+      payment_id: existingPayment.id,
+      idempotent: true,
+    })
   }
 
-  const currency = (feed.currency || 'USD').toUpperCase()
-  const txnDate: string = typeof feed.transaction_date === 'string'
-    ? feed.transaction_date.slice(0, 10)
-    : new Date(feed.transaction_date as unknown as string | number | Date).toISOString().slice(0, 10)
+  const currency = (feed.currency || "USD").toUpperCase()
+  const txnDate: string =
+    typeof feed.transaction_date === "string"
+      ? feed.transaction_date.slice(0, 10)
+      : new Date(feed.transaction_date as unknown as string | number | Date)
+          .toISOString()
+          .slice(0, 10)
 
-  // 3. (Account branch) — create the backfilled SD first
+  // ── Branch B: create the backfilled SD first ───────────────────────
   let sdId: string | null = null
-  if (accountId) {
+  if (!isAttachBranch) {
     try {
       const sd = await createBackfilledSD({
         account_id: accountId,
+        contact_id: contactId,
         service_type: serviceType!,
         service_name: serviceName,
         amount: Number(feed.amount),
@@ -118,44 +202,59 @@ export async function POST(req: NextRequest) {
       })
       sdId = sd.id
     } catch (err) {
-      return NextResponse.json({
-        error: `Failed to create service delivery: ${err instanceof Error ? err.message : 'unknown'}`,
-      }, { status: 500 })
+      return NextResponse.json(
+        {
+          error: `Failed to create service delivery: ${err instanceof Error ? err.message : "unknown"}`,
+        },
+        { status: 500 },
+      )
     }
+  } else {
+    sdId = serviceDeliveryId!
   }
 
-  // 4. createTDInvoice — paid, idempotent
-  const description = serviceName || (contactId ? `Wire payment from ${feed.sender_name ?? 'individual'}` : 'Service')
+  // ── createTDInvoice — paid, idempotent ─────────────────────────────
+  const description =
+    serviceName ||
+    (contactId ? `Wire payment from ${feed.sender_name ?? "individual"}` : "Service")
   let invoice
   try {
     invoice = await createTDInvoice({
       account_id: accountId,
       contact_id: contactId,
-      line_items: [{ description, unit_price: Number(feed.amount), quantity: 1 }],
-      currency: currency === 'EUR' ? 'EUR' : 'USD',
+      line_items: [
+        { description, unit_price: Number(feed.amount), quantity: 1 },
+      ],
+      currency: currency === "EUR" ? "EUR" : "USD",
       mark_as_paid: true,
       paid_date: txnDate,
       payment_method: feed.source,
       idempotency_key: idempotencyKey,
-      installment: 'One-Time Service',
+      installment: "One-Time Service",
       notes: `Bank-feed flow — created from bank feed ${feedId}`,
     })
   } catch (err) {
-    if (sdId) {
-      await supabaseAdmin.from('service_deliveries').delete().eq('id', sdId)
+    // Roll back the SD only if WE just created it (Branch B). Branch A's
+    // SD pre-existed and is not ours to delete.
+    if (!isAttachBranch && sdId) {
+      await supabaseAdmin.from("service_deliveries").delete().eq("id", sdId)
     }
-    return NextResponse.json({
-      error: `Failed to create invoice: ${err instanceof Error ? err.message : 'unknown'}`,
-    }, { status: 500 })
+    return NextResponse.json(
+      {
+        error: `Failed to create invoice: ${err instanceof Error ? err.message : "unknown"}`,
+      },
+      { status: 500 },
+    )
   }
 
-  // 5. manualMatch
+  // ── manualMatch ────────────────────────────────────────────────────
   const matchResult = await manualMatch(feedId, invoice.paymentId)
   if (!matchResult.matched) {
     return NextResponse.json({
       sd_id: sdId,
       payment_id: invoice.paymentId,
       invoice_number: invoice.invoiceNumber,
+      attached: isAttachBranch,
       warning: `Invoice created, but feed link failed: ${matchResult.error}`,
     })
   }
@@ -164,5 +263,6 @@ export async function POST(req: NextRequest) {
     sd_id: sdId,
     payment_id: invoice.paymentId,
     invoice_number: invoice.invoiceNumber,
+    attached: isAttachBranch,
   })
 }
