@@ -28,6 +28,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.guide': 'Guide',
     'nav.signOut': 'Sign Out',
     'nav.portal': 'Portal',
+    'nav.profile': 'Profile',
 
     // Billing
     'billing.title': 'Billing',
@@ -552,6 +553,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.guide': 'Guida',
     'nav.signOut': 'Esci',
     'nav.portal': 'Portale',
+    'nav.profile': 'Profilo',
 
     // Billing
     'billing.title': 'Fatturazione',
