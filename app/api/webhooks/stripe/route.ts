@@ -172,7 +172,27 @@ async function handleCheckoutCompleted(session: StripeSession) {
     }
   }
 
-  // 4. Create payment record
+  // 3b. Look up pending_activation early so we can gate the raw payments insert.
+  // When a draft TD invoice was created at offer-signing (portal_invoice_id set
+  // on the activation), the auto-reconcile branch below flips that draft to
+  // Paid via syncInvoiceStatus('payment', ...). Inserting a raw row here would
+  // create a duplicate Paid row with no invoice_number and no client_expenses
+  // mirror. Same gate pattern as confirm-payment Step 8 (PR 1).
+  let activationPortalInvoiceId: string | null = null
+  if (offerToken || email) {
+    let paQuery = getSupabase()
+      .from("pending_activations")
+      .select("id, portal_invoice_id")
+      .eq("status", "awaiting_payment")
+      .limit(1)
+    paQuery = offerToken
+      ? paQuery.eq("offer_token", offerToken)
+      : paQuery.eq("client_email", email!)
+    const { data: paRows } = await paQuery
+    if (paRows?.length) activationPortalInvoiceId = paRows[0].portal_invoice_id
+  }
+
+  // 4. Create payment record (skipped when offer-signed already created a draft)
   const productName = session.metadata?.contract_type
     ? `${session.metadata.contract_type === "formation" ? "LLC Formation" : session.metadata.contract_type} — ${clientName || email || "unknown"}`
     : `Stripe payment — ${clientName || email || "unknown"}`
@@ -193,10 +213,14 @@ async function handleCheckoutCompleted(session: StripeSession) {
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId
 
-  // eslint-disable-next-line no-restricted-syntax -- Stripe-webhook payment record insert; tracked by dev_task 7ebb1e0c
-  const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
-  if (payErr) {
-    console.error("[stripe-webhook] Failed to create payment:", payErr.message)
+  if (!activationPortalInvoiceId) {
+    // eslint-disable-next-line no-restricted-syntax -- Stripe-webhook payment record insert; tracked by dev_task 7ebb1e0c
+    const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
+    if (payErr) {
+      console.error("[stripe-webhook] Failed to create payment:", payErr.message)
+    }
+  } else {
+    console.warn(`[stripe-webhook] Skipping raw payments insert — activation has draft invoice ${activationPortalInvoiceId}; auto-reconcile will flip it Paid`)
   }
 
   // 5. Auto-reconcile with open CRM invoices (supports contact-only invoices)

@@ -176,6 +176,23 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     }
   }
 
+  // 3a. Look up pending_activation early so we can gate the raw payments insert.
+  // When a draft TD invoice was created at offer-signing (portal_invoice_id set
+  // on the activation), the auto-reconcile branch below flips that draft to
+  // Paid via syncInvoiceStatus('payment', ...). Inserting a raw row here would
+  // create a duplicate Paid row with no invoice_number and no client_expenses
+  // mirror. Same gate pattern as confirm-payment Step 8 (PR 1).
+  let activationPortalInvoiceId: string | null = null
+  if (email) {
+    const { data: paRows } = await getSupabase()
+      .from("pending_activations")
+      .select("id, portal_invoice_id")
+      .eq("status", "awaiting_payment")
+      .eq("client_email", email)
+      .limit(1)
+    if (paRows?.length) activationPortalInvoiceId = paRows[0].portal_invoice_id
+  }
+
   const paymentRecord: Record<string, unknown> = {
     amount: total,
     subtotal: total,
@@ -192,10 +209,14 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   if (accountId) paymentRecord.account_id = accountId
   if (contactId) paymentRecord.contact_id = contactId
 
-  // eslint-disable-next-line no-restricted-syntax -- Whop-webhook payment record insert; tracked by dev_task 7ebb1e0c
-  const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
-  if (payErr) {
-    console.error("[whop-webhook] Failed to create payment:", payErr.message)
+  if (!activationPortalInvoiceId) {
+    // eslint-disable-next-line no-restricted-syntax -- Whop-webhook payment record insert; tracked by dev_task 7ebb1e0c
+    const { error: payErr } = await getSupabase().from("payments").insert(paymentRecord)
+    if (payErr) {
+      console.error("[whop-webhook] Failed to create payment:", payErr.message)
+    }
+  } else {
+    console.warn(`[whop-webhook] Skipping raw payments insert — activation has draft invoice ${activationPortalInvoiceId}; auto-reconcile will flip it Paid`)
   }
 
   // 3b. Check if this Whop payment matches an open CRM invoice (auto-reconcile)
