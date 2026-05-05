@@ -6,9 +6,13 @@ import type { PortalMessage, ChatAttachment } from '@/lib/types'
 
 /**
  * Real-time chat hook using Supabase Realtime.
- * Supports both account-based and contact-based chat.
- * - accountId: for LLC-specific conversations (most clients)
- * - contactId: for contacts without accounts (ITIN clients, leads)
+ *
+ * PR 2 Step 6 (2026-05-05): one tagged thread per contact. The hook now
+ * always threads by contact_id (regardless of accountId), so switching the
+ * company switcher in the sidebar does NOT split the thread. accountId is
+ * still accepted because:
+ *   - Send-side: callers pass it through to tag a message as "company".
+ *   - Mark-as-read: the read endpoint accepts both for back-compat.
  */
 export function usePortalChat(accountId: string | null, contactId: string) {
   const [messages, setMessages] = useState<PortalMessage[]>([])
@@ -18,10 +22,10 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   const [hasMore, setHasMore] = useState(true)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  // Determine which param to use for API calls
-  const queryParam = accountId ? `account_id=${accountId}` : `contact_id=${contactId}`
-  const filterColumn = accountId ? 'account_id' : 'contact_id'
-  const filterValue = accountId || contactId
+  // Always thread by contact_id (unified per-contact thread).
+  const queryParam = `contact_id=${contactId}`
+  const filterColumn = 'contact_id'
+  const filterValue = contactId
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
@@ -37,7 +41,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
         fetch('/api/portal/chat/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(accountId ? { account_id: accountId } : { contact_id: contactId }),
+          body: JSON.stringify({ contact_id: contactId }),
         }).catch(() => {})
       }
     } catch {
@@ -45,7 +49,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     } finally {
       setLoading(false)
     }
-  }, [accountId, contactId, queryParam])
+  }, [contactId, queryParam])
 
   useEffect(() => {
     load()
@@ -134,9 +138,28 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     }
   }, [filterColumn, filterValue])
 
-  // Send message
-  const sendMessage = useCallback(async (message: string, attachments?: ChatAttachment[], replyToId?: string) => {
+  // Send message. Optional senderContext + tagAccountId let the caller
+  // override the picker's tag scope (PR 2 Step 6). Default: senderContext
+  // omitted, account_id falls back to the hook's accountId param.
+  const sendMessage = useCallback(async (
+    message: string,
+    attachments?: ChatAttachment[],
+    replyToId?: string,
+    senderContext?: 'person' | 'company',
+    tagAccountId?: string | null,
+  ) => {
     if ((!message.trim() && (!attachments || attachments.length === 0)) || sending) return
+
+    // Resolve account_id for the message: explicit override → hook default → null.
+    // 'person' tag forces account_id to null. 'company' requires an account_id.
+    let resolvedAccountId: string | null
+    if (senderContext === 'person') {
+      resolvedAccountId = null
+    } else if (senderContext === 'company') {
+      resolvedAccountId = tagAccountId ?? accountId ?? null
+    } else {
+      resolvedAccountId = tagAccountId !== undefined ? tagAccountId : (accountId ?? null)
+    }
 
     setSending(true)
     try {
@@ -144,8 +167,9 @@ export function usePortalChat(accountId: string | null, contactId: string) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          account_id: accountId || undefined,
+          account_id: resolvedAccountId || undefined,
           contact_id: contactId,
+          sender_context: senderContext,
           message: message || '',
           attachments: attachments ?? [],
           reply_to_id: replyToId || undefined,

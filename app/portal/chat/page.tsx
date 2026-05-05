@@ -26,7 +26,7 @@ export default async function PortalChatPage() {
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('chat.title', locale)}</h1>
         <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('chat.team', locale)}</p>
       </div>
-      <PortalChat accountId={selectedAccountId} contactId={contactId} userId={user.id} locale={locale} />
+      <PortalChat accountId={selectedAccountId} contactId={contactId} userId={user.id} locale={locale} accounts={accounts.map(a => ({ id: a.id, company_name: a.company_name }))} />
     </div>
   )
 }

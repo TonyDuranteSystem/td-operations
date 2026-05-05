@@ -39,6 +39,10 @@ interface ChatMessage {
   message: string
   sender_type: 'client' | 'admin'
   sender_name?: string | null
+  account_id?: string | null
+  // PR 2 Step 6 (2026-05-05): tag chosen by sender. NULL = legacy
+  // untagged message (pre-PR 2). Renders without a badge.
+  sender_context?: 'person' | 'company' | null
   created_at: string
   attachment_url?: string
   attachment_name?: string
@@ -1948,6 +1952,19 @@ export default function PortalChatsPage() {
                             : 'bg-zinc-100 text-zinc-900'
                         )}
                       >
+                        {/* PR 2 Step 6 — sender_context badge (additive). NULL renders nothing. */}
+                        {msg.sender_context && (
+                          <span className={cn(
+                            'inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5',
+                            isAdmin
+                              ? 'bg-blue-500/40 text-blue-100'
+                              : msg.sender_context === 'person'
+                                ? 'bg-zinc-200 text-zinc-600'
+                                : 'bg-blue-100 text-blue-700'
+                          )}>
+                            {msg.sender_context === 'person' ? 'Personal' : 'Company'}
+                          </span>
+                        )}
                         {/* Sender name for client messages (shows member name in MMLLC) */}
                         {!isAdmin && msg.sender_name && (
                           <p className="text-[10px] font-semibold text-zinc-500 mb-0.5">{msg.sender_name}</p>

@@ -45,8 +45,17 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
-export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { accountId?: string; contactId: string; userId: string; locale?: string }) {
+export function PortalChat({ accountId, contactId, userId, locale = 'en', accounts = [] }: { accountId?: string; contactId: string; userId: string; locale?: string; accounts?: { id: string; company_name: string }[] }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh } = usePortalChat(accountId || null, contactId)
+  // PR 2 Step 6 — sender_context picker. Defaults to "company" when an
+  // account is currently viewed, else "person". Hidden entirely when the
+  // contact has no accounts (formation-gap clients pre-materialization).
+  // Per Antonio's design decision 2026-05-05: binary picker (Person /
+  // current company), not a list of all the contact's companies.
+  const [tagScope, setTagScope] = useState<'person' | 'company'>(accountId ? 'company' : 'person')
+  const currentCompanyName = accounts.find(a => a.id === accountId)?.company_name ?? null
+  const accountNameById = new Map(accounts.map(a => [a.id, a.company_name]))
+  const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
   const draftKey = `chat_draft_${accountId || contactId}`
   const [input, setInput] = useState(() => {
     if (typeof window === 'undefined') return ''
@@ -159,12 +168,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
             }
             return await res.json() as ChatAttachment
           }))
-          await sendMessage(msg || '', uploaded, replyId)
+          await sendMessage(msg || '', uploaded, replyId, tagScope, accountId ?? null)
         } finally {
           setUploading(false)
         }
       } else {
-        await sendMessage(msg, undefined, replyId)
+        await sendMessage(msg, undefined, replyId, tagScope, accountId ?? null)
       }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
@@ -332,6 +341,23 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
                       ? 'bg-blue-600 text-white rounded-br-md'
                       : 'bg-zinc-100 text-zinc-900 rounded-bl-md'
                   )}>
+                    {/* PR 2 Step 6 — sender_context badge. Shown when the
+                        message was tagged at send time. NULL = legacy
+                        message (renders without a badge). */}
+                    {msg.sender_context && (
+                      <span className={cn(
+                        'inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5',
+                        isOwn
+                          ? 'bg-blue-500/40 text-blue-100'
+                          : msg.sender_context === 'person'
+                            ? 'bg-zinc-200 text-zinc-600'
+                            : 'bg-blue-100 text-blue-700'
+                      )}>
+                        {msg.sender_context === 'person'
+                          ? personalLabel
+                          : (msg.account_id && accountNameById.get(msg.account_id)) || (locale === 'it' ? 'Azienda' : 'Company')}
+                      </span>
+                    )}
                     {!isOwn && (
                       <p className="text-[10px] font-medium text-zinc-500 mb-0.5">
                         {msg.sender_type === 'admin' ? t('chat.team') : (msg.sender_name || t('chat.you'))}
@@ -530,6 +556,44 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en' }: { ac
             )}
           </div>
           <p className="text-[10px] text-zinc-400 mt-1">{pendingFiles.length}/{MAX_ATTACHMENTS} files</p>
+        </div>
+      )}
+
+      {/* Sender context picker (PR 2 Step 6) — Person / current Company.
+          Hidden when the contact has no accounts (formation-gap clients
+          pre-materialization always send as Person). */}
+      {accounts.length > 0 && currentCompanyName && (
+        <div className="px-3 sm:px-4 pt-2 pb-1 flex items-center gap-2 border-t bg-zinc-50/40">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium">
+            {locale === 'it' ? 'Invia come' : 'Send as'}
+          </span>
+          <div className="flex gap-1 bg-white border rounded-full p-0.5">
+            <button
+              type="button"
+              onClick={() => setTagScope('person')}
+              className={cn(
+                'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
+                tagScope === 'person'
+                  ? 'bg-zinc-900 text-white'
+                  : 'text-zinc-600 hover:bg-zinc-100'
+              )}
+            >
+              {personalLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTagScope('company')}
+              className={cn(
+                'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[180px] truncate',
+                tagScope === 'company'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-zinc-600 hover:bg-zinc-100'
+              )}
+              title={currentCompanyName}
+            >
+              {currentCompanyName}
+            </button>
+          </div>
         </div>
       )}
 
