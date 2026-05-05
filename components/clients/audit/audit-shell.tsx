@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Search, CheckCircle2, Flag, AlertCircle, Clock, User } from 'lucide-react'
+import { Search, CheckCircle2, Flag, AlertCircle, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AuditPanel } from './audit-panel'
 import { format, parseISO } from 'date-fns'
@@ -68,8 +68,6 @@ export type AccountRow = {
 type ShowFilter = 'all' | 'unreviewed' | 'reviewed' | 'flagged'
 type StatusFilter = 'all' | 'Active' | 'Delinquent' | 'Offboarding' | 'Suspended'
 
-const REVIEWERS = ['Antonio', 'Luca']
-
 export function AuditShell({
   accounts: initialAccounts,
   total,
@@ -82,7 +80,7 @@ export function AuditShell({
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState<ShowFilter>('unreviewed')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [reviewer, setReviewer] = useState<string>('Antonio')
+  const reviewer = 'Antonio'
 
   const reviewed = accounts.filter(a => a.audit_reviewed_at).length
 
@@ -136,27 +134,6 @@ export function AuditShell({
             />
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">{pct}% complete</p>
-        </div>
-        {/* Who is reviewing */}
-        <div className="flex items-center gap-2 ml-auto">
-          <User className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Reviewing as:</span>
-          <div className="flex gap-1">
-            {REVIEWERS.map(r => (
-              <button
-                key={r}
-                onClick={() => setReviewer(r)}
-                className={cn(
-                  'px-2.5 py-1 text-xs rounded-md border transition-colors',
-                  reviewer === r
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'
-                )}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 

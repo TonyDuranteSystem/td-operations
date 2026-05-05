@@ -2316,6 +2316,12 @@ export function AuditPanel({
                       setSavedTaxEdits(prev => ({ ...prev, ...pendingEdits }))
                       setTaxEdits({})
                       toast.success('Tax return edits saved')
+                      // Refetch dbData (uses freshAdminClient on the server) so any
+                      // edits other reviewers made are also pulled in.
+                      try {
+                        const r = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
+                        if (r.ok) setDbData(await r.json() as AccountData)
+                      } catch { /* keep optimistic savedTaxEdits */ }
                     }
                   }}
                   className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded-md hover:bg-amber-700"

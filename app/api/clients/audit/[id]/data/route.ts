@@ -46,7 +46,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .eq('account_id', id)
       .order('start_date', { ascending: false }),
 
-    supabaseAdmin
+    // freshAdminClient() — supabaseAdmin singleton + Next.js fetch cache returns
+    // stale tax_returns rows after writes (e.g. PATCH /api/tax-returns/[id]),
+    // making the audit panel display old status even after a successful save.
+    (freshAdminClient() as any)
       .from('tax_returns')
       .select('id, tax_year, return_type, status, data_received, data_received_date, extension_filed, extension_deadline, deadline, paid, sent_to_india, india_status, notes, link_sent')
       .eq('account_id', id)
