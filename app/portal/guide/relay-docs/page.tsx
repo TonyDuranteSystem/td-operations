@@ -131,7 +131,7 @@ const STEPS = [
   },
   {
     title: 'Invoice',
-    desc: 'Upload an invoice issued by your LLC in the last 60 days to a US-based company or individual. A paid invoice is preferred, but Relay also accepts unpaid ones.',
+    desc: 'Upload an invoice issued by your LLC in the last 60 days. The invoice must be addressed to a US-based recipient — this is how Relay confirms your LLC is actively doing business in the United States. The recipient can be a US individual, a US company, or another US LLC. A paid invoice is preferred, but Relay also accepts unpaid ones.',
   },
   {
     title: 'Source of Wealth',
