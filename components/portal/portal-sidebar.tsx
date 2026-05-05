@@ -66,16 +66,32 @@ interface NavItem {
 // inside the Companies section.
 
 // Personal section — items scoped to the contact (the person).
-// Invoices is NOT here: per Antonio (2026-05-05), "they can invoice only if
-// under a company, so the invoice system will appear only under company and
-// when there is a company." Personal/individual clients don't need an
-// invoicing system. For formation-gap clients (Lorenzo) the home page
-// already surfaces unpaid TD invoices via Action Items + Payment History.
+//
+// Invoices placement (Antonio 2026-05-05): "Lorenzo is just an individual
+// that bought the formation to create a company. Lorenzo, as an individual,
+// will see the invoice for 2,500 that he paid to buy the formation service.
+// After the company is created, he will use the invoice system."
+//
+// So /portal/invoices link follows context:
+//   - No company yet → "Invoices" appears in Personal (Lorenzo sees his
+//     personal formation receipt). Inserted at render time, not in this
+//     array, because it depends on accounts.length.
+//   - Company exists → "Invoices" appears under Company (the full
+//     Sales/Expenses/Vendors invoicing system).
 const personalItems: NavItem[] = [
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
   { key: 'nav.profile', href: '/portal/profile', icon: User },
 ]
+
+// Invoices link for personal/individual context (no company yet). Inserted
+// into the Personal section's render output when showCompaniesSection is
+// false. Same href as the Company-section Invoices, but the page itself
+// already branches: with no account, /portal/invoices renders only the
+// Expenses tab with contact-scoped TD invoices (PR 2 Step 4).
+const personalInvoicesItem: NavItem = {
+  key: 'nav.invoices', href: '/portal/invoices', icon: Receipt,
+}
 
 // Tier-specific items shown above the Personal section (CTAs the client hits
 // before they have a company). Lead → Offer; Onboarding → Wizard.
@@ -252,12 +268,28 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   }
 
   const visibleTierTop = tierTopItems.filter(isItemVisible)
-  const visiblePersonal = personalItems.filter(isItemVisible)
   const visiblePartner = partnerItems.filter(isItemVisible)
   // Company section visible only for non-partners with at least one account.
   // Active-tier with no account (rare edge case) hides the section too.
   const showCompaniesSection = !isPartner && accounts.length > 0
   const visibleCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
+
+  // Personal Invoices link is added when there's no company section
+  // (Antonio's model: Lorenzo as individual sees his personal formation
+  // invoice in Personal; after the company exists, the invoice system
+  // moves under Company).
+  const visiblePersonal = (() => {
+    const base = personalItems.filter(isItemVisible)
+    if (!isPartner && !showCompaniesSection) {
+      // Insert Invoices after Chat for visual grouping.
+      const chatIdx = base.findIndex(i => i.key === 'nav.chat')
+      const insertAt = chatIdx >= 0 ? chatIdx + 1 : 0
+      const next = base.slice()
+      next.splice(insertAt, 0, personalInvoicesItem)
+      return next
+    }
+    return base
+  })()
 
   // For single-LLC clients, show the company name as the section header.
   // For multi-LLC clients, the CompanySwitcher provides the selector.
