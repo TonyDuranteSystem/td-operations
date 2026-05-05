@@ -1265,13 +1265,75 @@ export function AuditPanel({
   async function handleFlag() {
     const next = !flagged
     setFlagged(next)
-    await fetch(`/api/clients/audit/${account.id}`, {
+    // Save all field data together with the flag so navigating away never loses typed values.
+    const contactsPayload = localContacts
+      .filter(c => contactEdits[c.id])
+      .map(c => {
+        const edits = contactEdits[c.id]
+        const normalized: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(edits)) {
+          normalized[k] = v === '' ? null : v
+        }
+        return { id: c.id, ...normalized }
+      })
+    const res = await fetch(`/api/clients/audit/${account.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account: { audit_flag: next } }),
+      body: JSON.stringify({
+        account: {
+          audit_flag: next,
+          account_type: accountType || null,
+          entity_type: entityType || null,
+          state_of_formation: stateOfFormation || null,
+          ein_number: ein || null,
+          filing_id: filingId || null,
+          physical_address: address || null,
+          formation_date: formationDate || null,
+          onboarding_date: onboardingDate || null,
+          installment_1_amount: inst1 ? parseFloat(inst1.replace(/,/g, '')) : null,
+          installment_1_currency: currency || null,
+          installment_2_amount: inst2 ? parseFloat(inst2.replace(/,/g, '')) : null,
+          installment_2_currency: currency || null,
+          setup_fee_amount: setupAmount ? parseFloat(setupAmount.replace(/,/g, '')) : null,
+          setup_fee_invoice: setupInvoice || null,
+          setup_fee_date: setupDate || null,
+          notes: notes || null,
+          status: status || null,
+        },
+        contacts: contactsPayload.length > 0 ? contactsPayload : undefined,
+      }),
     }).catch(() => null)
-    onUpdated({ ...account, audit_flag: next })
-    toast(next ? 'Flagged for follow-up' : 'Flag removed')
+    const updatedContacts = localContacts.map(c =>
+      contactEdits[c.id] ? { ...c, ...contactEdits[c.id] } : c
+    )
+    onUpdated({
+      ...account,
+      audit_flag: next,
+      account_type: accountType || null,
+      entity_type: (entityType || null) as typeof account.entity_type,
+      state_of_formation: stateOfFormation || null,
+      ein_number: ein || null,
+      filing_id: filingId || null,
+      physical_address: address || null,
+      formation_date: formationDate || null,
+      onboarding_date: onboardingDate || null,
+      installment_1_amount: inst1 ? parseFloat(inst1.replace(/,/g, '')) : null,
+      installment_1_currency: (currency || null) as typeof account.installment_1_currency,
+      installment_2_amount: inst2 ? parseFloat(inst2.replace(/,/g, '')) : null,
+      installment_2_currency: (currency || null) as typeof account.installment_2_currency,
+      setup_fee_amount: setupAmount ? parseFloat(setupAmount.replace(/,/g, '')) : null,
+      setup_fee_invoice: setupInvoice || null,
+      setup_fee_date: setupDate || null,
+      notes: notes || null,
+      status: (status || null) as typeof account.status,
+      contacts: updatedContacts,
+    })
+    if (res && !res.ok) {
+      const d = await res.json().catch(() => ({}))
+      toast.error(d.error || 'Flag saved locally but DB write failed')
+    } else {
+      toast(next ? 'Flagged — data saved' : 'Flag removed — data saved')
+    }
   }
 
   return (
