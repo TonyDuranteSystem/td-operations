@@ -98,12 +98,19 @@ export async function POST(req: NextRequest) {
 
   if (webhook_type === 'TRANSACTIONS') {
     if (webhook_code === 'SYNC_UPDATES_AVAILABLE' || webhook_code === 'DEFAULT_UPDATE') {
-      // Get access token for this item
+      // Get access token for this item — only sync if the connection is
+      // active. A non-active row (status='paused' / 'disabled' / etc.) means
+      // the user has explicitly opted that bank out of Plaid sync (e.g. when
+      // a direct API integration replaces Plaid for that bank). The cron
+      // (app/api/cron/plaid-sync/route.ts:43) already enforces this; the
+      // webhook must too, otherwise Plaid would keep ingesting paused banks
+      // every time a new transaction lands.
       const { data: connection } = await supabaseAdmin
         .from('plaid_connections')
         .select('access_token, bank_name')
         .eq('item_id', item_id)
-        .single()
+        .eq('status', 'active')
+        .maybeSingle()
 
       if (connection) {
         await syncPlaidTransactions(connection.access_token, connection.bank_name)

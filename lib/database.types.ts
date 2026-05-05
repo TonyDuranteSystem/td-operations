@@ -10869,6 +10869,17 @@ export type Database = {
           unread_count: number
         }[]
       }
+      get_portal_chat_threads_unified: {
+        Args: never
+        Returns: {
+          companies: Json
+          contact_id: string
+          contact_name: string
+          last_message: string
+          last_message_at: string
+          unread_count: number
+        }[]
+      }
       increment_email_open: {
         Args: { p_tracking_id: string }
         Returns: undefined
