@@ -2289,8 +2289,10 @@ export function AuditPanel({
               {Object.keys(taxEdits).length > 0 && (
                 <button
                   onClick={async () => {
+                    // Capture edits before async operations
+                    const pendingEdits = { ...taxEdits }
                     let failed = false
-                    for (const [trId, edits] of Object.entries(taxEdits)) {
+                    for (const [trId, edits] of Object.entries(pendingEdits)) {
                       if (!edits || Object.keys(edits).length === 0) continue
                       try {
                         const res = await fetch(`/api/tax-returns/${trId}`, {
@@ -2309,10 +2311,21 @@ export function AuditPanel({
                       }
                     }
                     if (!failed) {
+                      // Apply saved values directly into dbData — re-fetching hits a
+                      // Next.js/Supabase cache that returns the stale value even after
+                      // the DB write completed.
+                      setDbData(prev => {
+                        if (!prev) return prev
+                        return {
+                          ...prev,
+                          tax_returns: prev.tax_returns.map(tr => {
+                            const edits = pendingEdits[tr.id]
+                            if (!edits) return tr
+                            return { ...tr, ...edits }
+                          }),
+                        }
+                      })
                       setTaxEdits({})
-                      // Re-fetch from DB to get confirmed state
-                      const r = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
-                      if (r.ok) setDbData(await r.json() as AccountData)
                       toast.success('Tax return edits saved')
                     }
                   }}
