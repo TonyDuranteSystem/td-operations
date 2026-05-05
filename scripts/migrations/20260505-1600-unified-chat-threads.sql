@@ -73,5 +73,5 @@ AS $$
   ) unread ON TRUE
 
   ORDER BY latest.created_at DESC NULLS LAST
-  LIMIT 100;
+  LIMIT 500;
 $$;
