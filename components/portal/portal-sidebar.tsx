@@ -22,7 +22,6 @@ import {
   CreditCard,
   PenLine,
   FilePen,
-  ScrollText,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -115,7 +114,6 @@ const companyItems: NavItem[] = [
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
-  { key: 'nav.operatingAgreement', href: '/portal/documents/operating-agreement', icon: ScrollText, visibilityKey: 'documentGenerator' },
   { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
   // Invoices belongs under Company per Antonio 2026-05-05 — it's the
   // company's invoicing system (sales invoices to the client's customers
