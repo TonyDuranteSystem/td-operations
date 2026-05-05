@@ -22,6 +22,7 @@ interface ChatThread {
   contact_id: string | null
   company_name: string
   contact_name: string | null
+  companies: { id: string; name: string }[]
   last_message: string
   last_message_at: string
   unread_count: number
@@ -99,6 +100,9 @@ export default function PortalChatsPage() {
   const urlParams = useSearchParams()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(urlParams.get('account'))
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null)
+  // Unified thread state: which company the admin is sending as, and all companies for badge lookup
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
+  const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string }[]>([])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
@@ -728,7 +732,7 @@ export default function PortalChatsPage() {
     setAiPanelMessages(prev => [...prev, { role: 'user', text: question }])
     setAiPanelLoading(true)
     try {
-      const accountId = selectedAccountId || (selectedThreadId ? internalMessages?.thread?.account_id : null)
+      const accountId = selectedCompanyId || selectedAccountId || (selectedThreadId ? internalMessages?.thread?.account_id : null)
       if (!accountId) { toast.error('No client context'); return }
       const res = await fetch('/api/internal/ai-assist', {
         method: 'POST',
@@ -818,7 +822,13 @@ export default function PortalChatsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(selectedAccountId ? { account_id: selectedAccountId } : { contact_id: selectedContactId }),
+          ...(selectedAccountId
+            ? { account_id: selectedAccountId }
+            : {
+                contact_id: selectedContactId,
+                ...(selectedCompanyId ? { account_id: selectedCompanyId } : {}),
+              }
+          ),
           message, reply_to_id, attachments,
         }),
       })
@@ -1037,9 +1047,9 @@ export default function PortalChatsPage() {
         const res = await fetch(`/api/portal/chat/search-accounts?q=${encodeURIComponent(chatSearch)}`)
         if (res.ok) {
           const data = await res.json()
-          // Filter out accounts that already have threads
-          const threadIds = new Set((threads ?? []).map(t => t.account_id))
-          const extras = (data.accounts ?? []).filter((a: { id: string }) => !threadIds.has(a.id))
+          // Filter out accounts that already appear in a unified thread
+          const accountIdsInThreads = new Set((threads ?? []).flatMap(t => t.companies?.map(c => c.id) ?? []))
+          const extras = (data.accounts ?? []).filter((a: { id: string }) => !accountIdsInThreads.has(a.id))
           setSearchExtraAccounts(extras)
         }
       } catch { /* ignore */ }
@@ -1191,7 +1201,7 @@ export default function PortalChatsPage() {
             }).filter(t => {
               if (!chatSearch.trim()) return true
               const q = chatSearch.toLowerCase()
-              return t.company_name.toLowerCase().includes(q) || (t.contact_name?.toLowerCase().includes(q) ?? false)
+              return (t.contact_name || t.company_name).toLowerCase().includes(q) || (t.companies?.some(c => c.name.toLowerCase().includes(q)) ?? false)
             }).map(thread => {
               const threadKey = thread.account_id || thread.contact_id || ''
               const isSelected = thread.account_id
@@ -1201,14 +1211,13 @@ export default function PortalChatsPage() {
               <button
                 key={threadKey}
                 onClick={() => {
-                  setSelectedName({ company: thread.company_name, contact: thread.contact_name || undefined })
-                  if (thread.account_id) {
-                    setSelectedAccountId(thread.account_id)
-                    setSelectedContactId(null)
-                  } else if (thread.contact_id) {
-                    setSelectedContactId(thread.contact_id)
-                    setSelectedAccountId(null)
-                  }
+                  setSelectedName({ company: thread.contact_name || thread.company_name, contact: thread.companies?.map(c => c.name).join(' · ') || undefined })
+                  setSelectedAccountId(null)
+                  setSelectedContactId(thread.contact_id)
+                  const companies = thread.companies ?? []
+                  setSelectedThreadCompanies(companies)
+                  setSelectedCompanyId(companies[0]?.id ?? null)
+                  setSidebarView('chats')
                 }}
                 title={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name}
                 className={cn(
@@ -1218,19 +1227,19 @@ export default function PortalChatsPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 min-w-0">
-                    <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
+                    <User className="h-4 w-4 text-zinc-400 shrink-0" />
                     <div className="min-w-0">
-                      {thread.account_id ? (
-                        <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.company_name}</Link>
+                      {thread.contact_id ? (
+                        <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
                       ) : (
-                        <span className="text-sm font-medium text-zinc-900 truncate block">{thread.company_name}</span>
+                        <span className="text-sm font-medium text-zinc-900 truncate block">{thread.contact_name || thread.company_name}</span>
                       )}
-                      {thread.contact_name && (
-                        thread.contact_id ? (
-                          <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-[11px] text-zinc-400 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name}</Link>
-                        ) : (
-                          <span className="text-[11px] text-zinc-400 truncate block">{thread.contact_name}</span>
-                        )
+                      {thread.companies?.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          {thread.companies.map(c => (
+                            <Link key={c.id} href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
+                          ))}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1706,35 +1715,35 @@ export default function PortalChatsPage() {
             {/* Header */}
             <div className="px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null) }}
+                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
               </button>
               {(() => {
-                const threadName = selectedName?.company
-                  || threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)?.company_name
-                  || 'Chat'
-                const contactName = selectedName?.contact
-                  || threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)?.contact_name
+                const currentThread = threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)
+                const displayName = selectedName?.company || currentThread?.contact_name || currentThread?.company_name || 'Chat'
+                const companies = selectedThreadCompanies.length > 0 ? selectedThreadCompanies : (currentThread?.companies ?? [])
                 return (
                   <div className="flex items-center justify-between">
-                    <div>
-                      {selectedAccountId ? (
+                    <div className="min-w-0">
+                      {selectedContactId ? (
+                        <Link href={`/contacts/${selectedContactId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
+                          {displayName}
+                        </Link>
+                      ) : selectedAccountId ? (
                         <Link href={`/accounts/${selectedAccountId}`} className="text-sm font-semibold text-zinc-900 hover:text-blue-600 hover:underline transition-colors">
-                          {threadName}
+                          {displayName}
                         </Link>
                       ) : (
-                        <p className="text-sm font-semibold text-zinc-900">
-                          {threadName}
-                        </p>
+                        <p className="text-sm font-semibold text-zinc-900">{displayName}</p>
                       )}
-                      {contactName && (
-                        selectedContactId ? (
-                          <Link href={`/contacts/${selectedContactId}`} className="text-xs text-zinc-500 hover:text-blue-600 hover:underline transition-colors">{contactName}</Link>
-                        ) : (
-                          <p className="text-xs text-zinc-500">{contactName}</p>
-                        )
+                      {companies.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          {companies.map(c => (
+                            <Link key={c.id} href={`/accounts/${c.id}`} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors">{c.name}</Link>
+                          ))}
+                        </div>
                       )}
                     </div>
                     <div className="flex items-center gap-1">
@@ -1763,7 +1772,7 @@ export default function PortalChatsPage() {
             </div>
 
             {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
-            {selectedAccountId && (
+            {(selectedAccountId || selectedContactId) && (
               <div className="flex border-b bg-white shrink-0">
                 <button
                   onClick={() => setChatViewMode('messages')}
@@ -1792,8 +1801,8 @@ export default function PortalChatsPage() {
               </div>
             )}
 
-            {chatViewMode === 'tasks' && selectedAccountId ? (
-              <ThreadTasksPanel accountId={selectedAccountId} contactId={selectedContactId} />
+            {chatViewMode === 'tasks' && (selectedAccountId || selectedCompanyId) ? (
+              <ThreadTasksPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
             ) : (
             <>
 
@@ -1875,7 +1884,7 @@ export default function PortalChatsPage() {
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => { const acctId = selectedAccountId; if (acctId) createInternalThread(acctId, msg.id, msg.message) }}
+                            onSelect={() => { const acctId = selectedCompanyId || selectedAccountId; if (acctId) createInternalThread(acctId, msg.id, msg.message) }}
                           >
                             <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
                           </DropdownMenu.Item>
@@ -1952,19 +1961,29 @@ export default function PortalChatsPage() {
                             : 'bg-zinc-100 text-zinc-900'
                         )}
                       >
-                        {/* PR 2 Step 6 — sender_context badge (additive). NULL renders nothing. */}
-                        {msg.sender_context && (
-                          <span className={cn(
-                            'inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5',
-                            isAdmin
-                              ? 'bg-blue-500/40 text-blue-100'
-                              : msg.sender_context === 'person'
-                                ? 'bg-zinc-200 text-zinc-600'
-                                : 'bg-blue-100 text-blue-700'
-                          )}>
-                            {msg.sender_context === 'person' ? 'Personal' : 'Company'}
-                          </span>
-                        )}
+                        {/* Company badge — show on every message with an account_id when viewing a unified thread */}
+                        {(() => {
+                          const accountNameById = new Map(selectedThreadCompanies.map(c => [c.id, c.name]))
+                          const companyName = msg.account_id ? accountNameById.get(msg.account_id) : null
+                          // Show badge if we have a company name (multi-company thread) or sender_context is set
+                          const showBadge = companyName || msg.sender_context
+                          if (!showBadge) return null
+                          const label = msg.sender_context === 'person'
+                            ? 'Personal'
+                            : companyName || 'Company'
+                          return (
+                            <span className={cn(
+                              'inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5',
+                              isAdmin
+                                ? 'bg-blue-500/40 text-blue-100'
+                                : msg.sender_context === 'person'
+                                  ? 'bg-zinc-200 text-zinc-600'
+                                  : 'bg-blue-100 text-blue-700'
+                            )}>
+                              {label}
+                            </span>
+                          )
+                        })()}
                         {/* Sender name for client messages (shows member name in MMLLC) */}
                         {!isAdmin && msg.sender_name && (
                           <p className="text-[10px] font-semibold text-zinc-500 mb-0.5">{msg.sender_name}</p>
@@ -2173,6 +2192,43 @@ export default function PortalChatsPage() {
                   ))}
                 </div>
                 <p className="text-[10px] text-zinc-400 mt-1">{pendingAdminFiles.length}/{MAX_ADMIN_ATTACHMENTS} files</p>
+              </div>
+            )}
+
+            {/* Company picker — shown when the thread has multiple companies so admin can tag which company the reply is about */}
+            {selectedThreadCompanies.length > 0 && !selectedAccountId && (
+              <div className="px-3 py-2 border-t bg-zinc-50/60 flex items-center gap-2 flex-wrap shrink-0">
+                <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium shrink-0">Send as</span>
+                <div className="flex gap-1 flex-wrap">
+                  {selectedThreadCompanies.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setSelectedCompanyId(c.id)}
+                      className={cn(
+                        'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[180px] truncate',
+                        selectedCompanyId === c.id
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white border text-zinc-600 hover:bg-zinc-100'
+                      )}
+                      title={c.name}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCompanyId(null)}
+                    className={cn(
+                      'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
+                      !selectedCompanyId
+                        ? 'bg-zinc-900 text-white'
+                        : 'bg-white border text-zinc-600 hover:bg-zinc-100'
+                    )}
+                  >
+                    No tag
+                  </button>
+                </div>
               </div>
             )}
 
