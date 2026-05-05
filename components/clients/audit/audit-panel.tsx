@@ -2309,20 +2309,11 @@ export function AuditPanel({
                       }
                     }
                     if (!failed) {
-                      toast.success('Tax return edits saved')
-                      // Update dbData so UI reflects saved values without re-fetch
-                      setDbData(prev => {
-                        if (!prev) return prev
-                        return {
-                          ...prev,
-                          tax_returns: prev.tax_returns.map(tr => {
-                            const edits = taxEdits[tr.id]
-                            if (!edits) return tr
-                            return { ...tr, ...edits }
-                          }),
-                        }
-                      })
                       setTaxEdits({})
+                      // Re-fetch from DB to get confirmed state
+                      const r = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
+                      if (r.ok) setDbData(await r.json() as AccountData)
+                      toast.success('Tax return edits saved')
                     }
                   }}
                   className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded-md hover:bg-amber-700"
