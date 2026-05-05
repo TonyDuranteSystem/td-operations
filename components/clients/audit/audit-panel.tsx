@@ -2310,6 +2310,18 @@ export function AuditPanel({
                     }
                     if (!failed) {
                       toast.success('Tax return edits saved')
+                      // Update dbData so UI reflects saved values without re-fetch
+                      setDbData(prev => {
+                        if (!prev) return prev
+                        return {
+                          ...prev,
+                          tax_returns: prev.tax_returns.map(tr => {
+                            const edits = taxEdits[tr.id]
+                            if (!edits) return tr
+                            return { ...tr, ...edits }
+                          }),
+                        }
+                      })
                       setTaxEdits({})
                     }
                   }}
