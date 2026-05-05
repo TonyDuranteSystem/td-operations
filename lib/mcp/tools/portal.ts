@@ -1915,11 +1915,24 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
         // Admin sender ID (Antonio's auth user ID)
         const senderId = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
 
+        // Resolve contact_id: if only account_id was provided, look up the primary
+        // contact so the message is visible in the client's contact-scoped thread.
+        let resolvedContactId = contact_id || null
+        if (!resolvedContactId && account_id) {
+          const { data: primary } = await supabaseAdmin
+            .from("account_contacts")
+            .select("contact_id")
+            .eq("account_id", account_id)
+            .eq("is_primary", true)
+            .maybeSingle()
+          resolvedContactId = primary?.contact_id || null
+        }
+
         const { data: msg, error } = await supabaseAdmin
           .from("portal_messages")
           .insert({
             account_id: account_id || null,
-            contact_id: contact_id || null,
+            contact_id: resolvedContactId,
             sender_type: "admin",
             sender_id: senderId,
             message: msgText,

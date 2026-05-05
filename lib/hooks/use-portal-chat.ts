@@ -95,48 +95,45 @@ export function usePortalChat(accountId: string | null, contactId: string) {
   // Subscribe to realtime
   useEffect(() => {
     const supabase = createClient()
-    const channel = supabase
-      .channel(`portal-chat-${filterValue}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'portal_messages',
-          filter: `${filterColumn}=eq.${filterValue}`,
-        },
-        (payload) => {
-          const newMessage = payload.new as PortalMessage
-          setMessages(prev => {
-            if (prev.some(m => m.id === newMessage.id)) return prev
-            return [...prev, newMessage]
-          })
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'portal_messages',
-          filter: `${filterColumn}=eq.${filterValue}`,
-        },
-        (payload) => {
-          const updated = payload.new as PortalMessage & { deleted_at?: string | null }
-          // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
-          if (updated.deleted_at) {
-            setMessages(prev => prev.filter(m => m.id !== updated.id))
-          }
-        }
-      )
-      .subscribe()
 
+    const handleInsert = (payload: { new: unknown }) => {
+      const newMessage = payload.new as PortalMessage
+      setMessages(prev => {
+        if (prev.some(m => m.id === newMessage.id)) return prev
+        return [...prev, newMessage]
+      })
+    }
+
+    const handleUpdate = (payload: { new: unknown }) => {
+      const updated = payload.new as PortalMessage & { deleted_at?: string | null }
+      // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
+      if (updated.deleted_at) {
+        setMessages(prev => prev.filter(m => m.id !== updated.id))
+      }
+    }
+
+    // Primary subscription: messages tagged with this contact.
+    let channel = supabase
+      .channel(`portal-chat-${filterValue}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `${filterColumn}=eq.${filterValue}` }, handleInsert)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `${filterColumn}=eq.${filterValue}` }, handleUpdate)
+
+    // Secondary subscription: admin messages saved with contact_id=NULL but account_id set.
+    // This covers replies from the CRM dashboard and MCP tool that historically omitted contact_id.
+    // ID-based dedup in handleInsert prevents duplicates for messages that match both filters.
+    if (accountId) {
+      channel = channel
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${accountId}` }, handleInsert)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'portal_messages', filter: `account_id=eq.${accountId}` }, handleUpdate)
+    }
+
+    channel.subscribe()
     channelRef.current = channel
 
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [filterColumn, filterValue])
+  }, [filterColumn, filterValue, accountId])
 
   // Send message. Optional senderContext + tagAccountId let the caller
   // override the picker's tag scope (PR 2 Step 6). Default: senderContext

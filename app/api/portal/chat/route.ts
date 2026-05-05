@@ -39,14 +39,18 @@ export async function GET(request: NextRequest) {
 
   // Verify access
   const authContactId = getClientContactId(user)
+  let clientAccountIds: string[] = []
   if (authContactId) {
     if (accountId) {
-      const accountIds = await getClientAccountIds(authContactId)
-      if (!accountIds.includes(accountId)) {
+      clientAccountIds = await getClientAccountIds(authContactId)
+      if (!clientAccountIds.includes(accountId)) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 })
       }
     } else if (contactIdParam && contactIdParam !== authContactId) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    } else if (contactIdParam) {
+      // Fetch account IDs so we can include account-scoped admin messages below.
+      clientAccountIds = await getClientAccountIds(authContactId)
     }
   }
 
@@ -61,11 +65,19 @@ export async function GET(request: NextRequest) {
     query = query.is('deleted_at', null)
   }
 
-  // Threading: contact_id param returns the unified per-contact thread
-  // (across account_id NULL and account_id=X). account_id param without
-  // contact_id keeps the legacy per-account behavior for the CRM admin viewer.
+  // Threading: contact_id param returns the unified per-contact thread.
+  // For client users we also include admin messages saved with contact_id=NULL
+  // but account_id matching one of their accounts — this covers replies sent
+  // via the CRM dashboard or MCP tool (which historically omitted contact_id).
   if (contactIdParam) {
-    query = query.eq('contact_id', contactIdParam)
+    if (authContactId && clientAccountIds.length > 0) {
+      const acctList = clientAccountIds.join(',')
+      query = query.or(
+        `contact_id.eq.${contactIdParam},and(contact_id.is.null,sender_type.eq.admin,account_id.in.(${acctList}))`
+      )
+    } else {
+      query = query.eq('contact_id', contactIdParam)
+    }
   } else if (accountId) {
     query = query.eq('account_id', accountId)
   }
@@ -148,8 +160,19 @@ export async function POST(request: NextRequest) {
   const isClientUser = user.app_metadata?.role === 'client'
   const senderType = isClientUser ? 'client' : 'admin'
 
-  // Resolve contact_id — always set (from body, or from auth user)
-  const resolvedContactId = bodyContactId || getClientContactId(user)
+  // Resolve contact_id — always set (from body, or from auth user).
+  // For admin senders with only account_id, look up the primary contact so the
+  // message appears in the client's contact-scoped thread (fixes invisible admin messages).
+  let resolvedContactId = bodyContactId || getClientContactId(user)
+  if (!resolvedContactId && account_id && !isClientUser) {
+    const { data: primary } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contact_id')
+      .eq('account_id', account_id)
+      .eq('is_primary', true)
+      .maybeSingle()
+    resolvedContactId = primary?.contact_id || null
+  }
 
   // Verify access for clients
   if (isClientUser) {
