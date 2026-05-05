@@ -65,14 +65,14 @@ interface NavItem {
 // No "My Profile vs My Company" toggle. Multi-LLC clients still get a switcher
 // inside the Companies section.
 
-// Personal section — items scoped to the contact (the person), not the company.
-// /portal/invoices is intentionally listed here even though it's not strictly
-// personal: post PR 2 it shows BOTH personal and company invoices in one
-// mixed list, so it spans both scopes. Putting it under Personal mirrors how
-// people think about "my invoices" (mine, not the company's).
+// Personal section — items scoped to the contact (the person).
+// Invoices is NOT here: per Antonio (2026-05-05), "they can invoice only if
+// under a company, so the invoice system will appear only under company and
+// when there is a company." Personal/individual clients don't need an
+// invoicing system. For formation-gap clients (Lorenzo) the home page
+// already surfaces unpaid TD invoices via Action Items + Payment History.
 const personalItems: NavItem[] = [
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
-  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
   { key: 'nav.profile', href: '/portal/profile', icon: User },
 ]
@@ -99,6 +99,11 @@ const companyItems: NavItem[] = [
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
+  // Invoices belongs under Company per Antonio 2026-05-05 — it's the
+  // company's invoicing system (sales invoices to the client's customers
+  // + TD's expense invoices to the company). Hidden for no-company
+  // clients because the whole Companies section is hidden then.
+  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
   { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
 ]
 
