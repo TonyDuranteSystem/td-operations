@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -407,11 +407,12 @@ export default async function PortalDashboardPage() {
   const renewalBannerEnabled = currentYear >= renewalBannerMinYear
 
   // Fetch all data in parallel
-  const [account, services, deadlines, payments, taxReturns, members, actionItems, profileBanner, renewalOffer] = await Promise.all([
+  const [account, services, deadlines, accountPayments, contactPayments, taxReturns, members, actionItems, profileBanner, renewalOffer] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
     getPortalServices(selectedAccountId),
     getPortalDeadlines(selectedAccountId),
     getPortalPayments(selectedAccountId),
+    contactId ? getPortalPaymentsByContact(contactId) : Promise.resolve([]),
     getPortalTaxReturns(selectedAccountId),
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
@@ -470,6 +471,21 @@ export default async function PortalDashboardPage() {
   const today = new Date().toISOString().split('T')[0]
   const allServices = services
   const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
+
+  // PR 2 Step 4 — merge company-scoped + personal payments into one mixed
+  // list with a per-row scope label, mirroring the Expenses tab on
+  // /portal/invoices. Per Antonio's "he sees both" rule applied to the
+  // home-page PaymentHistory widget for active-tier clients.
+  const personalPaymentLabel = locale === 'it' ? 'Personale' : 'Personal'
+  const companyPaymentLabel = account.company_name ?? (locale === 'it' ? 'Azienda' : 'Company')
+  const payments = [
+    ...accountPayments.map(p => ({ ...p, scope_label: companyPaymentLabel })),
+    ...contactPayments.map(p => ({ ...p, scope_label: personalPaymentLabel })),
+  ].sort((a, b) => {
+    const ad = a.due_date ?? ''
+    const bd = b.due_date ?? ''
+    return bd.localeCompare(ad)
+  })
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">

@@ -19,6 +19,10 @@ interface Payment {
   installment: string | null
   invoice_number: string | null
   invoice_status: string | null
+  // PR 2 Step 4 (mixed list extension, 2026-05-05): "Personal" or company
+  // name. Set when the home-page widget unions contact-scoped + account-scoped
+  // payments for active-tier clients. Undefined for single-scope lists.
+  scope_label?: string | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -81,7 +85,17 @@ export function PaymentHistory({ payments, title }: { payments: Payment[]; title
             return (
               <div key={p.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium truncate text-xs">{p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || '\u2014')}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium truncate text-xs">{p.description ?? (`${p.period ?? ''} ${p.year ?? ''}`.trim() || '\u2014')}</p>
+                    {p.scope_label && (
+                      <span
+                        className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200"
+                        title={p.scope_label}
+                      >
+                        {p.scope_label}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-zinc-500">{p.due_date ? formatDate(p.due_date) : '\u2014'}</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
