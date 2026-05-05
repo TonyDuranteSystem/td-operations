@@ -167,6 +167,7 @@ const TAX_STATUSES = [
 
 const ACCOUNT_STATUSES = ['Active', 'Delinquent', 'Suspended', 'Offboarding', 'Cancelled', 'Closed']
 const ACCOUNT_TYPES = ['Client', 'Partner', 'One-Time']
+const ENTITY_TYPES = ['Single Member LLC', 'Multi Member LLC', 'C-Corp Elected'] as const
 
 // ─── Helper components ────────────────────────────────────
 
@@ -1152,10 +1153,14 @@ export function AuditPanel({
     try {
       const contactsPayload = localContacts
         .filter(c => contactEdits[c.id])
-        .map(c => ({
-          id: c.id,
-          ...contactEdits[c.id],
-        }))
+        .map(c => {
+          const edits = contactEdits[c.id]
+          const normalized: Record<string, unknown> = {}
+          for (const [k, v] of Object.entries(edits)) {
+            normalized[k] = v === '' ? null : v
+          }
+          return { id: c.id, ...normalized }
+        })
 
       const res = await fetch(`/api/clients/audit/${account.id}`, {
         method: 'PATCH',
@@ -1186,8 +1191,32 @@ export function AuditPanel({
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || 'Save failed')
+      const updatedContacts = localContacts.map(c =>
+        contactEdits[c.id] ? { ...c, ...contactEdits[c.id] } : c
+      )
       toast.success('Saved')
-      onUpdated({ ...account, onboarding_date: onboardingDate || null, audit_flag: flagged, status })
+      onUpdated({
+        ...account,
+        account_type: accountType || null,
+        entity_type: (entityType || null) as typeof account.entity_type,
+        state_of_formation: stateOfFormation || null,
+        ein_number: ein || null,
+        filing_id: filingId || null,
+        physical_address: address || null,
+        formation_date: formationDate || null,
+        onboarding_date: onboardingDate || null,
+        installment_1_amount: inst1 ? parseFloat(inst1) : null,
+        installment_1_currency: (currency || null) as typeof account.installment_1_currency,
+        installment_2_amount: inst2 ? parseFloat(inst2) : null,
+        installment_2_currency: (currency || null) as typeof account.installment_2_currency,
+        setup_fee_amount: setupAmount ? parseFloat(setupAmount) : null,
+        setup_fee_invoice: setupInvoice || null,
+        setup_fee_date: setupDate || null,
+        notes: notes || null,
+        status: (status || null) as typeof account.status,
+        audit_flag: flagged,
+        contacts: updatedContacts,
+      })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')
     } finally {
@@ -1682,13 +1711,14 @@ export function AuditPanel({
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Entity type</label>
-              <input
-                type="text"
+              <select
                 value={entityType}
                 onChange={e => setEntityType(e.target.value)}
-                placeholder="e.g. SMLLC, MMLLC, S-Corp"
                 className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              >
+                <option value="">— Select —</option>
+                {ENTITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
               <p className="text-xs text-muted-foreground">DB: {account.entity_type ?? '—'}</p>
             </div>
             <Field
