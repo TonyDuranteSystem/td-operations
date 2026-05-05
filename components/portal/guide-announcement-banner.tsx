@@ -4,20 +4,20 @@ import { useEffect, useState } from 'react'
 import { Globe, ArrowRight, X } from 'lucide-react'
 import Link from 'next/link'
 
-const DISMISS_KEY = 'td-guide-relay-wire-v1'
+const DISMISS_KEY = 'td-guide-relay-docs-v1'
 
 const COPY = {
   en: {
-    title: 'New Guide: How to Send an International Wire',
-    desc: 'Learn how to send a SWIFT wire transfer step by step via your Relay account.',
+    title: 'Relay — International Payments: Document Upload Guide',
+    desc: 'See exactly which documents to upload to unlock international wire transfers on your Relay account.',
     cta: 'View Guide',
     dismiss: 'Dismiss',
   },
   it: {
-    title: 'Nuova Guida: Come Inviare un Bonifico Internazionale',
-    desc: 'Scopri come inviare un bonifico SWIFT passo passo tramite il tuo conto Relay.',
-    cta: 'Vedi la Guida',
-    dismiss: 'Chiudi',
+    title: 'Relay — International Payments: Document Upload Guide',
+    desc: 'See exactly which documents to upload to unlock international wire transfers on your Relay account.',
+    cta: 'View Guide',
+    dismiss: 'Dismiss',
   },
 }
 
@@ -55,7 +55,7 @@ export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
         <p className="text-xs text-blue-700 mt-0.5">{c.desc}</p>
       </div>
       <Link
-        href="/portal/guide/relay-wire"
+        href="/portal/guide/relay-docs"
         onClick={handleDismiss}
         className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors shrink-0"
       >
