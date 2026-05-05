@@ -110,7 +110,8 @@ export async function POST(
 
   const contactId = primaryContact?.contact_id ?? null
   const contactRow = primaryContact?.contacts as { language?: string | null } | null
-  const isItalian = (contactRow?.language ?? "en") === "it"
+  const lang = contactRow?.language ?? "en"
+  const isItalian = lang === "it" || lang === "Italian"
 
   const chatMessage = isItalian
     ? `Ciao! Abbiamo bisogno di aggiornare le informazioni dei soci di **${account.company_name}**.\n\nPer favore compila questo breve modulo con i dati aggiornati di tutti i soci:\n\n${formUrl}`
