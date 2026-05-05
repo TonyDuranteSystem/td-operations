@@ -298,6 +298,23 @@ export async function getPortalPayments(accountId: string) {
 }
 
 /**
+ * Contact-scoped payments — for clients in the formation gap (paid as
+ * individual, no company yet) per Antonio's architectural model. Returns
+ * payment rows attached to the contact with no account_id set.
+ */
+export async function getPortalPaymentsByContact(contactId: string) {
+  const { data } = await supabaseAdmin
+    .from('payments')
+    .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, installment, invoice_number, invoice_status')
+    .eq('contact_id', contactId)
+    .is('account_id', null)
+    .order('due_date', { ascending: false })
+    .limit(20)
+
+  return data ?? []
+}
+
+/**
  * Get client expenses (incoming invoices: TD billing + third-party uploads).
  * Used in the Expenses tab of the portal invoices page.
  */
@@ -306,6 +323,22 @@ export async function getPortalExpenses(accountId: string) {
     .from('client_expenses')
     .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, td_payment_id, created_at')
     .eq('account_id', accountId)
+    .order('created_at', { ascending: false })
+    .limit(100)
+
+  return data ?? []
+}
+
+/**
+ * Contact-scoped expenses — mirror of getPortalExpenses for formation-gap
+ * clients (paid as individual, no company yet). Same shape, same fields.
+ */
+export async function getPortalExpensesByContact(contactId: string) {
+  const { data } = await supabaseAdmin
+    .from('client_expenses')
+    .select('id, vendor_name, invoice_number, internal_ref, description, currency, total, subtotal, tax_amount, issue_date, due_date, paid_date, status, source, category, attachment_url, attachment_name, td_payment_id, created_at')
+    .eq('contact_id', contactId)
+    .is('account_id', null)
     .order('created_at', { ascending: false })
     .limit(100)
 
@@ -855,6 +888,99 @@ export async function getPortalActionItems(
       href: `/portal/sign/document?token=${sig.token}`,
       priority,
       createdAt: sig.created_at,
+    })
+  }
+
+  // Sort: red → orange → blue, then by date (oldest first)
+  const priorityOrder = { red: 0, orange: 1, blue: 2 }
+  items.sort((a, b) => {
+    const po = priorityOrder[a.priority] - priorityOrder[b.priority]
+    if (po !== 0) return po
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  })
+
+  const counts = {
+    red: items.filter(i => i.priority === 'red').length,
+    orange: items.filter(i => i.priority === 'orange').length,
+    blue: items.filter(i => i.priority === 'blue').length,
+    total: items.length,
+  }
+
+  return { items, counts }
+}
+
+/**
+ * Contact-only variant of getPortalActionItems — for clients in the formation
+ * gap (paid as individual, no company yet) and for tier=lead/onboarding
+ * clients without an account. Replaces the broken
+ * `getPortalActionItems(undefined, contactId)` call which silently returned
+ * nothing because the underlying query did `.eq('id', accountId).single()`
+ * with accountId=undefined.
+ *
+ * Surfaces the items that make sense at the contact scope:
+ * - In-progress wizard forms (formation, onboarding, tax)
+ * - Unpaid invoices on the contact (account_id IS NULL)
+ *
+ * Skips OA/Lease/SS-4/MSA/tax-returns/signature-requests because none of
+ * those exist before the company is materialized.
+ */
+export async function getPortalActionItemsByContact(contactId: string): Promise<ActionItemsResult> {
+  const today = new Date().toISOString().split('T')[0]
+
+  const [wizardRes, invoiceRes] = await Promise.all([
+    supabaseAdmin
+      .from('wizard_progress')
+      .select('id, wizard_type, created_at, updated_at')
+      .eq('status', 'in_progress')
+      .eq('contact_id', contactId)
+      .limit(10),
+    supabaseAdmin
+      .from('payments')
+      .select('id, invoice_number, total, amount_currency, due_date, invoice_status, created_at')
+      .eq('contact_id', contactId)
+      .is('account_id', null)
+      .in('invoice_status', ['Sent', 'Overdue'])
+      .order('due_date', { ascending: true })
+      .limit(10),
+  ])
+
+  const items: ActionItem[] = []
+
+  // ── Wizard forms ──
+  // No SD-required gating at contact scope: formation/onboarding wizards
+  // attached to the contact don't have an account yet, so we can't check
+  // service_deliveries.account_id. Trust the wizard_progress row exists.
+  for (const w of wizardRes.data ?? []) {
+    const age = daysSince(w.created_at)
+    const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
+    const typeLabel = w.wizard_type === 'formation' ? 'Formation' : w.wizard_type === 'onboarding' ? 'Onboarding' : w.wizard_type
+    items.push({
+      type: 'form',
+      title: `Complete ${typeLabel} Form`,
+      titleIt: `Completa il modulo di ${typeLabel === 'Formation' ? 'Costituzione' : typeLabel === 'Onboarding' ? 'Onboarding' : typeLabel}`,
+      description: 'Your data collection form is in progress. Please complete it.',
+      descriptionIt: 'Il tuo modulo di raccolta dati è in corso. Completalo.',
+      href: '/portal/wizard',
+      priority,
+      createdAt: w.created_at,
+    })
+  }
+
+  // ── Unpaid invoices (contact-scoped) ──
+  for (const inv of invoiceRes.data ?? []) {
+    const isOverdue = inv.invoice_status === 'Overdue' || (inv.due_date && inv.due_date < today)
+    const dueSoon = inv.due_date ? daysUntil(inv.due_date) <= 7 : false
+    const priority: ActionItem['priority'] = isOverdue ? 'red' : dueSoon ? 'orange' : 'blue'
+    const amount = `${inv.amount_currency || 'USD'} ${Number(inv.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+    items.push({
+      type: 'invoice',
+      title: `Pay Invoice ${inv.invoice_number || ''}`,
+      titleIt: `Paga Fattura ${inv.invoice_number || ''}`,
+      description: `${amount} — ${isOverdue ? 'Overdue' : inv.due_date ? `Due ${inv.due_date}` : 'Payment pending'}`,
+      descriptionIt: `${amount} — ${isOverdue ? 'Scaduta' : inv.due_date ? `Scadenza ${inv.due_date}` : 'Pagamento in sospeso'}`,
+      href: '/portal/invoices?tab=expenses',
+      priority,
+      createdAt: inv.created_at,
     })
   }
 

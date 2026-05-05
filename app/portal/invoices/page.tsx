@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalExpenses } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalExpenses, getPortalExpensesByContact } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { InvoiceList } from '@/components/portal/invoice-list'
@@ -33,11 +33,19 @@ export default async function PortalInvoicesPage({
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
-  if (!selectedAccountId) redirect('/portal')
+  // No redirect when there's no account — formation-gap clients (paid as
+  // individual, no company yet, e.g. Lorenzo) need to see their personal
+  // invoices via the Expenses tab.
+  const selectedAccount = accounts.find(a => a.id === selectedAccountId) ?? null
+  const companyName = selectedAccount?.company_name ?? null
 
   const params = await searchParams
-  // view=paid (receipt email deep-link) → expenses tab showing paid TD invoices
-  const activeTab = params.tab === 'expenses' || params.view === 'paid'
+  // No-account clients only see Expenses (Sales + Vendors are company-scoped
+  // by design — client_invoices is the client's outgoing sales, vendors are
+  // the client's vendors). Force expenses when no account regardless of params.
+  const activeTab = !selectedAccountId
+    ? 'expenses'
+    : params.tab === 'expenses' || params.view === 'paid'
     ? 'expenses'
     : params.tab === 'vendors'
     ? 'vendors'
@@ -46,21 +54,34 @@ export default async function PortalInvoicesPage({
   const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
 
-  // Fetch data for all tabs in parallel
-  const [salesResult, expenses, templates, vendors] = await Promise.all([
-    supabaseAdmin
-      .from('client_invoices')
-      .select('*, client_customers(name)')
-      .eq('account_id', selectedAccountId)
-      .eq('source', 'client')
-      .order('created_at', { ascending: false })
-      .limit(100),
-    getPortalExpenses(selectedAccountId),
-    listTemplates(selectedAccountId),
-    listVendors(selectedAccountId),
+  // Fetch data for all tabs in parallel. When no account, only personal
+  // expenses are queried; sales/templates/vendors are empty.
+  const [salesResult, accountExpenses, personalExpenses, templates, vendors] = await Promise.all([
+    selectedAccountId
+      ? supabaseAdmin
+          .from('client_invoices')
+          .select('*, client_customers(name)')
+          .eq('account_id', selectedAccountId)
+          .eq('source', 'client')
+          .order('created_at', { ascending: false })
+          .limit(100)
+      : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
+    selectedAccountId ? getPortalExpenses(selectedAccountId) : Promise.resolve([]),
+    getPortalExpensesByContact(contactId),
+    selectedAccountId ? listTemplates(selectedAccountId) : Promise.resolve([]),
+    selectedAccountId ? listVendors(selectedAccountId) : Promise.resolve([]),
   ])
 
-  const invoices = salesResult.data ?? []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoices: any[] = salesResult.data ?? []
+  // Merge company-scoped + personal expenses into one mixed list. Each row
+  // gets a scope_label so the ExpenseList can render a small badge ("Personal"
+  // or company name). Per Antonio's design decision 2026-05-05.
+  const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
+  const expenses = [
+    ...accountExpenses.map(e => ({ ...e, scope_label: companyName ?? personalLabel })),
+    ...personalExpenses.map(e => ({ ...e, scope_label: personalLabel })),
+  ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
   // Sales stats
   const salesStats = {
@@ -95,7 +116,7 @@ export default async function PortalInvoicesPage({
             {activeTab === 'sales' ? t('invoices.salesSubtitle', locale) : t('invoices.expensesSubtitle', locale)}
           </p>
         </div>
-        {activeTab === 'sales' && (
+        {activeTab === 'sales' && selectedAccountId && (
           <Link
             href="/portal/invoices/new"
             className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
@@ -104,12 +125,16 @@ export default async function PortalInvoicesPage({
             {t('invoices.new', locale)}
           </Link>
         )}
-        {activeTab === 'expenses' && (
+        {activeTab === 'expenses' && selectedAccountId && (
           <ExpensesHeader accountId={selectedAccountId} vendors={vendors} locale={locale} />
         )}
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — Sales + Vendors hidden for clients without a company (Sales/Vendors are
+          genuinely company-scoped per R027 — client_invoices is the client's outgoing
+          sales invoices, vendors are the client's vendors. Formation-gap clients only
+          have personal expenses to view.) */}
+      {selectedAccountId && (
       <div className="flex gap-1 bg-zinc-100 p-1 rounded-lg w-fit">
         <Link
           href="/portal/invoices?tab=sales"
@@ -154,6 +179,7 @@ export default async function PortalInvoicesPage({
           )}
         </Link>
       </div>
+      )}
 
       {/* ── Sales Tab ── */}
       {activeTab === 'sales' && (
@@ -191,7 +217,7 @@ export default async function PortalInvoicesPage({
             <InvoiceList invoices={mapped} />
           )}
 
-          <TemplateList templates={templates} accountId={selectedAccountId} />
+          <TemplateList templates={templates} accountId={selectedAccountId!} />
         </>
       )}
 
@@ -232,7 +258,7 @@ export default async function PortalInvoicesPage({
 
       {/* ── Vendors Tab ── */}
       {activeTab === 'vendors' && (
-        <VendorList vendors={vendors} accountId={selectedAccountId} locale={locale} />
+        <VendorList vendors={vendors} accountId={selectedAccountId!} locale={locale} />
       )}
     </div>
   )

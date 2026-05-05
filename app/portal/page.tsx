@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getProfileBannerStatus, getFormationAccount, getFormationContext } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext } from '@/lib/portal/queries'
 import { ActionItems } from '@/components/portal/action-items'
 import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
@@ -217,8 +217,14 @@ export default async function PortalDashboardPage() {
     }
 
     // Pending actions for clients who have a portal account but no active
-    // account yet (e.g. onboarding tier waiting for wizard review).
-    const noAccountActionItems = await getPortalActionItems(undefined, contactId || undefined)
+    // account yet (e.g. onboarding tier waiting for wizard review). Uses the
+    // contact-scoped helper because the regular getPortalActionItems requires
+    // an accountId — passing undefined silently returned nothing (broken
+    // before PR 2). Surfaces in-progress wizards + contact-scoped unpaid
+    // invoices, which is everything that exists at this stage.
+    const noAccountActionItems = contactId
+      ? await getPortalActionItemsByContact(contactId)
+      : { items: [], counts: { red: 0, orange: 0, blue: 0, total: 0 } }
 
     return (
       <>

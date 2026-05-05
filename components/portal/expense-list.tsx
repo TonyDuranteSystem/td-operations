@@ -24,6 +24,10 @@ interface Expense {
   attachment_url: string | null
   attachment_name: string | null
   td_payment_id: string | null
+  // Mixed-list scope badge: "Personal" or company name. Set by the page when
+  // both contact-scoped and account-scoped expenses are merged into one list
+  // for active clients with a company. Undefined for single-scope lists.
+  scope_label?: string | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -154,6 +158,14 @@ export function ExpenseList({
               <div key={exp.id} className="grid grid-cols-1 md:grid-cols-[1fr,120px,100px,90px,80px,80px,80px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 items-center text-sm hover:bg-zinc-50/50 transition-colors">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-medium truncate">{exp.vendor_name}</span>
+                  {exp.scope_label && (
+                    <span
+                      className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200"
+                      title={exp.scope_label}
+                    >
+                      {exp.scope_label}
+                    </span>
+                  )}
                   {exp.attachment_url && (
                     <a href={exp.attachment_url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-zinc-400 hover:text-blue-600">
                       <FileText className="h-3.5 w-3.5" />
