@@ -16,13 +16,11 @@ import {
   Menu,
   X,
   User,
-  ChevronDown,
   PenSquare,
   Share2,
   Briefcase,
   FolderOpen,
   CreditCard,
-  TrendingDown,
   PenLine,
   FilePen,
 } from 'lucide-react'
@@ -60,56 +58,69 @@ interface NavItem {
   partnerOnly?: boolean // if true, only show for partner portal
 }
 
-interface NavGroup {
-  key: string // i18n key for group label
-  items: NavItem[]
-  defaultOpen?: boolean
-}
+// (NavGroup interface removed in PR 2 Step 7 — sections are now hard-coded
+// rather than data-driven, since there are exactly two: Personal + Companies.)
 
-// Flat items (always visible, filtered by role/tier/data)
-const topItems: NavItem[] = [
+// PR 2 Step 7 (2026-05-05) — sidebar restructure per Antonio's architectural
+// model: contact is the home, personal stuff at top, companies nested below.
+// No "My Profile vs My Company" toggle. Multi-LLC clients still get a switcher
+// inside the Companies section.
+
+// Personal section — items scoped to the contact (the person), not the company.
+// /portal/invoices is intentionally listed here even though it's not strictly
+// personal: post PR 2 it shows BOTH personal and company invoices in one
+// mixed list, so it spans both scopes. Putting it under Personal mirrors how
+// people think about "my invoices" (mine, not the company's).
+const personalItems: NavItem[] = [
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
+  { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
+  { key: 'nav.profile', href: '/portal/profile', icon: User },
+]
+
+// Tier-specific items shown above the Personal section (CTAs the client hits
+// before they have a company). Lead → Offer; Onboarding → Wizard.
+const tierTopItems: NavItem[] = [
+  { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
+  { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
+]
+
+// Items nested under the Companies section header. Active-tier only — these
+// pages are account-scoped (read by selectedAccountId).
+const companyItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
-  { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, visibilityKey: 'pendingSignatures' },
-  { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
-  { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
-  { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
-  { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
+  { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
+  { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
   { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
-  { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
+  { key: 'nav.businessSettings', href: '/portal/profile', icon: Settings },
 ]
 
-// Grouped items — each item can have a visibilityKey
-const navGroups: NavGroup[] = [
-  {
-    key: 'nav.group.business',
-    items: [
-      { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
-      { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
-      { key: 'nav.expenses', href: '/portal/invoices?tab=expenses', icon: TrendingDown, visibilityKey: 'billing' },
-      { key: 'nav.businessSettings', href: '/portal/profile', icon: Settings },
-    ],
-    defaultOpen: true,
-  },
+// Partner-portal items shown only when isPartnerPortal(portalRole). Flat list,
+// not under any section header.
+const partnerItems: NavItem[] = [
+  { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
+  { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
 ]
 
 const bottomItems: NavItem[] = [
   { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
 ]
 
-// i18n fallback for group labels
-const GROUP_LABELS: Record<string, Record<string, string>> = {
-  'nav.group.business': { en: 'Business', it: 'Business' },
+// i18n fallback for section labels (used when no t() key exists yet).
+const SECTION_LABELS: Record<string, Record<string, string>> = {
+  'nav.section.personal': { en: 'Personal', it: 'Personale' },
+  'nav.section.companies': { en: 'Companies', it: 'Aziende' },
+  'nav.section.company': { en: 'Company', it: 'Azienda' },
 }
+
 
 export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, accountType, contactId, portalRole, hasWizardPending }: PortalSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [liveUnreadCount, setLiveUnreadCount] = useState(unreadChatCount)
   const pathnameRef = useRef(pathname)
   const { t, locale } = useLocale()
@@ -138,20 +149,23 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   // Subscribe to new admin messages for real-time badge updates
   useEffect(() => {
-    const filterColumn = selectedAccountId ? 'account_id' : (contactId ? 'contact_id' : null)
-    const filterValue = selectedAccountId || contactId
-    if (!filterColumn || !filterValue) return
+    // PR 2 Step 6 (chat unification): always filter by contact_id, regardless
+    // of whether an account is selected. The pre-PR 2 logic filtered by
+    // account_id when one was set — that meant admin messages tagged
+    // "Personal" (account_id=null) didn't increment the badge for active-tier
+    // clients. Threading is per-contact now, so the unread count is too.
+    if (!contactId) return
 
     const supabase = createClient()
     const channel = supabase
-      .channel(`sidebar-unread-${filterValue}`)
+      .channel(`sidebar-unread-${contactId}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'portal_messages',
-          filter: `${filterColumn}=eq.${filterValue}`,
+          filter: `contact_id=eq.${contactId}`,
         },
         (payload) => {
           const newMsg = payload.new as { sender_type: string }
@@ -165,22 +179,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [selectedAccountId, contactId])
+  }, [contactId])
 
   const handleLogout = async () => {
     const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/portal/login')
     router.refresh()
-  }
-
-  const toggleGroup = (groupKey: string) => {
-    setCollapsedGroups(prev => {
-      const next = new Set(prev)
-      if (next.has(groupKey)) next.delete(groupKey)
-      else next.add(groupKey)
-      return next
-    })
   }
 
   const isActive = (href: string) => {
@@ -190,7 +195,65 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     return pathname.startsWith(hrefPath)
   }
 
-  const displayName = user.email?.split('@')[0] ?? 'User'
+  const fullName = user.user_metadata?.full_name?.trim() ?? ''
+  const displayName = fullName || user.email?.split('@')[0] || 'User'
+
+  // Locale-aware section labels — used by the Personal / Companies headers.
+  const personalLabel = SECTION_LABELS['nav.section.personal']?.[locale] ?? SECTION_LABELS['nav.section.personal']?.en ?? 'Personal'
+  const companiesLabel = (accounts.length > 1
+    ? SECTION_LABELS['nav.section.companies']
+    : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
+  const loggedInAsLabel = locale === 'it' ? 'Accesso come' : 'Logged in as'
+
+  const isPartner = isPartnerPortal(portalRole)
+
+  // Standard visibility filter — same logic the previous structure used,
+  // just factored so it can run against any item array.
+  const isItemVisible = (item: NavItem): boolean => {
+    if (item.partnerOnly) return isPartner
+
+    if (isPartner) {
+      if (item.tierOnly) return false
+      if (['nav.myCompany', 'nav.documents', 'nav.tdBilling', 'nav.signDocuments', 'nav.invoices', 'nav.myClients', 'nav.businessSettings'].includes(item.key)) return false
+      if (item.key === 'nav.referrals') return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+      return true
+    }
+
+    if (item.key === 'nav.tdBilling') {
+      if (!isTierFeatureVisible(portalTier || null, 'billing', accountType, portalRole)) return false
+      return navVisibility?.billing ?? false
+    }
+
+    if (item.key === 'nav.myCompany') {
+      return isTierFeatureVisible(portalTier || null, 'services', accountType, portalRole)
+    }
+
+    if (item.key === 'nav.referrals') {
+      return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
+    }
+
+    if (item.visibilityKey) {
+      if (!isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType, portalRole)) return false
+      return navVisibility?.[item.visibilityKey] ?? false
+    }
+
+    if (!item.tierOnly) return true
+    if (item.wizardDynamic && hasWizardPending) return true
+    return item.tierOnly.includes(portalTier || 'lead')
+  }
+
+  const visibleTierTop = tierTopItems.filter(isItemVisible)
+  const visiblePersonal = personalItems.filter(isItemVisible)
+  const visiblePartner = partnerItems.filter(isItemVisible)
+  // Company section visible only for non-partners with at least one account.
+  // Active-tier with no account (rare edge case) hides the section too.
+  const showCompaniesSection = !isPartner && accounts.length > 0
+  const visibleCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
+
+  // For single-LLC clients, show the company name as the section header.
+  // For multi-LLC clients, the CompanySwitcher provides the selector.
+  const selectedCompanyName = accounts.find(a => a.id === selectedAccountId)?.company_name ?? null
+  const isMultiLLC = accounts.length > 1
 
   const renderNavItem = (item: NavItem) => {
     const badge = item.href === '/portal/chat' && liveUnreadCount > 0 ? liveUnreadCount : 0
@@ -265,14 +328,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           </button>
         </div>
 
-        {/* Company Switcher (hidden for partners — they don't have accounts) */}
-        {!isPartnerPortal(portalRole) && (accounts.length > 0 || user.email) && (
-          <div className="px-3 py-3 border-b">
-            <CompanySwitcher
-              accounts={accounts}
-              selectedAccountId={selectedAccountId}
-              userName={user.user_metadata?.full_name || user.email?.split('@')[0]}
-            />
+        {/* Contact name — the person is the home (PR 2 Step 7).
+            Hidden for partners (they're not "logged in as a contact" in the
+            same sense — they manage referrals). */}
+        {!isPartner && (
+          <div className="px-5 py-3 border-b">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-0.5">{loggedInAsLabel}</div>
+            <div className="font-semibold text-zinc-900 truncate text-sm">{displayName}</div>
           </div>
         )}
 
@@ -288,108 +350,72 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {/* Top items (filtered by tier + role) */}
-          {topItems.filter(item => {
-            const isPartner = isPartnerPortal(portalRole)
+          {/* Tier-specific top items (Offer for leads, Wizard for onboarding) — */}
+          {/* sit ABOVE the Personal section because they're action CTAs for clients */}
+          {/* who don't yet have a company. */}
+          {visibleTierTop.map(renderNavItem)}
 
-            // Partner-only items (partnerClients, partnerInvoices): show ONLY for partners
-            if (item.partnerOnly) return isPartner
-
-            // For partners: only show general items (chat, overview, referrals)
-            // Hide company/document/billing items
-            if (isPartner) {
-              if (item.tierOnly) return false
-              if (['nav.myCompany', 'nav.documents', 'nav.tdBilling', 'nav.signDocuments'].includes(item.key)) return false
-              if (item.key === 'nav.referrals') return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
-              return true // chat, overview
-            }
-
-            // Non-partner from here:
-
-            // TD Billing: tier + data gate (needs billing feature AND actual billing data)
-            if (item.key === 'nav.tdBilling') {
-              if (!isTierFeatureVisible(portalTier || null, 'billing', accountType, portalRole)) return false
-              return navVisibility?.billing ?? false
-            }
-
-            // My Company: visible for active/full tiers (uses 'services' as proxy)
-            if (item.key === 'nav.myCompany') {
-              return isTierFeatureVisible(portalTier || null, 'services', accountType, portalRole)
-            }
-
-            // Referrals: tier gate
-            if (item.key === 'nav.referrals') {
-              return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
-            }
-
-            // Generic visibilityKey gate (tier check + data check)
-            if (item.visibilityKey) {
-              if (!isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType, portalRole)) return false
-              return navVisibility?.[item.visibilityKey] ?? false
-            }
-
-            // Standard tier gates
-            if (!item.tierOnly) return true
-            // Wizard link: show for tier match OR when there are pending wizard-eligible services
-            if (item.wizardDynamic && hasWizardPending) return true
-            return item.tierOnly.includes(portalTier || 'lead')
-          }).map(renderNavItem)}
-
-          {/* Collapsible groups (hidden for partners) */}
-          {!isPartnerPortal(portalRole) && navGroups.map(group => {
-            // Filter items by visibility flags
-            const visibleItems = group.items.filter(item => {
-              // Check tier visibility first
-              if (item.visibilityKey && !isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType, portalRole)) return false
-              // Then check data-driven visibility
-              if (!item.visibilityKey || !navVisibility) return true
-              return navVisibility[item.visibilityKey]
-            })
-
-            // Skip entire group if no visible items
-            if (visibleItems.length === 0) return null
-
-            const isCollapsed = collapsedGroups.has(group.key)
-            const groupLabel = GROUP_LABELS[group.key]?.[locale] ?? GROUP_LABELS[group.key]?.en ?? group.key
-            const hasActiveItem = visibleItems.some(item => isActive(item.href))
-
-            return (
-              <div key={group.key} className="pt-3">
-                <button
-                  onClick={() => toggleGroup(group.key)}
-                  className="flex items-center justify-between w-full px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider hover:text-zinc-600 transition-colors"
-                >
-                  <span>{groupLabel}</span>
-                  <ChevronDown className={cn('h-3 w-3 transition-transform', isCollapsed && '-rotate-90')} />
-                </button>
-                {(!isCollapsed || hasActiveItem) && (
-                  <div className="mt-1 space-y-0.5">
-                    {visibleItems.map(item => {
-                      // If collapsed, only show the active item
-                      if (isCollapsed && !isActive(item.href)) return null
-                      return renderNavItem(item)
-                    })}
-                  </div>
-                )}
+          {/* Personal section — always visible (chat / invoices / referrals / profile). */}
+          {/* Hidden for partners since their flow is different. */}
+          {!isPartner && visiblePersonal.length > 0 && (
+            <div className={visibleTierTop.length > 0 ? 'pt-3' : ''}>
+              <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                {personalLabel}
               </div>
-            )
-          })}
+              <div className="space-y-0.5">
+                {visiblePersonal.map(renderNavItem)}
+              </div>
+            </div>
+          )}
 
-          {/* Bottom items */}
-          <div className="pt-3">
+          {/* Partner-only items (referral portal flow). */}
+          {isPartner && visiblePartner.length > 0 && (
+            <div className="pt-3 space-y-0.5">
+              {visiblePartner.map(renderNavItem)}
+            </div>
+          )}
+
+          {/* Companies section — nested under Personal per Antonio's model. */}
+          {/* For single-LLC clients, the company name is the section header. */}
+          {/* For multi-LLC clients, the CompanySwitcher dropdown picks which company. */}
+          {showCompaniesSection && visibleCompanyItems.length > 0 && (
+            <div className="pt-4">
+              <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                {companiesLabel}
+              </div>
+              {isMultiLLC ? (
+                <div className="px-0 py-1">
+                  <CompanySwitcher
+                    accounts={accounts}
+                    selectedAccountId={selectedAccountId}
+                    userName={fullName || user.email?.split('@')[0]}
+                  />
+                </div>
+              ) : selectedCompanyName ? (
+                <div className="px-3 py-1.5 flex items-center gap-2 text-sm text-zinc-900 font-medium">
+                  <Briefcase className="h-4 w-4 text-blue-600 shrink-0" />
+                  <span className="truncate">{selectedCompanyName}</span>
+                </div>
+              ) : null}
+              <div className="space-y-0.5 mt-1">
+                {visibleCompanyItems.map(renderNavItem)}
+              </div>
+            </div>
+          )}
+
+          {/* Bottom items (Guide) */}
+          <div className="pt-4">
             {bottomItems.map(renderNavItem)}
           </div>
         </nav>
 
-        {/* Footer */}
+        {/* Footer — Profile link removed (now in Personal section). Sign Out only. */}
         <div className="px-3 py-4 border-t">
-          <Link
-            href="/portal/profile"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 transition-colors"
-          >
+          {/* Identity row — small, repeats the contact name as a visual reminder. */}
+          <div className="flex items-center gap-3 px-3 py-2 text-sm text-zinc-500">
             <User className="h-4 w-4" />
             <span className="flex-1 truncate">{displayName}</span>
-          </Link>
+          </div>
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-600 hover:bg-zinc-50 hover:text-red-600 transition-colors w-full"
