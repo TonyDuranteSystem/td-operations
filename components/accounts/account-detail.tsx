@@ -7,7 +7,7 @@ import {
   ArrowLeft, Building2, User, Users, Mail, Phone, Globe, MapPin,
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
-  Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck,
+  Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -926,6 +926,21 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
   const [addDraft, setAddDraft] = useState<Record<string, string | number | null>>({})
   const [adding, setAdding] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CrmMember | null>(null)
+  const [sendingForm, setSendingForm] = useState(false)
+
+  const handleSendMemberInfoForm = async () => {
+    setSendingForm(true)
+    try {
+      const res = await fetch(`/api/accounts/${accountId}/member-info-form`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to send form')
+      toast.success(data.is_existing ? 'Form link re-sent via portal chat' : 'Member info form sent via portal chat')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to send form')
+    } finally {
+      setSendingForm(false)
+    }
+  }
 
   useEffect(() => {
     setLoading(true)
@@ -1027,13 +1042,24 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
           Members ({members.length})
         </h3>
-        <button
-          onClick={() => { setShowAddForm(!showAddForm); setAddDraft({}) }}
-          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add Member
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSendMemberInfoForm}
+            disabled={sendingForm}
+            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+            title="Send member info form via portal chat"
+          >
+            {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            Send Info Form
+          </button>
+          <button
+            onClick={() => { setShowAddForm(!showAddForm); setAddDraft({}) }}
+            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Member
+          </button>
+        </div>
       </div>
 
       {/* Add form */}
