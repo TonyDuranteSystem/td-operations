@@ -11,7 +11,6 @@ import {
   MessageCircle,
   BookOpen,
   Users,
-  Settings,
   LogOut,
   Menu,
   X,
@@ -87,6 +86,12 @@ const tierTopItems: NavItem[] = [
 
 // Items nested under the Companies section header. Active-tier only — these
 // pages are account-scoped (read by selectedAccountId).
+//
+// `nav.businessSettings` was removed in PR 2 Step 7 — it pointed to
+// /portal/profile which is the SAME route as the new "Profile" item under
+// Personal. Two sidebar links to the same URL was confusing. The Profile
+// page already renders both personal info AND business settings (logo,
+// bank accounts, payment links) — one link covers both.
 const companyItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
@@ -95,7 +100,6 @@ const companyItems: NavItem[] = [
   { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
   { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
   { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
-  { key: 'nav.businessSettings', href: '/portal/profile', icon: Settings },
 ]
 
 // Partner-portal items shown only when isPartnerPortal(portalRole). Flat list,
