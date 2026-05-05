@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
-import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History } from 'lucide-react'
+import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import DistributionResolutionTemplate from '@/components/portal/distribution-resolution-template'
 import TaxStatementTemplate from '@/components/portal/tax-statement-template'
+import OperatingAgreementTemplate from '@/components/portal/operating-agreement-template'
 import {
   type GeneratedDocumentType,
   type DocumentFormData,
@@ -27,6 +28,11 @@ interface HistoryItem {
   created_at: string
 }
 
+interface ExtendedMemberInfo extends MemberInfo {
+  address?: string | null
+  isPrimary?: boolean
+}
+
 interface Props {
   account: {
     id: string
@@ -37,8 +43,9 @@ interface Props {
     physicalAddress: string | null
     logoUrl: string | null
     entityType: string | null
+    registeredAgentAddress?: string | null
   }
-  members: MemberInfo[]
+  members: ExtendedMemberInfo[]
   history: HistoryItem[]
   locale: string
 }
@@ -61,6 +68,18 @@ const LABELS: Record<string, Record<string, string>> = {
     en: 'A certificate documenting the distribution and confirming the US tax status for foreign tax authorities.',
     it: 'Un certificato che documenta la distribuzione e conferma lo status fiscale USA per le autorità fiscali estere.',
   },
+  operatingAgreement: { en: 'Operating Agreement', it: 'Atto Costitutivo' },
+  operatingAgreementDesc: {
+    en: 'The founding document of your LLC establishing ownership, management, and operating rules.',
+    it: 'Il documento costitutivo della tua LLC che stabilisce proprietà, gestione e regole operative.',
+  },
+  effectiveDate: { en: 'Effective Date', it: 'Data di Efficacia' },
+  memberAddresses: { en: 'Member Addresses', it: 'Indirizzi dei Soci' },
+  addressHint: {
+    en: 'Enter each member\'s full address to include in the Operating Agreement.',
+    it: 'Inserisci l\'indirizzo completo di ciascun socio da includere nell\'Atto Costitutivo.',
+  },
+  address: { en: 'Address', it: 'Indirizzo' },
   amount: { en: 'Distribution Amount', it: 'Importo Distribuzione' },
   fiscalYear: { en: 'Fiscal Year', it: 'Anno Fiscale' },
   distributionDate: { en: 'Distribution Date', it: 'Data Distribuzione' },
@@ -88,6 +107,13 @@ function l(key: string, locale: string): string {
   return LABELS[key]?.[locale] || LABELS[key]?.['en'] || key
 }
 
+function docTypeLabel(type: string, lang: string): string {
+  if (type === 'distribution_resolution') return l('distributionResolution', lang)
+  if (type === 'tax_statement') return l('taxStatement', lang)
+  if (type === 'operating_agreement') return l('operatingAgreement', lang)
+  return type
+}
+
 export function GenerateDocumentsClient({ account, members, history: initialHistory, locale }: Props) {
   const { locale: ctxLocale } = useLocale()
   const lang = ctxLocale || locale || 'en'
@@ -100,6 +126,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     distributionDate: new Date().toISOString().split('T')[0],
     currency: 'USD',
   })
+  // OA-specific state
+  const [oaEffectiveDate, setOaEffectiveDate] = useState(new Date().toISOString().split('T')[0])
+  const [oaMemberAddresses, setOaMemberAddresses] = useState<Record<number, string>>(
+    Object.fromEntries(members.map((m, i) => [i, m.address || '']))
+  )
   const [isGenerating, setIsGenerating] = useState(false)
   const [signatureImage, setSignatureImage] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>(initialHistory)
@@ -121,6 +152,15 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   }
 
   const fiscalYearOptions = getFiscalYearOptions()
+
+  const isOA = selectedType === 'operating_agreement'
+
+  // Members with addresses resolved from OA state (for OA template)
+  const oaMembers = members.map((m, i) => ({
+    fullName: m.fullName,
+    address: oaMemberAddresses[i] || m.address || '',
+    ownershipPct: m.ownershipPct ?? 100 / members.length,
+  }))
 
   // Initialize signature pad (non-async ref callback)
   const initSignaturePad = useCallback((canvas: HTMLCanvasElement | null) => {
@@ -150,8 +190,21 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   }
 
   const handlePreview = () => {
-    if (formData.amount <= 0) return
+    if (!isOA && formData.amount <= 0) return
     setStage('preview')
+  }
+
+  const getPdfFilename = (signed: boolean) => {
+    const company = account.companyName.replace(/\s+/g, '_')
+    if (isOA) {
+      return signed
+        ? `Operating_Agreement_SIGNED_${company}_${oaEffectiveDate}.pdf`
+        : `Operating_Agreement_${company}_${oaEffectiveDate}.pdf`
+    }
+    const prefix = selectedType === 'distribution_resolution' ? 'Distribution_Resolution' : 'Tax_Statement'
+    return signed
+      ? `${prefix}_SIGNED_${company}_${formData.fiscalYear}.pdf`
+      : `${prefix}_${company}_${formData.fiscalYear}.pdf`
   }
 
   const handleDownloadPdf = async () => {
@@ -159,14 +212,10 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     setIsGenerating(true)
     try {
       const html2pdf = (await import('html2pdf.js')).default
-      const filename = selectedType === 'distribution_resolution'
-        ? `Distribution_Resolution_${account.companyName.replace(/\s+/g, '_')}_${formData.fiscalYear}.pdf`
-        : `Tax_Statement_${account.companyName.replace(/\s+/g, '_')}_${formData.fiscalYear}.pdf`
-
       await html2pdf()
         .set({
           margin: [0.5, 0.6, 0.7, 0.6],
-          filename,
+          filename: getPdfFilename(false),
           image: { type: 'jpeg', quality: 0.95 },
           html2canvas: { scale: 2, useCORS: true },
           jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
@@ -174,7 +223,6 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
         .from(documentRef.current)
         .save()
 
-      // Save to history
       await saveToHistory('downloaded')
       setStage('done')
     } catch (err) {
@@ -186,7 +234,6 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
   const handleSignAndDownload = () => {
     setStage('signing')
-    // Signature pad will be initialized via ref callback
   }
 
   const handleConfirmSign = async () => {
@@ -194,19 +241,15 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     const sigDataUrl = sigPadRef.current.toDataURL('image/png')
     setSignatureImage(sigDataUrl)
 
-    // Wait for re-render with signature image, then generate PDF
     setTimeout(async () => {
       if (!documentRef.current) return
       setIsGenerating(true)
       try {
         const html2pdf = (await import('html2pdf.js')).default
-        const prefix = selectedType === 'distribution_resolution' ? 'Distribution_Resolution' : 'Tax_Statement'
-        const filename = `${prefix}_SIGNED_${account.companyName.replace(/\s+/g, '_')}_${formData.fiscalYear}.pdf`
-
         await html2pdf()
           .set({
             margin: [0.5, 0.6, 0.7, 0.6],
-            filename,
+            filename: getPdfFilename(true),
             image: { type: 'jpeg', quality: 0.95 },
             html2canvas: { scale: 2, useCORS: true },
             jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
@@ -221,36 +264,54 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       } finally {
         setIsGenerating(false)
       }
-    }, 300) // Wait for signature image to render
+    }, 300)
   }
 
   const saveToHistory = async (status: string) => {
     try {
+      const body = isOA
+        ? {
+            account_id: account.id,
+            document_type: selectedType,
+            fiscal_year: new Date().getFullYear(),
+            amount: null,
+            distribution_date: oaEffectiveDate,
+            currency: null,
+            status,
+            metadata: {
+              company_name: account.companyName,
+              ein: account.ein,
+              entity_type: account.entityType,
+              effective_date: oaEffectiveDate,
+            },
+          }
+        : {
+            account_id: account.id,
+            document_type: selectedType,
+            fiscal_year: formData.fiscalYear,
+            amount: formData.amount,
+            distribution_date: formData.distributionDate,
+            currency: formData.currency,
+            status,
+            metadata: {
+              company_name: account.companyName,
+              ein: account.ein,
+              entity_type: account.entityType,
+              entity_category: entityCategory,
+            },
+          }
+
       const res = await fetch('/api/portal/generated-documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account_id: account.id,
-          document_type: selectedType,
-          fiscal_year: formData.fiscalYear,
-          amount: formData.amount,
-          distribution_date: formData.distributionDate,
-          currency: formData.currency,
-          status,
-          metadata: {
-            company_name: account.companyName,
-            ein: account.ein,
-            entity_type: account.entityType,
-            entity_category: entityCategory,
-          },
-        }),
+        body: JSON.stringify(body),
       })
       if (res.ok) {
         const newDoc = await res.json()
         setHistory(prev => [newDoc, ...prev])
       }
     } catch {
-      // Non-blocking — history save failure doesn't affect PDF download
+      // Non-blocking
     }
   }
 
@@ -264,6 +325,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
       distributionDate: new Date().toISOString().split('T')[0],
       currency: 'USD',
     })
+    setOaEffectiveDate(new Date().toISOString().split('T')[0])
+    setOaMemberAddresses(Object.fromEntries(members.map((m, i) => [i, m.address || ''])))
   }
 
   return (
@@ -318,6 +381,26 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
               </div>
             </button>
+
+            {/* Operating Agreement Card */}
+            <button
+              onClick={() => handleSelectType('operating_agreement')}
+              className="text-left p-6 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 hover:border-violet-500/50 transition-all group"
+            >
+              <div className="flex items-start gap-4">
+                <div className="p-2.5 rounded-lg bg-violet-500/10 text-violet-400 group-hover:bg-violet-500/20 transition">
+                  <ScrollText size={24} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-zinc-100 group-hover:text-violet-400 transition">
+                    {l('operatingAgreement', lang)}
+                  </h3>
+                  <p className="text-sm text-zinc-400 mt-1">
+                    {l('operatingAgreementDesc', lang)}
+                  </p>
+                </div>
+              </div>
+            </button>
           </div>
 
           {/* History */}
@@ -341,11 +424,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   <tbody>
                     {history.map(h => (
                       <tr key={h.id} className="border-b border-zinc-800 text-zinc-300">
-                        <td className="py-2 px-3">
-                          {h.document_type === 'distribution_resolution'
-                            ? l('distributionResolution', lang)
-                            : l('taxStatement', lang)}
-                        </td>
+                        <td className="py-2 px-3">{docTypeLabel(h.document_type, lang)}</td>
                         <td className="py-2 px-3">{h.fiscal_year}</td>
                         <td className="py-2 px-3 text-right">
                           {h.amount ? formatDocumentAmount(h.amount, h.currency || 'USD') : '-'}
@@ -380,7 +459,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
           </button>
 
           <h2 className="text-xl font-semibold text-zinc-100">
-            {selectedType === 'distribution_resolution' ? l('distributionResolution', lang) : l('taxStatement', lang)}
+            {docTypeLabel(selectedType || '', lang)}
           </h2>
 
           {/* Read-only company fields */}
@@ -411,58 +490,94 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             </div>
           </div>
 
-          {/* Editable fields */}
-          <div className="grid md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('amount', lang)} *</label>
-              <div className="flex">
-                <select
-                  value={formData.currency}
-                  onChange={e => setFormData(p => ({ ...p, currency: e.target.value }))}
-                  className="px-2 py-2 bg-zinc-800 rounded-l border border-r-0 border-zinc-700 text-zinc-300 text-sm"
-                >
-                  <option value="USD">USD</option>
-                  <option value="EUR">EUR</option>
-                </select>
+          {/* OA-specific fields */}
+          {isOA ? (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">{l('effectiveDate', lang)} *</label>
                 <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={formData.amount || ''}
-                  onChange={e => setFormData(p => ({ ...p, amount: parseFloat(e.target.value) || 0 }))}
-                  placeholder="0.00"
-                  className="flex-1 px-3 py-2 bg-zinc-800 rounded-r border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-blue-500"
+                  type="date"
+                  value={oaEffectiveDate}
+                  onChange={e => setOaEffectiveDate(e.target.value)}
+                  className="w-full md:w-1/2 px-3 py-2 bg-zinc-800 rounded border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">{l('memberAddresses', lang)}</label>
+                <p className="text-xs text-zinc-500 mb-3">{l('addressHint', lang)}</p>
+                <div className="space-y-3">
+                  {members.map((m, i) => (
+                    <div key={i}>
+                      <label className="block text-xs text-zinc-400 mb-1">
+                        {m.fullName} — {l('address', lang)}
+                      </label>
+                      <input
+                        type="text"
+                        value={oaMemberAddresses[i] || ''}
+                        onChange={e => setOaMemberAddresses(prev => ({ ...prev, [i]: e.target.value }))}
+                        placeholder="123 Main St, City, State, Country"
+                        className="w-full px-3 py-2 bg-zinc-800 rounded border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Distribution/Tax fields */
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">{l('amount', lang)} *</label>
+                <div className="flex">
+                  <select
+                    value={formData.currency}
+                    onChange={e => setFormData(p => ({ ...p, currency: e.target.value }))}
+                    className="px-2 py-2 bg-zinc-800 rounded-l border border-r-0 border-zinc-700 text-zinc-300 text-sm"
+                  >
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.amount || ''}
+                    onChange={e => setFormData(p => ({ ...p, amount: parseFloat(e.target.value) || 0 }))}
+                    placeholder="0.00"
+                    className="flex-1 px-3 py-2 bg-zinc-800 rounded-r border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">{l('fiscalYear', lang)} *</label>
+                <select
+                  value={formData.fiscalYear}
+                  onChange={e => setFormData(p => ({ ...p, fiscalYear: parseInt(e.target.value) }))}
+                  className="w-full px-3 py-2 bg-zinc-800 rounded border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-blue-500"
+                >
+                  {fiscalYearOptions.map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">{l('distributionDate', lang)} *</label>
+                <input
+                  type="date"
+                  value={formData.distributionDate}
+                  onChange={e => setFormData(p => ({ ...p, distributionDate: e.target.value }))}
+                  className="w-full px-3 py-2 bg-zinc-800 rounded border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-blue-500"
                 />
               </div>
             </div>
-            <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('fiscalYear', lang)} *</label>
-              <select
-                value={formData.fiscalYear}
-                onChange={e => setFormData(p => ({ ...p, fiscalYear: parseInt(e.target.value) }))}
-                className="w-full px-3 py-2 bg-zinc-800 rounded border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-blue-500"
-              >
-                {fiscalYearOptions.map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-500 mb-1">{l('distributionDate', lang)} *</label>
-              <input
-                type="date"
-                value={formData.distributionDate}
-                onChange={e => setFormData(p => ({ ...p, distributionDate: e.target.value }))}
-                className="w-full px-3 py-2 bg-zinc-800 rounded border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
+          )}
 
           {/* Preview button */}
           <div className="flex justify-end">
             <button
               onClick={handlePreview}
-              disabled={formData.amount <= 0}
+              disabled={!isOA && formData.amount <= 0}
               className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
             >
               {l('preview', lang)}
@@ -494,13 +609,29 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 entityCategory={entityCategory}
                 signatureImage={signatureImage}
               />
-            ) : (
+            ) : selectedType === 'tax_statement' ? (
               <TaxStatementTemplate
                 ref={documentRef}
                 company={companyData}
                 members={members}
                 form={formData}
                 entityCategory={entityCategory}
+                signatureImage={signatureImage}
+              />
+            ) : (
+              <OperatingAgreementTemplate
+                ref={documentRef}
+                account={{
+                  companyName: account.companyName,
+                  ein: account.ein,
+                  stateOfFormation: account.stateOfFormation,
+                  formationDate: account.formationDate,
+                  physicalAddress: account.physicalAddress,
+                  entityType: account.entityType,
+                  registeredAgentAddress: account.registeredAgentAddress || null,
+                }}
+                members={oaMembers}
+                effectiveDate={oaEffectiveDate}
                 signatureImage={signatureImage}
               />
             )}
