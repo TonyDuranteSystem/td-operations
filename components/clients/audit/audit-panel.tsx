@@ -2289,16 +2289,29 @@ export function AuditPanel({
               {Object.keys(taxEdits).length > 0 && (
                 <button
                   onClick={async () => {
+                    let failed = false
                     for (const [trId, edits] of Object.entries(taxEdits)) {
                       if (!edits || Object.keys(edits).length === 0) continue
-                      await fetch(`/api/tax-returns/${trId}`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(edits),
-                      }).catch(() => null)
+                      try {
+                        const res = await fetch(`/api/tax-returns/${trId}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(edits),
+                        })
+                        if (!res.ok) {
+                          const d = await res.json().catch(() => ({}))
+                          toast.error(d.error || `Failed to save tax return (${res.status})`)
+                          failed = true
+                        }
+                      } catch {
+                        toast.error('Network error — tax return not saved')
+                        failed = true
+                      }
                     }
-                    toast.success('Tax return edits saved')
-                    setTaxEdits({})
+                    if (!failed) {
+                      toast.success('Tax return edits saved')
+                      setTaxEdits({})
+                    }
                   }}
                   className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded-md hover:bg-amber-700"
                 >
