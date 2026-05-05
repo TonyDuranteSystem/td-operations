@@ -50,24 +50,26 @@ export default async function GenerateDocumentsPage() {
   if (!accountDetail) redirect('/portal')
 
   const rawMembers = members || []
+  const ownerContact = contactResult.data?.contacts as { first_name: string | null; last_name: string | null } | null
+
   const mappedMembers = rawMembers.length > 0
     ? rawMembers.map(m => ({
         fullName: `${m.first_name} ${m.last_name}`.trim(),
         role: m.role || 'owner',
         ownershipPct: m.ownership_pct ?? null,
+        // Address fields for OA generation
+        address: [m.address_line1, m.address_city, m.address_state, m.address_country].filter(Boolean).join(', ') || null,
+        isPrimary: m.is_primary ?? false,
       }))
-    : (() => {
-        // Fallback for older clients without members table rows.
-        // Use the account's owner contact (by role), not the logged-in user —
-        // authorized representatives may log in on behalf of the actual owner.
-        const ownerContact = contactResult.data?.contacts as { first_name: string | null; last_name: string | null } | null
-        if (!ownerContact) return []
-        return [{
+    : ownerContact
+      ? [{
           fullName: `${ownerContact.first_name ?? ''} ${ownerContact.last_name ?? ''}`.trim() || 'N/A',
           role: 'owner',
           ownershipPct: null,
+          address: null,
+          isPrimary: true,
         }]
-      })()
+      : []
 
   return (
     <GenerateDocumentsClient
@@ -80,6 +82,7 @@ export default async function GenerateDocumentsPage() {
         physicalAddress: accountDetail.physical_address,
         logoUrl: accountDetail.invoice_logo_url,
         entityType: accountDetail.entity_type,
+        registeredAgentAddress: accountDetail.registered_agent_address,
       }}
       members={mappedMembers}
       history={historyResult.data || []}
