@@ -924,6 +924,8 @@ export function AuditPanel({
 
   // ── Tax return edits ──
   const [taxEdits, setTaxEdits] = useState<Record<string, { status?: string; data_received?: boolean }>>({})
+  // Committed values — displayed after setTaxEdits({}) clears pending edits, avoiding dbData staleness.
+  const [savedTaxEdits, setSavedTaxEdits] = useState<Record<string, { status?: string; data_received?: boolean }>>({})
 
   // ── DB data ──
   const [dbData, setDbData] = useState<AccountData | null>(null)
@@ -2205,8 +2207,8 @@ export function AuditPanel({
               {dbData!.tax_returns.map(tr => {
                 const submission = dbData!.tax_return_submissions.find(s => s.tax_year === tr.tax_year)
                 const anomaly = tr.data_received && (!submission || !submission.completed_at)
-                const editedStatus = taxEdits[tr.id]?.status ?? tr.status ?? ''
-                const editedDataReceived = taxEdits[tr.id]?.data_received ?? tr.data_received ?? false
+                const editedStatus = taxEdits[tr.id]?.status ?? savedTaxEdits[tr.id]?.status ?? tr.status ?? ''
+                const editedDataReceived = taxEdits[tr.id]?.data_received ?? savedTaxEdits[tr.id]?.data_received ?? tr.data_received ?? false
 
                 return (
                   <div
@@ -2239,8 +2241,8 @@ export function AuditPanel({
                           <option value="">—</option>
                           {TAX_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
-                        {(taxEdits[tr.id]?.status !== undefined && taxEdits[tr.id]?.status !== tr.status) && (
-                          <p className="text-xs text-orange-600">DB: {tr.status ?? '—'}</p>
+                        {(taxEdits[tr.id]?.status !== undefined && taxEdits[tr.id]?.status !== (savedTaxEdits[tr.id]?.status ?? tr.status)) && (
+                          <p className="text-xs text-orange-600">DB: {savedTaxEdits[tr.id]?.status ?? tr.status ?? '—'}</p>
                         )}
                       </div>
                       <div className="space-y-0.5">
@@ -2311,22 +2313,15 @@ export function AuditPanel({
                       }
                     }
                     if (!failed) {
-                      // Apply saved values directly into dbData — re-fetching hits a
-                      // Next.js/Supabase cache that returns the stale value even after
-                      // the DB write completed.
-                      setDbData(prev => {
-                        if (!prev) return prev
-                        return {
-                          ...prev,
-                          tax_returns: prev.tax_returns.map(tr => {
-                            const edits = pendingEdits[tr.id]
-                            if (!edits) return tr
-                            return { ...tr, ...edits }
-                          }),
-                        }
-                      })
+                      setSavedTaxEdits(prev => ({ ...prev, ...pendingEdits }))
                       setTaxEdits({})
                       toast.success('Tax return edits saved')
+                      // Refetch dbData (uses freshAdminClient on the server) so any
+                      // edits other reviewers made are also pulled in.
+                      try {
+                        const r = await fetch(`/api/clients/audit/${account.id}/data`, { cache: 'no-store' })
+                        if (r.ok) setDbData(await r.json() as AccountData)
+                      } catch { /* keep optimistic savedTaxEdits */ }
                     }
                   }}
                   className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded-md hover:bg-amber-700"
