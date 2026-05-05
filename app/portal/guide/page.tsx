@@ -293,6 +293,13 @@ const EN = {
       desc: 'Step-by-step guide for sending a SWIFT transfer via your Relay account.',
       href: '/portal/guide/relay-wire',
     },
+    {
+      icon: FileText,
+      color: 'bg-blue-50 text-blue-600',
+      title: 'Relay — International Payments: Document Upload Guide',
+      desc: 'What to upload to unlock international wire transfers on your Relay account.',
+      href: '/portal/guide/relay-docs',
+    },
   ],
   faqTitle: 'Frequently Asked Questions',
   faq: [
@@ -420,6 +427,13 @@ const IT = {
       title: 'Come Inviare un Bonifico Internazionale',
       desc: 'Guida passo passo per inviare un bonifico SWIFT tramite il tuo conto Relay.',
       href: '/portal/guide/relay-wire',
+    },
+    {
+      icon: FileText,
+      color: 'bg-blue-50 text-blue-600',
+      title: 'Relay — Pagamenti Internazionali: Caricamento Documenti',
+      desc: 'Cosa caricare per sbloccare i bonifici internazionali sul tuo conto Relay.',
+      href: '/portal/guide/relay-docs',
     },
   ],
   faqTitle: 'Domande Frequenti',
