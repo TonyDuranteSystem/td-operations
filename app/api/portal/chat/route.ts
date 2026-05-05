@@ -11,8 +11,16 @@ import { NextRequest, NextResponse } from 'next/server'
  * GET /api/portal/chat?contact_id=xxx&before=timestamp&limit=50
  * Returns messages for the given account or contact. Verifies access.
  *
+ * Threading model (PR 2 Step 6, 2026-05-05):
+ * - When contact_id is given: returns ALL messages for the contact across
+ *   both scopes (account_id NULL or set). This is the unified thread the
+ *   client sees in the portal — one tagged thread per contact.
+ * - When account_id is given (and contact_id is not): returns messages
+ *   for that account only. Used by the CRM admin viewer which still
+ *   groups by account.
+ *
  * POST /api/portal/chat
- * Sends a message. Body: { account_id?, contact_id?, message }
+ * Sends a message. Body: { account_id?, contact_id?, sender_context?, message }
  */
 export async function GET(request: NextRequest) {
   const supabase = createClient()
@@ -53,10 +61,13 @@ export async function GET(request: NextRequest) {
     query = query.is('deleted_at', null)
   }
 
-  if (accountId) {
+  // Threading: contact_id param returns the unified per-contact thread
+  // (across account_id NULL and account_id=X). account_id param without
+  // contact_id keeps the legacy per-account behavior for the CRM admin viewer.
+  if (contactIdParam) {
+    query = query.eq('contact_id', contactIdParam)
+  } else if (accountId) {
     query = query.eq('account_id', accountId)
-  } else if (contactIdParam) {
-    query = query.eq('contact_id', contactIdParam).is('account_id', null)
   }
 
   if (before) {
@@ -89,7 +100,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, message, attachment_url, attachment_name, attachments, reply_to_id } = body
+  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, message, attachment_url, attachment_name, attachments, reply_to_id } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -97,6 +108,19 @@ export async function POST(request: NextRequest) {
 
   if (!message?.trim() && !attachment_url && (!attachments || attachments.length === 0)) {
     return NextResponse.json({ error: 'message or attachment required' }, { status: 400 })
+  }
+
+  // PR 2 Step 6 — sender_context: 'person' | 'company' | null. NULL is
+  // accepted (legacy callers / admin replies that don't pass a tag).
+  // 'company' requires account_id to be set.
+  let sender_context: 'person' | 'company' | null = null
+  if (rawSenderContext === 'person' || rawSenderContext === 'company') {
+    sender_context = rawSenderContext
+  } else if (rawSenderContext != null) {
+    return NextResponse.json({ error: 'Invalid sender_context (must be person or company)' }, { status: 400 })
+  }
+  if (sender_context === 'company' && !account_id) {
+    return NextResponse.json({ error: 'sender_context=company requires account_id' }, { status: 400 })
   }
 
   // Input validation: max message length
@@ -149,6 +173,7 @@ export async function POST(request: NextRequest) {
       contact_id: resolvedContactId || null,
       sender_type: senderType,
       sender_id: user.id,
+      sender_context,
       message: (message || '').trim(),
       attachment_url: attachment_url || null,
       attachment_name: attachment_name || null,

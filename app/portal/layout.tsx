@@ -85,9 +85,9 @@ export default async function PortalLayout({
     ? await Promise.all([
         getPortalActiveServices(selectedAccountId),
         getPortalNavVisibility(selectedAccountId),
-        getUnreadChatCount(selectedAccountId, contactId || ''),
+        contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
-    : [[] as string[], getContactOnlyNavVisibility(), contactId ? await getUnreadChatCount(null, contactId) : 0]
+    : [[] as string[], getContactOnlyNavVisibility(), contactId ? await getUnreadChatCount(contactId) : 0]
 
   // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
   // for the three branches (SD-by-account, SD-by-contact, tier-based

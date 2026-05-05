@@ -443,11 +443,12 @@ export interface ChatAttachment {
 
 export interface PortalMessage {
   id: string
-  account_id: string
+  account_id: string | null
   sender_type: 'client' | 'admin'
   sender_id: string
   sender_name: string | null
   contact_id: string | null
+  sender_context?: 'person' | 'company' | null
   message: string
   attachment_url: string | null
   attachment_name: string | null

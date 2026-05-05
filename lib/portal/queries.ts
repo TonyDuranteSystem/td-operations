@@ -541,22 +541,20 @@ export function getContactOnlyNavVisibility(): PortalNavVisibility {
 /**
  * Count unread admin messages for a client.
  * Used for the chat badge in the sidebar.
+ *
+ * PR 2 Step 6 (2026-05-05): unified per-contact thread. The badge counts
+ * unread admin messages across BOTH personal and company scopes for the
+ * contact. Switching the company switcher in the sidebar no longer changes
+ * the count.
  */
-export async function getUnreadChatCount(accountId: string | null, contactId: string): Promise<number> {
-  let query = supabaseAdmin
+export async function getUnreadChatCount(contactId: string): Promise<number> {
+  const { count } = await supabaseAdmin
     .from('portal_messages')
     .select('id', { count: 'exact', head: true })
+    .eq('contact_id', contactId)
     .eq('sender_type', 'admin')
     .is('read_at', null)
     .is('deleted_at', null)
-
-  if (accountId) {
-    query = query.eq('account_id', accountId)
-  } else {
-    query = query.eq('contact_id', contactId).is('account_id', null)
-  }
-
-  const { count } = await query
   return count ?? 0
 }
 
