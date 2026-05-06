@@ -8,11 +8,12 @@ import { logCron } from "@/lib/cron-log"
  * Cron: Annual Report Check
  * Schedule: daily at 9am UTC
  *
- * Scans active Client accounts where annual_report_due_date is within 45 days.
+ * Scans active Client accounts where annual_report_due_date is within 30 days.
  * Creates service_delivery + task for Luca if not already created.
  * NM accounts are skipped (no annual report required).
  * Blocked if installment not paid.
- * SOP: State Annual Report v3.1
+ * SOP: State Annual Report v7.0 — window tightened 45 → 30 days per Antonio
+ * 2026-05-05 ("SDs activated 30 days before natural deadline").
  */
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -24,10 +25,10 @@ export async function GET(req: NextRequest) {
     }
 
     const today = new Date()
-    const fortyFiveDaysFromNow = new Date(today)
-    fortyFiveDaysFromNow.setDate(fortyFiveDaysFromNow.getDate() + 45)
+    const thirtyDaysFromNow = new Date(today)
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30)
 
-    // Find active Client accounts with annual report due within 45 days
+    // Find active Client accounts with annual report due within 30 days
     // Exclude New Mexico (no annual report required)
     const { data: accounts, error: qErr } = await supabaseAdmin
       .from("accounts")
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
       .eq("account_type", "Client")
       .not("annual_report_due_date", "is", null)
       .neq("state_of_formation", "New Mexico")
-      .lte("annual_report_due_date", fortyFiveDaysFromNow.toISOString().split("T")[0])
+      .lte("annual_report_due_date", thirtyDaysFromNow.toISOString().split("T")[0])
       .gte("annual_report_due_date", today.toISOString().split("T")[0])
 
     if (qErr) throw qErr
@@ -105,6 +106,7 @@ export async function GET(req: NextRequest) {
 
       // Create service delivery
       const sdStatus = isBlocked ? "blocked" : "active"
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.insert in cron; refactor deferred (dev_task 7ebb1e0c)
       const { data: sd, error: sdErr } = await supabaseAdmin
         .from("service_deliveries")
         .insert({
@@ -143,6 +145,7 @@ export async function GET(req: NextRequest) {
           .limit(1)
 
         if (!existingTask?.length) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert in cron; refactor deferred (dev_task 7ebb1e0c)
           await supabaseAdmin
             .from("tasks")
             .insert({
@@ -170,6 +173,7 @@ export async function GET(req: NextRequest) {
           .limit(1)
 
         if (!existingTask?.length) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert in cron; refactor deferred (dev_task 7ebb1e0c)
           await supabaseAdmin
             .from("tasks")
             .insert({
