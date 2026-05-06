@@ -725,7 +725,10 @@ function QuickActionsBar({
   const showWizardReminder = contact.portal_tier === 'onboarding' && !hasWizard && (hasPaidOffer || pendingActivations.some(pa => pa.payment_confirmed_at))
   const showAdvanceStage = activeSds.length > 0
   const awaitingPayment = pendingActivations.find(pa => pa.status === 'awaiting_payment')
-  const showConfirmPaymentBtn = !!awaitingPayment && !!lead
+  // Show the button when an offer is awaiting payment AND we have either a
+  // lead (classic funnel) OR a signed offer in scope (existing-account /
+  // existing-contact re-entry, e.g. Mojo Labs LLC).
+  const showConfirmPaymentBtn = !!awaitingPayment && (!!lead || offers.length > 0)
 
   const hasActions = showCreatePortal || showResendWelcome || showWizardReminder || showAdvanceStage || showConfirmPaymentBtn
 
@@ -902,13 +905,20 @@ function QuickActionsBar({
         )}
       </div>
 
-      {/* Confirm Payment Dialog */}
-      {showConfirmPayment && lead && (
+      {/* Confirm Payment Dialog
+          Two paths:
+            - Lead in scope: pass leadId (existing behavior)
+            - No lead, but contact has a signed offer: pass contactId +
+              offerToken (account/contact re-entry case, e.g. Mojo Labs LLC).
+              The server-side route resolves account_id from offer.account_id. */}
+      {showConfirmPayment && (lead || offers[0]) && (
         <ConfirmPaymentDialog
           open={showConfirmPayment}
           onClose={() => setShowConfirmPayment(false)}
-          leadId={lead.id}
-          leadName={contact.full_name ?? lead.full_name}
+          leadId={lead?.id}
+          contactId={lead ? undefined : contact.id}
+          offerToken={lead ? undefined : offers[0]?.token}
+          clientName={contact.full_name ?? lead?.full_name ?? 'Client'}
           offer={offers[0] ? {
             token: offers[0].token,
             contract_type: offers[0].contract_type,

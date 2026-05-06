@@ -89,7 +89,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Offer (latest for this account)
     supabase
       .from('offers')
-      .select('token, status, contract_type, cost_summary, view_count, viewed_at, created_at, required_documents')
+      .select('token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents')
       .eq('account_id', params.id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -137,6 +137,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     status: string
     contract_type: string | null
     cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+    bundled_pipelines: string[] | null
     view_count: number
     viewed_at: string | null
     created_at: string

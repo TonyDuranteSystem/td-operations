@@ -533,7 +533,7 @@ export function LeadActions({
         open={showConfirmPayment}
         onClose={() => setShowConfirmPayment(false)}
         leadId={leadId}
-        leadName={leadName}
+        clientName={leadName}
         offer={offer}
       />
 

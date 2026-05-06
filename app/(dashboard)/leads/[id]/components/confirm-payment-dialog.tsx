@@ -15,8 +15,22 @@ interface OfferData {
 interface ConfirmPaymentDialogProps {
   open: boolean
   onClose: () => void
-  leadId: string
-  leadName: string
+  /**
+   * Caller provides AT LEAST ONE of these identifiers. The dialog forwards
+   * whichever is set to /api/crm/admin-actions/confirm-payment, which
+   * resolves the offer + activation chain accordingly.
+   *
+   *   - leadId       → classic lead funnel
+   *   - accountId    → existing-account re-entry (One-Time → Client upgrade)
+   *   - contactId    → existing-contact re-entry (no current account/lead)
+   *   - offerToken   → most specific; pass when the offer is in scope
+   */
+  leadId?: string
+  accountId?: string
+  contactId?: string
+  offerToken?: string
+  /** Display name shown in the dialog header + summary. */
+  clientName: string
   offer: OfferData | null
 }
 
@@ -38,7 +52,16 @@ const CONTRACT_TYPES = [
   { value: 'itin', label: 'ITIN Application' },
 ]
 
-export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }: ConfirmPaymentDialogProps) {
+export function ConfirmPaymentDialog({
+  open,
+  onClose,
+  leadId,
+  accountId,
+  contactId,
+  offerToken,
+  clientName,
+  offer,
+}: ConfirmPaymentDialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -102,9 +125,18 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
       return
     }
 
-    if (!hasOffer && finalPipelines.length === 0) {
-      toast.error('Select at least one service pipeline')
-      return
+    // Mode 2 (no offer + manual pipelines) is only valid for the lead path.
+    // The account_id / contact_id / offer_token paths require a real offer —
+    // the server returns 400 if not, but we surface a clear message earlier.
+    if (!hasOffer) {
+      if (!leadId) {
+        toast.error('An offer is required for this account/contact. Create an offer first, then confirm payment.')
+        return
+      }
+      if (finalPipelines.length === 0) {
+        toast.error('Select at least one service pipeline')
+        return
+      }
     }
 
     startTransition(async () => {
@@ -113,7 +145,13 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            lead_id: leadId,
+            // Pass through whichever identifier(s) the caller provided. The
+            // route resolves priority: offer_token > lead_id > account_id >
+            // contact_id (see route.ts header for full doc).
+            lead_id: leadId || undefined,
+            account_id: accountId || undefined,
+            contact_id: contactId || undefined,
+            offer_token: offerToken || undefined,
             payment_method: method,
             payment_date: paymentDate,
             payment_reference: reference || undefined,
@@ -129,15 +167,16 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
         const data = await res.json()
 
         if (!res.ok) {
-          toast.error(data.error || 'Failed to confirm payment')
+          // Surface the server's actual error (R099) instead of a generic toast.
+          toast.error(data.error || `Failed to confirm payment (HTTP ${res.status})`)
           return
         }
 
-        toast.success(`Payment confirmed for ${leadName}`)
+        toast.success(`Payment confirmed for ${clientName}`)
         onClose()
         router.refresh()
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'An error occurred')
+        toast.error(err instanceof Error && err.message ? err.message : 'Network error — please try again')
       }
     })
   }
@@ -165,13 +204,23 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
           </div>
 
           <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
-            {/* Mode indicator */}
-            {!hasOffer && (
+            {/* Mode indicator — Mode 2 (manual pipelines) is only valid for
+                the lead path. For account/contact/offer_token paths, an offer
+                must already exist. */}
+            {!hasOffer && leadId && (
               <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
                 <p className="text-sm text-amber-800">
                   No offer found for this lead. Specify services manually.
                   Consider creating an offer first for a cleaner record.
+                </p>
+              </div>
+            )}
+            {!hasOffer && !leadId && (
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+                <p className="text-sm text-red-800">
+                  No offer found. Create and send an offer before confirming payment for this {accountId ? 'account' : 'contact'}.
                 </p>
               </div>
             )}
@@ -250,19 +299,19 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
             {/* Paid By (third-party payer) */}
             <div>
               <label className="block text-sm font-medium mb-1">
-                Paid By <span className="text-zinc-400 font-normal">(if different from lead)</span>
+                Paid By <span className="text-zinc-400 font-normal">(if different from client)</span>
               </label>
               <input
                 type="text"
                 value={paidByName}
                 onChange={e => setPaidByName(e.target.value)}
-                placeholder="Leave empty if the lead paid directly"
+                placeholder="Leave empty if the client paid directly"
                 className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
 
-            {/* Mode 2 — Manual fields (no offer) */}
-            {!hasOffer && (
+            {/* Mode 2 — Manual fields (no offer + lead path only) */}
+            {!hasOffer && leadId && (
               <>
                 {/* Amount + Currency */}
                 <div className="grid grid-cols-2 gap-3">
@@ -339,14 +388,18 @@ export function ConfirmPaymentDialog({ open, onClose, leadId, leadName, offer }:
               />
             </div>
 
-            {/* Summary */}
+            {/* Summary — items adapt to whichever path the dialog was
+                opened from. The lead-funnel path includes the lead→contact
+                conversion + form trigger; the account/contact re-entry path
+                runs the upgrade and activation chain instead. */}
             <div className="bg-blue-50 rounded-lg p-3 text-sm text-blue-800">
               <p className="font-medium mb-1">This will:</p>
               <ul className="list-disc list-inside space-y-0.5 text-xs">
                 <li>Record payment as Paid</li>
-                <li>Convert lead to contact</li>
+                {leadId && <li>Convert lead to contact</li>}
+                {!leadId && hasOffer && <li>Upgrade client (account_type → Client when annual)</li>}
                 <li>Create service deliveries</li>
-                <li>Trigger data collection form</li>
+                {leadId && <li>Trigger data collection form</li>}
                 <li>Send activation email to client</li>
               </ul>
             </div>
