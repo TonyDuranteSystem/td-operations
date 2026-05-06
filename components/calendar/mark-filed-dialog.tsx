@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { X, Loader2, Upload, ExternalLink, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import type { RenewalRow } from '@/app/(dashboard)/calendar/page'
 
 const STATE_PORTALS: Record<string, { name: string; fee: string }> = {
@@ -21,6 +22,7 @@ interface Props {
 export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   const [filedDate, setFiledDate] = useState<string>(() => new Date().toISOString().split('T')[0])
   const [file, setFile] = useState<File | null>(null)
+  const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const isRA = row.kind === 'ra'
@@ -28,6 +30,34 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   const year = filedDate.slice(0, 4)
 
   const canSubmit = !!file && !!filedDate && !submitting
+
+  function acceptFile(f: File | null | undefined) {
+    if (!f) return
+    if (f.type && !f.type.includes('pdf')) {
+      toast.error(`Receipt must be a PDF. Got: ${f.type || 'unknown'}.`)
+      return
+    }
+    setFile(f)
+  }
+
+  function handleDrag(e: React.DragEvent<HTMLLabelElement>) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (submitting) return
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true)
+    } else if (e.type === 'dragleave') {
+      setDragActive(false)
+    }
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLLabelElement>) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    if (submitting) return
+    acceptFile(e.dataTransfer.files?.[0])
+  }
 
   async function handleSubmit() {
     if (!file) {
@@ -166,15 +196,32 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
               <label className="block text-xs font-medium text-zinc-600 mb-1">
                 Receipt PDF <span className="text-red-500">*</span>
               </label>
-              <label className="flex items-center justify-center gap-2 w-full px-3 py-4 text-sm border-2 border-dashed border-zinc-300 rounded-md cursor-pointer hover:bg-zinc-50">
-                <Upload className="h-4 w-4 text-zinc-500" />
+              <label
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+                className={cn(
+                  'flex items-center justify-center gap-2 w-full px-3 py-6 text-sm border-2 border-dashed rounded-md cursor-pointer transition-colors',
+                  dragActive
+                    ? 'border-blue-500 bg-blue-50'
+                    : file
+                      ? 'border-emerald-300 bg-emerald-50/40 hover:bg-emerald-50'
+                      : 'border-zinc-300 hover:bg-zinc-50',
+                )}
+              >
+                <Upload className={cn('h-4 w-4 shrink-0', dragActive ? 'text-blue-600' : 'text-zinc-500')} />
                 <span className="truncate">
-                  {file ? file.name : 'Drop or click to upload PDF'}
+                  {dragActive
+                    ? 'Drop PDF here…'
+                    : file
+                      ? file.name
+                      : 'Drop a PDF here, or click to browse'}
                 </span>
                 <input
                   type="file"
                   accept="application/pdf,.pdf"
-                  onChange={e => setFile(e.target.files?.[0] ?? null)}
+                  onChange={e => acceptFile(e.target.files?.[0] ?? null)}
                   className="hidden"
                 />
               </label>
