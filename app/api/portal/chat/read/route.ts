@@ -40,21 +40,52 @@ export async function POST(request: NextRequest) {
   // Mark opposite sender's messages as read
   const senderTypeToMark = dashUser ? 'client' : 'admin'
 
-  let query = supabaseAdmin
-    .from('portal_messages')
-    .update({ read_at: new Date().toISOString() })
-    .eq('sender_type', senderTypeToMark)
-    .is('read_at', null)
+  const now = new Date().toISOString()
 
   if (account_id) {
-    query = query.eq('account_id', account_id)
-  } else {
-    query = query.eq('contact_id', contact_id).is('account_id', null)
+    // Account-scoped: mark messages for this account only
+    const { error, count } = await supabaseAdmin
+      .from('portal_messages')
+      .update({ read_at: now })
+      .eq('account_id', account_id)
+      .eq('sender_type', senderTypeToMark)
+      .is('read_at', null)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ marked: count ?? 0 })
   }
 
-  const { error, count } = await query
+  // Contact-scoped: mark ALL messages for this contact across all accounts.
+  // This covers:
+  //   (a) messages with contact_id = X (any account_id, including null)
+  //   (b) legacy messages with contact_id = NULL but account_id in linked accounts
+  const { data: acRows } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id')
+    .eq('contact_id', contact_id)
+  const linkedAccountIds = (acRows ?? []).map(r => r.account_id)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  // (a) messages tagged with contact_id
+  const { error: e1, count: c1 } = await supabaseAdmin
+    .from('portal_messages')
+    .update({ read_at: now })
+    .eq('contact_id', contact_id)
+    .eq('sender_type', senderTypeToMark)
+    .is('read_at', null)
+  if (e1) return NextResponse.json({ error: e1.message }, { status: 500 })
 
-  return NextResponse.json({ marked: count ?? 0 })
+  // (b) legacy messages with no contact_id but linked account
+  let c2 = 0
+  if (linkedAccountIds.length > 0) {
+    const { error: e2, count } = await supabaseAdmin
+      .from('portal_messages')
+      .update({ read_at: now })
+      .is('contact_id', null)
+      .in('account_id', linkedAccountIds)
+      .eq('sender_type', senderTypeToMark)
+      .is('read_at', null)
+    if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
+    c2 = count ?? 0
+  }
+
+  return NextResponse.json({ marked: (c1 ?? 0) + c2 })
 }

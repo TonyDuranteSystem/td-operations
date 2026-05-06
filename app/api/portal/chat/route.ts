@@ -66,14 +66,25 @@ export async function GET(request: NextRequest) {
   }
 
   // Threading: contact_id param returns the unified per-contact thread.
-  // For client users we also include admin messages saved with contact_id=NULL
-  // but account_id matching one of their accounts — this covers replies sent
-  // via the CRM dashboard or MCP tool (which historically omitted contact_id).
+  // We also include messages saved with contact_id=NULL but account_id matching
+  // one of the contact's linked accounts — covers replies sent via the CRM
+  // dashboard or MCP tool that historically omitted contact_id.
   if (contactIdParam) {
-    if (authContactId && clientAccountIds.length > 0) {
-      const acctList = clientAccountIds.join(',')
+    // For client users, account IDs were already resolved above.
+    // For admin users, look them up now from account_contacts.
+    let threadAccountIds = clientAccountIds
+    if (!authContactId && threadAccountIds.length === 0) {
+      const { data: acRows } = await supabaseAdmin
+        .from('account_contacts')
+        .select('account_id')
+        .eq('contact_id', contactIdParam)
+      threadAccountIds = (acRows ?? []).map(r => r.account_id)
+    }
+
+    if (threadAccountIds.length > 0) {
+      const acctList = threadAccountIds.join(',')
       query = query.or(
-        `contact_id.eq.${contactIdParam},and(contact_id.is.null,sender_type.eq.admin,account_id.in.(${acctList}))`
+        `contact_id.eq.${contactIdParam},and(contact_id.is.null,account_id.in.(${acctList}))`
       )
     } else {
       query = query.eq('contact_id', contactIdParam)

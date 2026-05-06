@@ -7977,6 +7977,7 @@ export type Database = {
           message: string
           read_at: string | null
           reply_to_id: string | null
+          sender_context: string | null
           sender_id: string
           sender_type: string
         }
@@ -7993,6 +7994,7 @@ export type Database = {
           message: string
           read_at?: string | null
           reply_to_id?: string | null
+          sender_context?: string | null
           sender_id: string
           sender_type: string
         }
@@ -8009,6 +8011,7 @@ export type Database = {
           message?: string
           read_at?: string | null
           reply_to_id?: string | null
+          sender_context?: string | null
           sender_id?: string
           sender_type?: string
         }
@@ -10859,6 +10862,17 @@ export type Database = {
         Returns: {
           account_id: string
           company_name: string
+          contact_id: string
+          contact_name: string
+          last_message: string
+          last_message_at: string
+          unread_count: number
+        }[]
+      }
+      get_portal_chat_threads_unified: {
+        Args: never
+        Returns: {
+          companies: Json
           contact_id: string
           contact_name: string
           last_message: string

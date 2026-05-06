@@ -9,9 +9,9 @@ import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
   Loader2, ArrowRight, CheckCircle2, AlertCircle,
-  Search, Building2, User,
+  Search, Building2, User, Trash2,
 } from 'lucide-react'
-import { matchBankFeedToInvoice, ignoreBankFeed } from './actions'
+import { matchBankFeedToInvoice, ignoreBankFeed, deleteDuplicateBankFeed } from './actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 
@@ -895,8 +895,22 @@ function UnmatchedRow({
   )
 }
 
-function MatchedRow({ feed }: { feed: BankFeedRecord }) {
+function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord; canDeleteDuplicate?: boolean }) {
   const payment = feed.payments
+  // Plaid-Mercury duplicate cleanup. Only enabled when:
+  //   - this row is source='mercury' (Plaid)
+  //   - it's matched
+  //   - a same-day same-amount same-currency mercury_api twin exists AND is
+  //     matched to the SAME payment
+  // The parent component computes eligibility from the full bank-feed array
+  // and passes the flag in via canDeleteDuplicate.
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const handleDeleteConfirm = async () => {
+    const result = await deleteDuplicateBankFeed(feed.id)
+    if (!result.success) return { success: false, error: result.error || 'Failed to delete duplicate' }
+    return { success: true, message: 'Plaid duplicate deleted' }
+  }
+
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
@@ -931,6 +945,38 @@ function MatchedRow({ feed }: { feed: BankFeedRecord }) {
       )}>
         {feed.match_confidence ?? 'matched'}
       </span>
+      {canDeleteDuplicate && (
+        <>
+          <button
+            onClick={() => setConfirmOpen(true)}
+            title="Delete this Plaid duplicate — Mercury API twin already matched to the same invoice"
+            className="p-1 rounded hover:bg-red-50 text-red-500 shrink-0"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+          <ConfirmDestructiveDialog
+            open={confirmOpen}
+            onClose={() => setConfirmOpen(false)}
+            title="Delete Plaid duplicate"
+            description="The same wire is also recorded via the Mercury API and already matched to the same invoice. Deleting the Plaid copy keeps your books clean. The invoice and the Mercury API match are not affected."
+            severity="amber"
+            staticPreview={{
+              affected: { bank_feed: 1 },
+              items: [
+                {
+                  label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+                  details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
+                },
+              ],
+              warnings: [
+                'The Mercury API row remains as the canonical record of this wire.',
+              ],
+            }}
+            confirmLabel="Delete Plaid duplicate"
+            onConfirm={handleDeleteConfirm}
+          />
+        </>
+      )}
     </div>
   )
 }
@@ -962,6 +1008,26 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   const [page, setPage] = useState(0)
   const [highlightFeedId, setHighlightFeedId] = useState<string | null>(null)
   const pageSize = 50
+
+  // Plaid-Mercury duplicate eligibility — set of Plaid (mercury) feed IDs that
+  // have a matched mercury_api twin pointing at the same payment. Used by
+  // MatchedRow to surface a one-click "Delete Plaid duplicate" cleanup.
+  const eligibleForDeleteDuplicate = useMemo(() => {
+    const mercuryApiByKey = new Map<string, BankFeedRecord>()
+    for (const f of bankFeeds) {
+      if (f.source === 'mercury_api' && f.status === 'matched' && f.matched_payment_id) {
+        const key = `${f.transaction_date}|${f.amount}|${f.currency}|${f.matched_payment_id}`
+        mercuryApiByKey.set(key, f)
+      }
+    }
+    const eligible = new Set<string>()
+    for (const f of bankFeeds) {
+      if (f.source !== 'mercury' || f.status !== 'matched' || !f.matched_payment_id) continue
+      const key = `${f.transaction_date}|${f.amount}|${f.currency}|${f.matched_payment_id}`
+      if (mercuryApiByKey.has(key)) eligible.add(f.id)
+    }
+    return eligible
+  }, [bankFeeds])
 
   // Deep-link from audit panel: ?feed=<uuid> opens this tab scrolled to the feed.
   // Sets source filter from feed.source + search by amount + scrolls + 3s highlight.
@@ -1133,7 +1199,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 onCancelMatch={() => setMatchingFeed(null)}
               />
             ) : feed.status === 'matched' ? (
-              <MatchedRow feed={feed} />
+              <MatchedRow feed={feed} canDeleteDuplicate={eligibleForDeleteDuplicate.has(feed.id)} />
             ) : (
               <IgnoredRow feed={feed} />
             )
