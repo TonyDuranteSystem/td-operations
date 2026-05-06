@@ -434,16 +434,68 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── STEP 1.6: Auto-upgrade account_type if offer has annual services ──
-    // Formation removed (Antonio's architectural model, 2026-05-03/04): formation
-    // does not own an account at payment time, so there is no account_type to
-    // bump here. The account is created later when Articles arrive (Upload
-    // Articles button or Drive cron), and account_type is set there from the
-    // contract data.
+    // ─── STEP 1.6: Auto-upgrade account_type + propagate financial fields ──
+    // Formation: skipped — formation does not own an account at payment time.
+    //   The account is created later when Articles arrive; account_type is set
+    //   there from the contract data.
     //
-    // Onboarding excluded per SOP v7.2 — no account exists at payment; wizard
-    // submit creates it with the correct account_type already derived from
-    // contract rates (Client if annual, One-Time if no installments).
+    // Onboarding (existing-account re-entry — Mojo Labs LLC pattern, 2026-05-06):
+    //   When an existing One-Time customer signs an annual onboarding offer,
+    //   the wizard handler's UPDATE branch does NOT touch account_type, so
+    //   without this helper the account stays "One-Time" and `tier-config.ts:
+    //   ONE_TIME_EXCLUDED` keeps banking/billing/invoices/deadlines hidden in
+    //   the portal. The helper also propagates Setup Fee + 1st + 2nd installment
+    //   amounts from the offer to the account so next year's renewal cron
+    //   (annual-installments) has the right numbers.
+    //
+    //   Guards: only flips One-Time/null → Client (never downgrades from
+    //   Client/Closed/etc). Only writes columns when their current value is
+    //   null. Only flips account_type when at least one installment parses
+    //   from recurring_costs (pure setup-fee one-shots stay One-Time).
+    //
+    //   Onboarding without an existing account_id (the new-lead onboarding
+    //   path per SOP v7.2 Phase 0) is unaffected — `applyOnboardingAccountUpgrades`
+    //   short-circuits when accountId is missing or contract_type isn't 'onboarding'.
+    if (contractType === "onboarding" && autoAccountId && offer) {
+      try {
+        const { applyOnboardingAccountUpgrades } = await import("@/lib/operations/onboarding-account-upgrade")
+        const upgrade = await applyOnboardingAccountUpgrades({
+          accountId: autoAccountId,
+          offer: {
+            contract_type: offer.contract_type,
+            cost_summary: offer.cost_summary,
+            // offer.recurring_costs isn't included in the SELECT above — refetch
+            // just that column to keep the existing query unchanged. Cheap
+            // single-column read.
+            recurring_costs: await (async () => {
+              const { data } = await supabase
+                .from("offers")
+                .select("recurring_costs")
+                .eq("token", activation.offer_token)
+                .single()
+              return data?.recurring_costs ?? null
+            })(),
+          },
+          actor: "activate-service",
+        })
+        steps.push({
+          step: "account_upgrade",
+          status: upgrade.applied ? "done" : "skipped",
+          detail: [
+            upgrade.account_type_flipped ? `account_type ${upgrade.account_type_before ?? "null"} → Client` : null,
+            upgrade.setup_fee_written ? `setup_fee=${upgrade.setup_fee_written.amount} ${upgrade.setup_fee_written.currency}` : null,
+            upgrade.installment_1_written ? `installment_1=${upgrade.installment_1_written.amount} ${upgrade.installment_1_written.currency}` : null,
+            upgrade.installment_2_written ? `installment_2=${upgrade.installment_2_written.amount} ${upgrade.installment_2_written.currency}` : null,
+          ].filter(Boolean).join(" | ") || (upgrade.notes[0] ?? "no changes"),
+        })
+      } catch (e) {
+        steps.push({
+          step: "account_upgrade",
+          status: "error",
+          detail: e instanceof Error ? e.message : String(e),
+        })
+      }
+    }
 
     // ─── STEP 2: Service Deliveries from bundled_pipelines (AUTO) ─────
     const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []

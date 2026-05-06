@@ -119,6 +119,7 @@ interface OfferData {
   status: string
   contract_type: string | null
   cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+  bundled_pipelines: string[] | null
   view_count: number
   viewed_at: string | null
   created_at: string

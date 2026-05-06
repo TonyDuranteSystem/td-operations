@@ -3,10 +3,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye,
+  FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { CreateOfferDialog } from './create-offer-dialog'
+import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 
 const OFFER_STATUS_COLORS: Record<string, string> = {
   draft: 'bg-zinc-100 text-zinc-700',
@@ -22,6 +23,7 @@ interface OfferData {
   status: string
   contract_type: string | null
   cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+  bundled_pipelines: string[] | null
   view_count: number
   viewed_at: string | null
   created_at: string
@@ -49,6 +51,7 @@ export function AccountOfferPanel({
 }: AccountOfferPanelProps) {
   const router = useRouter()
   const [showCreateOffer, setShowCreateOffer] = useState(false)
+  const [showConfirmPayment, setShowConfirmPayment] = useState(false)
   const [sendingOffer, setSendingOffer] = useState(false)
   const [deletingOffer, setDeletingOffer] = useState(false)
   const [resettingOffer, setResettingOffer] = useState(false)
@@ -268,6 +271,20 @@ export function AccountOfferPanel({
                 </button>
               )}
 
+              {/* Confirm Payment (signed, awaiting wire/manual confirm).
+                  Wire fallback path for existing-account offers when the
+                  auto-match cron didn't match (or the client paid by a
+                  channel we don't auto-detect). */}
+              {offer.status === 'signed' && (
+                <button
+                  onClick={() => setShowConfirmPayment(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                >
+                  <CreditCard className="h-3.5 w-3.5" />
+                  Confirm Payment
+                </button>
+              )}
+
               {/* Reset Offer (not draft) */}
               {offer.status !== 'draft' && (
                 <button
@@ -304,6 +321,25 @@ export function AccountOfferPanel({
         clientEmail={clientEmail}
         clientLanguage={clientLanguage}
       />
+
+      {/* Confirm Payment Dialog — only mounted when an offer exists in
+          'signed' status. Routes via account_id + offer_token (no lead
+          needed for the existing-account re-entry case). */}
+      {showConfirmPayment && offer && (
+        <ConfirmPaymentDialog
+          open={showConfirmPayment}
+          onClose={() => setShowConfirmPayment(false)}
+          accountId={accountId}
+          offerToken={offer.token}
+          clientName={companyName}
+          offer={{
+            token: offer.token,
+            contract_type: offer.contract_type,
+            bundled_pipelines: offer.bundled_pipelines,
+            cost_summary: offer.cost_summary,
+          }}
+        />
+      )}
     </>
   )
 }
