@@ -22,21 +22,67 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
-  // Find the most recent client message in this thread
-  let query = supabaseAdmin
-    .from('portal_messages')
-    .select('id')
-    .eq('sender_type', 'client')
-    .order('created_at', { ascending: false })
-    .limit(1)
+  // Find the most recent client message in this thread.
+  // For contact-scoped threads: check both contact_id-tagged messages AND
+  // legacy account-only messages (contact_id=NULL + linked account_id).
+  let latestId: string | null = null
+  let findError = null
 
   if (account_id) {
-    query = query.eq('account_id', account_id)
+    const { data, error } = await supabaseAdmin
+      .from('portal_messages')
+      .select('id')
+      .eq('account_id', account_id)
+      .eq('sender_type', 'client')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    latestId = data?.id ?? null
+    findError = error
   } else {
-    query = query.eq('contact_id', contact_id).is('account_id', null)
+    // Get linked account IDs for this contact
+    const { data: acRows } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id')
+      .eq('contact_id', contact_id)
+    const linkedAccountIds = (acRows ?? []).map(r => r.account_id)
+
+    // Check contact-tagged messages first (most recent)
+    const { data: d1, error: e1 } = await supabaseAdmin
+      .from('portal_messages')
+      .select('id, created_at')
+      .eq('contact_id', contact_id)
+      .eq('sender_type', 'client')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    findError = e1
+
+    // Check legacy account-only messages
+    let d2: { id: string; created_at: string } | null = null
+    if (linkedAccountIds.length > 0) {
+      const { data, error: e2 } = await supabaseAdmin
+        .from('portal_messages')
+        .select('id, created_at')
+        .is('contact_id', null)
+        .in('account_id', linkedAccountIds)
+        .eq('sender_type', 'client')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      d2 = data
+      if (!findError) findError = e2
+    }
+
+    // Pick whichever is more recent
+    if (d1 && d2) {
+      latestId = new Date(d1.created_at) >= new Date(d2.created_at) ? d1.id : d2.id
+    } else {
+      latestId = d1?.id ?? d2?.id ?? null
+    }
   }
 
-  const { data: latest, error: findError } = await query.maybeSingle()
+  const latest = latestId ? { id: latestId } : null
 
   if (findError) return NextResponse.json({ error: findError.message }, { status: 500 })
   if (!latest) return NextResponse.json({ unmarked: 0 })
