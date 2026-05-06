@@ -21,7 +21,7 @@ export async function GET() {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rows, error } = await (supabaseAdmin as any).rpc('get_portal_chat_threads_unified')
+  const { data: rows, error } = await (supabaseAdmin as any).rpc('get_portal_chat_threads_v2')
 
   if (!error && rows) {
     const threads = (rows as Array<{
