@@ -1513,7 +1513,13 @@ export function AuditPanel({
                       value={getContactValue(c, 'itin_number')}
                       onChange={v => setContactValue(c.id, 'itin_number', v)}
                     />
-                    <div className="flex items-end gap-3 text-xs">
+                    <Field
+                      label="ITIN Issue Date"
+                      type="date"
+                      value={getContactValue(c, 'itin_issue_date')}
+                      onChange={v => setContactValue(c.id, 'itin_issue_date', v)}
+                    />
+                    <div className="col-span-2 flex items-center gap-3 text-xs">
                       <span className={cn(
                         'px-2 py-1 rounded',
                         c.passport_on_file

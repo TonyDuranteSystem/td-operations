@@ -15,6 +15,7 @@ export type ContactRow = {
   language: string | null
   citizenship: string | null
   itin_number: string | null
+  itin_issue_date: string | null
   portal_tier: string | null
   date_of_birth: string | null
   passport_number: string | null

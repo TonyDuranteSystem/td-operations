@@ -55,7 +55,7 @@ export default async function ClientAuditPage() {
     supabaseAdmin
       .from('account_contacts')
       // itin_number is the canonical DB column (contacts.itin column has 0 live rows)
-      .select('account_id, is_primary, contact:contacts(id, full_name, email, phone, language, citizenship, itin_number, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country)')
+      .select('account_id, is_primary, contact:contacts(id, full_name, email, phone, language, citizenship, itin_number, itin_issue_date, portal_tier, date_of_birth, passport_number, passport_expiry_date, passport_on_file, kyc_status, address_line1, address_city, address_state, address_zip, address_country)')
       .in('account_id', accountIds),
 
     // Batch fetch non-cancelled service_deliveries for all accounts at once (avoid N+1)
@@ -70,7 +70,7 @@ export default async function ClientAuditPage() {
   const contactMap: Record<string, {
     id: string; full_name: string; email: string | null; phone: string | null
     language: string | null; citizenship: string | null; itin_number: string | null
-    portal_tier: string | null
+    itin_issue_date: string | null; portal_tier: string | null
     date_of_birth: string | null; passport_number: string | null
     passport_expiry_date: string | null; passport_on_file: boolean | null
     kyc_status: string | null
