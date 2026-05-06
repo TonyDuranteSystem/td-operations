@@ -23,6 +23,8 @@ interface ChatThread {
   company_name: string
   contact_name: string | null
   companies: { id: string; name: string }[]
+  /** Non-empty for account-level threads (multi-member LLCs) — list of member contacts */
+  members: { id: string; name: string }[]
   last_message: string
   last_message_at: string
   unread_count: number
@@ -103,6 +105,8 @@ export default function PortalChatsPage() {
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
   const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string }[]>([])
+  /** Non-empty when selected thread is an account-level (multi-member LLC) thread */
+  const [selectedThreadMembers, setSelectedThreadMembers] = useState<{ id: string; name: string }[]>([])
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   const [replyText, setReplyText] = useState('')
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
@@ -1211,12 +1215,25 @@ export default function PortalChatsPage() {
               <button
                 key={threadKey}
                 onClick={() => {
-                  setSelectedName({ company: thread.contact_name || thread.company_name, contact: thread.companies?.map(c => c.name).join(' · ') || undefined })
-                  setSelectedAccountId(null)
-                  setSelectedContactId(thread.contact_id)
+                  const members = thread.members ?? []
                   const companies = thread.companies ?? []
-                  setSelectedThreadCompanies(companies)
-                  setSelectedCompanyId(companies[0]?.id ?? null)
+                  if (thread.account_id && members.length > 0) {
+                    // Account-level thread (multi-member LLC): fetch by account_id
+                    setSelectedName({ company: thread.contact_name || thread.company_name, contact: members.map(m => m.name).join(' · ') })
+                    setSelectedAccountId(thread.account_id)
+                    setSelectedContactId(null)
+                    setSelectedThreadMembers(members)
+                    setSelectedThreadCompanies([])
+                    setSelectedCompanyId(null)
+                  } else {
+                    // Contact-level thread: fetch by contact_id
+                    setSelectedName({ company: thread.contact_name || thread.company_name, contact: companies.map(c => c.name).join(' · ') || undefined })
+                    setSelectedAccountId(null)
+                    setSelectedContactId(thread.contact_id)
+                    setSelectedThreadMembers([])
+                    setSelectedThreadCompanies(companies)
+                    setSelectedCompanyId(companies[0]?.id ?? null)
+                  }
                   setSidebarView('chats')
                 }}
                 title={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name}
@@ -1229,12 +1246,24 @@ export default function PortalChatsPage() {
                   <div className="flex items-center gap-2 min-w-0">
                     <User className="h-4 w-4 text-zinc-400 shrink-0" />
                     <div className="min-w-0">
-                      {thread.contact_id ? (
+                      {thread.account_id && (thread.members ?? []).length > 0 ? (
+                        // Account-level thread: show company name linked to account
+                        <Link href={`/accounts/${thread.account_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
+                      ) : thread.contact_id ? (
                         <Link href={`/contacts/${thread.contact_id}`} onClick={e => e.stopPropagation()} className="text-sm font-medium text-zinc-900 truncate block hover:text-blue-600 hover:underline transition-colors">{thread.contact_name || thread.company_name}</Link>
                       ) : (
                         <span className="text-sm font-medium text-zinc-900 truncate block">{thread.contact_name || thread.company_name}</span>
                       )}
-                      {thread.companies?.length > 0 && (
+                      {/* Account-level: show member names as pills */}
+                      {(thread.members ?? []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          {thread.members.map(m => (
+                            <Link key={m.id} href={`/contacts/${m.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded hover:bg-purple-100 transition-colors truncate max-w-[120px]">{m.name}</Link>
+                          ))}
+                        </div>
+                      )}
+                      {/* Contact-level: show company pills */}
+                      {(thread.members ?? []).length === 0 && thread.companies?.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-0.5">
                           {thread.companies.map(c => (
                             <Link key={c.id} href={`/accounts/${c.id}`} onClick={e => e.stopPropagation()} className="text-[10px] bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded hover:bg-blue-50 hover:text-blue-600 transition-colors truncate max-w-[120px]">{c.name}</Link>
@@ -1715,7 +1744,7 @@ export default function PortalChatsPage() {
             {/* Header */}
             <div className="px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]) }}
+                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
@@ -1961,8 +1990,15 @@ export default function PortalChatsPage() {
                             : 'bg-zinc-100 text-zinc-900'
                         )}
                       >
-                        {/* Company badge — show on every message with an account_id when viewing a unified thread */}
+                        {/* Member badge — for account-level threads (multi-member LLC), show who wrote each client message */}
+                        {selectedThreadMembers.length > 0 && !isAdmin && msg.sender_name && (
+                          <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-purple-100 text-purple-700">
+                            {msg.sender_name}
+                          </span>
+                        )}
+                        {/* Company badge — show on every message with an account_id when viewing a contact-level unified thread */}
                         {(() => {
+                          if (selectedThreadMembers.length > 0) return null // handled above
                           const accountNameById = new Map(selectedThreadCompanies.map(c => [c.id, c.name]))
                           const companyName = msg.account_id ? accountNameById.get(msg.account_id) : null
                           // Show badge if we have a company name (multi-company thread) or sender_context is set

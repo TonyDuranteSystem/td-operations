@@ -5,13 +5,13 @@ import { NextResponse } from 'next/server'
 
 /**
  * GET /api/portal/chat/threads — Admin only.
- * Returns one thread per contact (unified view). Each thread includes all
- * linked companies so the admin sees messages across all companies (e.g.
- * Aces + Stepwell) in a single conversation. Uses get_portal_chat_threads_unified() RPC.
+ * Returns unified threads via get_portal_chat_threads_unified() RPC.
  *
- * Response shape per thread:
- *   { account_id: null, contact_id, company_name (=contact_name for backward compat),
- *     contact_name, companies: [{id, name}], last_message, last_message_at, unread_count }
+ * Two thread types:
+ *   Contact-level: { account_id: null, contact_id, contact_name, companies: [{id,name}], members: [] }
+ *   Account-level: { account_id, contact_id: null, contact_name (=company_name), companies: [], members: [{id,name}] }
+ *
+ * Account-level threads are emitted for multi-member LLCs (≥2 contacts with messages on same account).
  */
 export async function GET() {
   const supabase = createClient()
@@ -25,18 +25,21 @@ export async function GET() {
 
   if (!error && rows) {
     const threads = (rows as Array<{
-      contact_id: string
+      contact_id: string | null
       contact_name: string
+      account_id: string | null
       companies: { id: string; name: string }[]
+      members: { id: string; name: string }[]
       last_message: string
       last_message_at: string
       unread_count: number
     }>).map(r => ({
-      account_id: null as string | null,
-      contact_id: r.contact_id,
+      account_id: r.account_id ?? null,
+      contact_id: r.contact_id ?? null,
       company_name: r.contact_name,
       contact_name: r.contact_name,
       companies: r.companies ?? [],
+      members: r.members ?? [],
       last_message: r.last_message ?? '',
       last_message_at: r.last_message_at ?? '',
       unread_count: Number(r.unread_count ?? 0),
