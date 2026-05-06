@@ -117,7 +117,6 @@ export function ProfileCompletionBanner({
       <div className="flex-1 space-y-3">
         <div>
           <p className="font-semibold text-amber-900">{t('profile.banner.title', locale)}</p>
-          <p className="text-sm text-amber-800 mt-0.5">{t('profile.banner.subtitle', locale)}</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {missingFields.map(field => {
