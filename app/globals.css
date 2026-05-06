@@ -30,6 +30,12 @@
     --sidebar-accent-foreground: 0 0% 98%;
     --sidebar-border: 220 10% 16%;
   }
+
+  [data-sandbox="true"] {
+    --sidebar: 25 80% 14%;
+    --sidebar-accent: 25 70% 20%;
+    --sidebar-border: 25 70% 20%;
+  }
 }
 
 @layer base {

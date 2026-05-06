@@ -115,7 +115,7 @@ export default async function DashboardLayout({
       <SwRegister />
       <RealtimeNotifications />
       <DashboardPullToRefresh />
-      <div className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>
+      <div data-sandbox={isSandbox ? 'true' : undefined} className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>
         <Sidebar
           user={user}
           isAdmin={admin}
