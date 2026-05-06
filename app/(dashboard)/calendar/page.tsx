@@ -78,6 +78,8 @@ export default async function CalendarPage({
       ra_renewal_date,
       annual_report_due_date,
       registered_agent_id,
+      registered_agent_provider,
+      registered_agent_address,
       gdrive_folder_url,
       portal_tier
     `)
@@ -178,12 +180,17 @@ export default async function CalendarPage({
   }
 
   // ─── 6. Build renewal rows from accounts ───────────────────────────
+  // Provider/agent/address resolution prefers the structured FK
+  // (accounts.registered_agent_id → addresses), falls back to the legacy
+  // free-text columns (registered_agent_provider / registered_agent_address)
+  // for accounts not yet migrated to the RA picker. Sandbox 2026-05-06:
+  // 242/243 active Clients still use legacy text columns.
   const renewalRows: RenewalRow[] = []
   for (const a of accountsForRenewals ?? []) {
     const addr = a.registered_agent_id ? raAddressMap.get(a.registered_agent_id) ?? null : null
-    const provider = addr?.provider ?? null
-    const agent_name = addr?.agent_name ?? null
-    const ra_address_line = formatAddressLine(addr)
+    const provider = addr?.provider ?? a.registered_agent_provider ?? null
+    const agent_name = addr?.agent_name ?? null  // legacy text columns don't separate agent from address
+    const ra_address_line = formatAddressLine(addr) ?? a.registered_agent_address ?? null
     const ra_county = addr?.county ?? null
     const has_offboarding = offboardingAccounts.has(a.id)
 

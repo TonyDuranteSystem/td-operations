@@ -220,18 +220,34 @@ export async function fileRenewal(
         throw new Error(`completeSD failed: ${completion.error ?? "unknown"}`)
       }
 
-      // 6. Sync legacy deadlines row → Filed (best-effort, no-op if no row)
-      await supabaseAdmin
+      // 6. Sync legacy deadlines row → Filed (best-effort, no-op if no row).
+      // Try the year-matched row first; if none updates, fall back to a row
+      // with year IS NULL (most legacy/Airtable-imported rows have year=NULL —
+      // sandbox audit 2026-05-06: 230 of 256 Annual Report rows + 225 of 252
+      // RA Renewal rows have year unset).
+      const updatePatch = {
+        status: "Filed",
+        filed_date: params.filed_date,
+        deadline_record: driveLink,
+        updated_at: new Date().toISOString(),
+        year, // backfill year on the row we touch
+      }
+      const { count: yearMatched } = await supabaseAdmin
         .from("deadlines")
-        .update({
-          status: "Filed",
-          filed_date: params.filed_date,
-          deadline_record: driveLink,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePatch, { count: "exact" })
         .eq("account_id", account.id)
         .eq("deadline_type", DEADLINE_TYPE_BY_KIND[params.kind])
         .eq("year", year)
+      if (!yearMatched || yearMatched === 0) {
+        // Fallback: row exists but year is NULL — match it and backfill year
+        await supabaseAdmin
+          .from("deadlines")
+          .update(updatePatch)
+          .eq("account_id", account.id)
+          .eq("deadline_type", DEADLINE_TYPE_BY_KIND[params.kind])
+          .is("year", null)
+          .in("status", ["Pending", "Not Started"])
+      }
 
       // 7. Append accounts.notes entry (CRM Update Rule)
       const newNotes = buildAccountNoteEntry(
