@@ -1,5 +1,3 @@
-"use server"
-
 /**
  * fileRenewal — atomic Mark Filed action invoked from the CRM Calendar.
  *
