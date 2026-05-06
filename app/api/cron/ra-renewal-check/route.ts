@@ -11,7 +11,9 @@ import { logCron } from "@/lib/cron-log"
  * Scans active Client accounts where ra_renewal_date is within 30 days.
  * Creates service_delivery + task for Luca if not already created.
  * Skips accounts with active Company Closure or Client Offboarding.
- * SOP: RA Renewal v3.1
+ * Blocked if 1st installment not paid (overdue payments) — task to Antonio.
+ * SOP: RA Renewal v7.1 (was v7.0 "non-postponable" — Antonio 2026-05-05:
+ * "no service if first installment unpaid", overrides the old rule).
  */
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -43,6 +45,7 @@ export async function GET(req: NextRequest) {
 
     let created = 0
     let skipped = 0
+    let blocked = 0
     const results: { company: string; action: string }[] = []
 
     for (const account of accounts) {
@@ -76,6 +79,18 @@ export async function GET(req: NextRequest) {
         continue
       }
 
+      // Check payment status — overdue payments block the renewal (SOP v7.1).
+      // Antonio 2026-05-05: "no service if first installment unpaid" overrides
+      // the old SOP v7.0 'non-postponable' rule. Mirrors annual-report-check.
+      const { data: overduePayments } = await supabaseAdmin
+        .from("payments")
+        .select("id")
+        .eq("account_id", account.id)
+        .in("status", ["Overdue", "Delinquent"])
+        .limit(1)
+
+      const isBlocked = overduePayments?.length ? true : false
+
       // Get first pipeline stage
       const { data: firstStage } = await supabaseAdmin
         .from("pipeline_stages")
@@ -86,6 +101,8 @@ export async function GET(req: NextRequest) {
         .single()
 
       // Create service delivery
+      const sdStatus = isBlocked ? "blocked" : "active"
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.insert in cron; refactor deferred (dev_task 7ebb1e0c)
       const { data: sd, error: sdErr } = await supabaseAdmin
         .from("service_deliveries")
         .insert({
@@ -95,13 +112,20 @@ export async function GET(req: NextRequest) {
           stage: firstStage?.stage_name || "Upcoming",
           stage_order: firstStage?.stage_order || 1,
           stage_entered_at: new Date().toISOString(),
-          stage_history: [{ to_stage: "Upcoming", to_order: 1, advanced_at: new Date().toISOString(), notes: "Auto-created by cron" }],
+          stage_history: [{
+            to_stage: "Upcoming",
+            to_order: 1,
+            advanced_at: new Date().toISOString(),
+            notes: isBlocked ? "Auto-created by cron — BLOCKED payment overdue" : "Auto-created by cron",
+          }],
           account_id: account.id,
-          status: "active",
+          status: sdStatus,
           start_date: new Date().toISOString().split("T")[0],
           due_date: account.ra_renewal_date,
           assigned_to: "Luca",
-          notes: `Auto-created: RA renewal due ${account.ra_renewal_date}`,
+          notes: isBlocked
+            ? `BLOCKED — Payment overdue. RA renewal due ${account.ra_renewal_date}`
+            : `Auto-created: RA renewal due ${account.ra_renewal_date}`,
         })
         .select("id")
         .single()
@@ -111,56 +135,97 @@ export async function GET(req: NextRequest) {
         continue
       }
 
-      // Create task for Luca
-      await supabaseAdmin
-        .from("tasks")
-        .insert({
-          task_title: `Renew RA on Harbor for ${account.company_name} — deadline ${account.ra_renewal_date}`,
-          assigned_to: "Luca",
-          status: "To Do",
-          priority: "High",
-          category: "Filing",
-          due_date: account.ra_renewal_date,
-          account_id: account.id,
-          delivery_id: sd?.id,
-          description: `Go to Harbor Compliance, search for ${account.company_name}, authorize renewal, pay $35, download confirmation, upload to Drive.`,
-        })
+      if (isBlocked) {
+        // Dedup: check if blocked-task already exists for this account
+        const { data: existingTask } = await supabaseAdmin
+          .from("tasks")
+          .select("id")
+          .eq("account_id", account.id)
+          .like("task_title", "RA Renewal blocked%")
+          .eq("status", "To Do")
+          .limit(1)
 
-      created++
-      results.push({ company: account.company_name, action: "created SD + task" })
+        if (!existingTask?.length) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert in cron; refactor deferred (dev_task 7ebb1e0c)
+          await supabaseAdmin
+            .from("tasks")
+            .insert({
+              task_title: `RA Renewal blocked — ${account.company_name} has overdue payment`,
+              assigned_to: "Antonio",
+              status: "To Do",
+              priority: "Urgent",
+              category: "Payment",
+              due_date: account.ra_renewal_date,
+              account_id: account.id,
+              delivery_id: sd?.id,
+              description: `RA renewal due ${account.ra_renewal_date} but payment is overdue. Resolve payment before proceeding.`,
+            })
+        }
+        blocked++
+        results.push({ company: account.company_name, action: existingTask?.length ? "created SD (BLOCKED) — task already exists" : "created SD (BLOCKED) + task Antonio" })
+      } else {
+        // Create task for Luca
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert in cron; refactor deferred (dev_task 7ebb1e0c)
+        await supabaseAdmin
+          .from("tasks")
+          .insert({
+            task_title: `Renew RA on Harbor for ${account.company_name} — deadline ${account.ra_renewal_date}`,
+            assigned_to: "Luca",
+            status: "To Do",
+            priority: "High",
+            category: "Filing",
+            due_date: account.ra_renewal_date,
+            account_id: account.id,
+            delivery_id: sd?.id,
+            description: `Go to Harbor Compliance, search for ${account.company_name}, authorize renewal, pay $35, download confirmation, upload to Drive.`,
+          })
+
+        created++
+        results.push({ company: account.company_name, action: "created SD + task" })
+      }
     }
 
     logCron({
       endpoint: "/api/cron/ra-renewal-check",
       status: "success",
       duration_ms: Date.now() - startTime,
-      details: { checked: accounts.length, created, skipped, results },
+      details: { checked: accounts.length, created, skipped, blocked, results },
     })
 
-    // Send email report if there are new renewals
-    if (created > 0) {
+    // Send email report if there are new renewals or blocked accounts
+    if (created > 0 || blocked > 0) {
       try {
         const { gmailPost } = await import("@/lib/gmail")
 
         const renewalRows = results
           .filter(r => r.action === "created SD + task")
-          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">SD + Task created</td></tr>`)
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd">✅ SD + Task Luca</td></tr>`)
+          .join("")
+
+        const blockedRows = results
+          .filter(r => r.action.includes("BLOCKED"))
+          .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#c00">🚫 Blocked — overdue payment</td></tr>`)
           .join("")
 
         const skippedRows = results
-          .filter(r => r.action !== "created SD + task")
+          .filter(r => r.action.includes("skipped"))
           .map(r => `<tr><td style="padding:6px 12px;border:1px solid #ddd;color:#888">${r.company}</td><td style="padding:6px 12px;border:1px solid #ddd;color:#888">${r.action}</td></tr>`)
           .join("")
 
         const html = `
           <h2>🔄 RA Renewal Report — ${today.toISOString().split("T")[0]}</h2>
-          <p><strong>${created}</strong> new renewals | <strong>${skipped}</strong> skipped | <strong>${accounts.length}</strong> checked</p>
-          <h3>✅ New renewals to do (assigned to Luca)</h3>
+          <p><strong>${created}</strong> new renewals | <strong>${blocked}</strong> blocked | <strong>${skipped}</strong> skipped | <strong>${accounts.length}</strong> checked</p>
+          ${renewalRows ? `<h3>✅ New renewals to do (Luca)</h3>
           <table style="border-collapse:collapse;width:100%">
             <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Action</th></tr>
             ${renewalRows}
-          </table>
-          ${skippedRows ? `<h3 style="margin-top:16px">⏭️ Skipped</h3>
+          </table>` : ""}
+          ${blockedRows ? `<h3 style="margin-top:16px">🚫 Blocked — overdue payment (Antonio)</h3>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Status</th></tr>
+            ${blockedRows}
+          </table>` : ""}
+          ${skippedRows ? `<h3 style="margin-top:16px;color:#888">⏭️ Skipped</h3>
           <table style="border-collapse:collapse;width:100%">
             <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Company</th><th style="padding:6px 12px;border:1px solid #ddd;text-align:left">Reason</th></tr>
             ${skippedRows}
@@ -170,7 +235,7 @@ export async function GET(req: NextRequest) {
 
         await gmailPost("/messages/send", {
           to: "support@tonydurante.us",
-          subject: `🔄 RA Renewal: ${created} new renewals to process`,
+          subject: `🔄 RA Renewal: ${created} new${blocked ? ` + ${blocked} blocked` : ""}`,
           htmlBody: html,
         })
       } catch (emailErr) {
@@ -179,7 +244,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, checked: accounts.length, created, skipped, results })
+    return NextResponse.json({ ok: true, checked: accounts.length, created, skipped, blocked, results })
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
