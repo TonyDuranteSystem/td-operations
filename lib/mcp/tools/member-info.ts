@@ -3,7 +3,7 @@
  *
  * Tools:
  *   member_info_form_create — Create (or retrieve existing) member info request for an MMLLC account.
- *                             Pre-populates from existing members table. Returns form URL and email draft.
+ *                             Pre-populates from existing members table. Returns form URL only.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
@@ -27,9 +27,8 @@ Pre-populates the form with any existing member data already in the members tabl
 Returns:
 - form_url: direct link to the form (send to primary member)
 - admin_preview_url: ?preview=td version for internal testing
-- email_draft: ready-to-send email body for the primary member
 
-After creating, send the form_url via portal message or email to the primary member (is_primary=true).`,
+No email draft is returned — compose the email manually based on the specific context and relationship with the client.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID (must be an MMLLC account)"),
     },
@@ -114,33 +113,11 @@ After creating, send the form_url via portal message or email to the primary mem
       const formUrl = `${APP_BASE_URL}/member-info/${token}/${accessCode}`
       const adminPreviewUrl = `${formUrl}?preview=td`
 
-      const emailDraft = `Hi,
-
-We are pleased to inform you that the EIN for ${account.company_name} has been issued.
-
-To proceed with the next steps — including opening your business bank account — we need complete information for all LLC members.
-
-Please fill out the short form below at your earliest convenience:
-
-${formUrl}
-
-This will only take a few minutes. Once submitted, we will update your account and guide you through the next steps.
-
-If you have any questions, please don't hesitate to reach out.
-
-Best regards,
-Tony Durante LLC`
-
       const lines = [
         `✅ Member info form ${existing ? "(existing)" : "created"} for **${account.company_name}**`,
         ``,
         `**Form URL:** ${formUrl}`,
         `**Admin Preview:** ${adminPreviewUrl}`,
-        ``,
-        `**Email draft:**`,
-        `\`\`\``,
-        emailDraft,
-        `\`\`\``,
       ]
 
       return { content: [{ type: "text", text: lines.join("\n") }] }
