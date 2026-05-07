@@ -241,6 +241,56 @@ describe("confirm-payment — account_id path", () => {
     const body = await res.json()
     expect(body.error).toMatch(/No offer found for account/)
   })
+
+  // Bug 1 fix (master 9e27e14f, sysdoc ops-2026-05-07-onetime-to-active-journey-fix-plan):
+  // confirm-payment must write the new invoice's paymentId back onto the
+  // activation BEFORE invoking activate-service. Otherwise activate-service
+  // Step 3 sees portal_invoice_id=null and falls through to its own
+  // createTDInvoice fallback — second invoice lands. Mojo sandbox 2026-05-07:
+  // INV-002192 + INV-002193 both Paid $2000 for one wire.
+  it("links the newly created invoice to the activation before calling activate-service", async () => {
+    setTable("offers", {
+      selectMaybeSingle: {
+        data: {
+          token: "offer-mojo-2026",
+          status: "signed",
+          contract_type: "onboarding",
+          bundled_pipelines: [],
+          cost_summary: [],
+          client_email: "sanjin@example.com",
+          client_name: "Mojo Labs LLC",
+          services: [],
+          account_id: "account-1",
+          lead_id: null,
+        },
+        error: null,
+      },
+    })
+    setTable("contacts", {
+      selectMaybeSingle: { data: { id: "contact-1" }, error: null },
+    })
+    setTable("account_contacts", {
+      selectMaybeSingle: { data: { account_id: "account-1" }, error: null },
+    })
+    setTable("pending_activations", {
+      // No existing activation — falls into create branch
+      selectMaybeSingle: { data: null, error: null },
+      insertResult: { data: { id: "pa-mojo" }, error: null },
+    })
+
+    const res = await POST(
+      makeRequest({ ...baseBody, account_id: "account-1" }) as Parameters<typeof POST>[0],
+    )
+    expect(res.status).toBe(200)
+
+    // The invoice was created
+    expect(_lastTDInvoice).not.toBeNull()
+    // AND the activation row was updated with the invoice's paymentId — this
+    // is what stops activate-service Step 3 from creating a duplicate invoice.
+    const upd = tables.pending_activations.lastUpdate as Record<string, unknown> | undefined
+    expect(upd).toBeDefined()
+    expect(upd?.portal_invoice_id).toBe("pay-1")
+  })
 })
 
 // ── contact_id path ────────────────────────────────────────────────────────

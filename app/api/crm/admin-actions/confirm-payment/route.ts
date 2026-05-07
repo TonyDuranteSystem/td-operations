@@ -449,7 +449,7 @@ export async function POST(request: Request) {
           (effectiveLeadId ? `lead:${effectiveLeadId}` : null) ||
           (resolvedAccountId ? `account:${resolvedAccountId}` : null) ||
           (resolvedContactId ? `contact:${resolvedContactId}` : "no-anchor")
-        await createTDInvoice({
+        const invoiceResult = await createTDInvoice({
           account_id: resolvedAccountId || undefined,
           contact_id: resolvedContactId || undefined,
           line_items: [{
@@ -464,6 +464,19 @@ export async function POST(request: Request) {
           notes: noteParts.join(". "),
           idempotency_key: `manual-confirm-payment:${idempotencyAnchor}:${paidDate}:${amount}`,
         })
+        // Bug 1 fix (master 9e27e14f, sysdoc ops-2026-05-07-onetime-to-active-journey-fix-plan):
+        // link the invoice we just created to the activation BEFORE calling
+        // activate-service. Otherwise activate-service Step 3 sees
+        // activation.portal_invoice_id=null and falls through to its own
+        // createTDInvoice fallback (route.ts:905-948) — different code path,
+        // no shared idempotency key, two Paid invoices land for one wire.
+        // Mojo sandbox 2026-05-07: INV-002192 + INV-002193 both Paid $2000.
+        if (invoiceResult?.paymentId && activationId) {
+          await supabaseAdmin
+            .from("pending_activations")
+            .update({ portal_invoice_id: invoiceResult.paymentId })
+            .eq("id", activationId)
+        }
       } catch (invErr) {
         console.error("[confirm-payment] createTDInvoice failed:", invErr)
         logAction({

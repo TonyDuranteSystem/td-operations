@@ -825,16 +825,91 @@ export async function POST(req: NextRequest) {
         steps.push({ step: "portal_user", status: "error", detail: portalResult.error })
       }
 
-      // Push notification: new service ready
-      if (autoAccountId && pipelines.length > 0) {
-        createPortalNotification({
-          account_id: autoAccountId,
-          contact_id: contactId || undefined,
-          type: "service",
-          title: "Welcome! Your service is being set up",
-          body: `We're preparing your ${pipelines[0]} service. Check the portal for next steps.`,
-          link: "/portal",
-        }).catch(() => {})
+      // Welcome notification + portal message at activation.
+      //
+      // Bug 2 fix (master 9e27e14f, sysdoc ops-2026-05-07-onetime-to-active-journey-fix-plan):
+      // for onboarding and formation, send a clear "Welcome onboard, complete
+      // the wizard" call-to-action so the customer knows the next step.
+      // The previous generic "service is being set up" notification gave no
+      // direction — clients were left guessing what to do next, especially in
+      // the no-lead path where they jump straight from payment to portal
+      // without a follow-up email.
+      if (contactId) {
+        try {
+          const { data: contactLang } = await supabase
+            .from("contacts")
+            .select("language")
+            .eq("id", contactId)
+            .single()
+          const isIt = contactLang?.language === "it" || contactLang?.language === "Italian"
+
+          if (contractType === "onboarding") {
+            const title = isIt ? "Benvenuto a bordo!" : "Welcome onboard!"
+            const body = isIt
+              ? "Inizia il tuo percorso completando il modulo di onboarding."
+              : "Start your journey by completing the onboarding wizard."
+
+            createPortalNotification({
+              account_id: autoAccountId || undefined,
+              contact_id: contactId,
+              type: "service",
+              title,
+              body,
+              link: "/portal/wizard",
+            }).catch(() => {})
+
+            if (autoAccountId) {
+              await supabase.from("portal_messages").insert({
+                account_id: autoAccountId,
+                contact_id: contactId,
+                sender_type: "admin",
+                sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+                message: `${title} ${body}`,
+              })
+            }
+          } else if (contractType === "formation") {
+            const title = isIt ? "Benvenuto a bordo!" : "Welcome onboard!"
+            const body = isIt
+              ? "Inizia il tuo percorso completando il modulo di formazione."
+              : "Start your journey by completing the formation wizard."
+
+            createPortalNotification({
+              account_id: autoAccountId || undefined,
+              contact_id: contactId,
+              type: "service",
+              title,
+              body,
+              link: "/portal/wizard",
+            }).catch(() => {})
+
+            if (autoAccountId) {
+              await supabase.from("portal_messages").insert({
+                account_id: autoAccountId,
+                contact_id: contactId,
+                sender_type: "admin",
+                sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+                message: `${title} ${body}`,
+              })
+            }
+          } else if (autoAccountId && pipelines.length > 0) {
+            // Tax return / ITIN / other non-wizard contract types — keep the
+            // generic notification (these don't have an onboarding wizard to
+            // direct the customer toward).
+            createPortalNotification({
+              account_id: autoAccountId,
+              contact_id: contactId,
+              type: "service",
+              title: isIt ? "Benvenuto! Il tuo servizio sta per partire" : "Welcome! Your service is being set up",
+              body: isIt
+                ? `Stiamo preparando il tuo servizio ${pipelines[0]}. Accedi al portale per i prossimi passi.`
+                : `We're preparing your ${pipelines[0]} service. Check the portal for next steps.`,
+              link: "/portal",
+            }).catch(() => {})
+          }
+        } catch (e) {
+          // Notification + message are best-effort. Don't fail activation.
+          console.error("[activate-service] welcome notification failed:", e)
+        }
       }
     } else {
       steps.push({ step: "portal_user", status: "skipped", detail: "No contact_id available" })

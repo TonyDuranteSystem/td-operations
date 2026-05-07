@@ -22,6 +22,25 @@ import type { Json } from "@/lib/database.types"
 interface WelcomePackagePayload {
   account_id: string
   suite_number?: string
+  /**
+   * Bug 3 fix (master 9e27e14f, sysdoc ops-2026-05-07-onetime-to-active-journey-fix-plan):
+   *
+   * The handler was originally Formation Stage 3.11 only — it celebrates an
+   * EIN that just arrived after fresh LLC formation and tells the client
+   * banking is now available. When the onboarding wizard handler started
+   * enqueuing this same job (to reuse the OA / Lease / Relay / Payset /
+   * email-draft scaffolding), the celebration message was sent to clients
+   * whose EIN was issued long ago — factually wrong and confusing.
+   *
+   * Pass `context: 'onboarding'` from the onboarding wizard handler. The
+   * message + push notification at Step 9 will then use onboarding wording
+   * ("Your onboarding is being processed...") instead of the Formation EIN
+   * celebration. Default ('formation' or undefined) keeps existing behavior
+   * — important: `record-ein-received` must NOT pass this flag so the
+   * Formation EIN celebration still fires correctly when EIN actually
+   * arrives in the Formation flow.
+   */
+  context?: "formation" | "onboarding"
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -330,14 +349,33 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   result.steps.push(step("status_update", "ok", `welcome_package_status → ${wpStatus}`))
 
   // ─── 9. NOTIFY CLIENT via portal message + push ───
+  // Bug 3 fix (master 9e27e14f): branch on payload.context.
+  //   - 'onboarding' (existing-account re-onboarding via wizard submit): the
+  //     EIN was already on file long before this purchase. The required
+  //     wizard uploads (passport, Articles of Organization, EIN, SS-4) are
+  //     themselves proof the company exists. Use an onboarding-completion
+  //     message; do NOT celebrate the EIN.
+  //   - 'formation' or undefined (fresh formation EIN arrival, the original
+  //     Stage 3.11 path triggered by record-ein-received / SD advancement):
+  //     keep the celebration message.
   try {
     const isIt = lang === "it"
-    const greeting = isIt
-      ? `Ottima notizia! Il codice fiscale americano (EIN) per ${account.company_name} è stato emesso: ${account.ein_number}.`
-      : `Great news! The EIN for ${account.company_name} has been issued: ${account.ein_number}.`
-    const body = isIt
-      ? `Puoi ora avviare la procedura per aprire il conto bancario aziendale. Accedi al portale per iniziare il processo di apertura del conto e, se applicabile, per firmare il tuo Accordo Operativo e il contratto di domiciliazione.`
-      : `You can now start the process to open your business bank account. Log in to your portal to begin the banking wizard and, where applicable, sign your Operating Agreement and lease.`
+    const isOnboarding = p.context === "onboarding"
+
+    const greeting = isOnboarding
+      ? (isIt
+          ? `Il tuo onboarding è in elaborazione, ${account.company_name}.`
+          : `Your onboarding is being processed, ${account.company_name}.`)
+      : (isIt
+          ? `Ottima notizia! Il codice fiscale americano (EIN) per ${account.company_name} è stato emesso: ${account.ein_number}.`
+          : `Great news! The EIN for ${account.company_name} has been issued: ${account.ein_number}.`)
+    const body = isOnboarding
+      ? (isIt
+          ? `I tuoi moduli bancari (Relay e Payset), il tuo Accordo Operativo e il contratto di domiciliazione sono pronti per essere firmati nel portale.`
+          : `Your banking forms (Relay and Payset), your Operating Agreement and your lease are ready to sign in the portal.`)
+      : (isIt
+          ? `Puoi ora avviare la procedura per aprire il conto bancario aziendale. Accedi al portale per iniziare il processo di apertura del conto e, se applicabile, per firmare il tuo Accordo Operativo e il contratto di domiciliazione.`
+          : `You can now start the process to open your business bank account. Log in to your portal to begin the banking wizard and, where applicable, sign your Operating Agreement and lease.`)
     const message = `${greeting}\n\n${body}`
 
     await supabaseAdmin.from("portal_messages").insert({
@@ -352,13 +390,17 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     await createPortalNotification({
       account_id: p.account_id,
       contact_id: contact.id,
-      type: "ein_received",
-      title: isIt ? "EIN emesso — banking disponibile" : "EIN issued — banking available",
-      body: isIt ? `EIN: ${account.ein_number}` : `EIN: ${account.ein_number}`,
-      link: "/portal/banking",
+      type: isOnboarding ? "service" : "ein_received",
+      title: isOnboarding
+        ? (isIt ? "Onboarding in elaborazione" : "Onboarding in progress")
+        : (isIt ? "EIN emesso — banking disponibile" : "EIN issued — banking available"),
+      body: isOnboarding
+        ? (isIt ? "Moduli bancari, OA e lease pronti da firmare." : "Banking forms, OA and lease ready to sign.")
+        : (isIt ? `EIN: ${account.ein_number}` : `EIN: ${account.ein_number}`),
+      link: isOnboarding ? "/portal" : "/portal/banking",
     })
 
-    result.steps.push(step("notify_client", "ok", `Portal message sent to ${contact.email}`))
+    result.steps.push(step("notify_client", "ok", `Portal message sent to ${contact.email}${isOnboarding ? " (onboarding context)" : " (formation context)"}`))
   } catch (e) {
     result.steps.push(step("notify_client", "error", e instanceof Error ? e.message : String(e)))
   }

@@ -1275,12 +1275,19 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("welcome_package", "skipped", "No EIN yet — will be triggered when formation reaches Post-Formation stage"))
       } else {
         const { enqueueJob } = await import("@/lib/jobs/queue")
+        // Bug 3 fix (master 9e27e14f, sysdoc ops-2026-05-07-onetime-to-active-journey-fix-plan):
+        // pass context='onboarding' so the welcome-package handler sends an
+        // onboarding-completion message instead of the Formation Stage 3.11
+        // EIN celebration. The required wizard uploads (passport, Articles
+        // of Organization, EIN, SS-4) are themselves proof the EIN was
+        // issued long before this purchase — celebrating it now is
+        // factually wrong for re-onboarded clients.
         await enqueueJob({
           job_type: "welcome_package_prepare",
-          payload: { account_id },
+          payload: { account_id, context: "onboarding" },
           priority: 5,
         })
-        result.steps.push(step("welcome_package", "ok", "Job enqueued (Relay, Payset, email draft, review task)"))
+        result.steps.push(step("welcome_package", "ok", "Job enqueued (Relay, Payset, email draft, review task) — context=onboarding"))
       }
     } catch (e) {
       result.steps.push(step("welcome_package", "error", e instanceof Error ? e.message : String(e)))
