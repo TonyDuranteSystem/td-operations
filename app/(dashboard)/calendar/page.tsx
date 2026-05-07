@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { AnnualCalendar } from '@/components/calendar/annual-calendar'
+import { resolveDriveFolderUrl } from '@/lib/drive-folder-url'
 
 export type RenewalKind = 'ra' | 'ar'
 export type RenewalStatus = 'upcoming' | 'active' | 'blocked' | 'completed' | 'filed' | 'offboarding'
@@ -81,6 +82,7 @@ export default async function CalendarPage({
       registered_agent_provider,
       registered_agent_address,
       gdrive_folder_url,
+      drive_folder_id,
       portal_tier
     `)
     .eq('status', 'Active')
@@ -150,17 +152,17 @@ export default async function CalendarPage({
   }
   // Need company names for filed SDs whose accounts aren't already loaded
   const filedAccountIds = Array.from(new Set(filedSDs.map(s => s.account_id).filter(id => !accountIds.includes(id))))
-  const filedAccountMap: Record<string, { company_name: string; state_of_formation: string | null; gdrive_folder_url: string | null }> = {}
+  const filedAccountMap: Record<string, { company_name: string; state_of_formation: string | null; drive_folder_url: string | null }> = {}
   if (filedAccountIds.length > 0) {
     const { data: extra } = await supabase
       .from('accounts')
-      .select('id, company_name, state_of_formation, gdrive_folder_url')
+      .select('id, company_name, state_of_formation, gdrive_folder_url, drive_folder_id')
       .in('id', filedAccountIds)
     for (const a of extra ?? []) {
       filedAccountMap[a.id] = {
         company_name: a.company_name,
         state_of_formation: a.state_of_formation,
-        gdrive_folder_url: a.gdrive_folder_url,
+        drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
       }
     }
   }
@@ -216,7 +218,7 @@ export default async function CalendarPage({
         agent_name,
         ra_address_line,
         ra_county,
-        drive_folder_url: a.gdrive_folder_url,
+        drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
         has_offboarding,
       })
     }
@@ -247,7 +249,7 @@ export default async function CalendarPage({
         agent_name,
         ra_address_line,
         ra_county,
-        drive_folder_url: a.gdrive_folder_url,
+        drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
         has_offboarding,
       })
     }
@@ -259,7 +261,9 @@ export default async function CalendarPage({
     const accountFromExtra = filedAccountMap[f.account_id]
     const company_name = accountFromMain?.company_name ?? accountFromExtra?.company_name ?? '—'
     const state_of_formation = accountFromMain?.state_of_formation ?? accountFromExtra?.state_of_formation ?? null
-    const drive_folder_url = accountFromMain?.gdrive_folder_url ?? accountFromExtra?.gdrive_folder_url ?? null
+    const drive_folder_url = accountFromMain
+      ? resolveDriveFolderUrl(accountFromMain.gdrive_folder_url, accountFromMain.drive_folder_id)
+      : accountFromExtra?.drive_folder_url ?? null
     renewalRows.push({
       kind: f.service_type === 'State RA Renewal' ? 'ra' : 'ar',
       account_id: f.account_id,
