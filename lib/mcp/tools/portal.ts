@@ -785,6 +785,73 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
           globalFlags.push(`ERROR: Welcome email failed for ${contact.email}: ${emailResult.error}`)
         }
 
+        // ─── 7. ADDITIONAL MEMBERS (Multi-Member LLC) ───
+        // For each additional contact linked to this account, create their auth
+        // user and send their welcome email. processAccountForTransition is NOT
+        // re-run — account-level work (docs, SDs, notes) is already done above.
+        const additionalLinks = contactLinks.slice(1)
+        if (additionalLinks.length > 0) {
+          reportLines.push("")
+          reportLines.push("--- ADDITIONAL MEMBERS ---")
+          for (const addLink of additionalLinks) {
+            const addContact = addLink.contact as unknown as {
+              id: string; full_name: string; email: string; language: string | null
+            }
+            if (!addContact?.email) {
+              reportLines.push(`⚠️ ${addContact?.full_name || "Unknown"}: no email — skipped`)
+              globalFlags.push(`SKIP: Additional contact ${addContact?.full_name || "unknown"} has no email`)
+              continue
+            }
+
+            // Compute this contact's own account list for auth metadata
+            const { data: addAccountLinks } = await supabaseAdmin
+              .from("account_contacts")
+              .select("account_id")
+              .eq("contact_id", addContact.id)
+            const addAccountIds = (addAccountLinks ?? []).map(l => l.account_id)
+
+            const addLang: "en" | "it" = addContact.language?.toLowerCase().startsWith("it") || addContact.language === "Italian" ? "it" : "en"
+            const existingAddAuth = await findAuthUserByEmail(addContact.email)
+
+            if (!existingAddAuth) {
+              const addTempPwd = `TD${Math.random().toString(36).slice(2, 10)}!`
+              const { data: addUser, error: addErr } = await supabaseAdmin.auth.admin.createUser({
+                email: addContact.email, password: addTempPwd, email_confirm: true,
+                app_metadata: { role: "client", contact_id: addContact.id, portal_tier: "active", account_ids: addAccountIds },
+                user_metadata: { full_name: addContact.full_name, must_change_password: true },
+              })
+              if (addErr || !addUser) {
+                reportLines.push(`❌ ${addContact.full_name}: auth user creation failed — ${addErr?.message || "unknown"}`)
+                globalFlags.push(`ERROR: Auth user creation failed for ${addContact.email}: ${addErr?.message || "unknown"}`)
+                continue
+              }
+              logAction({ action_type: "create", table_name: "auth.users", record_id: addUser.user.id, account_id: account_id, summary: `Additional member portal user created: ${addContact.full_name} (${addContact.email})` })
+              // syncTier already ran per-account in step 4 — contact tier is already active
+              const addEmailResult = await sendTransitionWelcome(addContact, activeAccounts[0], addTempPwd, addLang, allPendingDocs)
+              if (addEmailResult.sent) {
+                reportLines.push(`✅ ${addContact.full_name} (${addContact.email}): auth user created, welcome email sent`)
+              } else {
+                reportLines.push(`⚠️ ${addContact.full_name} (${addContact.email}): auth user created, email failed — ${addEmailResult.error}`)
+                globalFlags.push(`ERROR: Welcome email failed for additional member ${addContact.email}: ${addEmailResult.error}`)
+              }
+            } else {
+              // Auth user already exists — repair metadata and attempt welcome email if not yet sent
+              await supabaseAdmin.auth.admin.updateUserById(existingAddAuth.id, {
+                app_metadata: { ...existingAddAuth.app_metadata, role: "client", contact_id: addContact.id, portal_tier: "active", account_ids: addAccountIds },
+              })
+              const addEmailResult = await sendTransitionWelcome(addContact, activeAccounts[0], "", addLang, allPendingDocs)
+              if (addEmailResult.alreadySent) {
+                reportLines.push(`⏭️ ${addContact.full_name} (${addContact.email}): auth user existed, welcome email already sent`)
+              } else if (addEmailResult.sent) {
+                reportLines.push(`✅ ${addContact.full_name} (${addContact.email}): auth user existed (metadata repaired), welcome email sent`)
+              } else {
+                reportLines.push(`⚠️ ${addContact.full_name} (${addContact.email}): auth user existed (metadata repaired), email failed — ${addEmailResult.error}`)
+              }
+              globalFlags.push(`NOTE: Auth user already existed for additional contact ${addContact.email} — metadata repaired`)
+            }
+          }
+        }
+
         return {
           content: [
             { type: "text" as const, text: reportLines.join("\n") },

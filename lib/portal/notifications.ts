@@ -220,10 +220,10 @@ export async function notifyClientOfAdminMessage({
   if (Date.now() - lastSent < 2 * 60 * 60 * 1000) return
   recentClientNotifications.set(throttleKey, Date.now())
 
-  // Resolve contact: email, name, language
-  let email: string | null = null
-  let firstName: string | null = null
-  let language = 'en'
+  // Resolve all recipients. For contact_id: one recipient. For account_id: ALL
+  // contacts on the account so every member of a Multi-Member LLC is notified.
+  type Recipient = { email: string; firstName: string | null; language: string }
+  let recipients: Recipient[] = []
 
   if (contact_id) {
     const { data: contact } = await supabaseAdmin
@@ -231,38 +231,41 @@ export async function notifyClientOfAdminMessage({
       .select('email, full_name, language')
       .eq('id', contact_id)
       .single()
-    email = contact?.email ?? null
-    firstName = contact?.full_name?.split(' ')[0] ?? null
-    language = contact?.language ?? 'en'
+    if (contact?.email) {
+      recipients = [{ email: contact.email, firstName: contact.full_name?.split(' ')[0] ?? null, language: contact.language ?? 'en' }]
+    }
   } else if (account_id) {
-    const { data: link } = await supabaseAdmin
+    const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('contacts(email, full_name, language)')
       .eq('account_id', account_id)
-      .limit(1)
-      .maybeSingle()
-    const contact = (link?.contacts as { email: string; full_name: string; language: string } | null)
-    email = contact?.email ?? null
-    firstName = contact?.full_name?.split(' ')[0] ?? null
-    language = contact?.language ?? 'en'
+    recipients = (links ?? [])
+      .map(l => {
+        const c = l.contacts as { email: string; full_name: string; language: string } | null
+        if (!c?.email) return null
+        return { email: c.email, firstName: c.full_name?.split(' ')[0] ?? null, language: c.language ?? 'en' }
+      })
+      .filter((r): r is Recipient => r !== null)
   }
 
-  if (!email) return
+  if (recipients.length === 0) return
 
-  const isIt = language === 'it'
-  const greeting = firstName ? (isIt ? `Ciao ${firstName},` : `Hi ${firstName},`) : (isIt ? 'Ciao,' : 'Hi,')
-  const subject = isIt ? 'Nuovo messaggio dal team Tony Durante' : 'New message from the Tony Durante team'
-  const bodyText = isIt
-    ? 'Hai ricevuto un nuovo messaggio dal nostro team. Accedi al portale per leggerlo e rispondere.'
-    : 'You have a new message from our team. Log in to your portal to read and reply.'
-  const ctaLabel = isIt ? 'Vai al Portale' : 'Go to Portal'
-  const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
-
+  const { gmailPost } = await import('@/lib/gmail')
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const preview = escHtml(messagePreview.slice(0, 200) || '…')
   const portalChatUrl = `${PORTAL_BASE_URL}/portal/chat`
 
-  const html = `
+  for (const recipient of recipients) {
+    const isIt = recipient.language === 'it'
+    const greeting = recipient.firstName ? (isIt ? `Ciao ${recipient.firstName},` : `Hi ${recipient.firstName},`) : (isIt ? 'Ciao,' : 'Hi,')
+    const subject = isIt ? 'Nuovo messaggio dal team Tony Durante' : 'New message from the Tony Durante team'
+    const bodyText = isIt
+      ? 'Hai ricevuto un nuovo messaggio dal nostro team. Accedi al portale per leggerlo e rispondere.'
+      : 'You have a new message from our team. Log in to your portal to read and reply.'
+    const ctaLabel = isIt ? 'Vai al Portale' : 'Go to Portal'
+    const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
+
+    const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <div style="background:#0A3161;padding:20px;border-radius:12px 12px 0 0;">
         <img src="https://app.tonydurante.us/images/logo.jpg" alt="Tony Durante LLC" style="height:40px;" />
@@ -281,27 +284,27 @@ export async function notifyClientOfAdminMessage({
     </div>
   `
 
-  try {
-    const { gmailPost } = await import('@/lib/gmail')
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
-    const boundary = `boundary_${Date.now()}`
-    const raw = [
-      `From: Tony Durante LLC <support@tonydurante.us>`,
-      `To: ${email}`,
-      `Subject: ${encodedSubject}`,
-      `MIME-Version: 1.0`,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`,
-      '',
-      `--${boundary}`,
-      `Content-Type: text/html; charset=UTF-8`,
-      `Content-Transfer-Encoding: base64`,
-      '',
-      Buffer.from(html).toString('base64'),
-      `--${boundary}--`,
-    ].join('\r\n')
-    await gmailPost('/messages/send', { raw: Buffer.from(raw).toString('base64url') })
-  } catch (err) {
-    console.error('[notifyClientOfAdminMessage] Email failed:', err)
+    try {
+      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+      const boundary = `boundary_${Date.now()}`
+      const raw = [
+        `From: Tony Durante LLC <support@tonydurante.us>`,
+        `To: ${recipient.email}`,
+        `Subject: ${encodedSubject}`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        `Content-Type: text/html; charset=UTF-8`,
+        `Content-Transfer-Encoding: base64`,
+        '',
+        Buffer.from(html).toString('base64'),
+        `--${boundary}--`,
+      ].join('\r\n')
+      await gmailPost('/messages/send', { raw: Buffer.from(raw).toString('base64url') })
+    } catch (err) {
+      console.error(`[notifyClientOfAdminMessage] Email failed for ${recipient.email}:`, err)
+    }
   }
 }
 
