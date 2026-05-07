@@ -497,7 +497,11 @@ export async function POST(request: Request) {
     // 7. Call activate-service (SAME chain as Whop webhook)
     let activationResult = null
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
+      // Use VERCEL_URL (auto-injected by Vercel) so internal calls always
+      // hit the same deployment. Falls back to NEXT_PUBLIC_APP_URL or the
+      // hardcoded INTERNAL_BASE_URL for local dev.
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+        || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : INTERNAL_BASE_URL)
 
       const res = await fetch(`${baseUrl}/api/workflows/activate-service`, {
         method: "POST",
