@@ -5,7 +5,20 @@ import { validateNarrative } from '@/lib/offer-narrative'
 
 // ── System prompt ──
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(language: 'en' | 'it'): string {
+  // Single-language intro — match the client's preferred language only.
+  // 2026-05-07: previously generated BOTH intros; the access-code offer page
+  // renders both fields side-by-side, which produced unwanted bilingual
+  // welcome blocks for monolingual clients (Mojo / Sanjin case). Generator
+  // now produces only the matching intro and leaves the other empty.
+  const introSpec = language === 'it'
+    ? `- "intro_it": A 2-4 sentence personalized introduction in NATURAL Italian (not machine-translated). Address the client by name. Reference their specific situation from the notes. Explain what this offer covers.
+- "intro_en": MUST be an empty string "". Do not produce English intro content.`
+    : `- "intro_en": A 2-4 sentence personalized introduction in English. Address the client by name. Reference their specific situation from the notes. Explain what this offer covers.
+- "intro_it": MUST be an empty string "". Do not produce Italian intro content.`
+
+  const otherSectionsLang = language === 'it' ? 'Italian' : 'English'
+
   return `You are a senior business consultant writing client-facing offer content for Tony Durante LLC, a professional consulting firm based in Florida that helps international entrepreneurs set up and manage U.S. LLCs.
 
 Your writing style is:
@@ -15,17 +28,16 @@ Your writing style is:
 - Tailored to the specific client situation based on the notes provided
 
 You must produce ALL output as a single JSON object with exactly these keys:
-- "intro_en": A 2-4 sentence personalized introduction in English. Address the client by name. Reference their specific situation from the notes. Explain what this offer covers.
-- "intro_it": The Italian translation of intro_en. Must be natural Italian, not machine-translated.
+${introSpec}
 - "strategy": An array of 3-5 strategic steps. Each: { "step_number": N, "title": "Short Title", "description": "1-2 sentence explanation" }. These describe the overall approach/plan for the client.
 - "next_steps": An array of 3-5 next steps after signing. Each: { "step_number": N, "title": "Short Title", "description": "1-2 sentence explanation" }. These describe what happens operationally after the client signs.
 - "future_developments": An array of 2-4 items. Each: { "text": "Description of a future opportunity" }. These are optional services or growth opportunities for later.
 - "immediate_actions": An array of 2-4 items. Each: { "title": "Action Name", "description": "What needs to happen and why" }. These are things to address right away.
 
 LANGUAGE RULES (CRITICAL):
-- "intro_en" is ALWAYS in English. "intro_it" is ALWAYS in Italian.
-- "strategy", "next_steps", "future_developments", and "immediate_actions" MUST be written in the client's PREFERRED LANGUAGE (specified in the user prompt). If the preferred language is Italian, write these 4 sections in Italian. If English, write them in English.
-- This is important because the client sees these sections on their offer page in their language.
+- The client's preferred language is ${otherSectionsLang}. Generate ALL content in ${otherSectionsLang} only.
+- The intro field for the OTHER language MUST be an empty string ""; do NOT translate or duplicate the intro into the other language.
+- "strategy", "next_steps", "future_developments", and "immediate_actions" MUST be written in ${otherSectionsLang}.
 
 Other rules:
 - Output ONLY the JSON object. No markdown, no code fences, no explanation.
@@ -82,10 +94,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'AI provider not configured' }, { status: 503 })
     }
 
-    const systemPrompt = buildSystemPrompt()
+    const lang: 'en' | 'it' = language === 'it' ? 'it' : 'en'
+    const systemPrompt = buildSystemPrompt(lang)
     const userPrompt = buildUserPrompt(
       client_name,
-      language || 'en',
+      lang,
       services as string[],
       notes_context || '',
       contract_type || 'formation',
@@ -140,8 +153,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'AI returned invalid JSON' }, { status: 502 })
       }
 
-      // Validate structure
-      const validation = validateNarrative(parsed)
+      // Validate structure (language-aware: only require the matching intro)
+      const validation = validateNarrative(parsed, lang)
       if ('result' in validation) {
         return NextResponse.json({ success: true, narrative: validation.result })
       }

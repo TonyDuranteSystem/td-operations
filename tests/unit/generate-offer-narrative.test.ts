@@ -113,6 +113,70 @@ describe('validateNarrative', () => {
   })
 })
 
+describe('validateNarrative — single-language mode (2026-05-07)', () => {
+  it("accepts intro_en only when language='en'", () => {
+    const n = validNarrative()
+    n.intro_it = ''
+    const result = validateNarrative(n, 'en')
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.result.intro_en).toContain('Dear John')
+      expect(result.result.intro_it).toBe('')
+    }
+  })
+
+  it("rejects empty intro_en when language='en'", () => {
+    const n = validNarrative()
+    n.intro_en = ''
+    n.intro_it = ''
+    const result = validateNarrative(n, 'en')
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.error).toContain('intro_en')
+  })
+
+  it("rejects non-empty intro_it when language='en'", () => {
+    const n = validNarrative()
+    // intro_it left populated
+    const result = validateNarrative(n, 'en')
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.error).toMatch(/intro_it must be empty/)
+  })
+
+  it("accepts intro_it only when language='it'", () => {
+    const n = validNarrative()
+    n.intro_en = ''
+    const result = validateNarrative(n, 'it')
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.result.intro_it).toContain('Caro John')
+      expect(result.result.intro_en).toBe('')
+    }
+  })
+
+  it("rejects non-empty intro_en when language='it'", () => {
+    const n = validNarrative()
+    // intro_en left populated
+    const result = validateNarrative(n, 'it')
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.error).toMatch(/intro_en must be empty/)
+  })
+
+  it('accepts missing intro_it (undefined) in en mode', () => {
+    const n = validNarrative() as unknown as Record<string, unknown>
+    delete n.intro_it
+    const result = validateNarrative(n, 'en')
+    expect(result.valid).toBe(true)
+  })
+
+  it('preserves legacy strict-both behavior when language is undefined', () => {
+    const n = validNarrative()
+    n.intro_it = ''
+    const result = validateNarrative(n) // no language → both required
+    expect(result.valid).toBe(false)
+    if (!result.valid) expect(result.error).toContain('intro_it')
+  })
+})
+
 describe('NARRATIVE_KEYS', () => {
   it('contains all 6 narrative field names', () => {
     expect(NARRATIVE_KEYS).toHaveLength(6)
