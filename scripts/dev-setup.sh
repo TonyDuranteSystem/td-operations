@@ -26,15 +26,15 @@ echo "🔧 Setting up sandbox environment..."
 echo ""
 
 # Step 1: Link Vercel CLI to sandbox project
-echo "1/3 Linking to $SANDBOX_PROJECT..."
+echo "1/5 Linking to $SANDBOX_PROJECT..."
 vercel link --project "$SANDBOX_PROJECT" --yes
 
 # Step 2: Pull sandbox env vars
-echo "2/3 Pulling sandbox environment variables into .env.local..."
+echo "2/5 Pulling sandbox environment variables into .env.local..."
 vercel env pull .env.local --yes
 
 # Step 3: Generate .mcp.json with sandbox MCP connection
-echo "3/4 Generating .mcp.json for sandbox MCP connection..."
+echo "3/5 Generating .mcp.json for sandbox MCP connection..."
 SANDBOX_MCP_KEY=$(grep 'TD_MCP_API_KEY' .env.local | head -1 | sed 's/TD_MCP_API_KEY="\(.*\)"/\1/')
 cat > .mcp.json << EOF
 {
@@ -50,8 +50,48 @@ cat > .mcp.json << EOF
 }
 EOF
 
-# Step 4: Verify both files are correct before finishing
-echo "4/4 Verifying..."
+# Step 4: Install user-global Claude Code behavior contract hook
+# Why: rules in CLAUDE.md load once at session start and rot. Re-injecting the
+# behavior contract on every UserPromptSubmit keeps it fresh in the model's
+# working memory. Lives at user-global level so it fires in every project on
+# this machine, not just td-operations.
+echo "4/5 Installing user-global Claude Code behavior-contract hook..."
+mkdir -p "$HOME/.claude/hooks"
+cp .claude/hooks/user-prompt-contract.sh "$HOME/.claude/hooks/user-prompt-contract.sh"
+chmod +x "$HOME/.claude/hooks/user-prompt-contract.sh"
+
+python3 - <<'PY'
+import json, os
+path = os.path.expanduser("~/.claude/settings.json")
+hook_cmd = "bash " + os.path.expanduser("~/.claude/hooks/user-prompt-contract.sh")
+
+if os.path.exists(path):
+    with open(path) as f:
+        data = json.load(f)
+else:
+    data = {}
+
+data.setdefault("hooks", {})
+ups = data["hooks"].setdefault("UserPromptSubmit", [])
+
+already = any(
+    h.get("command") == hook_cmd
+    for group in ups
+    for h in group.get("hooks", [])
+)
+
+if already:
+    print(f"   UserPromptSubmit hook already registered in {path} — no change")
+else:
+    ups.append({"hooks": [{"type": "command", "command": hook_cmd, "timeout": 5}]})
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    print(f"   Registered UserPromptSubmit hook in {path}")
+PY
+
+# Step 5: Verify both files are correct before finishing
+echo "5/5 Verifying..."
 
 PROJECT=$(python3 -c "import json; print(json.load(open('.vercel/project.json')).get('projectName',''))" 2>/dev/null || echo "UNKNOWN")
 SUPABASE_URL=$(grep 'NEXT_PUBLIC_SUPABASE_URL' .env.local 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "MISSING")
