@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Tag } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import type { ChatAttachment } from '@/lib/types'
@@ -53,8 +53,9 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
   // Per Antonio's design decision 2026-05-05: binary picker (Person /
   // current company), not a list of all the contact's companies.
   const [tagScope, setTagScope] = useState<'person' | 'company'>(accountId ? 'company' : 'person')
-  const [topic, setTopic] = useState('')
-  const [activeTopicFilter, setActiveTopicFilter] = useState<string | null>(null)
+  const [activeTopic, setActiveTopic] = useState<string | null>(null)
+  const [creatingTopic, setCreatingTopic] = useState(false)
+  const [newTopicInput, setNewTopicInput] = useState('')
   const currentCompanyName = accounts.find(a => a.id === accountId)?.company_name ?? null
   const accountNameById = new Map(accounts.map(a => [a.id, a.company_name]))
   const personalLabel = locale === 'it' ? 'Personale' : 'Personal'
@@ -170,12 +171,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             }
             return await res.json() as ChatAttachment
           }))
-          await sendMessage(msg || '', uploaded, replyId, tagScope, accountId ?? null, topic.trim() || null)
+          await sendMessage(msg || '', uploaded, replyId, tagScope, accountId ?? null, activeTopic)
         } finally {
           setUploading(false)
         }
       } else {
-        await sendMessage(msg, undefined, replyId, tagScope, accountId ?? null, topic.trim() || null)
+        await sendMessage(msg, undefined, replyId, tagScope, accountId ?? null, activeTopic)
       }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : 'Failed to send message'
@@ -253,13 +254,12 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
     }
   }
 
-  const filteredMessages = activeTopicFilter
-    ? messages.filter(m => m.topic === activeTopicFilter)
-    : messages
+  const filteredMessages = activeTopic
+    ? messages.filter(m => m.topic === activeTopic)
+    : messages.filter(m => !m.topic)
 
   // Group messages by date
   let lastDate = ''
-  let lastTopic = ''
 
   return (
     <div
@@ -284,37 +284,69 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           <p className="text-sm font-medium text-blue-600">Drop file to attach</p>
         </div>
       )}
-      {/* Topic filter tabs — shown only when at least one message has a topic */}
-      {topics.length > 0 && (
-        <div className="px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
+      {/* Topic tabs — always visible. General = untagged messages. Named tabs = thread per topic. */}
+      <div className="px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
+        <button
+          onClick={() => setActiveTopic(null)}
+          className={cn(
+            'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+            activeTopic === null
+              ? 'bg-zinc-900 text-white border-zinc-900'
+              : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+          )}
+        >
+          {locale === 'it' ? 'Generale' : 'General'}
+        </button>
+        {topics.map(tp => (
           <button
-            onClick={() => setActiveTopicFilter(null)}
+            key={tp}
+            onClick={() => setActiveTopic(tp === activeTopic ? null : tp)}
             className={cn(
-              'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border',
-              activeTopicFilter === null
-                ? 'bg-zinc-900 text-white border-zinc-900'
+              'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+              activeTopic === tp
+                ? 'bg-blue-600 text-white border-blue-600'
                 : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
             )}
           >
-            {locale === 'it' ? 'Tutti' : 'All'}
+            {tp}
           </button>
-          {topics.map(t => (
-            <button
-              key={t}
-              onClick={() => setActiveTopicFilter(t === activeTopicFilter ? null : t)}
-              className={cn(
-                'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border flex items-center gap-1',
-                activeTopicFilter === t
-                  ? 'bg-blue-600 text-white border-blue-600'
-                  : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
-              )}
-            >
-              <Tag className="h-2.5 w-2.5" />
-              {t}
-            </button>
-          ))}
-        </div>
-      )}
+        ))}
+        {creatingTopic ? (
+          <input
+            autoFocus
+            type="text"
+            value={newTopicInput}
+            onChange={e => setNewTopicInput(e.target.value.slice(0, 100))}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && newTopicInput.trim()) {
+                setActiveTopic(newTopicInput.trim())
+                setNewTopicInput('')
+                setCreatingTopic(false)
+              } else if (e.key === 'Escape') {
+                setNewTopicInput('')
+                setCreatingTopic(false)
+              }
+            }}
+            onBlur={() => {
+              if (newTopicInput.trim()) {
+                setActiveTopic(newTopicInput.trim())
+              }
+              setNewTopicInput('')
+              setCreatingTopic(false)
+            }}
+            placeholder={locale === 'it' ? 'Nome argomento…' : 'Topic name…'}
+            className="shrink-0 px-2.5 py-1 text-[11px] rounded-full border border-blue-300 outline-none bg-white text-zinc-800 placeholder:text-zinc-400 w-32"
+          />
+        ) : (
+          <button
+            onClick={() => setCreatingTopic(true)}
+            className="shrink-0 h-6 w-6 rounded-full border border-zinc-200 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:border-zinc-400 transition-colors"
+            title={locale === 'it' ? 'Nuovo argomento' : 'New topic'}
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        )}
+      </div>
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
@@ -351,9 +383,6 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
             const messageDate = formatMessageDate(msg.created_at)
             const showDateHeader = messageDate !== lastDate
             lastDate = messageDate
-            const msgTopic = msg.topic ?? null
-            const showTopicHeader = !activeTopicFilter && msgTopic !== lastTopic
-            lastTopic = msgTopic ?? ''
             const isOwn = msg.sender_id === userId
             const replyMsg = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
 
@@ -364,16 +393,6 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                     <span className="text-[10px] text-zinc-400 bg-zinc-100 px-3 py-1 rounded-full">
                       {messageDate}
                     </span>
-                  </div>
-                )}
-                {showTopicHeader && msgTopic && (
-                  <div className="flex items-center gap-2 my-3">
-                    <div className="flex-1 h-px bg-zinc-100" />
-                    <span className="flex items-center gap-1 text-[10px] text-zinc-500 font-medium px-2 py-0.5 bg-zinc-50 border border-zinc-200 rounded-full">
-                      <Tag className="h-2.5 w-2.5" />
-                      {msgTopic}
-                    </span>
-                    <div className="flex-1 h-px bg-zinc-100" />
                   </div>
                 )}
                 <div className={cn('flex mb-1 items-end gap-1', isOwn ? 'justify-end' : 'justify-start')}>
@@ -408,16 +427,6 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                         {msg.sender_context === 'person'
                           ? personalLabel
                           : (msg.account_id && accountNameById.get(msg.account_id)) || (locale === 'it' ? 'Azienda' : 'Company')}
-                      </span>
-                    )}
-                    {/* Topic badge — only shown when filtering by "All" so it's clear which topic the message belongs to */}
-                    {!activeTopicFilter && msg.topic && (
-                      <span className={cn(
-                        'inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded mb-0.5 ml-1',
-                        isOwn ? 'bg-blue-500/30 text-blue-100' : 'bg-zinc-100 text-zinc-500'
-                      )}>
-                        <Tag className="h-2 w-2" />
-                        {msg.topic}
                       </span>
                     )}
                     {!isOwn && (
@@ -620,29 +629,6 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
           <p className="text-[10px] text-zinc-400 mt-1">{pendingFiles.length}/{MAX_ATTACHMENTS} files</p>
         </div>
       )}
-
-      {/* Topic input — freeform label the client assigns to a message */}
-      <div className="px-3 sm:px-4 pt-2 pb-0 flex items-center gap-2">
-        <Tag className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-        <input
-          type="text"
-          value={topic}
-          onChange={e => setTopic(e.target.value.slice(0, 100))}
-          placeholder={locale === 'it' ? 'Argomento (es. Burlington, Lien #3920)…' : 'Topic (e.g. Burlington, Lien #3920)…'}
-          list="topic-suggestions"
-          className="flex-1 text-xs bg-transparent outline-none text-zinc-600 placeholder:text-zinc-300"
-        />
-        {topics.length > 0 && (
-          <datalist id="topic-suggestions">
-            {topics.map(t => <option key={t} value={t} />)}
-          </datalist>
-        )}
-        {topic && (
-          <button onClick={() => setTopic('')} className="text-zinc-300 hover:text-zinc-500">
-            <X className="h-3 w-3" />
-          </button>
-        )}
-      </div>
 
       {/* Sender context picker (PR 2 Step 6) — Person / current Company.
           Hidden when the contact has no accounts (formation-gap clients

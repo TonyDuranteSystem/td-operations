@@ -50,6 +50,7 @@ interface ChatMessage {
   attachment_url?: string
   attachment_name?: string
   attachments?: ChatAttachment[] | null
+  topic?: string | null
   read_at?: string | null
   reply_to_id?: string | null
   deleted_at?: string | null
@@ -162,6 +163,10 @@ export default function PortalChatsPage() {
   const lastSuggestedMsgRef = useRef<string | null>(null)
   const lastSentTextRef = useRef<string>('')
   const queryClient = useQueryClient()
+  // Topic-as-thread state for admin
+  const [adminActiveTopic, setAdminActiveTopic] = useState<string | null>(null)
+  const [adminCreatingTopic, setAdminCreatingTopic] = useState(false)
+  const [adminNewTopicInput, setAdminNewTopicInput] = useState('')
   const { playSound } = useNotificationSound()
 
   const handleRefresh = useCallback(async () => {
@@ -321,6 +326,16 @@ export default function PortalChatsPage() {
     enabled: !!(selectedAccountId || selectedContactId),
     refetchInterval: 30_000, // fallback reconciliation; realtime subscription below is primary
   })
+
+  // Topics derived from messages — deduplicated, sorted
+  const adminTopics = Array.from(
+    new Set((messages ?? []).map(m => m.topic).filter((t): t is string => !!t))
+  ).sort()
+
+  // Messages filtered by active topic tab
+  const adminFilteredMessages = adminActiveTopic
+    ? (messages ?? []).filter(m => m.topic === adminActiveTopic)
+    : (messages ?? []).filter(m => !m.topic)
 
   // Realtime subscription — selected thread messages. Subscribes to portal_messages
   // INSERT events filtered by account_id or contact_id and appends them to the React
@@ -834,6 +849,7 @@ export default function PortalChatsPage() {
               }
           ),
           message, reply_to_id, attachments,
+          topic: adminActiveTopic || undefined,
         }),
       })
       if (!res.ok) throw new Error('Failed to send')
@@ -860,6 +876,13 @@ export default function PortalChatsPage() {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
   })
+
+  // Reset topic when thread changes
+  useEffect(() => {
+    setAdminActiveTopic(null)
+    setAdminCreatingTopic(false)
+    setAdminNewTopicInput('')
+  }, [selectedAccountId, selectedContactId])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -1830,6 +1853,70 @@ export default function PortalChatsPage() {
               </div>
             )}
 
+            {/* Topic tabs — always visible when a thread is selected and we're in messages view */}
+            {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && (
+              <div className="px-3 py-1.5 border-b bg-white flex items-center gap-1.5 overflow-x-auto shrink-0">
+                <button
+                  onClick={() => setAdminActiveTopic(null)}
+                  className={cn(
+                    'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+                    adminActiveTopic === null
+                      ? 'bg-zinc-900 text-white border-zinc-900'
+                      : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+                  )}
+                >
+                  General
+                </button>
+                {adminTopics.map(tp => (
+                  <button
+                    key={tp}
+                    onClick={() => setAdminActiveTopic(tp === adminActiveTopic ? null : tp)}
+                    className={cn(
+                      'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+                      adminActiveTopic === tp
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
+                    )}
+                  >
+                    {tp}
+                  </button>
+                ))}
+                {adminCreatingTopic ? (
+                  <input
+                    autoFocus
+                    type="text"
+                    value={adminNewTopicInput}
+                    onChange={e => setAdminNewTopicInput(e.target.value.slice(0, 100))}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && adminNewTopicInput.trim()) {
+                        setAdminActiveTopic(adminNewTopicInput.trim())
+                        setAdminNewTopicInput('')
+                        setAdminCreatingTopic(false)
+                      } else if (e.key === 'Escape') {
+                        setAdminNewTopicInput('')
+                        setAdminCreatingTopic(false)
+                      }
+                    }}
+                    onBlur={() => {
+                      if (adminNewTopicInput.trim()) setAdminActiveTopic(adminNewTopicInput.trim())
+                      setAdminNewTopicInput('')
+                      setAdminCreatingTopic(false)
+                    }}
+                    placeholder="Topic name…"
+                    className="shrink-0 px-2.5 py-1 text-[11px] rounded-full border border-blue-300 outline-none bg-white text-zinc-800 placeholder:text-zinc-400 w-32"
+                  />
+                ) : (
+                  <button
+                    onClick={() => setAdminCreatingTopic(true)}
+                    className="shrink-0 h-6 w-6 rounded-full border border-zinc-200 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:border-zinc-400 transition-colors"
+                    title="New topic"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            )}
+
             {chatViewMode === 'tasks' && (selectedAccountId || selectedCompanyId) ? (
               <ThreadTasksPanel accountId={selectedAccountId || selectedCompanyId} contactId={selectedContactId} />
             ) : (
@@ -1853,6 +1940,16 @@ export default function PortalChatsPage() {
                     </div>
                   </div>
                 )}
+                {/* Empty topic thread */}
+                {messages && messages.length > 0 && adminFilteredMessages.length === 0 && !messagesLoading && (
+                  <div className="flex-1 flex items-center justify-center py-12">
+                    <div className="text-center">
+                      <MessageSquare className="h-10 w-10 text-zinc-200 mx-auto mb-3" />
+                      <p className="text-sm font-medium text-zinc-500 mb-1">No messages in this topic yet</p>
+                      <p className="text-xs text-zinc-400">Send the first message below</p>
+                    </div>
+                  </div>
+                )}
                 {/* Load older messages */}
                 {messages && messages.length >= 50 && (
                   <div className="flex justify-center mb-2">
@@ -1865,7 +1962,7 @@ export default function PortalChatsPage() {
                     </button>
                   </div>
                 )}
-                {messages?.map(msg => {
+                {adminFilteredMessages.map(msg => {
                   const isAdmin = msg.sender_type === 'admin'
                   const replyRef = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
                   const isDeleted = !!msg.deleted_at
