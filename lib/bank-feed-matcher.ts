@@ -516,10 +516,10 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         .from("payments")
         .update({
           invoice_status: newStatus,
-          status: newStatus,
+          // status column has a stricter enum — only update to "Paid"; Partial keeps current status
+          ...(newStatus === "Paid" ? { status: "Paid", paid_date: today } : {}),
           amount_paid: newAmountPaid,
           amount_due: newAmountDue,
-          ...(newStatus === "Paid" ? { paid_date: today } : {}),
           payment_method: "Wire (Manual Match)",
           updated_at: now,
         })
