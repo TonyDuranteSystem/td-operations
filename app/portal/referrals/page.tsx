@@ -27,7 +27,7 @@ export default async function PortalReferralsPage() {
   const referralCode = contact?.referral_code || null
   const referralLink = referralCode ? `https://tonydurante.us/r/${referralCode}` : null
 
-  // Get this contact's referrals
+  // Get this contact's referrals + payouts in parallel
   const { data: referrals } = await supabaseAdmin
     .from('referrals')
     .select(`
@@ -39,6 +39,17 @@ export default async function PortalReferralsPage() {
     .eq('is_test', false)
     .order('created_at', { ascending: false })
 
+  const referralIds = (referrals ?? []).map(r => r.id)
+
+  const { data: payouts } = referralIds.length > 0
+    ? await supabaseAdmin
+        .from('referral_payouts')
+        .select('id, referral_id, payout_type, amount, currency, reference, created_at')
+        .in('referral_id', referralIds)
+        .eq('is_test', false)
+        .order('created_at', { ascending: false })
+    : { data: [] }
+
   const referralRows = (referrals ?? []).map(r => ({
     id: r.id,
     referred_name: r.referred_name,
@@ -49,6 +60,16 @@ export default async function PortalReferralsPage() {
     credited_amount: r.credited_amount,
     paid_amount: r.paid_amount,
     created_at: r.created_at,
+  }))
+
+  const payoutRows = (payouts ?? []).map(p => ({
+    id: p.id,
+    referral_id: p.referral_id,
+    payout_type: p.payout_type,
+    amount: p.amount,
+    currency: p.currency || 'EUR',
+    reference: p.reference,
+    created_at: p.created_at,
   }))
 
   // Stats
@@ -89,6 +110,7 @@ export default async function PortalReferralsPage() {
       <ReferralPage
         referralLink={referralLink}
         referrals={referralRows}
+        payouts={payoutRows}
         locale={locale}
       />
     </div>

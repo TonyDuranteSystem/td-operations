@@ -17,9 +17,20 @@ interface ReferralRow {
   created_at: string
 }
 
+interface PayoutRow {
+  id: string
+  referral_id: string
+  payout_type: string
+  amount: number
+  currency: string
+  reference: string | null
+  created_at: string | null
+}
+
 interface Props {
   referralLink: string | null
   referrals: ReferralRow[]
+  payouts: PayoutRow[]
   locale: Locale
 }
 
@@ -31,7 +42,7 @@ const statusConfig: Record<string, { label_en: string; label_it: string; color: 
   cancelled: { label_en: 'Cancelled', label_it: 'Annullato', color: 'bg-red-100 text-red-800' },
 }
 
-export function ReferralPage({ referralLink, referrals, locale }: Props) {
+export function ReferralPage({ referralLink, referrals, payouts, locale }: Props) {
   const [copied, setCopied] = useState(false)
 
   const copyLink = () => {
@@ -121,6 +132,36 @@ export function ReferralPage({ referralLink, referrals, locale }: Props) {
           </div>
         </div>
       )}
+
+      {/* Payouts */}
+      <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+        <div className="px-5 py-3.5 border-b bg-zinc-50">
+          <h3 className="text-sm font-semibold text-zinc-700">{t('referrals.payouts', locale)}</h3>
+        </div>
+        {payouts.length === 0 ? (
+          <p className="text-sm text-zinc-400 px-5 py-6 text-center">{t('referrals.noPayouts', locale)}</p>
+        ) : (
+          <div className="divide-y">
+            {payouts.map((p) => {
+              const typeKey = `referrals.payoutType.${p.payout_type}` as Parameters<typeof t>[0]
+              const typeLabel = t(typeKey, locale) || p.payout_type
+              return (
+                <div key={p.id} className="flex items-center justify-between px-5 py-3.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-zinc-900">{typeLabel}</p>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      {p.created_at?.slice(0, 10)}{p.reference ? ` · ${p.reference}` : ''}
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold text-emerald-600 shrink-0">
+                    {p.currency} {Number(p.amount).toLocaleString('en-US', { minimumFractionDigits: 0 })}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

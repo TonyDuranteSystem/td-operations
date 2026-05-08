@@ -490,6 +490,18 @@ export function registerCrmTools(server: McpServer) {
           .filter((p: Record<string, unknown>) => p.status === 'paid')
           .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
 
+        const { data: referralsMade } = await supabaseAdmin
+          .from('referrals')
+          .select('id, referred_name, status, commission_type, commission_amount, commission_currency, commission_pct, credited_amount, paid_amount, created_at, referred_account:accounts!referrals_referred_account_id_fkey(company_name)')
+          .eq('referrer_contact_id', contact_id)
+          .eq('is_test', false)
+          .order('created_at', { ascending: false })
+
+        const referralsMadeData = referralsMade || []
+        const pendingCommission = referralsMadeData
+          .filter((r: Record<string, unknown>) => r.status !== 'paid' && r.status !== 'cancelled')
+          .reduce((s: number, r: Record<string, unknown>) => s + ((r.commission_amount as number) || 0), 0)
+
         const summary = {
           type: "individual_client",
           contact: contact,
@@ -512,6 +524,11 @@ export function registerCrmTools(server: McpServer) {
           },
           tax_returns: taxReturns.data || [],
           recent_conversations: conversations.data || [],
+          referrals: {
+            made: referralsMadeData.length,
+            pending_commission_eur: pendingCommission,
+            items: referralsMadeData,
+          },
         }
 
         return {
@@ -579,6 +596,35 @@ export function registerCrmTools(server: McpServer) {
         .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
       const overduePayments = paymentData.filter((p: Record<string, unknown>) => p.status === 'overdue')
 
+      // Referral data: was this account referred? do any of its contacts refer others?
+      const contactIds = (contacts.data || []).map((ac: Record<string, unknown>) => {
+        const c = ac.contacts as Record<string, unknown> | null
+        return c?.id as string | undefined
+      }).filter(Boolean) as string[]
+
+      const [referredBy, referralsMadeByContacts] = await Promise.all([
+        supabaseAdmin
+          .from('referrals')
+          .select('id, referred_name, status, commission_amount, commission_currency, commission_type, commission_pct, referrer_contact_id, referrer:contacts!referrals_referrer_contact_id_fkey(full_name, referrer_type)')
+          .eq('referred_account_id', id)
+          .eq('is_test', false)
+          .limit(1),
+        contactIds.length > 0
+          ? supabaseAdmin
+              .from('referrals')
+              .select('id, referred_name, status, commission_amount, commission_currency, commission_pct, credited_amount, paid_amount, created_at, referrer_contact_id, referred_account:accounts!referrals_referred_account_id_fkey(company_name)')
+              .in('referrer_contact_id', contactIds)
+              .eq('is_test', false)
+              .order('created_at', { ascending: false })
+          : Promise.resolve({ data: [] }),
+      ])
+
+      const referredByRecord = referredBy.data?.[0] || null
+      const referralsMadeData = referralsMadeByContacts.data || []
+      const pendingCommissionLLC = referralsMadeData
+        .filter((r: Record<string, unknown>) => r.status !== 'paid' && r.status !== 'cancelled')
+        .reduce((s: number, r: Record<string, unknown>) => s + ((r.commission_amount as number) || 0), 0)
+
       const summary = {
         type: "llc_client",
         account: account,
@@ -610,6 +656,12 @@ export function registerCrmTools(server: McpServer) {
           unclassified: documents.data?.filter((d: Record<string, unknown>) => d.status === 'unclassified').length || 0,
           items: documents.data || [],
         },
+        referrals: {
+          referred_by: referredByRecord,
+          made_by_contacts: referralsMadeData.length,
+          pending_commission_eur: pendingCommissionLLC,
+          items: referralsMadeData,
+        },
       }
 
       return {
@@ -635,6 +687,7 @@ export function registerCrmTools(server: McpServer) {
           documentsRes,
           tasksRes,
           dealsRes,
+          referralsRes,
         ] = await Promise.all([
           supabaseAdmin.from("accounts").select("id, status, entity_type, state_of_formation, client_health").or("is_test.is.null,is_test.eq.false"),
           supabaseAdmin.from("services").select("id, service_type, status, blocked_waiting_external"),
@@ -644,6 +697,7 @@ export function registerCrmTools(server: McpServer) {
             .select("id, status, category_name, account_id"),
           supabaseAdmin.from("tasks").select("id, status, priority"),
           supabaseAdmin.from("deals").select("id, stage, amount"),
+          supabaseAdmin.from("referrals").select("id, status, commission_amount, commission_currency, referrer_contact_id, referrer_type, credited_amount, paid_amount").eq("is_test", false),
         ])
 
         const accounts = accountsRes.data || []
@@ -652,6 +706,7 @@ export function registerCrmTools(server: McpServer) {
         const documents = documentsRes.data || []
         const tasks = tasksRes.data || []
         const deals = dealsRes.data || []
+        const referrals = referralsRes.data || []
 
         // ── Accounts ──
         const accByStatus: Record<string, number> = {}
@@ -733,6 +788,24 @@ export function registerCrmTools(server: McpServer) {
           dealTotalValue += (d.amount as number) || 0
         }
 
+        // ── Referrals ──
+        const refByStatus: Record<string, number> = {}
+        const refByType: Record<string, number> = {}
+        const topReferrers: Record<string, number> = {}
+        let pendingCommissionEUR = 0
+        let totalCommissionPaidEUR = 0
+        for (const r of referrals) {
+          refByStatus[r.status || "unknown"] = (refByStatus[r.status || "unknown"] || 0) + 1
+          if (r.referrer_type) refByType[r.referrer_type] = (refByType[r.referrer_type] || 0) + 1
+          if (r.referrer_contact_id) topReferrers[r.referrer_contact_id] = (topReferrers[r.referrer_contact_id] || 0) + 1
+          const currency = (r.commission_currency as string) || "EUR"
+          if (currency === "EUR") {
+            if (r.status !== "paid" && r.status !== "cancelled") pendingCommissionEUR += Number(r.commission_amount) || 0
+            totalCommissionPaidEUR += (Number(r.credited_amount) || 0) + (Number(r.paid_amount) || 0)
+          }
+        }
+        const activeReferrers = Object.keys(topReferrers).length
+
         // ── Build Output ──
         const fmt = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         const sortDesc = (obj: Record<string, number>) => Object.entries(obj).sort((a, b) => b[1] - a[1])
@@ -771,6 +844,13 @@ export function registerCrmTools(server: McpServer) {
           deals.length > 0
             ? `Pipeline value: ${fmt(dealTotalValue)} | By stage: ${sortDesc(dealByStage).map(([k, v]) => `${k}: ${v}`).join(" | ")}`
             : "No deals recorded",
+          "",
+          `══ 🔗 Referrals (${referrals.length}) ══`,
+          referrals.length > 0
+            ? `By status: ${sortDesc(refByStatus).map(([k, v]) => `${k}: ${v}`).join(" | ")}`
+            : "No referrals recorded",
+          Object.keys(refByType).length > 0 ? `By type: ${sortDesc(refByType).map(([k, v]) => `${k}: ${v}`).join(" | ")}` : "",
+          referrals.length > 0 ? `Active referrers: ${activeReferrers} | Pending commission (EUR): €${pendingCommissionEUR.toLocaleString()} | Paid out (EUR): €${totalCommissionPaidEUR.toLocaleString()}` : "",
         ]
 
         return { content: [{ type: "text" as const, text: lines.filter(Boolean).join("\n") }] }

@@ -64,6 +64,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'referrals.noReferrals': 'No referrals yet',
     'referrals.noReferralsDesc': 'Share your link to start earning commissions.',
     'referrals.noLinkYet': 'Your referral link is being set up. Contact us if you need it sooner.',
+    'referrals.payouts': 'Payouts',
+    'referrals.noPayouts': 'No payouts yet.',
+    'referrals.payoutType.bank_transfer': 'Bank Transfer',
+    'referrals.payoutType.credit_note': 'Credit Note',
+    'referrals.payoutType.invoice_deduction': 'Invoice Deduction',
 
     // Pay Now
     'pay.title': 'Pay This Invoice',
@@ -589,6 +594,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'referrals.noReferrals': 'Nessun referral ancora',
     'referrals.noReferralsDesc': 'Condividi il tuo link per iniziare a guadagnare commissioni.',
     'referrals.noLinkYet': 'Il tuo link referral e\' in fase di configurazione. Contattaci se ne hai bisogno prima.',
+    'referrals.payouts': 'Pagamenti',
+    'referrals.noPayouts': 'Nessun pagamento ancora.',
+    'referrals.payoutType.bank_transfer': 'Bonifico Bancario',
+    'referrals.payoutType.credit_note': 'Nota di Credito',
+    'referrals.payoutType.invoice_deduction': 'Deduzione Fattura',
 
     // Pay Now
     'pay.title': 'Paga Questa Fattura',
