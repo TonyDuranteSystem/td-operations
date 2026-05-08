@@ -258,6 +258,14 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
     ? messages.filter(m => m.topic === activeTopic)
     : messages.filter(m => !m.topic)
 
+  // Unread count per topic tab (admin messages not yet read by the client)
+  const unreadByTopic = messages.reduce<Record<string, number>>((acc, m) => {
+    if (m.sender_type !== 'admin' || m.read_at) return acc
+    const key = m.topic ?? ''
+    acc[key] = (acc[key] ?? 0) + 1
+    return acc
+  }, {})
+
   // Group messages by date
   let lastDate = ''
 
@@ -289,26 +297,42 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
         <button
           onClick={() => setActiveTopic(null)}
           className={cn(
-            'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+            'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
             activeTopic === null
               ? 'bg-zinc-900 text-white border-zinc-900'
               : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
           )}
         >
           {locale === 'it' ? 'Argomento' : 'Topic'}
+          {(unreadByTopic[''] ?? 0) > 0 && (
+            <span className={cn(
+              'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
+              activeTopic === null ? 'bg-white text-zinc-900' : 'bg-red-500 text-white'
+            )}>
+              {unreadByTopic['']}
+            </span>
+          )}
         </button>
         {topics.map(tp => (
           <button
             key={tp}
             onClick={() => setActiveTopic(tp === activeTopic ? null : tp)}
             className={cn(
-              'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+              'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
               activeTopic === tp
                 ? 'bg-blue-600 text-white border-blue-600'
                 : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
             )}
           >
             {tp}
+            {(unreadByTopic[tp] ?? 0) > 0 && (
+              <span className={cn(
+                'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
+                activeTopic === tp ? 'bg-white text-blue-600' : 'bg-red-500 text-white'
+              )}>
+                {unreadByTopic[tp]}
+              </span>
+            )}
           </button>
         ))}
         {creatingTopic ? (

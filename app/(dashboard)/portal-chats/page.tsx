@@ -337,6 +337,14 @@ export default function PortalChatsPage() {
     ? (messages ?? []).filter(m => m.topic === adminActiveTopic)
     : (messages ?? []).filter(m => !m.topic)
 
+  // Unread count per topic tab (client messages not yet read by admin)
+  const adminUnreadByTopic = (messages ?? []).reduce<Record<string, number>>((acc, m) => {
+    if (m.sender_type !== 'client' || m.read_at) return acc
+    const key = m.topic ?? ''
+    acc[key] = (acc[key] ?? 0) + 1
+    return acc
+  }, {})
+
   // Realtime subscription — selected thread messages. Subscribes to portal_messages
   // INSERT events filtered by account_id or contact_id and appends them to the React
   // Query cache instantly (WhatsApp/Telegram-like feel). Refetch interval above acts
@@ -1859,26 +1867,42 @@ export default function PortalChatsPage() {
                 <button
                   onClick={() => setAdminActiveTopic(null)}
                   className={cn(
-                    'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+                    'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
                     adminActiveTopic === null
                       ? 'bg-zinc-900 text-white border-zinc-900'
                       : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
                   )}
                 >
                   Topic
+                  {(adminUnreadByTopic[''] ?? 0) > 0 && (
+                    <span className={cn(
+                      'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
+                      adminActiveTopic === null ? 'bg-white text-zinc-900' : 'bg-red-500 text-white'
+                    )}>
+                      {adminUnreadByTopic['']}
+                    </span>
+                  )}
                 </button>
                 {adminTopics.map(tp => (
                   <button
                     key={tp}
                     onClick={() => setAdminActiveTopic(tp === adminActiveTopic ? null : tp)}
                     className={cn(
-                      'shrink-0 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
+                      'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
                       adminActiveTopic === tp
                         ? 'bg-blue-600 text-white border-blue-600'
                         : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
                     )}
                   >
                     {tp}
+                    {(adminUnreadByTopic[tp] ?? 0) > 0 && (
+                      <span className={cn(
+                        'inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold',
+                        adminActiveTopic === tp ? 'bg-white text-blue-600' : 'bg-red-500 text-white'
+                      )}>
+                        {adminUnreadByTopic[tp]}
+                      </span>
+                    )}
                   </button>
                 ))}
                 {adminCreatingTopic ? (
