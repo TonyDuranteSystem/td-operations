@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, message, attachment_url, attachment_name, attachments, reply_to_id } = body
+  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -204,6 +204,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const topic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic.trim().slice(0, 100) : null
+
   const { data, error } = await supabaseAdmin
     .from('portal_messages')
     .insert({
@@ -212,6 +214,7 @@ export async function POST(request: NextRequest) {
       sender_type: senderType,
       sender_id: user.id,
       sender_context,
+      topic,
       message: (message || '').trim(),
       attachment_url: attachment_url || null,
       attachment_name: attachment_name || null,
@@ -241,6 +244,7 @@ export async function POST(request: NextRequest) {
     notifyClientOfAdminMessage({
       account_id: account_id || null,
       contact_id: resolvedContactId || null,
+      topic,
       messagePreview: (message || '').trim(),
     }).catch(() => {})
   }

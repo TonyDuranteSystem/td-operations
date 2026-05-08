@@ -449,6 +449,7 @@ export interface PortalMessage {
   sender_name: string | null
   contact_id: string | null
   sender_context?: 'person' | 'company' | null
+  topic?: string | null
   message: string
   attachment_url: string | null
   attachment_name: string | null

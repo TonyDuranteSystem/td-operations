@@ -207,14 +207,20 @@ const recentClientNotifications = new Map<string, number>()
 export async function notifyClientOfAdminMessage({
   account_id,
   contact_id,
+  topic,
   messagePreview,
 }: {
   account_id?: string | null
   contact_id?: string | null
+  topic?: string | null
   messagePreview: string
 }): Promise<void> {
-  const throttleKey = account_id || contact_id
-  if (!throttleKey) return
+  const baseKey = account_id || contact_id
+  if (!baseKey) return
+
+  // Per-topic throttle: each topic gets its own 2-hour notification window.
+  // Messages with no topic share a single window (backward-compatible).
+  const throttleKey = topic ? `${topic}::${baseKey}` : baseKey
 
   const lastSent = recentClientNotifications.get(throttleKey) ?? 0
   if (Date.now() - lastSent < 2 * 60 * 60 * 1000) return

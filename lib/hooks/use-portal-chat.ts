@@ -144,6 +144,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     replyToId?: string,
     senderContext?: 'person' | 'company',
     tagAccountId?: string | null,
+    topic?: string | null,
   ) => {
     if ((!message.trim() && (!attachments || attachments.length === 0)) || sending) return
 
@@ -167,6 +168,7 @@ export function usePortalChat(accountId: string | null, contactId: string) {
           account_id: resolvedAccountId || undefined,
           contact_id: contactId,
           sender_context: senderContext,
+          topic: topic || undefined,
           message: message || '',
           attachments: attachments ?? [],
           reply_to_id: replyToId || undefined,
@@ -192,5 +194,9 @@ export function usePortalChat(accountId: string | null, contactId: string) {
     }
   }, [accountId, contactId, sending])
 
-  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh }
+  const topics = Array.from(
+    new Set(messages.map(m => m.topic).filter((t): t is string => !!t))
+  ).sort()
+
+  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics }
 }
