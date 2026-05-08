@@ -1865,7 +1865,7 @@ export default function PortalChatsPage() {
                       : 'text-zinc-600 border-zinc-200 hover:bg-zinc-100'
                   )}
                 >
-                  General
+                  Topic
                 </button>
                 {adminTopics.map(tp => (
                   <button
@@ -1908,10 +1908,10 @@ export default function PortalChatsPage() {
                 ) : (
                   <button
                     onClick={() => setAdminCreatingTopic(true)}
-                    className="shrink-0 h-6 w-6 rounded-full border border-zinc-200 flex items-center justify-center text-zinc-400 hover:text-zinc-600 hover:border-zinc-400 transition-colors"
-                    title="New topic"
+                    className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
                   >
                     <Plus className="h-3 w-3" />
+                    Create a new topic
                   </button>
                 )}
               </div>
