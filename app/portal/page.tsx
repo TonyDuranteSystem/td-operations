@@ -66,6 +66,13 @@ export default async function PortalDashboardPage() {
   const contactId = getClientContactId(user)
   const locale = getLocale(user)
 
+  // Partners have their own section — redirect immediately
+  if (contactId) {
+    const { getPortalRoleByContact } = await import('@/lib/portal/queries')
+    const portalRole = await getPortalRoleByContact(contactId)
+    if (portalRole === 'partner') redirect('/portal/partner/clients')
+  }
+
   // Get accounts (may be empty for leads)
   const accounts = contactId ? await getPortalAccounts(contactId) : []
 
