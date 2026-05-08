@@ -48,6 +48,8 @@ export interface InvoiceEmailInput {
     swiftBic?: string | null
     accountNumber?: string | null
     routingNumber?: string | null
+    /** Payment reference the client must include in the wire transfer memo. */
+    reference?: string | null
   } | null
 
   /** Optional free-text message from the invoice record. Rendered in a
@@ -159,9 +161,14 @@ function bankDetailsBlock(bd: InvoiceEmailInput["bankDetails"]): string {
     .filter(Boolean)
     .join("<br/>")
   if (!fields) return ""
+  const referenceRow = bd.reference
+    ? `<p style="margin:10px 0 0;padding:8px 10px;background:#dcfce7;border-radius:4px;font-size:13px;color:#14532d;font-weight:bold;">
+        ⚠ Payment Reference: ${bd.reference} — Please include this exactly in your wire transfer memo.
+      </p>`
+    : ""
   return `<div style="background:#f0fdf4;padding:16px;border-radius:8px;margin-top:16px;border:1px solid #bbf7d0;">
     <p style="margin:0;font-size:12px;color:#15803d;text-transform:uppercase;font-weight:bold;">Bank Transfer — ${bd.label}</p>
-    <p style="margin:8px 0 0;font-size:13px;color:#166534;">${fields}</p>
+    <p style="margin:8px 0 0;font-size:13px;color:#166534;">${fields}</p>${referenceRow}
   </div>`
 }
 
@@ -242,7 +249,10 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
       paymentPath = ctaPortalOpen()
     } else {
       const payUrl = input.payToken ? buildPayUrl(input.payToken) : null
-      paymentPath = (payUrl ? ctaNoPortalOpen(payUrl) : "") + bankDetailsBlock(input.bankDetails ?? null)
+      const bdWithRef = input.bankDetails
+        ? { ...input.bankDetails, reference: input.bankDetails.reference ?? input.invoiceNumber }
+        : null
+      paymentPath = (payUrl ? ctaNoPortalOpen(payUrl) : "") + bankDetailsBlock(bdWithRef)
     }
   } else if (isReceipt && isPortal) {
     paymentPath = ctaPortalReceipt()

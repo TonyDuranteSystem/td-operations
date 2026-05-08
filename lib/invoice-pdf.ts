@@ -344,6 +344,39 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<Uint8Array>
   drawRight(page, formatCurrency(subtotal), colAmount, y, helveticaBold, 12, COLORS.white)
 
   // ═══════════════════════════════════════════════════════════
+  // PAYMENT INSTRUCTIONS
+  // ═══════════════════════════════════════════════════════════
+  y -= 24
+
+  // Red accent bar
+  page.drawRectangle({ x: margin, y: y - 26, width: 3, height: 36, color: COLORS.tdRed })
+
+  // Background
+  page.drawRectangle({
+    x: margin + 3,
+    y: y - 26,
+    width: width - margin * 2 - 3,
+    height: 36,
+    color: COLORS.veryLightGray,
+    borderColor: COLORS.lightGray,
+    borderWidth: 0.5,
+  })
+
+  page.drawText('PAYMENT INSTRUCTIONS', {
+    x: margin + 12, y: y, size: 8, font: helveticaBold, color: COLORS.tdRed,
+  })
+  page.drawText(`Wire Reference: ${data.invoiceNumber}`, {
+    x: margin + 12, y: y - 14, size: 10, font: helveticaBold, color: COLORS.darkGray,
+  })
+  page.drawText('— include this in the memo/description of your bank transfer', {
+    x: margin + 12 + helveticaBold.widthOfTextAtSize(`Wire Reference: ${data.invoiceNumber}`, 10) + 6,
+    y: y - 14,
+    size: 8,
+    font: helvetica,
+    color: COLORS.mediumGray,
+  })
+
+  // ═══════════════════════════════════════════════════════════
   // NOTES
   // ═══════════════════════════════════════════════════════════
   y -= 45
