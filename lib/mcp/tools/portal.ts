@@ -268,6 +268,10 @@ export function registerPortalTools(server: McpServer) {
           msaStatus = `SKIPPED — Year 1 client (onboarding: ${tdStartDate})`
         } else {
           const skipJanuary = tdStartYear === agreementYear - 1 && tdStartMonth !== null && tdStartMonth >= 9
+          // Legacy clients (started before this year) have already been billed outside the portal.
+          // Create their current-year MSA as completed so it never appears as pending in the portal.
+          const isLegacyTransition = tdStartYear !== null && tdStartYear < agreementYear
+          const msaInitialStatus = isLegacyTransition ? "completed" : "draft"
           const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
           const token = `renewal-${companySlug}-${agreementYear}`
           const today = new Date().toISOString().slice(0, 10)
@@ -275,9 +279,9 @@ export function registerPortalTools(server: McpServer) {
           const { data: newMSA, error: msaError } = await (supabaseAdmin as any).from("annual_agreements").insert({
             token, account_id: account.id, agreement_year: agreementYear,
             client_name: contact.full_name, client_email: contact.email,
-            language: lang, payment_type: "bank_transfer", status: "draft", offer_date: today,
+            language: lang, payment_type: "bank_transfer", status: msaInitialStatus, offer_date: today,
             effective_date: `${agreementYear}-01-01`,
-            skip_january: skipJanuary,
+            skip_january: skipJanuary || isLegacyTransition,
             bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
             services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
             cost_summary: skipJanuary
@@ -291,8 +295,8 @@ export function registerPortalTools(server: McpServer) {
                 ],
           }).select("id, token").single() as { data: { id: string; token: string } | null; error: { message: string; code: string } | null }
           if (newMSA) {
-            msaStatus = `AUTO-CREATED${skipJanuary ? " (Sep-rule, skip January)" : ""} (draft, token: ${newMSA.token})`
-            pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
+            msaStatus = `AUTO-CREATED${isLegacyTransition ? " (legacy, completed — no signature required)" : skipJanuary ? " (Sep-rule, skip January)" : ""} (${msaInitialStatus}, token: ${newMSA.token})`
+            if (!isLegacyTransition) pendingDocs.push(lang === "it" ? "Contratto di Servizio Annuale" : "Annual Service Agreement")
             logAction({ action_type: "create", table_name: "annual_agreements", record_id: newMSA.id, account_id: account.id, summary: `Auto-created annual agreement for ${account.company_name} (legacy onboard)` })
           } else {
             msaStatus = `FAILED to create${msaError ? `: ${msaError.message} (${msaError.code})` : ""}`
