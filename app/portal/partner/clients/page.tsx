@@ -2,6 +2,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import { ChevronRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -74,7 +76,11 @@ export default async function PartnerClientsPage() {
         {(accounts ?? []).map(a => {
           const acctServices = servicesByAccount.get(a.id) ?? []
           return (
-            <div key={a.id} className="bg-white rounded-lg border p-4 space-y-2">
+            <Link
+              key={a.id}
+              href={`/portal/partner/clients/${a.id}`}
+              className="block bg-white rounded-lg border p-4 space-y-2 hover:border-zinc-300 hover:shadow-sm transition-all"
+            >
               <div className="flex items-center justify-between">
                 <div>
                   <div className="font-medium">{a.company_name}</div>
@@ -82,9 +88,12 @@ export default async function PartnerClientsPage() {
                     {a.entity_type ?? ''} · {a.state_of_formation ?? ''}{a.ein_number ? ` · EIN: ${a.ein_number}` : ''}
                   </div>
                 </div>
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[a.status ?? ''] ?? 'bg-zinc-100 text-zinc-600'}`}>
-                  {a.status}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[a.status ?? ''] ?? 'bg-zinc-100 text-zinc-600'}`}>
+                    {a.status}
+                  </span>
+                  <ChevronRight className="h-4 w-4 text-zinc-400" />
+                </div>
               </div>
               {acctServices.length > 0 && (
                 <div className="flex flex-wrap gap-1">
@@ -95,7 +104,7 @@ export default async function PartnerClientsPage() {
                   ))}
                 </div>
               )}
-            </div>
+            </Link>
           )
         })}
         {(accounts ?? []).length === 0 && (
