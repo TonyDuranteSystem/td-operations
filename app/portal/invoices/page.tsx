@@ -20,7 +20,7 @@ import { listVendors } from './vendor-actions'
 export default async function PortalInvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; view?: string }>
+  searchParams: Promise<{ tab?: string; view?: string; accountId?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -29,17 +29,47 @@ export default async function PortalInvoicesPage({
   const contactId = getClientContactId(user)
   if (!contactId) redirect('/portal')
 
+  const params = await searchParams
+
+  // Partner access: if ?accountId is provided and the user is a partner,
+  // verify they manage that account via client_partners → accounts.partner_id.
+  let partnerAccountId: string | undefined
+  if (params.accountId) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('portal_role')
+      .eq('id', contactId)
+      .single()
+    if (contact?.portal_role === 'partner') {
+      const { data: partnerRecord } = await supabaseAdmin
+        .from('client_partners')
+        .select('id')
+        .eq('contact_id', contactId)
+        .single()
+      if (partnerRecord) {
+        const { data: acct } = await supabaseAdmin
+          .from('accounts')
+          .select('id')
+          .eq('id', params.accountId)
+          .eq('partner_id', partnerRecord.id)
+          .single()
+        if (acct) partnerAccountId = acct.id
+      }
+    }
+  }
+
   const accounts = await getPortalAccounts(contactId)
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  const selectedAccountId = partnerAccountId
+    ?? accounts.find(a => a.id === cookieAccountId)?.id
+    ?? accounts[0]?.id
   // No redirect when there's no account — formation-gap clients (paid as
   // individual, no company yet, e.g. Lorenzo) need to see their personal
   // invoices via the Expenses tab.
   const selectedAccount = accounts.find(a => a.id === selectedAccountId) ?? null
   const companyName = selectedAccount?.company_name ?? null
 
-  const params = await searchParams
   // No-account clients only see Expenses (Sales + Vendors are company-scoped
   // by design — client_invoices is the client's outgoing sales, vendors are
   // the client's vendors). Force expenses when no account regardless of params.

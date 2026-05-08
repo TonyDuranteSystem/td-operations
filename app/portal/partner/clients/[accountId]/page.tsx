@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Building2, Mail, Phone, User, PlusCircle } from 'lucide-react'
+import { ArrowLeft, Building2, Mail, Phone, User, PlusCircle, Receipt } from 'lucide-react'
 
 const STATUS_COLORS: Record<string, string> = {
   Active: 'bg-emerald-100 text-emerald-700',
@@ -110,14 +110,23 @@ export default async function PartnerClientDetailPage({
         </span>
       </div>
 
-      {/* New Request CTA */}
-      <Link
-        href={`/portal/partner/new-request?accountId=${accountId}&accountName=${encodedName}`}
-        className="flex items-center gap-2 w-full px-4 py-3 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors justify-center"
-      >
-        <PlusCircle className="h-4 w-4" />
-        New Request for this Client
-      </Link>
+      {/* CTAs */}
+      <div className="flex gap-3">
+        <Link
+          href={`/portal/partner/new-request?accountId=${accountId}&accountName=${encodedName}`}
+          className="flex items-center gap-2 flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors justify-center"
+        >
+          <PlusCircle className="h-4 w-4" />
+          New Request
+        </Link>
+        <Link
+          href={`/portal/invoices?accountId=${accountId}&tab=sales`}
+          className="flex items-center gap-2 flex-1 px-4 py-3 bg-white border border-zinc-200 text-zinc-700 rounded-xl text-sm font-medium hover:bg-zinc-50 transition-colors justify-center"
+        >
+          <Receipt className="h-4 w-4" />
+          Invoices
+        </Link>
+      </div>
 
       {/* Contacts */}
       <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
