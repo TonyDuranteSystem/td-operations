@@ -89,6 +89,7 @@ const SOURCE_LABELS: Record<string, string> = {
   airwallex_email: 'Airwallex',
   airwallex_api: 'Airwallex',
   manual: 'Manual',
+  stripe: 'Stripe',
 }
 
 const SOURCE_COLORS: Record<string, string> = {
@@ -99,6 +100,7 @@ const SOURCE_COLORS: Record<string, string> = {
   airwallex_email: 'bg-orange-100 text-orange-700',
   airwallex_api: 'bg-orange-100 text-orange-700',
   manual: 'bg-zinc-100 text-zinc-700',
+  stripe: 'bg-violet-100 text-violet-700',
 }
 
 // Map bank institution names to source filter values

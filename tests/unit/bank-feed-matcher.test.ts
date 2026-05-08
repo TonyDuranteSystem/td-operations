@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isStripePayoutFeed } from "@/lib/bank-feed-matcher"
+import { isStripePayoutFeed, resolveInvoiceStatusAfterPayment } from "@/lib/bank-feed-matcher"
 
 describe("isStripePayoutFeed", () => {
   // mercury (Plaid) pattern: full text in memo and sender_name
@@ -49,5 +49,41 @@ describe("isStripePayoutFeed", () => {
 
   it("returns false when both fields are empty strings", () => {
     expect(isStripePayoutFeed("", "")).toBe(false)
+  })
+})
+
+describe("resolveInvoiceStatusAfterPayment", () => {
+  it("marks Paid when payment covers the full balance", () => {
+    const result = resolveInvoiceStatusAfterPayment(1000, 0, 1000)
+    expect(result.newStatus).toBe("Paid")
+    expect(result.newAmountPaid).toBe(1000)
+    expect(result.newAmountDue).toBe(0)
+  })
+
+  it("marks Partial when payment is less than the full balance", () => {
+    const result = resolveInvoiceStatusAfterPayment(1000, 0, 200)
+    expect(result.newStatus).toBe("Partial")
+    expect(result.newAmountPaid).toBe(200)
+    expect(result.newAmountDue).toBe(800)
+  })
+
+  it("accumulates correctly for installments — second payment of five", () => {
+    const result = resolveInvoiceStatusAfterPayment(1000, 200, 200)
+    expect(result.newStatus).toBe("Partial")
+    expect(result.newAmountPaid).toBe(400)
+    expect(result.newAmountDue).toBe(600)
+  })
+
+  it("marks Paid on the final installment", () => {
+    const result = resolveInvoiceStatusAfterPayment(1000, 800, 200)
+    expect(result.newStatus).toBe("Paid")
+    expect(result.newAmountPaid).toBe(1000)
+    expect(result.newAmountDue).toBe(0)
+  })
+
+  it("clamps amount_due to 0 if overpaid", () => {
+    const result = resolveInvoiceStatusAfterPayment(1000, 900, 200)
+    expect(result.newStatus).toBe("Paid")
+    expect(result.newAmountDue).toBe(0)
   })
 })

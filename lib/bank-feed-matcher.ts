@@ -452,6 +452,21 @@ export async function markMercuryStripePayoutsOutgoing(): Promise<{ marked: numb
 }
 
 /**
+ * Calculate the new invoice status and running totals after a payment is applied.
+ * Exported for unit tests.
+ */
+export function resolveInvoiceStatusAfterPayment(
+  invoiceTotal: number,
+  currentAmountPaid: number,
+  feedAmount: number,
+): { newStatus: "Paid" | "Partial"; newAmountPaid: number; newAmountDue: number } {
+  const newAmountPaid = currentAmountPaid + feedAmount
+  const newAmountDue = Math.max(invoiceTotal - newAmountPaid, 0)
+  const newStatus = newAmountDue <= 0 ? "Paid" : "Partial"
+  return { newStatus, newAmountPaid, newAmountDue }
+}
+
+/**
  * Manual match — used from the reconciliation UI.
  * Links a bank feed to a specific payment and marks both as reconciled.
  */
@@ -459,6 +474,14 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
   try {
     const now = new Date().toISOString()
     const today = new Date().toISOString().split("T")[0]
+
+    // Fetch feed amount — needed for partial-payment calculation
+    const { data: feed } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("amount")
+      .eq("id", feedId)
+      .single()
+    const feedAmount = Number(feed?.amount ?? 0)
 
     // Update bank feed
     await supabaseAdmin
@@ -476,22 +499,44 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     // Check if this is an invoice payment
     const { data: payment } = await supabaseAdmin
       .from("payments")
-      .select("invoice_status, invoice_number")
+      .select("invoice_status, invoice_number, total, amount_paid")
       .eq("id", paymentId)
       .single()
 
-    // If it's an invoice, mark as paid via unified system (updates BOTH payments + client_invoices)
+    // Update invoice status — partial if feed amount < remaining balance, paid otherwise
     if (payment?.invoice_status && !["Paid", "Voided", "Credit"].includes(payment.invoice_status)) {
-      await syncInvoiceStatus("payment", paymentId, "Paid", today)
+      const { newStatus, newAmountPaid, newAmountDue } = resolveInvoiceStatusAfterPayment(
+        Number(payment.total ?? 0),
+        Number(payment.amount_paid ?? 0),
+        feedAmount,
+      )
 
-      // Also set payment_method
       // eslint-disable-next-line no-restricted-syntax
       await supabaseAdmin
         .from("payments")
-        .update({ payment_method: "Wire (Manual Match)" })
+        .update({
+          invoice_status: newStatus,
+          status: newStatus,
+          amount_paid: newAmountPaid,
+          amount_due: newAmountDue,
+          ...(newStatus === "Paid" ? { paid_date: today } : {}),
+          payment_method: "Wire (Manual Match)",
+          updated_at: now,
+        })
         .eq("id", paymentId)
 
-      syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
+      // Sync status to client_expenses mirror
+      const { syncTDInvoiceStatus } = await import("@/lib/portal/td-invoice")
+      await syncTDInvoiceStatus(
+        paymentId,
+        newStatus,
+        newStatus === "Paid" ? today : undefined,
+        newAmountPaid,
+      )
+
+      if (newStatus === "Paid") {
+        syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
+      }
     }
 
     // Check if this invoice is linked to a pending_activation → trigger activation chain

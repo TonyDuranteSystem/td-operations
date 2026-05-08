@@ -75,9 +75,15 @@ export async function syncStripeCharges(
         continue
       }
 
+      const clientEmail =
+        charge.billing_details?.email ||
+        charge.metadata?.client_email ||
+        null
+
       const senderName =
         charge.billing_details?.name ||
         charge.metadata?.client_name ||
+        clientEmail ||
         charge.description ||
         "Unknown"
 
@@ -86,11 +92,23 @@ export async function syncStripeCharges(
         charge.metadata?.offer_token ||
         null
 
-      // Build memo from description + metadata
-      const metaParts = Object.entries(charge.metadata || {})
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ")
-      const memo = [charge.description, metaParts].filter(Boolean).join(" | ")
+      // Build a human-readable memo with the most useful fields first
+      const cardInfo = (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const card = (charge.payment_method_details as any)?.card
+        if (!card) return null
+        return `${card.brand ?? "card"} ••••${card.last4 ?? ""}`
+      })()
+
+      const memoParts = [
+        charge.description,
+        clientEmail ? `email: ${clientEmail}` : null,
+        charge.metadata?.contract_type ? `service: ${charge.metadata.contract_type}` : null,
+        charge.metadata?.invoice_number ? `inv: ${charge.metadata.invoice_number}` : null,
+        charge.metadata?.offer_token ? `offer: ${charge.metadata.offer_token}` : null,
+        cardInfo,
+      ].filter(Boolean)
+      const memo = memoParts.join(" | ") || null
 
       const row = {
         source: "stripe" as const,
