@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import { INTERNAL_BASE_URL } from "@/lib/config"
+import { resolveExternalValue } from "@/lib/catalog/framework"
 
 // Lightweight types for Stripe objects (v22 has different namespace pattern)
 interface StripeEvent {
@@ -115,6 +116,26 @@ async function handleCheckoutCompleted(session: StripeSession) {
   const contractType = session.metadata?.contract_type || null
 
   console.warn(`[stripe-webhook] checkout.session.completed: ${sessionId} — ${clientName || email} — ${currency} ${total}`)
+
+  // Anti-corruption layer (Phase 1, observational only): record any
+  // unrecognized contract_type into catalog_pending_review so we can map
+  // them to canonical service slugs in Phase 2. Does not change webhook
+  // behavior — failures are swallowed.
+  if (contractType) {
+    try {
+      await resolveExternalValue("services", contractType, "stripe_webhook", {
+        session_id: sessionId,
+        email,
+        client_name: clientName,
+        payment_intent_id: paymentIntentId,
+        offer_token: offerToken,
+      })
+    } catch (err) {
+      console.warn(
+        `[stripe-webhook] catalog resolveExternalValue failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
 
   // 1. Log webhook event
   await getSupabase().from("webhook_events").insert({

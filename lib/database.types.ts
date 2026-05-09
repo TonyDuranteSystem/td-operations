@@ -1676,6 +1676,209 @@ export type Database = {
           },
         ]
       }
+      catalog_decision_log: {
+        Row: {
+          action: string
+          actor_kind: string
+          actor_user_id: string | null
+          after_state: Json | null
+          before_state: Json | null
+          catalog_entry_id: string | null
+          catalog_id: string
+          created_at: string | null
+          id: string
+          reason: string
+        }
+        Insert: {
+          action: string
+          actor_kind: string
+          actor_user_id?: string | null
+          after_state?: Json | null
+          before_state?: Json | null
+          catalog_entry_id?: string | null
+          catalog_id: string
+          created_at?: string | null
+          id?: string
+          reason: string
+        }
+        Update: {
+          action?: string
+          actor_kind?: string
+          actor_user_id?: string | null
+          after_state?: Json | null
+          before_state?: Json | null
+          catalog_entry_id?: string | null
+          catalog_id?: string
+          created_at?: string | null
+          id?: string
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "catalog_decision_log_catalog_entry_id_fkey"
+            columns: ["catalog_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "catalog_decision_log_catalog_id_fkey"
+            columns: ["catalog_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_definitions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      catalog_definitions: {
+        Row: {
+          admin_can_add_rows: boolean | null
+          created_at: string | null
+          description: string | null
+          display_name: string
+          display_name_translations: Json | null
+          id: string
+          tags_schema: Json | null
+          updated_at: string | null
+        }
+        Insert: {
+          admin_can_add_rows?: boolean | null
+          created_at?: string | null
+          description?: string | null
+          display_name: string
+          display_name_translations?: Json | null
+          id: string
+          tags_schema?: Json | null
+          updated_at?: string | null
+        }
+        Update: {
+          admin_can_add_rows?: boolean | null
+          created_at?: string | null
+          description?: string | null
+          display_name?: string
+          display_name_translations?: Json | null
+          id?: string
+          tags_schema?: Json | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      catalog_entries: {
+        Row: {
+          capabilities: Json | null
+          catalog_id: string
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          description_translations: Json | null
+          display_name: string
+          display_name_translations: Json | null
+          id: string
+          metadata: Json | null
+          slug: string
+          status: string
+          tags: Json | null
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          capabilities?: Json | null
+          catalog_id: string
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          description_translations?: Json | null
+          display_name: string
+          display_name_translations?: Json | null
+          id?: string
+          metadata?: Json | null
+          slug: string
+          status: string
+          tags?: Json | null
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          capabilities?: Json | null
+          catalog_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          description_translations?: Json | null
+          display_name?: string
+          display_name_translations?: Json | null
+          id?: string
+          metadata?: Json | null
+          slug?: string
+          status?: string
+          tags?: Json | null
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "catalog_entries_catalog_id_fkey"
+            columns: ["catalog_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_definitions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      catalog_pending_review: {
+        Row: {
+          catalog_id: string
+          created_at: string | null
+          id: string
+          resolved_at: string | null
+          resolved_by: string | null
+          resolved_to_entry_id: string | null
+          source: string
+          source_metadata: Json | null
+          status: string
+          submitted_value: string
+        }
+        Insert: {
+          catalog_id: string
+          created_at?: string | null
+          id?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          resolved_to_entry_id?: string | null
+          source: string
+          source_metadata?: Json | null
+          status?: string
+          submitted_value: string
+        }
+        Update: {
+          catalog_id?: string
+          created_at?: string | null
+          id?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
+          resolved_to_entry_id?: string | null
+          source?: string
+          source_metadata?: Json | null
+          status?: string
+          submitted_value?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "catalog_pending_review_catalog_id_fkey"
+            columns: ["catalog_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_definitions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "catalog_pending_review_resolved_to_entry_id_fkey"
+            columns: ["resolved_to_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_bank_accounts: {
         Row: {
           account_holder: string | null

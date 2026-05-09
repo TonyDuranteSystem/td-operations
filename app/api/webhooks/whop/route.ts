@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import { INTERNAL_BASE_URL } from "@/lib/config"
+import { resolveExternalValue } from "@/lib/catalog/framework"
 
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
@@ -120,6 +121,25 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
   const clientName = billing?.name as string | undefined
 
   console.warn(`[whop-webhook] payment.succeeded: ${paymentId} — ${clientName || username || email} — $${total} ${currency} — ${productTitle}`)
+
+  // Anti-corruption layer (Phase 1, observational only): record any
+  // unrecognized product title into catalog_pending_review so we can map
+  // them to canonical service slugs in Phase 2. Does not change webhook
+  // behavior — failures are swallowed.
+  if (productTitle) {
+    try {
+      await resolveExternalValue("services", productTitle, "whop_webhook", {
+        payment_id: paymentId,
+        product_id: _productId,
+        email,
+        username,
+      })
+    } catch (err) {
+      console.warn(
+        `[whop-webhook] catalog resolveExternalValue failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
 
   // 1. Log webhook event
   await getSupabase().from("webhook_events").insert({
