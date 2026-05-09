@@ -145,6 +145,7 @@ export type Database = {
           registered_agent_id: string | null
           registered_agent_provider: string | null
           services_bundle: string[] | null
+          services_bundle_entry_ids: Json | null
           setup_fee_amount: number | null
           setup_fee_currency: Database["public"]["Enums"]["currency"] | null
           setup_fee_date: string | null
@@ -223,6 +224,7 @@ export type Database = {
           registered_agent_id?: string | null
           registered_agent_provider?: string | null
           services_bundle?: string[] | null
+          services_bundle_entry_ids?: Json | null
           setup_fee_amount?: number | null
           setup_fee_currency?: Database["public"]["Enums"]["currency"] | null
           setup_fee_date?: string | null
@@ -301,6 +303,7 @@ export type Database = {
           registered_agent_id?: string | null
           registered_agent_provider?: string | null
           services_bundle?: string[] | null
+          services_bundle_entry_ids?: Json | null
           setup_fee_amount?: number | null
           setup_fee_currency?: Database["public"]["Enums"]["currency"] | null
           setup_fee_date?: string | null
@@ -2954,6 +2957,7 @@ export type Database = {
       }
       client_partners: {
         Row: {
+          agreed_service_entry_ids: Json | null
           agreed_services: string[] | null
           commission_model: string | null
           contact_id: string
@@ -2968,6 +2972,7 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          agreed_service_entry_ids?: Json | null
           agreed_services?: string[] | null
           commission_model?: string | null
           contact_id: string
@@ -2982,6 +2987,7 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          agreed_service_entry_ids?: Json | null
           agreed_services?: string[] | null
           commission_model?: string | null
           contact_id?: string
@@ -6928,6 +6934,7 @@ export type Database = {
           additional_services: Json | null
           admin_notes: string | null
           bank_details: Json | null
+          bundled_pipeline_entry_ids: Json | null
           bundled_pipelines: string[] | null
           client_email: string | null
           client_name: string
@@ -6979,6 +6986,7 @@ export type Database = {
           additional_services?: Json | null
           admin_notes?: string | null
           bank_details?: Json | null
+          bundled_pipeline_entry_ids?: Json | null
           bundled_pipelines?: string[] | null
           client_email?: string | null
           client_name: string
@@ -7030,6 +7038,7 @@ export type Database = {
           additional_services?: Json | null
           admin_notes?: string | null
           bank_details?: Json | null
+          bundled_pipeline_entry_ids?: Json | null
           bundled_pipelines?: string[] | null
           client_email?: string | null
           client_name?: string
@@ -7926,6 +7935,7 @@ export type Database = {
           id: string
           requires_approval: boolean | null
           service_type: string
+          service_type_entry_id: string | null
           sla_days: number | null
           stage_description: string | null
           stage_name: string
@@ -7940,6 +7950,7 @@ export type Database = {
           id?: string
           requires_approval?: boolean | null
           service_type: string
+          service_type_entry_id?: string | null
           sla_days?: number | null
           stage_description?: string | null
           stage_name: string
@@ -7954,12 +7965,21 @@ export type Database = {
           id?: string
           requires_approval?: boolean | null
           service_type?: string
+          service_type_entry_id?: string | null
           sla_days?: number | null
           stage_description?: string | null
           stage_name?: string
           stage_order?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_stages_service_type_entry_id_fkey"
+            columns: ["service_type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       plaid_connections: {
         Row: {
@@ -8183,6 +8203,7 @@ export type Database = {
           sender_context: string | null
           sender_id: string
           sender_type: string
+          topic: string | null
         }
         Insert: {
           account_id?: string | null
@@ -8200,6 +8221,7 @@ export type Database = {
           sender_context?: string | null
           sender_id: string
           sender_type: string
+          topic?: string | null
         }
         Update: {
           account_id?: string | null
@@ -8217,6 +8239,7 @@ export type Database = {
           sender_context?: string | null
           sender_id?: string
           sender_type?: string
+          topic?: string | null
         }
         Relationships: [
           {
@@ -8781,6 +8804,7 @@ export type Database = {
           pipeline: string | null
           service_name: string
           service_type: string
+          service_type_entry_id: string | null
           stage: string | null
           stage_entered_at: string | null
           stage_history: Json | null
@@ -8811,6 +8835,7 @@ export type Database = {
           pipeline?: string | null
           service_name: string
           service_type: string
+          service_type_entry_id?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
@@ -8841,6 +8866,7 @@ export type Database = {
           pipeline?: string | null
           service_name?: string
           service_type?: string
+          service_type_entry_id?: string | null
           stage?: string | null
           stage_entered_at?: string | null
           stage_history?: Json | null
@@ -8898,6 +8924,13 @@ export type Database = {
             columns: ["deal_id"]
             isOneToOne: false
             referencedRelation: "deals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_deliveries_service_type_entry_id_fkey"
+            columns: ["service_type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
             referencedColumns: ["id"]
           },
         ]
@@ -11080,6 +11113,19 @@ export type Database = {
           contact_name: string
           last_message: string
           last_message_at: string
+          unread_count: number
+        }[]
+      }
+      get_portal_chat_threads_v2: {
+        Args: never
+        Returns: {
+          account_id: string
+          companies: Json
+          contact_id: string
+          contact_name: string
+          last_message: string
+          last_message_at: string
+          members: Json
           unread_count: number
         }[]
       }
