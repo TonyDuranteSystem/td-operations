@@ -4,6 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { PartnersHeader } from './components/partners-header'
+import { labelForServiceStatic } from '@/lib/services'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,7 +69,7 @@ export default async function PartnersPage() {
               <div className="text-sm font-medium">{clientCount}</div>
               <div className="flex flex-wrap gap-1">
                 {(p.agreed_services ?? []).map((s: string) => (
-                  <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">{s}</span>
+                  <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">{labelForServiceStatic(s)}</span>
                 ))}
               </div>
               <span className={`text-xs font-medium px-2 py-0.5 rounded-full w-fit ${STATUS_COLORS[p.status] ?? 'bg-zinc-100 text-zinc-600'}`}>

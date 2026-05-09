@@ -4,9 +4,54 @@ import { useState, useTransition } from 'react'
 import { X, Loader2, Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { callPartnerAction, type PartnerData } from './partner-actions'
+import {
+  getServiceBySlugStatic,
+  labelForServiceStatic,
+  SERVICES_STATIC,
+} from '@/lib/services'
 
 const COMMISSION_MODELS = ['percentage', 'price_difference', 'flat_fee']
-const AVAILABLE_SERVICES = ['LLC Formation', 'Tax Return', 'ITIN', 'EIN', 'Banking', 'CMRA', 'Annual Renewal']
+
+// Canonical service-catalog slugs offered by the partner picker. Stored
+// verbatim in `client_partners.agreed_services`. Display labels come from
+// the catalog. Mirrors the create-partner dialog.
+const AVAILABLE_SERVICE_SLUGS = [
+  'llc_formation',
+  'tax_return',
+  'itin',
+  'ein',
+  'banking',
+  'cmra',
+  'state_ra_renewal',
+  'state_annual_report',
+] as const
+
+// Known legacy ad-hoc slugs that the partner-portal phase 1 close commit
+// stored before slugs were canonical. Map them to their canonical
+// catalog equivalents so the picker tick state matches and Save doesn't
+// silently overwrite them. Adding more is safe — they're applied on read.
+const LEGACY_SLUG_ALIASES: Record<string, string> = {
+  ra_renewal: 'state_ra_renewal',
+  annual_report: 'state_annual_report',
+}
+
+/**
+ * F3 fix — normalize a stored agreed_services value to a canonical slug.
+ * Accepts catalog slugs verbatim, maps known display_names (and translated
+ * display_names) and known legacy aliases back to slugs, and passes
+ * unrecognized values through unchanged so Save never silently drops data.
+ */
+function normalizeStoredService(stored: string): string {
+  if (getServiceBySlugStatic(stored)) return stored
+  if (LEGACY_SLUG_ALIASES[stored]) return LEGACY_SLUG_ALIASES[stored]
+  for (const entry of SERVICES_STATIC) {
+    if (entry.display_name === stored) return entry.slug
+    for (const tx of Object.values(entry.display_name_translations)) {
+      if (tx === stored) return entry.slug
+    }
+  }
+  return stored
+}
 
 interface Props {
   open: boolean
@@ -19,7 +64,9 @@ export function EditPartnerDialog({ open, onClose, partner }: Props) {
   const [partnerName, setPartnerName] = useState(partner.partner_name)
   const [partnerEmail, setPartnerEmail] = useState(partner.partner_email ?? '')
   const [commissionModel, setCommissionModel] = useState(partner.commission_model ?? '')
-  const [selectedServices, setSelectedServices] = useState<string[]>(partner.agreed_services ?? [])
+  const [selectedServices, setSelectedServices] = useState<string[]>(
+    (partner.agreed_services ?? []).map(normalizeStoredService),
+  )
   const [notes, setNotes] = useState(partner.notes ?? '')
   const [priceListJson, setPriceListJson] = useState(
     partner.price_list ? JSON.stringify(partner.price_list, null, 2) : ''
@@ -108,17 +155,27 @@ export function EditPartnerDialog({ open, onClose, partner }: Props) {
             <div>
               <label className="block text-sm font-medium mb-1">Agreed Services</label>
               <div className="flex flex-wrap gap-2">
-                {AVAILABLE_SERVICES.map(svc => (
-                  <button key={svc} type="button" onClick={() => toggleService(svc)}
+                {AVAILABLE_SERVICE_SLUGS.map(slug => (
+                  <button key={slug} type="button" onClick={() => toggleService(slug)}
                     className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                      selectedServices.includes(svc)
+                      selectedServices.includes(slug)
                         ? 'bg-blue-50 border-blue-300 text-blue-700'
                         : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'
                     }`}>
-                    {svc}
+                    {labelForServiceStatic(slug)}
                   </button>
                 ))}
               </div>
+              {(() => {
+                const offered = new Set<string>(AVAILABLE_SERVICE_SLUGS)
+                const orphans = selectedServices.filter(s => !offered.has(s))
+                if (orphans.length === 0) return null
+                return (
+                  <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    Other stored values (preserved on save): {orphans.join(', ')}
+                  </p>
+                )
+              })()}
             </div>
 
             <div>

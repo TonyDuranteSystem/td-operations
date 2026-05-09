@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { PartnerHeaderActions, type PartnerData, type ManagedAccount } from './components/partner-actions'
 import { ManagedClientsSection } from './components/managed-clients-section'
 import { BackButton } from '@/components/ui/back-button'
+import { labelForServiceStatic } from '@/lib/services'
 
 export const dynamic = 'force-dynamic'
 
@@ -173,7 +174,7 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
               <span className="text-muted-foreground">Services</span>
               <div className="flex flex-wrap gap-1 justify-end">
                 {(partner.agreed_services ?? []).map((s: string) => (
-                  <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">{s}</span>
+                  <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">{labelForServiceStatic(s)}</span>
                 ))}
               </div>
             </div>
