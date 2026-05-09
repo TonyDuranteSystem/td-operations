@@ -8,6 +8,7 @@ import {
   Loader2, MessageCircle, PlusCircle, User,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { labelForServiceStatic } from '@/lib/services'
 
 interface Account {
   id: string
@@ -22,70 +23,24 @@ interface Props {
   preselectedAccountName: string | null
 }
 
-const SERVICES = [
-  {
-    id: 'llc_formation',
-    icon: Building2,
-    color: 'text-blue-600 bg-blue-50',
-    name: 'LLC Formation',
-    desc: 'Form a new US LLC (Wyoming, Delaware, New Mexico, Florida)',
-  },
-  {
-    id: 'tax_return',
-    icon: Receipt,
-    color: 'text-green-600 bg-green-50',
-    name: 'Tax Return Filing',
-    desc: 'Annual tax return (Form 1120, 1065, 5472)',
-  },
-  {
-    id: 'itin',
-    icon: Fingerprint,
-    color: 'text-purple-600 bg-purple-50',
-    name: 'ITIN Application',
-    desc: 'W-7 preparation and filing as IRS Certified Acceptance Agent',
-  },
-  {
-    id: 'banking',
-    icon: CreditCard,
-    color: 'text-amber-600 bg-amber-50',
-    name: 'Business Banking',
-    desc: 'USD (Relay) or EUR (Payset IBAN) business account',
-  },
-  {
-    id: 'ein',
-    icon: FileText,
-    color: 'text-indigo-600 bg-indigo-50',
-    name: 'EIN Application',
-    desc: 'Employer Identification Number from the IRS',
-  },
-  {
-    id: 'shipping',
-    icon: Package,
-    color: 'text-orange-600 bg-orange-50',
-    name: 'Shipping Service',
-    desc: 'International shipping, mail forwarding, package handling',
-  },
-  {
-    id: 'notary',
-    icon: FileText,
-    color: 'text-rose-600 bg-rose-50',
-    name: 'Public Notary',
-    desc: 'Notarization, apostille, certified copies',
-  },
-  {
-    id: 'closure',
-    icon: XCircle,
-    color: 'text-red-600 bg-red-50',
-    name: 'Company Closure',
-    desc: 'LLC dissolution, state filing, IRS closure letter',
-  },
-  {
-    id: 'consulting',
-    icon: Phone,
-    color: 'text-teal-600 bg-teal-50',
-    name: 'Consulting Call',
-    desc: 'One-on-one consultation about your business needs',
-  },
+// Slug → UI metadata (icon, color, marketing description). Display label
+// is fetched from the services catalog via labelForServiceStatic so wording
+// stays canonical across the app. Listed in display order.
+const SERVICE_UI: ReadonlyArray<{
+  slug: string
+  icon: typeof Building2
+  color: string
+  desc: string
+}> = [
+  { slug: 'llc_formation', icon: Building2, color: 'text-blue-600 bg-blue-50', desc: 'Form a new US LLC (Wyoming, Delaware, New Mexico, Florida)' },
+  { slug: 'tax_return', icon: Receipt, color: 'text-green-600 bg-green-50', desc: 'Annual tax return (Form 1120, 1065, 5472)' },
+  { slug: 'itin', icon: Fingerprint, color: 'text-purple-600 bg-purple-50', desc: 'W-7 preparation and filing as IRS Certified Acceptance Agent' },
+  { slug: 'banking', icon: CreditCard, color: 'text-amber-600 bg-amber-50', desc: 'USD (Relay) or EUR (Payset IBAN) business account' },
+  { slug: 'ein', icon: FileText, color: 'text-indigo-600 bg-indigo-50', desc: 'Employer Identification Number from the IRS' },
+  { slug: 'shipping', icon: Package, color: 'text-orange-600 bg-orange-50', desc: 'International shipping, mail forwarding, package handling' },
+  { slug: 'notary', icon: FileText, color: 'text-rose-600 bg-rose-50', desc: 'Notarization, apostille, certified copies' },
+  { slug: 'closure', icon: XCircle, color: 'text-red-600 bg-red-50', desc: 'LLC dissolution, state filing, IRS closure letter' },
+  { slug: 'consulting', icon: Phone, color: 'text-teal-600 bg-teal-50', desc: 'One-on-one consultation about your business needs' },
 ]
 
 export function PartnerNewRequestClient({
@@ -125,7 +80,7 @@ export function PartnerNewRequestClient({
     setSubmitting(true)
 
     try {
-      const service = SERVICES.find(s => s.id === selectedService)!
+      const serviceName = labelForServiceStatic(selectedService)
       const clientInfo = isNewClient && newClientEmail
         ? `${clientLabel} (${newClientEmail})`
         : clientLabel
@@ -135,7 +90,7 @@ export function PartnerNewRequestClient({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           account_id: isNewClient ? undefined : (selectedAccountId || undefined),
-          message: `🛎️ PARTNER REQUEST [${partnerName}]\nClient: ${clientInfo}\nService: ${service.name}\n\nDetails: ${details.trim()}\nUrgency: ${urgency}`,
+          message: `🛎️ PARTNER REQUEST [${partnerName}]\nClient: ${clientInfo}\nService: ${serviceName}\n\nDetails: ${details.trim()}\nUrgency: ${urgency}`,
           type: 'service_request',
         }),
       })
@@ -145,7 +100,7 @@ export function PartnerNewRequestClient({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           service_id: selectedService,
-          service_name: service.name,
+          service_name: serviceName,
           details: `[Partner: ${partnerName}] Client: ${clientInfo}\n\n${details.trim()}`,
           urgency,
           contact_id: contactId,
@@ -304,19 +259,19 @@ export function PartnerNewRequestClient({
             <>
               <p className="text-sm font-medium text-zinc-700">Select a service</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {SERVICES.map(svc => {
+                {SERVICE_UI.map(svc => {
                   const Icon = svc.icon
                   return (
                     <button
-                      key={svc.id}
-                      onClick={() => setSelectedService(svc.id)}
+                      key={svc.slug}
+                      onClick={() => setSelectedService(svc.slug)}
                       className="flex items-start gap-3 p-4 bg-white border rounded-xl hover:border-blue-300 hover:shadow-sm transition-all text-left"
                     >
                       <div className={cn('p-2.5 rounded-lg shrink-0', svc.color)}>
                         <Icon className="h-5 w-5" />
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-zinc-900">{svc.name}</p>
+                        <p className="text-sm font-medium text-zinc-900">{labelForServiceStatic(svc.slug)}</p>
                         <p className="text-xs text-zinc-500 mt-0.5">{svc.desc}</p>
                       </div>
                     </button>
@@ -336,7 +291,7 @@ export function PartnerNewRequestClient({
 
               {/* Selected service card */}
               {(() => {
-                const svc = SERVICES.find(s => s.id === selectedService)!
+                const svc = SERVICE_UI.find(s => s.slug === selectedService)!
                 const Icon = svc.icon
                 return (
                   <div className="flex items-center gap-3 p-4 bg-white border rounded-xl">
@@ -344,7 +299,7 @@ export function PartnerNewRequestClient({
                       <Icon className="h-5 w-5" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold">{svc.name}</p>
+                      <p className="text-sm font-semibold">{labelForServiceStatic(svc.slug)}</p>
                       <p className="text-xs text-zinc-500">{svc.desc}</p>
                     </div>
                   </div>
