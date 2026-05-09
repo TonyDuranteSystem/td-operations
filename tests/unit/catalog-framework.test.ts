@@ -265,10 +265,15 @@ import {
   getLLCManagementBundle,
   getSDByType,
   getServiceBySlug,
+  getServiceBySlugStatic,
   isStandaloneSD,
   labelForService,
+  labelForServiceStatic,
+  SD_STATIC,
   type ServiceSlug,
   servicesAutoBundledWithManagement,
+  SERVICES_STATIC,
+  SERVICES_STATIC_SELLABLE,
   slugToDisplay,
 } from "@/lib/services/index"
 
@@ -803,5 +808,62 @@ describe("lib/services/index", () => {
 
   it("seed contains exactly 18 entries (matches DB)", () => {
     expect(SERVICES_SEED.length).toBe(18)
+  })
+})
+
+// ─── SERVICES_STATIC drift detector ──────────────────────────────────────
+
+describe("SERVICES_STATIC", () => {
+  it("contains exactly the 18 seed entries by slug", () => {
+    expect(SERVICES_STATIC.map((e) => e.slug).sort()).toEqual(
+      SERVICES_SEED.map((s) => s.slug).sort(),
+    )
+  })
+
+  it("matches each seed row's display_name, status, tags, and translations", () => {
+    for (const seed of SERVICES_SEED) {
+      const stat = SERVICES_STATIC.find((e) => e.slug === seed.slug)
+      expect(stat, `static entry missing for slug=${seed.slug}`).toBeDefined()
+      if (!stat) continue
+      expect(stat.display_name).toBe(seed.display_name)
+      expect(stat.status).toBe(seed.status)
+      expect([...stat.tags].sort()).toEqual([...seed.tags].sort())
+      expect(stat.display_name_translations).toEqual(seed.display_name_translations ?? {})
+    }
+  })
+
+  it("SERVICES_STATIC_SELLABLE matches getAllServices() (11 active rows tagged 'service')", async () => {
+    const dynamic = await getAllServices()
+    expect(SERVICES_STATIC_SELLABLE.map((e) => e.slug).sort()).toEqual(
+      dynamic.map((e) => e.slug).sort(),
+    )
+    expect(SERVICES_STATIC_SELLABLE.length).toBe(11)
+  })
+
+  it("SD_STATIC matches active 'sd'-tagged rows (10 rows; annual_renewal_sd is deprecated)", async () => {
+    const dynamic = await getAllSDTypes()
+    const dynamicActive = dynamic.filter((e) => e.status === "active")
+    expect(SD_STATIC.map((e) => e.slug).sort()).toEqual(
+      dynamicActive.map((e) => e.slug).sort(),
+    )
+    expect(SD_STATIC.length).toBe(10)
+  })
+
+  it("getServiceBySlugStatic returns the same slug as getServiceBySlug for known slugs", async () => {
+    const dyn = await getServiceBySlug("tax_return")
+    const stat = getServiceBySlugStatic("tax_return")
+    expect(stat?.slug).toBe(dyn?.slug)
+    expect(stat?.display_name).toBe(dyn?.display_name)
+  })
+
+  it("getServiceBySlugStatic returns null for unknown slug", () => {
+    expect(getServiceBySlugStatic("nonexistent")).toBeNull()
+  })
+
+  it("labelForServiceStatic returns Italian when present, English otherwise", () => {
+    expect(labelForServiceStatic("tax_return", "it")).toBe("Dichiarazione Fiscale")
+    expect(labelForServiceStatic("consulting", "it")).toBe("Consulting Call")
+    expect(labelForServiceStatic("tax_return")).toBe("Tax Return")
+    expect(labelForServiceStatic("unknown_slug")).toBe("unknown_slug")
   })
 })

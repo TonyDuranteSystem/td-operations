@@ -164,3 +164,180 @@ export async function displayToSlug(): Promise<Record<string, string>> {
   for (const e of all) map[e.display_name] = e.slug
   return map
 }
+
+// ── Static mirror (sync access for client components) ─────────────────────
+
+export interface StaticServiceEntry {
+  slug: string
+  display_name: string
+  display_name_translations: Record<string, string>
+  status: "active" | "deprecated" | "exception_only"
+  tags: readonly string[]
+}
+
+/**
+ * Hand-maintained mirror of the 18 production seed rows for
+ * `catalog_id='services'`. Synchronously available, suitable for use in
+ * client components that cannot `await`.
+ *
+ * Drift between this list and the DB seed is caught at build time by a unit
+ * test in `tests/unit/catalog-framework.test.ts`. Any change to the
+ * canonical seed must be reflected here in the same PR.
+ */
+export const SERVICES_STATIC: readonly StaticServiceEntry[] = [
+  {
+    slug: "llc_formation",
+    display_name: "LLC Formation",
+    display_name_translations: { it: "Costituzione LLC" },
+    status: "active",
+    tags: ["service", "sellable", "entry_to_management"],
+  },
+  {
+    slug: "onboarding",
+    display_name: "Onboarding",
+    display_name_translations: { it: "Onboarding LLC esistente" },
+    status: "active",
+    tags: ["service", "sellable", "entry_to_management"],
+  },
+  {
+    slug: "tax_return",
+    display_name: "Tax Return",
+    display_name_translations: { it: "Dichiarazione Fiscale" },
+    status: "active",
+    tags: ["service", "sd", "sellable", "auto_bundled_with_management"],
+  },
+  {
+    slug: "itin",
+    display_name: "ITIN Application",
+    display_name_translations: { it: "Richiesta ITIN" },
+    status: "active",
+    tags: ["service", "sd", "sellable"],
+  },
+  {
+    slug: "ein",
+    display_name: "EIN Application",
+    display_name_translations: { it: "Richiesta EIN" },
+    status: "active",
+    tags: ["service", "sd", "sellable"],
+  },
+  {
+    slug: "banking",
+    display_name: "Banking",
+    display_name_translations: { it: "Apertura conto bancario" },
+    status: "active",
+    tags: ["service", "sd", "sellable"],
+  },
+  {
+    slug: "cmra",
+    display_name: "CMRA Mailing Address",
+    display_name_translations: { it: "Indirizzo postale (CMRA)" },
+    status: "active",
+    tags: ["service", "sd", "sellable", "auto_bundled_with_management"],
+  },
+  {
+    slug: "shipping",
+    display_name: "Shipping Service",
+    display_name_translations: {},
+    status: "active",
+    tags: ["service", "sellable"],
+  },
+  {
+    slug: "notary",
+    display_name: "Public Notary",
+    display_name_translations: {},
+    status: "active",
+    tags: ["service", "sellable"],
+  },
+  {
+    slug: "closure",
+    display_name: "Company Closure",
+    display_name_translations: {},
+    status: "active",
+    tags: ["service", "sd", "sellable"],
+  },
+  {
+    slug: "consulting",
+    display_name: "Consulting Call",
+    display_name_translations: {},
+    status: "active",
+    tags: ["service", "sellable"],
+  },
+  {
+    slug: "state_annual_report",
+    display_name: "State Annual Report",
+    display_name_translations: { it: "Rapporto annuale statale" },
+    status: "active",
+    tags: ["sd", "auto_bundled_with_management"],
+  },
+  {
+    slug: "state_ra_renewal",
+    display_name: "State RA Renewal",
+    display_name_translations: { it: "Rinnovo Registered Agent" },
+    status: "active",
+    tags: ["sd", "auto_bundled_with_management"],
+  },
+  {
+    slug: "client_onboarding",
+    display_name: "Client Onboarding",
+    display_name_translations: {},
+    status: "active",
+    tags: ["sd"],
+  },
+  {
+    slug: "company_formation",
+    display_name: "Company Formation",
+    display_name_translations: {},
+    status: "active",
+    tags: ["sd"],
+  },
+  {
+    slug: "annual_renewal_sd",
+    display_name: "Annual Renewal (Legacy SD)",
+    display_name_translations: {},
+    status: "deprecated",
+    tags: ["billing_cycle_artifact", "deprecated"],
+  },
+  {
+    slug: "custom",
+    display_name: "Custom",
+    display_name_translations: {},
+    status: "exception_only",
+    tags: ["exception"],
+  },
+  {
+    slug: "pending_review",
+    display_name: "Pending Review",
+    display_name_translations: {},
+    status: "exception_only",
+    tags: ["exception"],
+  },
+]
+
+/** Active rows tagged `service`, in seed order. Sync mirror of `getAllServices()`. */
+export const SERVICES_STATIC_SELLABLE: readonly StaticServiceEntry[] = SERVICES_STATIC.filter(
+  (e) => e.status === "active" && e.tags.includes("service"),
+)
+
+/** Active rows tagged `sd`, in seed order. Sync mirror of `getAllSDTypes()`. */
+export const SD_STATIC: readonly StaticServiceEntry[] = SERVICES_STATIC.filter(
+  (e) => e.status === "active" && e.tags.includes("sd"),
+)
+
+/** Sync slug→entry lookup keyed by canonical catalog slug. */
+const STATIC_BY_SLUG: Record<string, StaticServiceEntry> = Object.fromEntries(
+  SERVICES_STATIC.map((e) => [e.slug, e]),
+)
+
+export function getServiceBySlugStatic(slug: string): StaticServiceEntry | null {
+  return STATIC_BY_SLUG[slug] ?? null
+}
+
+/** English-or-translated display name for a slug. Sync mirror of `labelForService()`. */
+export function labelForServiceStatic(slug: string, lang: string = "en"): string {
+  const e = STATIC_BY_SLUG[slug]
+  if (!e) return slug
+  if (lang !== "en" && e.display_name_translations[lang]) {
+    return e.display_name_translations[lang]
+  }
+  return e.display_name
+}
