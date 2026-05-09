@@ -5,6 +5,7 @@ import { X, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import { ContactCombobox } from './contact-combobox'
+import { labelForServiceStatic } from '@/lib/services'
 
 interface CreatePartnerDialogProps {
   open: boolean
@@ -12,7 +13,19 @@ interface CreatePartnerDialogProps {
 }
 
 const COMMISSION_MODELS = ['percentage', 'price_difference', 'flat_fee']
-const AVAILABLE_SERVICES = ['LLC Formation', 'Tax Return', 'ITIN', 'EIN', 'Banking', 'CMRA', 'Annual Renewal']
+
+// Canonical service-catalog slugs offered to partners. Stored verbatim in
+// `client_partners.agreed_services`. Display labels come from the catalog.
+const AVAILABLE_SERVICE_SLUGS = [
+  'llc_formation',
+  'tax_return',
+  'itin',
+  'ein',
+  'banking',
+  'cmra',
+  'state_ra_renewal',
+  'state_annual_report',
+] as const
 
 export function CreatePartnerDialog({ open, onClose }: CreatePartnerDialogProps) {
   const [isPending, startTransition] = useTransition()
@@ -130,14 +143,14 @@ export function CreatePartnerDialog({ open, onClose }: CreatePartnerDialogProps)
             <div>
               <label className="block text-sm font-medium mb-1">Agreed Services</label>
               <div className="flex flex-wrap gap-2">
-                {AVAILABLE_SERVICES.map(svc => (
-                  <button key={svc} type="button" onClick={() => toggleService(svc)}
+                {AVAILABLE_SERVICE_SLUGS.map(slug => (
+                  <button key={slug} type="button" onClick={() => toggleService(slug)}
                     className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                      selectedServices.includes(svc)
+                      selectedServices.includes(slug)
                         ? 'bg-blue-50 border-blue-300 text-blue-700'
                         : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'
                     }`}>
-                    {svc}
+                    {labelForServiceStatic(slug)}
                   </button>
                 ))}
               </div>

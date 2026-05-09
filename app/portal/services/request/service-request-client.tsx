@@ -8,6 +8,7 @@ import {
   Loader2, MessageCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { labelForServiceStatic } from '@/lib/services'
 
 interface ServiceRequestClientProps {
   contactId: string
@@ -16,70 +17,24 @@ interface ServiceRequestClientProps {
   locale: string
 }
 
-const SERVICES = [
-  {
-    id: 'llc_formation',
-    icon: Building2,
-    color: 'text-blue-600 bg-blue-50',
-    en: { name: 'LLC Formation', desc: 'Form a new US LLC (Wyoming, Delaware, New Mexico, Florida)' },
-    it: { name: 'Costituzione LLC', desc: 'Costituisci una nuova LLC americana (Wyoming, Delaware, New Mexico, Florida)' },
-  },
-  {
-    id: 'tax_return',
-    icon: Receipt,
-    color: 'text-green-600 bg-green-50',
-    en: { name: 'Tax Return Filing', desc: 'Annual tax return (Form 1120, 1065, 5472)' },
-    it: { name: 'Dichiarazione dei Redditi', desc: 'Dichiarazione annuale (Form 1120, 1065, 5472)' },
-  },
-  {
-    id: 'itin',
-    icon: Fingerprint,
-    color: 'text-purple-600 bg-purple-50',
-    en: { name: 'ITIN Application', desc: 'W-7 preparation and filing as IRS Certified Acceptance Agent' },
-    it: { name: 'Richiesta ITIN', desc: 'Preparazione W-7 e invio come Agente Certificato IRS' },
-  },
-  {
-    id: 'banking',
-    icon: CreditCard,
-    color: 'text-amber-600 bg-amber-50',
-    en: { name: 'Business Banking', desc: 'USD (Relay) or EUR (Payset IBAN) business account' },
-    it: { name: 'Conto Business', desc: 'Conto aziendale USD (Relay) o EUR IBAN (Payset)' },
-  },
-  {
-    id: 'ein',
-    icon: FileText,
-    color: 'text-indigo-600 bg-indigo-50',
-    en: { name: 'EIN Application', desc: 'Employer Identification Number from the IRS' },
-    it: { name: 'Richiesta EIN', desc: 'Employer Identification Number dall\'IRS' },
-  },
-  {
-    id: 'shipping',
-    icon: Package,
-    color: 'text-orange-600 bg-orange-50',
-    en: { name: 'Shipping Service', desc: 'International shipping, mail forwarding, package handling' },
-    it: { name: 'Servizio Spedizioni', desc: 'Spedizioni internazionali, inoltro posta, gestione pacchi' },
-  },
-  {
-    id: 'notary',
-    icon: FileText,
-    color: 'text-rose-600 bg-rose-50',
-    en: { name: 'Public Notary', desc: 'Notarization, apostille, certified copies' },
-    it: { name: 'Notaio Pubblico', desc: 'Notarizzazione, apostille, copie certificate' },
-  },
-  {
-    id: 'closure',
-    icon: XCircle,
-    color: 'text-red-600 bg-red-50',
-    en: { name: 'Company Closure', desc: 'LLC dissolution, state filing, IRS closure letter' },
-    it: { name: 'Chiusura Società', desc: 'Scioglimento LLC, filing statale, lettera chiusura IRS' },
-  },
-  {
-    id: 'consulting',
-    icon: Phone,
-    color: 'text-teal-600 bg-teal-50',
-    en: { name: 'Consulting Call', desc: 'One-on-one consultation about your business needs' },
-    it: { name: 'Consulenza', desc: 'Consulenza personalizzata sulle tue esigenze aziendali' },
-  },
+// Slug → UI metadata (icon, color, bilingual marketing description). Display
+// labels are resolved from the services catalog via labelForServiceStatic so
+// wording stays canonical across the app and admin tooling.
+const SERVICE_UI: ReadonlyArray<{
+  slug: string
+  icon: typeof Building2
+  color: string
+  desc: { en: string; it: string }
+}> = [
+  { slug: 'llc_formation', icon: Building2, color: 'text-blue-600 bg-blue-50', desc: { en: 'Form a new US LLC (Wyoming, Delaware, New Mexico, Florida)', it: 'Costituisci una nuova LLC americana (Wyoming, Delaware, New Mexico, Florida)' } },
+  { slug: 'tax_return', icon: Receipt, color: 'text-green-600 bg-green-50', desc: { en: 'Annual tax return (Form 1120, 1065, 5472)', it: 'Dichiarazione annuale (Form 1120, 1065, 5472)' } },
+  { slug: 'itin', icon: Fingerprint, color: 'text-purple-600 bg-purple-50', desc: { en: 'W-7 preparation and filing as IRS Certified Acceptance Agent', it: 'Preparazione W-7 e invio come Agente Certificato IRS' } },
+  { slug: 'banking', icon: CreditCard, color: 'text-amber-600 bg-amber-50', desc: { en: 'USD (Relay) or EUR (Payset IBAN) business account', it: 'Conto aziendale USD (Relay) o EUR IBAN (Payset)' } },
+  { slug: 'ein', icon: FileText, color: 'text-indigo-600 bg-indigo-50', desc: { en: 'Employer Identification Number from the IRS', it: 'Employer Identification Number dall\'IRS' } },
+  { slug: 'shipping', icon: Package, color: 'text-orange-600 bg-orange-50', desc: { en: 'International shipping, mail forwarding, package handling', it: 'Spedizioni internazionali, inoltro posta, gestione pacchi' } },
+  { slug: 'notary', icon: FileText, color: 'text-rose-600 bg-rose-50', desc: { en: 'Notarization, apostille, certified copies', it: 'Notarizzazione, apostille, copie certificate' } },
+  { slug: 'closure', icon: XCircle, color: 'text-red-600 bg-red-50', desc: { en: 'LLC dissolution, state filing, IRS closure letter', it: 'Scioglimento LLC, filing statale, lettera chiusura IRS' } },
+  { slug: 'consulting', icon: Phone, color: 'text-teal-600 bg-teal-50', desc: { en: 'One-on-one consultation about your business needs', it: 'Consulenza personalizzata sulle tue esigenze aziendali' } },
 ]
 
 const T = {
@@ -133,8 +88,8 @@ export function ServiceRequestClient({ contactId, accountId, userName, locale }:
     setSubmitting(true)
 
     try {
-      const service = SERVICES.find(s => s.id === selected)
-      const serviceName = locale === 'it' ? service?.it.name : service?.en.name
+      const serviceName = labelForServiceStatic(selected, locale)
+      const serviceNameEn = labelForServiceStatic(selected, 'en')
 
       // Submit via chat API (creates a message visible to staff).
       // Pass account_id so the message lands on the account chat — without
@@ -156,7 +111,7 @@ export function ServiceRequestClient({ contactId, accountId, userName, locale }:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           service_id: selected,
-          service_name: service?.en.name, // Always English for CRM
+          service_name: serviceNameEn, // Always English for CRM
           details: details.trim(),
           urgency,
           contact_id: contactId,
@@ -208,21 +163,21 @@ export function ServiceRequestClient({ contactId, accountId, userName, locale }:
       {!selected ? (
         // Service grid
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {SERVICES.map(svc => {
+          {SERVICE_UI.map(svc => {
             const Icon = svc.icon
-            const label = locale === 'it' ? svc.it : svc.en
+            const desc = locale === 'it' ? svc.desc.it : svc.desc.en
             return (
               <button
-                key={svc.id}
-                onClick={() => setSelected(svc.id)}
+                key={svc.slug}
+                onClick={() => setSelected(svc.slug)}
                 className="flex items-start gap-3 p-4 bg-white border rounded-xl hover:border-blue-300 hover:shadow-sm transition-all text-left"
               >
                 <div className={cn('p-2.5 rounded-lg shrink-0', svc.color)}>
                   <Icon className="h-5 w-5" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-zinc-900">{label.name}</p>
-                  <p className="text-xs text-zinc-500 mt-0.5">{label.desc}</p>
+                  <p className="text-sm font-medium text-zinc-900">{labelForServiceStatic(svc.slug, locale)}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">{desc}</p>
                 </div>
               </button>
             )
@@ -241,17 +196,17 @@ export function ServiceRequestClient({ contactId, accountId, userName, locale }:
 
           {/* Selected service card */}
           {(() => {
-            const svc = SERVICES.find(s => s.id === selected)!
+            const svc = SERVICE_UI.find(s => s.slug === selected)!
             const Icon = svc.icon
-            const label = locale === 'it' ? svc.it : svc.en
+            const desc = locale === 'it' ? svc.desc.it : svc.desc.en
             return (
               <div className="flex items-center gap-3 p-4 bg-white border rounded-xl mb-6">
                 <div className={cn('p-2.5 rounded-lg', svc.color)}>
                   <Icon className="h-5 w-5" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold">{label.name}</p>
-                  <p className="text-xs text-zinc-500">{label.desc}</p>
+                  <p className="text-sm font-semibold">{labelForServiceStatic(svc.slug, locale)}</p>
+                  <p className="text-xs text-zinc-500">{desc}</p>
                 </div>
               </div>
             )

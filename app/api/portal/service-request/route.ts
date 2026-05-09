@@ -10,10 +10,15 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
+import { getServiceBySlug, type ServiceSlug } from '@/lib/services'
 
 export const dynamic = 'force-dynamic'
 
-const SERVICE_CATEGORIES: Record<string, string> = {
+// CRM category routing for portal service requests. Keyed by canonical
+// catalog slug. Anything not in this map falls back to 'Client Response'.
+// Not all ServiceSlugs route here (the picker only offers nine); the
+// `Partial` type lets the compiler accept that.
+const SERVICE_CATEGORIES: Partial<Record<ServiceSlug, string>> = {
   llc_formation: 'Formation',
   tax_return: 'Filing',
   itin: 'Filing',
@@ -35,11 +40,23 @@ export async function POST(req: NextRequest) {
 
     const contactId = getClientContactId(user)
     const body = await req.json()
-    const { service_id, service_name, details, urgency, contact_id } = body
+    const { service_id, details, urgency, contact_id } = body
 
-    if (!service_id || !service_name || !details) {
+    if (!service_id || !details) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
+
+    // Validate service_id against the catalog. The display label used in the
+    // task title comes from the catalog (the trusted source) — not from any
+    // client-supplied service_name field.
+    const serviceEntry = await getServiceBySlug(service_id)
+    if (!serviceEntry) {
+      return NextResponse.json(
+        { error: `Unknown service: ${service_id}` },
+        { status: 400 },
+      )
+    }
+    const serviceName = serviceEntry.display_name
 
     // Find account linked to this contact
     const targetContactId = contact_id || contactId
@@ -68,9 +85,13 @@ export async function POST(req: NextRequest) {
 
     // Create CRM task
     const taskTitle = companyName
-      ? `${service_name} — ${companyName} (portal request)`
-      : `${service_name} — ${clientName} (portal request)`
+      ? `${serviceName} — ${companyName} (portal request)`
+      : `${serviceName} — ${clientName} (portal request)`
 
+    /* eslint-disable no-restricted-syntax */
+    // Pre-existing raw insert; predates the P2.4 rule. Extracting a
+    // createTask() helper into lib/operations/task.ts is tracked
+    // separately and out of scope for catalog Phase 3.
     const { data: task, error: taskErr } = await supabaseAdmin
       .from('tasks')
       .insert({
@@ -78,13 +99,14 @@ export async function POST(req: NextRequest) {
         description: `Service requested via Client Portal.\n\nClient: ${clientName}${companyName ? `\nCompany: ${companyName}` : ''}\nEmail: ${contact?.email || user.email}\n\nDetails:\n${details}`,
         status: 'To Do',
         priority: urgency === 'urgent' ? 'Urgent' : 'Normal',
-        category: (SERVICE_CATEGORIES[service_id] || 'Client Response') as never,
+        category: (SERVICE_CATEGORIES[service_id as ServiceSlug] || 'Client Response') as never,
         assigned_to: 'Antonio',
         account_id: accountId || null,
         contact_id: targetContactId || null,
       })
       .select('id')
       .single()
+    /* eslint-enable no-restricted-syntax */
 
     if (taskErr) {
       console.error('[service-request] Task creation failed:', taskErr.message)
