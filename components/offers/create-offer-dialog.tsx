@@ -363,13 +363,29 @@ export function CreateOfferDialog({
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
-  // Default service_context based on service pipeline/name
+  // Default service_context routing keyed by canonical service-catalog slug.
+  // svc.id is the catalog slug (set in the loader at line ~130). Anything
+  // not in these sets falls through to 'ask'.
+  const INDIVIDUAL_DEFAULT_SLUGS: ReadonlySet<string> = new Set(['itin'])
+  const BUSINESS_DEFAULT_SLUGS: ReadonlySet<string> = new Set([
+    'llc_formation',
+    'onboarding',
+    'company_formation',
+    'client_onboarding',
+    'ein',
+    'banking',
+    'closure',
+    'cmra',
+    'state_ra_renewal',
+    'state_annual_report',
+  ])
+  const ASK_DEFAULT_SLUGS: ReadonlySet<string> = new Set(['tax_return'])
+
   const getDefaultContext = (svc: CatalogService | undefined): 'individual' | 'business' | 'ask' => {
     if (!svc) return 'ask'
-    const p = svc.pipeline?.toLowerCase() || svc.name.toLowerCase()
-    if (['itin', 'itin renewal'].some(t => p.includes(t.toLowerCase()))) return 'individual'
-    if (['company formation', 'ein', 'banking fintech', 'company closure', 'cmra', 'annual renewal', 'dba', 'client onboarding', 'state ra renewal', 'state annual report'].some(t => p.includes(t.toLowerCase()))) return 'business'
-    if (p.includes('tax return')) return 'ask'
+    if (INDIVIDUAL_DEFAULT_SLUGS.has(svc.id)) return 'individual'
+    if (BUSINESS_DEFAULT_SLUGS.has(svc.id)) return 'business'
+    if (ASK_DEFAULT_SLUGS.has(svc.id)) return 'ask'
     return 'ask'
   }
 
