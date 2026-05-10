@@ -7,6 +7,7 @@ import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-acti
 import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/account-create'
 import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
+import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
 import type { Json } from '@/lib/database.types'
 
 export async function updateAccountField(
@@ -450,6 +451,49 @@ export async function createAndLinkContact(
   return { success: true, contactId: contact.id }
 }
 
+/**
+ * Promote an onboarding-tier account whose EIN has been recorded to the
+ * 'active' tier. UI equivalent of what `onboarding_form_review` does at the
+ * end of its background job — provided for cases where the form was reviewed
+ * manually (no MCP run) or got stuck on tier promotion. Gated client-side on
+ * portal_tier='onboarding' + ein_number set; server re-checks both before the
+ * tier write to avoid stale-UI errors.
+ */
+export async function promoteAccountToActive(accountId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    const actor = `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
+
+    const { data: account } = await supabaseAdmin
+      .from('accounts')
+      .select('portal_tier, ein_number, company_name')
+      .eq('id', accountId)
+      .single()
+
+    if (!account) throw new Error('Account not found')
+    if (account.portal_tier !== 'onboarding') {
+      throw new Error(`Account tier is "${account.portal_tier ?? 'null'}", not "onboarding" — promote not allowed`)
+    }
+    if (!account.ein_number) {
+      throw new Error('Account has no EIN — record EIN before promoting to active')
+    }
+
+    const result = await syncTier({
+      accountId,
+      newTier: 'active',
+      reason: 'CRM: promote to active (post-onboarding)',
+      actor,
+    })
+    if (!result.success) throw new Error(result.error ?? 'syncTier failed')
+
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'update', table_name: 'accounts', record_id: accountId,
+    summary: 'Promoted onboarding → active',
+  })
+}
+
 // ── Status Change with Cascades ────────────────────────────────────
 // Atomic-ish status change: writes new status, runs opt-in side effects,
 // logs everything to action_log, appends a dated note to accounts.notes.
@@ -651,6 +695,13 @@ export async function changeAccountStatus(
     })
   }
 
+  // Capture actor once for cascades that need to log it (recompute helpers).
+  // Pulled before the cascades so revoke/suspend can attribute the contact
+  // tier recompute to the same dashboard user that triggered the status change.
+  const cascadeSupabase = createClient()
+  const { data: { user: cascadeUser } } = await cascadeSupabase.auth.getUser()
+  const cascadeActor = `dashboard:${cascadeUser?.email?.split('@')[0] ?? 'unknown'}`
+
   if (options.revokePortalAccess) {
     await runCascade('revoke_portal_access', async () => {
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
@@ -659,6 +710,11 @@ export async function changeAccountStatus(
         .update({ portal_tier: 'inactive', portal_account: false })
         .eq('id', accountId)
       if (error) throw new Error(error.message)
+      // Recompute portal_tier on every linked contact so the contact + auth
+      // metadata reflect the loss of this account. computeContactTier inside
+      // the helper excludes lifecycle markers ('inactive'/'suspended') and
+      // returns the MAX of the remaining valid account tiers.
+      await syncContactTiersForAccount(accountId, cascadeActor)
     })
   }
 
@@ -670,6 +726,7 @@ export async function changeAccountStatus(
         .update({ portal_tier: 'suspended' })
         .eq('id', accountId)
       if (error) throw new Error(error.message)
+      await syncContactTiersForAccount(accountId, cascadeActor)
     })
   }
 

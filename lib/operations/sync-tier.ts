@@ -65,6 +65,78 @@ export async function computeContactTier(contactId: string): Promise<PortalTier 
 }
 
 /**
+ * Recompute and sync portal_tier for every contact linked to `accountId`.
+ *
+ * Use this when an account's tier was just written by the caller and you need
+ * the linked contacts + auth metadata to catch up — including when the new
+ * account tier is a lifecycle marker (`inactive`, `suspended`) that `syncTier`
+ * itself refuses. Each contact's new tier is the MAX of its remaining
+ * non-lifecycle account tiers via `computeContactTier`; if that returns null
+ * the contact's existing tier is preserved (same contract as `syncTier`).
+ *
+ * Does NOT write to the accounts table — the caller owns that.
+ */
+export async function syncContactTiersForAccount(
+  accountId: string,
+  actor = 'system',
+): Promise<ContactTierUpdate[]> {
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('contact_id')
+    .eq('account_id', accountId)
+
+  if (!links || links.length === 0) return []
+
+  const contactIds = Array.from(new Set(links.map(l => l.contact_id)))
+  const contactsUpdated: ContactTierUpdate[] = []
+
+  for (const contactId of contactIds) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('portal_tier, email')
+      .eq('id', contactId)
+      .single()
+
+    if (!contact) continue
+
+    const contactPreviousTier = contact.portal_tier as string | null
+    const computedTier = await computeContactTier(contactId)
+    if (computedTier === null) continue
+
+    if (computedTier !== contactPreviousTier) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({ portal_tier: computedTier, updated_at: new Date().toISOString() })
+        .eq('id', contactId)
+      contactsUpdated.push({ contactId, previousTier: contactPreviousTier, newTier: computedTier })
+    }
+
+    if (contact.email) {
+      const authUser = await findAuthUserByEmail(contact.email)
+      if (authUser && authUser.app_metadata?.portal_tier !== computedTier) {
+        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+          app_metadata: { ...authUser.app_metadata, portal_tier: computedTier },
+        })
+      }
+    }
+  }
+
+  if (contactsUpdated.length > 0) {
+    await supabaseAdmin.from('action_log').insert({
+      actor,
+      action_type: 'tier_sync',
+      table_name: 'contacts',
+      record_id: accountId,
+      account_id: accountId,
+      summary: `Contact tier recompute after account change — ${contactsUpdated.length} contact(s) updated`,
+      details: JSON.parse(JSON.stringify({ accountId, contacts_updated: contactsUpdated })),
+    })
+  }
+
+  return contactsUpdated
+}
+
+/**
  * Single entry point for all portal tier writes.
  * Writes to accounts, recomputes contact tier for all linked contacts, syncs auth metadata.
  */

@@ -8,6 +8,7 @@ import {
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
   Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
+  Rocket,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -27,7 +28,7 @@ import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
@@ -478,8 +479,27 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showDiagnostic, setShowDiagnostic] = useState(false)
   const [showStatusDialog, setShowStatusDialog] = useState(false)
   const [showEINReceived, setShowEINReceived] = useState(false)
+  const [promoting, setPromoting] = useState(false)
 
   const primaryContact = contacts[0] || null
+
+  // Cast once: account.portal_tier is not in the generated Account type yet.
+  const accountPortalTier = (account as unknown as Record<string, unknown>).portal_tier as string | null
+
+  const handlePromoteToActive = async () => {
+    if (!confirm(`Promote ${account.company_name} from onboarding → active?\n\nThis grants full portal access. Use after the onboarding form has been reviewed and the CRM setup is complete.`)) {
+      return
+    }
+    setPromoting(true)
+    const res = await promoteAccountToActive(account.id)
+    setPromoting(false)
+    if (res.success) {
+      toast.success('Promoted to active')
+      router.refresh()
+    } else {
+      toast.error(res.error ?? 'Failed to promote')
+    }
+  }
 
   const activeServices = services.filter(s => s.status !== 'Completed' && s.status !== 'Cancelled')
   const formationSD = services.find(s => s.service_type === 'Company Formation' && s.status !== 'Completed' && s.status !== 'Cancelled')
@@ -554,6 +574,16 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
               >
                 <BadgeCheck className="h-3.5 w-3.5" />
                 EIN Received
+              </button>
+            )}
+            {isAdmin && accountPortalTier === 'onboarding' && account.ein_number && (
+              <button
+                onClick={handlePromoteToActive}
+                disabled={promoting}
+                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors disabled:opacity-50"
+              >
+                {promoting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
+                {promoting ? 'Promoting…' : 'Promote to Active'}
               </button>
             )}
           </div>

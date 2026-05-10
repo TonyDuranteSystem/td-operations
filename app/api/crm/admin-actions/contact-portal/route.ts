@@ -3,7 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
-import { PORTAL_TIERS } from '@/lib/portal/tier-config'
+import { PORTAL_TIERS, type PortalTier } from '@/lib/portal/tier-config'
+import { syncTier } from '@/lib/operations/sync-tier'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -49,43 +50,53 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Invalid tier. Must be one of: ${validTiers.join(', ')}` }, { status: 400 })
     }
 
-    // Update contacts table
-    /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts/accounts portal_tier update; extract to reconcileTier() in lib/operations/portal.ts */
-    await supabaseAdmin
-      .from('contacts')
-      .update({ portal_tier: tier, updated_at: new Date().toISOString() })
-      .eq('id', contact_id)
-    /* eslint-enable no-restricted-syntax */
+    const actor = `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`
 
-    // Also sync tier to all linked accounts
+    // Route the write through syncTier per linked account. syncTier handles
+    // the account write, the contact-tier recompute (MAX across the contact's
+    // remaining valid account tiers, which here equals `tier` because every
+    // linked account is being set to the same value), and the auth.app_metadata
+    // sync — replacing the previous 3 separate non-atomic writes.
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id')
       .eq('contact_id', contact_id)
+
     for (const link of links ?? []) {
-      /* eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update portal_tier */
-      await supabaseAdmin
-        .from('accounts')
-        .update({ portal_tier: tier, updated_at: new Date().toISOString() })
-        .eq('id', link.account_id)
+      await syncTier({
+        accountId: link.account_id,
+        newTier: tier as PortalTier,
+        reason: 'admin: change_tier via contact-portal',
+        actor,
+      })
     }
 
-    // Update auth app_metadata
-    const authUser = await findAuthUser()
-    if (authUser) {
-      await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
-        app_metadata: { ...authUser.app_metadata, portal_tier: tier },
-      })
+    // Fallback path: contact has no linked accounts (rare — tier-only contact).
+    // The loop above never ran, so write the contact tier + auth metadata
+    // directly so the admin override sticks.
+    if (!links || links.length === 0) {
+      /* eslint-disable no-restricted-syntax -- pre-P2.4 Phase D1 raw contacts portal_tier update (no-account fallback only); extract when reconcileTier() lands */
+      await supabaseAdmin
+        .from('contacts')
+        .update({ portal_tier: tier, updated_at: new Date().toISOString() })
+        .eq('id', contact_id)
+      /* eslint-enable no-restricted-syntax */
+      const authUser = await findAuthUser()
+      if (authUser) {
+        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+          app_metadata: { ...authUser.app_metadata, portal_tier: tier },
+        })
+      }
     }
 
     // Log
     await supabaseAdmin.from('action_log').insert({
-      actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
+      actor,
       action_type: 'update',
       table_name: 'contacts',
       record_id: contact_id,
       summary: `Portal tier changed to ${tier}`,
-      details: { previous_tier: contact.portal_tier, new_tier: tier },
+      details: { previous_tier: contact.portal_tier, new_tier: tier, accounts_synced: links?.length ?? 0 },
     })
 
     return NextResponse.json({ success: true, message: `Tier changed to ${tier}` })
