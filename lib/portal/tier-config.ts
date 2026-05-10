@@ -94,9 +94,10 @@ export function isPartnerPortal(portalRole: string | null | undefined): boolean 
 }
 
 // Features excluded for One-Time accounts (standalone service customers)
-// They get portal access but don't need annual management tools
+// They get portal access but don't need annual management tools.
+// 'billing' is intentionally NOT excluded — One-Time customers still receive
+// TD invoices for the standalone service and must be able to view them.
 const ONE_TIME_EXCLUDED = [
-  'billing',       // No TD invoices/installments
   'invoices',      // No client invoicing tools
   'customers',     // No client database
   'deadlines',     // No recurring compliance
