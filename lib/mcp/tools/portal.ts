@@ -11,6 +11,7 @@ import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
 import { gmailPost } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
 import type { MailingAddressRow } from "@/lib/addresses"
+import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 
 // Document types allowed to be visible in the client portal Documents tab
 // Document types visible to clients in the portal (by type name)
@@ -282,7 +283,7 @@ export function registerPortalTools(server: McpServer) {
             language: lang, payment_type: "bank_transfer", status: msaInitialStatus, offer_date: today,
             effective_date: `${agreementYear}-01-01`,
             skip_january: skipJanuary || isLegacyTransition,
-            bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
+            bundled_pipelines: [...LLC_MANAGEMENT_BUNDLE_TYPES],
             services: [{ name: "Annual LLC Management", price: (account.installment_1_amount || 0) + (account.installment_2_amount || 0), description: "Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal" }],
             cost_summary: skipJanuary
               ? [

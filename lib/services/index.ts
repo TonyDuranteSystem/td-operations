@@ -116,6 +116,35 @@ export async function getLLCManagementBundle(): Promise<CatalogEntry[]> {
 /** Alias kept for spec parity. */
 export const servicesAutoBundledWithManagement = getLLCManagementBundle
 
+/**
+ * Display names of the 4 LLC Management bundle SD types — the value written to
+ * `annual_agreements.bundled_pipelines` and `offers.bundled_pipelines`.
+ *
+ * Order is the historical write order (CMRA, State RA Renewal, State Annual
+ * Report, Tax Return) — preserved so callers produce byte-identical JSONB to
+ * what's already in the DB. The bundle's *set* membership is derived from the
+ * catalog (`auto_bundled_with_management` tag); a unit test asserts the set
+ * here matches the catalog so drift between the two is caught at build time.
+ */
+export const LLC_MANAGEMENT_BUNDLE_TYPES: readonly string[] = [
+  "CMRA Mailing Address",
+  "State RA Renewal",
+  "State Annual Report",
+  "Tax Return",
+] as const
+
+/**
+ * Async accessor — returns the bundle SD-type display names. Reads through
+ * the catalog cache and respects the `auto_bundled_with_management` tag, but
+ * yields entries in catalog seed order (NOT the historical write order). For
+ * writes to `bundled_pipelines`, prefer `LLC_MANAGEMENT_BUNDLE_TYPES` so the
+ * stored array stays consistent with existing rows.
+ */
+export async function getLLCManagementBundleTypes(): Promise<string[]> {
+  const entries = await getLLCManagementBundle()
+  return entries.map((e) => e.display_name)
+}
+
 /** Active rows tagged `sellable`. */
 export async function getAllSellableServices(): Promise<CatalogEntry[]> {
   const all = await loadEntries()

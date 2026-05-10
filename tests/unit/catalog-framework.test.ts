@@ -263,12 +263,14 @@ import {
   getAllSellableServices,
   getAllServices,
   getLLCManagementBundle,
+  getLLCManagementBundleTypes,
   getSDByType,
   getServiceBySlug,
   getServiceBySlugStatic,
   isStandaloneSD,
   labelForService,
   labelForServiceStatic,
+  LLC_MANAGEMENT_BUNDLE_TYPES,
   SD_STATIC,
   type ServiceSlug,
   servicesAutoBundledWithManagement,
@@ -743,6 +745,28 @@ describe("lib/services/index", () => {
     const a = await servicesAutoBundledWithManagement()
     const b = await getLLCManagementBundle()
     expect(a.map((x) => x.slug).sort()).toEqual(b.map((x) => x.slug).sort())
+  })
+
+  it("LLC_MANAGEMENT_BUNDLE_TYPES set matches catalog auto_bundled_with_management entries", async () => {
+    const fromCatalog = (await getLLCManagementBundle()).map((e) => e.display_name).sort()
+    const fromConst = [...LLC_MANAGEMENT_BUNDLE_TYPES].sort()
+    expect(fromConst).toEqual(fromCatalog)
+  })
+
+  it("LLC_MANAGEMENT_BUNDLE_TYPES preserves the historical write order for bundled_pipelines", () => {
+    expect(LLC_MANAGEMENT_BUNDLE_TYPES).toEqual([
+      "CMRA Mailing Address",
+      "State RA Renewal",
+      "State Annual Report",
+      "Tax Return",
+    ])
+  })
+
+  it("getLLCManagementBundleTypes returns the 4 display names from the catalog", async () => {
+    const types = await getLLCManagementBundleTypes()
+    expect(types.sort()).toEqual(
+      ["CMRA Mailing Address", "State Annual Report", "State RA Renewal", "Tax Return"].sort(),
+    )
   })
 
   it("getAllSellableServices returns the 11 sellable rows", async () => {
