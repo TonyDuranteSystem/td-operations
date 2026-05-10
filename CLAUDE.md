@@ -199,6 +199,8 @@ Before saying "it works" or "done", run `npm run test:unit`. If you didn't run t
 
 - **R105** — ALL DDL MUST GO THROUGH MIGRATION FILES (2026-04-30, structural enforcement). `CREATE TABLE`, `ALTER TABLE`, `CREATE FUNCTION/TRIGGER/VIEW/SEQUENCE/TYPE/EXTENSION`, and `CREATE INDEX` are blocked by `execute_sql` unless `reason` starts with `migration:<filename>`. Pattern: (1) write SQL to `scripts/migrations/YYYYMMDD-HHMM-description.sql`; (2) apply to sandbox: `node scripts/apply-migration.js <file>` — refuses if `.env.local` points to production; (3) Antonio approves → promote to production via `execute_sql(mode: "write", reason: "migration:<filename>")`. NEVER run DDL directly via `execute_sql` without this pattern. NEVER run DDL on production without sandbox test first.
 
+- **R106** — Service/SD vocabulary lives in the catalog framework. The source of truth for service types is `catalog_entries` (`catalog_id='services'`). Code MUST import from `lib/services/index.ts` — never hardcode service type strings. New service types added via `catalog_add` MCP tool or `/catalog` CRM page. `createSD` automatically sets `service_type_entry_id`. LLC Management bundle = 4 SDs defined in `LLC_MANAGEMENT_BUNDLE_TYPES`. Annual Renewal is NOT an SD (billing cycle only). Portal tier: `tierForContract()` in `lib/portal/auto-create.ts`.
+
 - **R102** — Portal tier has exactly 4 values: `lead`, `formation`, `onboarding`, `active`. The value `full` is removed and must never be used. All writes to `contacts.portal_tier` or `accounts.portal_tier` MUST go through `syncTier()` in `lib/operations/sync-tier.ts` — direct column writes are forbidden. `formation` tier = company being formed (no EIN yet); these clients see a formation-specific dashboard. When EIN is received, tier advances to `active` via the "Record EIN Received" button or `enter_ein` action — never advance tier manually. Contact `portal_tier` is computed as the highest tier across all linked accounts; contacts without any account keep their own tier.
 
 <!-- TIER2:END -->
@@ -209,7 +211,7 @@ Before saying "it works" or "done", run `npm run test:unit`. If you didn't run t
 
 ### Architecture reference
 
-**Repo contents:** MCP server (206 tools across 41 active tool files), CRM dashboard, OAuth 2.1, offer system, API routes.
+**Repo contents:** MCP server (198 tools across 41 active tool files), CRM dashboard, OAuth 2.1, offer system, API routes.
 
 **Backing systems:**
 - **Supabase** (`ydzipybqeebtpcvsbtvs`) = Single Source of Truth — all data lives here
@@ -269,6 +271,10 @@ lib/
   mcp/
     instructions.ts           <- Server instructions (sent in MCP initialize)
     tools/                    <- 41 tool files (crm, doc, drive, gmail, etc.)
+  catalog/
+    framework.ts              <- Generic catalog API (any vocabulary)
+  services/
+    index.ts                  <- DB-driven Services accessor
   portal/
     td-invoice.ts             <- TD billing: createTDInvoice() → payments + client_expenses
     unified-invoice.ts        <- Client sales: createUnifiedInvoice() → client_invoices only
