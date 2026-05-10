@@ -12,6 +12,16 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }))
 
+// Catalog lookup is mocked so createSD's FK resolution is isolated from the
+// catalog framework's DB layer (covered separately in catalog-framework.test).
+const { catalogLookup } = vi.hoisted(() => ({
+  catalogLookup: vi.fn<(serviceType: string) => Promise<{ id: string } | null>>(),
+}))
+
+vi.mock("@/lib/services", () => ({
+  getEntryByServiceType: (serviceType: string) => catalogLookup(serviceType),
+}))
+
 // ─── Mock harness ──────────────────────────────────────
 //
 // Each test provides its own pipeline_stages fixture by setting the
@@ -133,6 +143,8 @@ beforeEach(() => {
     },
     error: null,
   }
+  catalogLookup.mockReset()
+  catalogLookup.mockResolvedValue(null)
 })
 
 // ─── createSD ──────────────────────────────────────────
@@ -384,5 +396,103 @@ describe("createSD — stage resolution", () => {
     await createSD({ service_type: "EIN" })
 
     expect(insertCapture).toMatchObject({ status: "active" })
+  })
+})
+
+// ─── createSD — catalog FK resolution (Phase 4 Step 1) ────────────────────
+
+describe("createSD — service_type_entry_id (catalog FK)", () => {
+  it("sets service_type_entry_id when the catalog lookup matches", async () => {
+    pipelineFixture = {
+      EIN: [{ stage_name: "SS-4 Preparation", stage_order: 1 }],
+    }
+    catalogLookup.mockResolvedValueOnce({ id: "cat-ein-uuid" })
+    insertResponse = {
+      data: {
+        id: "sd-ein",
+        service_type: "EIN",
+        service_name: "EIN",
+        stage: "SS-4 Preparation",
+        stage_order: 1,
+        account_id: null,
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    await createSD({ service_type: "EIN" })
+
+    expect(catalogLookup).toHaveBeenCalledWith("EIN")
+    expect(insertCapture).toMatchObject({
+      service_type: "EIN",
+      service_type_entry_id: "cat-ein-uuid",
+    })
+  })
+
+  it("inserts with service_type_entry_id=null and does NOT throw when no catalog entry matches", async () => {
+    pipelineFixture = {
+      Support: [{ stage_name: "Open", stage_order: 1 }],
+    }
+    catalogLookup.mockResolvedValueOnce(null)
+    insertResponse = {
+      data: {
+        id: "sd-support",
+        service_type: "Support",
+        service_name: "Support",
+        stage: "Open",
+        stage_order: 1,
+        account_id: null,
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await expect(createSD({ service_type: "Support" })).resolves.toMatchObject({
+      id: "sd-support",
+    })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "Support",
+      service_type_entry_id: null,
+    })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('no catalog entry for service_type="Support"'),
+    )
+
+    warn.mockRestore()
+  })
+
+  it("treats a thrown catalog lookup as a soft failure (insert proceeds with null FK)", async () => {
+    pipelineFixture = {
+      EIN: [{ stage_name: "SS-4 Preparation", stage_order: 1 }],
+    }
+    catalogLookup.mockRejectedValueOnce(new Error("catalog DB down"))
+    insertResponse = {
+      data: {
+        id: "sd-ein",
+        service_type: "EIN",
+        service_name: "EIN",
+        stage: "SS-4 Preparation",
+        stage_order: 1,
+        account_id: null,
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await expect(createSD({ service_type: "EIN" })).resolves.toMatchObject({
+      id: "sd-ein",
+    })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "EIN",
+      service_type_entry_id: null,
+    })
+
+    warn.mockRestore()
   })
 })

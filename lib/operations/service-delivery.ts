@@ -45,6 +45,7 @@ import {
   isValidServiceType,
   type ValidServiceType,
 } from "@/lib/operations/service-types"
+import { getEntryByServiceType } from "@/lib/services"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -227,11 +228,34 @@ export async function createSD(
     if (c?.is_test === true) is_test = true
   }
 
+  // Catalog Framework Phase 4 Step 1: resolve the catalog FK from the
+  // service_type text so new SDs match the Phase 2 backfill (alias map in
+  // lib/services/index.ts mirrors 20260510-catalog-backfill.sql §1).
+  // Graceful: unmapped types stay null with a warning so legitimate but
+  // not-yet-mapped service types (Support, Client Offboarding) still insert.
+  let service_type_entry_id: string | null = null
+  try {
+    const entry = await getEntryByServiceType(params.service_type)
+    if (entry) {
+      service_type_entry_id = entry.id
+    } else {
+      console.warn(
+        `[createSD] no catalog entry for service_type="${params.service_type}" — service_type_entry_id left null`,
+      )
+    }
+  } catch (err) {
+    console.warn(
+      `[createSD] catalog lookup failed for service_type="${params.service_type}":`,
+      err,
+    )
+  }
+
   const row = await dbWrite(
     supabaseAdmin
       .from("service_deliveries")
       .insert({
         service_type: params.service_type,
+        service_type_entry_id,
         service_name,
         account_id: params.account_id || null,
         contact_id: params.contact_id || null,
