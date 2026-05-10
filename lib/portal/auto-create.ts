@@ -3,8 +3,10 @@
  *
  * Reusable function called from:
  * - offer_send (MCP tool) → creates portal with 'lead' tier
- * - activate-service (payment confirmed) → auto-creates with 'formation' tier for formation contracts, 'onboarding' for all others
- * - portal_create_user (MCP tool) → manual creation with 'full' tier
+ * - activate-service (payment confirmed) → tier derived via tierForContract(contractType):
+ *     'formation' contract → 'formation', 'onboarding' contract → 'onboarding',
+ *     everything else (tax_return, itin, closure, renewal, …) → 'active'
+ * - portal_create_user (MCP tool) → manual creation with 'active' tier
  *
  * Idempotent: if user already exists, just updates the tier.
  */
@@ -15,6 +17,24 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { type PortalTier } from './tier-config'
 import { getEntityTypeFromContract } from './entity-type-from-contract'
 import { syncTier } from '@/lib/operations/sync-tier'
+
+/**
+ * Map a contract type to the portal tier a paying client should land on.
+ *
+ * - 'formation'  → 'formation' (LLC being created; client sees formation wizard)
+ * - 'onboarding' → 'onboarding' (existing LLC client going through onboarding wizard)
+ * - everything else (tax_return, itin, closure, renewal, unknown) → 'active'
+ *
+ * Centralised so activate-service, stripe webhook, whop webhook, and
+ * ensureMinimalAccount share one rule. R102: only 4 valid tier values
+ * exist (lead, formation, onboarding, active) — 'lead' is for unpaid offers
+ * and is set at offer-send time, not here.
+ */
+export function tierForContract(contractType: string | null | undefined): PortalTier {
+  if (contractType === 'formation') return 'formation'
+  if (contractType === 'onboarding') return 'onboarding'
+  return 'active'
+}
 
 interface AutoCreateResult {
   success: boolean
@@ -299,7 +319,8 @@ export async function ensureMinimalAccount(params: {
   isStandaloneBusiness?: boolean
   tier?: PortalTier
 }): Promise<EnsureAccountResult> {
-  const { contactId, clientName, contractType, offerToken, leadId, isStandaloneBusiness, tier = 'onboarding' } = params
+  const { contactId, clientName, contractType, offerToken, leadId, isStandaloneBusiness, tier } = params
+  const effectiveTier: PortalTier = tier ?? tierForContract(contractType)
 
   // Phase 0 safety: read the entity type the client picked on the signed contract.
   // Used for new-account INSERT below, and for reconciliation on the existing-account branches.
@@ -452,7 +473,7 @@ export async function ensureMinimalAccount(params: {
   })
 
   // Set initial portal tier (syncs account + linked contacts + auth metadata)
-  await syncTier({ accountId: account.id, newTier: tier, reason: 'auto-created during payment' })
+  await syncTier({ accountId: account.id, newTier: effectiveTier, reason: 'auto-created during payment' })
 
   // Backfill account_id on contact-only invoices (created at signing, before account existed)
   await supabaseAdmin

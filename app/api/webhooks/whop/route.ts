@@ -335,8 +335,14 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
     }
   }
   if (resolvedAccountId) {
-    const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-    await upgradePortalTier(resolvedAccountId, _productId === 'prod_nzrLiGLomSYZT' ? 'formation' : 'onboarding')
+    const { upgradePortalTier, tierForContract } = await import("@/lib/portal/auto-create")
+    // Whop only knows the product ID, not the contract type. The formation plan
+    // maps to 'formation'; every other Whop product is treated as a generic
+    // (non-formation, non-onboarding) contract and routed through the helper —
+    // which yields 'active'. activate-service corrects later if the offer
+    // actually carries contract_type='onboarding'.
+    const inferredContractType = _productId === 'prod_nzrLiGLomSYZT' ? 'formation' : 'other'
+    await upgradePortalTier(resolvedAccountId, tierForContract(inferredContractType))
   }
 
   // 5. Check if there's a pending_activation waiting for this payment
