@@ -55,19 +55,19 @@ const STAGE_PRESETS: Record<string, { service_type: string; stage_name: string; 
     service_type: "Company Formation",
     stage_name: "Data Collection",
     stage_order: 1,
-    portal_tier: "onboarding",
+    portal_tier: "formation",
   },
   data_collected: {
     service_type: "Company Formation",
     stage_name: "State Filing",
     stage_order: 2,
-    portal_tier: "onboarding",
+    portal_tier: "formation",
   },
   llc_formed: {
     service_type: "Company Formation",
     stage_name: "EIN Application",
     stage_order: 3,
-    portal_tier: "onboarding",
+    portal_tier: "formation",
   },
   ein_received: {
     service_type: "Company Formation",
