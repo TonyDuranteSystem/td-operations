@@ -56,12 +56,27 @@ export default async function PartnerClientDetailPage({
     row => (row as unknown as { contacts: { id: string; first_name: string | null; last_name: string | null; full_name: string | null; email: string | null; phone: string | null } }).contacts
   ).filter(Boolean)
 
-  // Active services
-  const { data: services } = await supabaseAdmin
+  // Active services. The catalog_entries join resolves service_type via the
+  // service_type_entry_id FK (Phase A read migration); display falls back to
+  // the raw text when no FK row is found.
+  const { data: servicesRaw } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_type, stage, status')
+    .select('id, service_type, stage, status, service_type_entry:catalog_entries!service_deliveries_service_type_entry_id_fkey(display_name)')
     .eq('account_id', accountId)
     .eq('status', 'active')
+
+  const services = ((servicesRaw ?? []) as Array<{
+    id: string
+    service_type: string
+    stage: string | null
+    status: string
+    service_type_entry: { display_name: string } | null
+  }>).map(s => ({
+    id: s.id,
+    service_type: s.service_type_entry?.display_name ?? s.service_type,
+    stage: s.stage,
+    status: s.status,
+  }))
 
   const encodedName = encodeURIComponent(account.company_name ?? '')
 

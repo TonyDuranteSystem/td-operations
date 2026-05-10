@@ -38,16 +38,29 @@ export default async function PartnerClientsPage() {
     .eq('partner_id', partner.id)
     .order('company_name')
 
-  // Fetch active services for all accounts
+  // Fetch active services for all accounts. The catalog_entries join resolves
+  // service_type via the service_type_entry_id FK (Phase A read migration); we
+  // render entry.display_name when present and fall back to the raw text.
   const accountIds = (accounts ?? []).map(a => a.id)
   let services: Array<{ account_id: string; service_type: string; stage: string | null; status: string }> = []
   if (accountIds.length > 0) {
     const { data: sds } = await supabaseAdmin
       .from('service_deliveries')
-      .select('account_id, service_type, stage, status')
+      .select('account_id, service_type, stage, status, service_type_entry:catalog_entries!service_deliveries_service_type_entry_id_fkey(display_name)')
       .in('account_id', accountIds)
       .eq('status', 'active')
-    services = (sds ?? []) as typeof services
+    services = ((sds ?? []) as Array<{
+      account_id: string
+      service_type: string
+      stage: string | null
+      status: string
+      service_type_entry: { display_name: string } | null
+    }>).map(s => ({
+      account_id: s.account_id,
+      service_type: s.service_type_entry?.display_name ?? s.service_type,
+      stage: s.stage,
+      status: s.status,
+    }))
   }
 
   const servicesByAccount = new Map<string, typeof services>()
