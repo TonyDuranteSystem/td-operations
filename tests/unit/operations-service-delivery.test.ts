@@ -464,6 +464,89 @@ describe("createSD — service_type_entry_id (catalog FK)", () => {
     warn.mockRestore()
   })
 
+  it("Phase 4 Step 3 — passes amount + amount_currency through to insert when provided", async () => {
+    pipelineFixture = {
+      "Client Onboarding": [{ stage_name: "Data Collection", stage_order: 1 }],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-onb",
+        service_type: "Client Onboarding",
+        service_name: "Client Onboarding - Acme",
+        stage: "Data Collection",
+        stage_order: 1,
+        account_id: "acct-1",
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    await createSD({
+      service_type: "Client Onboarding",
+      service_name: "Client Onboarding - Acme",
+      account_id: "acct-1",
+      amount: 2300,
+      amount_currency: "EUR",
+    })
+
+    expect(insertCapture).toMatchObject({
+      amount: 2300,
+      amount_currency: "EUR",
+    })
+  })
+
+  it("Phase 4 Step 3 — defaults amount_currency to USD when amount is provided without currency", async () => {
+    pipelineFixture = {
+      "Client Onboarding": [{ stage_name: "Data Collection", stage_order: 1 }],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-onb",
+        service_type: "Client Onboarding",
+        service_name: "Client Onboarding",
+        stage: "Data Collection",
+        stage_order: 1,
+        account_id: null,
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    await createSD({
+      service_type: "Client Onboarding",
+      amount: 1500,
+    })
+
+    expect(insertCapture).toMatchObject({
+      amount: 1500,
+      amount_currency: "USD",
+    })
+  })
+
+  it("Phase 4 Step 3 — omits amount fields entirely when amount is not provided", async () => {
+    pipelineFixture = {
+      EIN: [{ stage_name: "SS-4 Preparation", stage_order: 1 }],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-ein",
+        service_type: "EIN",
+        service_name: "EIN",
+        stage: "SS-4 Preparation",
+        stage_order: 1,
+        account_id: null,
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    await createSD({ service_type: "EIN" })
+
+    // Spread clause should NOT include amount keys when amount is undefined.
+    expect(insertCapture).not.toHaveProperty("amount")
+    expect(insertCapture).not.toHaveProperty("amount_currency")
+  })
+
   it("treats a thrown catalog lookup as a soft failure (insert proceeds with null FK)", async () => {
     pipelineFixture = {
       EIN: [{ stage_name: "SS-4 Preparation", stage_order: 1 }],
