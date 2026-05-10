@@ -4,6 +4,7 @@ import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { updateAccount } from '@/lib/operations/account'
+import { createSD } from '@/lib/operations/service-delivery'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
@@ -294,39 +295,51 @@ export async function POST(request: NextRequest) {
     const createdSDs: string[] = []
 
     if (acct.formation_date && !sdTypes.has('Company Formation')) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from('service_deliveries').insert({
-        account_id: acct.id, service_type: 'Company Formation', pipeline: 'Company Formation',
+      await createSD({
+        service_type: 'Company Formation',
         service_name: `Company Formation -- ${acct.company_name}`,
-        stage: 'Closing', stage_order: 6, status: 'completed',
-        start_date: acct.formation_date, assigned_to: 'Luca', notes: 'Legacy onboard',
-        stage_history: [{ to_stage: 'Closing', to_order: 6, notes: 'Legacy', advanced_at: new Date().toISOString() }],
+        account_id: acct.id,
+        target_stage: 'Closing',
+        target_stage_order: 6,
+        status: 'completed',
+        start_date: acct.formation_date,
+        notes: 'Legacy onboard',
       })
       createdSDs.push('Formation')
     }
     if (acct.ein_number && !sdTypes.has('EIN')) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from('service_deliveries').insert({
-        account_id: acct.id, service_type: 'EIN', pipeline: 'EIN',
+      await createSD({
+        service_type: 'EIN',
         service_name: `EIN -- ${acct.company_name}`,
-        stage: 'EIN Received', stage_order: 4, status: 'completed',
-        start_date: acct.formation_date || new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
+        account_id: acct.id,
+        target_stage: 'EIN Received',
+        target_stage_order: 4,
+        status: 'completed',
+        start_date: acct.formation_date || new Date().toISOString().slice(0, 10),
         notes: `Legacy onboard - EIN ${acct.ein_number}`,
-        stage_history: [{ to_stage: 'EIN Received', to_order: 4, notes: 'Legacy', advanced_at: new Date().toISOString() }],
       })
       createdSDs.push('EIN')
     }
     if (contact.itin_number && !sdTypes.has('ITIN')) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from('service_deliveries').insert({
-        account_id: acct.id, service_type: 'ITIN',
+      await createSD({
+        service_type: 'ITIN',
         service_name: `ITIN -- ${contact.full_name || acct.company_name}`,
-        status: 'completed', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
+        account_id: acct.id,
+        // Phase 4 Step 3: legacy onboard means ITIN was already approved.
+        // Explicit stage avoids createSD's first-stage default ("Data Collection").
+        target_stage: 'ITIN Approved',
+        target_stage_order: 8,
+        status: 'completed',
+        start_date: new Date().toISOString().slice(0, 10),
         notes: `Legacy onboard - ITIN ${contact.itin_number}`,
       })
       createdSDs.push('ITIN')
     }
     if (!isOneTime && !sdTypes.has('Annual Renewal')) {
+      // TODO: deprecated — remove when Site F is retired in Step 4. Annual Renewal
+      // is not actually a tracked SD; renewals happen through annual_agreements
+      // (MSA) signing and installment invoices. Leaving the raw insert in place
+      // because routing it through createSD would lock in the deprecated shape.
       // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
       await supabaseAdmin.from('service_deliveries').insert({
         account_id: acct.id, service_type: 'Annual Renewal',
@@ -336,11 +349,16 @@ export async function POST(request: NextRequest) {
       createdSDs.push('Annual Renewal')
     }
     if (!isOneTime && !sdTypes.has('CMRA Mailing Address') && isTDAddress(acct.physical_address, (acct as any).mailing_address)) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from('service_deliveries').insert({
-        account_id: acct.id, service_type: 'CMRA Mailing Address',
+      await createSD({
+        service_type: 'CMRA Mailing Address',
         service_name: `CMRA -- ${acct.company_name}`,
-        status: 'active', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca',
+        account_id: acct.id,
+        // Phase 4 Step 3: legacy onboard with TD address — CMRA already active.
+        // Explicit stage avoids createSD's first-stage default ("Lease Created").
+        target_stage: 'CMRA Active',
+        target_stage_order: 3,
+        status: 'active',
+        start_date: new Date().toISOString().slice(0, 10),
         notes: `Legacy onboard - ${acct.physical_address}`,
       })
       createdSDs.push('CMRA')
