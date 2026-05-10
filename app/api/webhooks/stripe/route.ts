@@ -267,8 +267,8 @@ async function handleCheckoutCompleted(session: StripeSession) {
     }
   }
   if (resolvedAccountId) {
-    const { upgradePortalTier } = await import("@/lib/portal/auto-create")
-    await upgradePortalTier(resolvedAccountId, contractType === 'formation' ? 'formation' : 'onboarding')
+    const { upgradePortalTier, tierForContract } = await import("@/lib/portal/auto-create")
+    await upgradePortalTier(resolvedAccountId, tierForContract(contractType))
   }
 
   // 8. Match pending_activation — use offer_token (exact) OR email (fallback)

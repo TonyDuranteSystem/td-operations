@@ -29,7 +29,7 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
-import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail } from "@/lib/portal/auto-create"
+import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
@@ -735,11 +735,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
-    // Upgrade portal tier from lead → onboarding after payment (syncs account + contacts)
+    // Upgrade portal tier from lead → tierForContract(contractType) after payment.
+    // formation → formation, onboarding → onboarding, everything else → active.
+    const targetTier: PortalTier = tierForContract(contractType)
     if (autoAccountId) {
       // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
       const { syncTier } = await import("@/lib/operations/sync-tier")
-      const targetTier: PortalTier = contractType === 'formation' ? 'formation' : 'onboarding'
       const tierResult = await syncTier({ accountId: autoAccountId, newTier: targetTier, reason: 'payment confirmed — portal tier activate' })
       const tierAlreadyAtOrAbove = (TIER_ORDER[(tierResult.previousTier || '') as PortalTier] ?? -1) >= TIER_ORDER[targetTier]
       steps.push({ step: "portal_tier_upgrade", status: tierResult.success ? "done" : "error", detail: tierResult.success ? (tierAlreadyAtOrAbove ? `Already ${tierResult.previousTier} (no change)` : `${tierResult.previousTier || "lead"} → ${targetTier} (via account)`) : (tierResult.error || "Unknown error") })
@@ -755,7 +756,7 @@ export async function POST(req: NextRequest) {
 
         const currentTier = currentContact?.portal_tier || "lead"
         const currentIdx = TIER_ORDER[(currentTier as PortalTier)] ?? -1
-        const newIdx = TIER_ORDER["onboarding"]
+        const newIdx = TIER_ORDER[targetTier]
 
         if (newIdx > currentIdx) {
           // 1. Update contacts.portal_tier
@@ -763,7 +764,7 @@ export async function POST(req: NextRequest) {
           await dbWrite(
             supabase
               .from("contacts")
-              .update({ portal_tier: "onboarding" })
+              .update({ portal_tier: targetTier })
               .eq("id", contactId),
             "contacts.update"
           )
@@ -774,12 +775,12 @@ export async function POST(req: NextRequest) {
             const authUser = await findAuthUserByEmail(currentContact.email)
             if (authUser) {
               await supabase.auth.admin.updateUserById(authUser.id, {
-                app_metadata: { ...authUser.app_metadata, portal_tier: "onboarding" },
+                app_metadata: { ...authUser.app_metadata, portal_tier: targetTier },
               })
             }
           }
 
-          steps.push({ step: "portal_tier_upgrade", status: "done", detail: `${currentTier} → onboarding (contact-only, no account)` })
+          steps.push({ step: "portal_tier_upgrade", status: "done", detail: `${currentTier} → ${targetTier} (contact-only, no account)` })
         } else {
           steps.push({ step: "portal_tier_upgrade", status: "done", detail: `Already at ${currentTier} (no downgrade)` })
         }
@@ -795,7 +796,7 @@ export async function POST(req: NextRequest) {
       const portalResult = await autoCreatePortalUser({
         contactId,
         accountId: autoAccountId || undefined,
-        tier: contractType === 'formation' ? 'formation' : 'onboarding',
+        tier: targetTier,
       })
 
       if (portalResult.success && !portalResult.alreadyExists && portalResult.tempPassword && portalResult.email) {
