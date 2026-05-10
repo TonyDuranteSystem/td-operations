@@ -836,32 +836,22 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           }
         }
 
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        const { data: newSD, error: sdErr } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_name: `Client Onboarding - ${company_name}`,
+        try {
+          const newSD = await createSD({
             service_type: "Client Onboarding",
-            pipeline: "Client Onboarding",
-            stage: stageName,
-            stage_order: stageOrder,
-            stage_entered_at: now,
-            stage_history: [{ to_stage: stageName, to_order: stageOrder, advanced_at: now, notes: "Created by Magic Button (skipped Data Collection)" }],
+            service_name: `Client Onboarding - ${company_name}`,
             account_id,
             contact_id: contact_id || null,
-            status: "active",
+            target_stage: stageName,
+            target_stage_order: stageOrder,
             start_date: today,
-            assigned_to: "Luca",
+            notes: "Created by Magic Button (skipped Data Collection)",
             ...(sdAmount != null && { amount: sdAmount, amount_currency: sdCurrency }),
           })
-          .select("id")
-          .single()
-
-        if (sdErr || !newSD) {
-          result.steps.push(step("service_delivery", "error", sdErr?.message || "unknown"))
-        } else {
           onboardingDeliveryId = newSD.id
           result.steps.push(step("service_delivery", "ok", `Created: ${newSD.id} (stage: ${stageName})`))
+        } catch (e) {
+          result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
         }
       }
       await updateJobProgress(job.id, result)

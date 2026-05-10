@@ -24,6 +24,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import { createSD } from "@/lib/operations/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
 
@@ -262,30 +263,20 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         // is materialized at Articles upload.
         const llcCandidate = String(submitted.llc_name_1 || "").trim()
         const sdName = llcCandidate ? `Company Formation - ${llcCandidate}` : "Company Formation"
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        const { data: sd, error: sdErr } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_name: sdName,
+        try {
+          const sd = await createSD({
             service_type: "Company Formation",
-            pipeline: "Company Formation",
-            stage: "Data Collection",
-            stage_order: 1,
-            stage_entered_at: now,
-            stage_history: JSON.stringify([{ stage: "Data Collection", entered_at: now, by: "formation_setup" }]),
+            service_name: sdName,
+            // Antonio's model: SD attaches to the buyer (contact) until/unless the company materializes.
             contact_id: sdContactId,
-            account_id: null, // Antonio's model: SD attaches to the buyer (contact) until/unless the company materializes.
-            status: "active",
+            account_id: null,
+            target_stage: "Data Collection",
+            target_stage_order: 1,
             start_date: now.slice(0, 10),
-            assigned_to: "Luca",
           })
-          .select("id")
-          .single()
-
-        if (sdErr) {
-          result.steps.push(step("service_delivery", "error", sdErr.message))
-        } else {
           result.steps.push(step("service_delivery", "ok", `SD created: ${sd.id} (Data Collection, contact-scoped)`))
+        } catch (e) {
+          result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
         }
       }
     } else {

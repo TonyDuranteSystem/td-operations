@@ -77,6 +77,13 @@ export interface CreateSDParams {
   start_date?: string
   /** Defaults to "active". */
   status?: string
+  /**
+   * Optional pricing carried from offers. When set, both fields should be
+   * provided together (Phase 4 Step 3 — needed for onboarding-setup which
+   * derives pricing from the offer at SD creation time).
+   */
+  amount?: number
+  amount_currency?: string
 }
 
 export interface CreateSDResult {
@@ -268,6 +275,10 @@ export async function createSD(
         notes: params.notes || null,
         stage_entered_at: new Date().toISOString(),
         is_test,
+        ...(params.amount != null && {
+          amount: params.amount,
+          amount_currency: params.amount_currency || "USD",
+        }),
       })
       .select("id, service_type, service_name, stage, stage_order, account_id, contact_id")
       .single(),
