@@ -81,6 +81,7 @@ interface NavItem {
 //     Sales/Expenses/Vendors invoicing system).
 const personalItems: NavItem[] = [
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
+  { key: 'nav.requestService', href: '/portal/services/request', icon: PlusCircle },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
   { key: 'nav.profile', href: '/portal/profile', icon: User },
 ]
