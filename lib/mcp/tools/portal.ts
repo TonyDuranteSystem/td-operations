@@ -313,6 +313,15 @@ export function registerPortalTools(server: McpServer) {
     }
 
     // ─── AUTO-CREATE SERVICE DELIVERIES ───
+    // CANONICAL LEGACY-ONBOARD SD SET (mirrored in
+    // app/api/portal/admin/transition/route.ts): Company Formation, EIN,
+    // CMRA Mailing Address, Tax Return, ITIN, State RA Renewal, State Annual
+    // Report. Annual Renewal is NOT an SD — renewals flow through
+    // annual_agreements (MSA signing + installment invoices), not
+    // service_deliveries. Divergence vs Site F (admin/transition route): that
+    // site additionally gates CMRA on isTDAddress; this site creates CMRA for
+    // all non-one-time accounts. Sites E and F should otherwise produce
+    // identical SD sets.
     const { data: existingSDs } = await supabaseAdmin.from("service_deliveries")
       .select("id, service_type, status").eq("account_id", account.id)
     const existingSDTypes = new Set((existingSDs ?? []).map(s => s.service_type))

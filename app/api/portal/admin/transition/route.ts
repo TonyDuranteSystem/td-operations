@@ -37,7 +37,7 @@ function isTDAddress(addr: string | null, mailingRow?: Pick<MailingAddressRow, '
  *   1. Scans Google Drive + processes new files (OCR + classify)
  *   2. Sets portal_visible on documents
  *   3. Auto-creates OA, Lease, Renewal MSA if missing (Client accounts)
- *   4. Auto-creates service deliveries (Formation, EIN, ITIN, Annual Renewal, CMRA)
+ *   4. Auto-creates service deliveries (canonical set — see SD block below)
  *   5. Auto-creates deadlines (Annual Report, RA Renewal)
  *   6. Sets portal_account=true, portal_tier=active
  *   7. Creates auth user with full metadata (once)
@@ -289,6 +289,13 @@ export async function POST(request: NextRequest) {
     }
 
     // ── SERVICE DELIVERIES ──
+    // CANONICAL LEGACY-ONBOARD SD SET (mirrored in lib/mcp/tools/portal.ts
+    // portal_transition_setup): Company Formation, EIN, CMRA Mailing Address,
+    // Tax Return, ITIN, State RA Renewal, State Annual Report.
+    // Annual Renewal is NOT an SD — renewals flow through annual_agreements
+    // (MSA signing + installment invoices), not service_deliveries.
+    // Divergence vs Site E: this site additionally gates CMRA on isTDAddress.
+    // Sites E and F should otherwise produce identical SD sets.
     const { data: existingSDs } = await supabaseAdmin.from('service_deliveries')
       .select('id, service_type').eq('account_id', acct.id)
     const sdTypes = new Set((existingSDs ?? []).map(s => s.service_type))
@@ -335,19 +342,6 @@ export async function POST(request: NextRequest) {
       })
       createdSDs.push('ITIN')
     }
-    if (!isOneTime && !sdTypes.has('Annual Renewal')) {
-      // TODO: deprecated — remove when Site F is retired in Step 4. Annual Renewal
-      // is not actually a tracked SD; renewals happen through annual_agreements
-      // (MSA) signing and installment invoices. Leaving the raw insert in place
-      // because routing it through createSD would lock in the deprecated shape.
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from('service_deliveries').insert({
-        account_id: acct.id, service_type: 'Annual Renewal',
-        service_name: `Annual Renewal -- ${acct.company_name}`,
-        status: 'active', start_date: new Date().toISOString().slice(0, 10), assigned_to: 'Luca', notes: 'Legacy onboard',
-      })
-      createdSDs.push('Annual Renewal')
-    }
     if (!isOneTime && !sdTypes.has('CMRA Mailing Address') && isTDAddress(acct.physical_address, (acct as any).mailing_address)) {
       await createSD({
         service_type: 'CMRA Mailing Address',
@@ -363,6 +357,65 @@ export async function POST(request: NextRequest) {
       })
       createdSDs.push('CMRA')
     }
+
+    // Tax Return SD (Client accounts only, formed before 2026)
+    if (!isOneTime && acct.formation_date && acct.formation_date < '2026-01-01' && !sdTypes.has('Tax Return')) {
+      const { data: existingTR } = await supabaseAdmin.from('tax_returns')
+        .select('id, data_received').eq('account_id', acct.id).eq('tax_year', 2025).maybeSingle()
+
+      const hasTaxRecord = !!existingTR
+      const trStage = hasTaxRecord ? 'Data Received' : '1st Installment Paid'
+      const trStageOrder = hasTaxRecord ? 3 : 1
+
+      await createSD({
+        service_type: 'Tax Return',
+        service_name: `Tax Return -- ${acct.company_name}`,
+        account_id: acct.id,
+        target_stage: trStage,
+        target_stage_order: trStageOrder,
+        status: 'active',
+        start_date: new Date().toISOString().slice(0, 10),
+        notes: hasTaxRecord
+          ? `Legacy onboard - 2025 tax return record exists (${existingTR?.id})`
+          : 'Legacy onboard - no 2025 tax return record yet; wizard needed',
+      })
+      createdSDs.push(`Tax Return (${trStage})`)
+
+      if (!hasTaxRecord) {
+        warnings.push(`${acct.company_name}: no 2025 tax_returns record — run tax_form_create separately`)
+      }
+    }
+
+    // State RA Renewal SD (Client accounts only)
+    if (!isOneTime && !sdTypes.has('State RA Renewal')) {
+      await createSD({
+        service_type: 'State RA Renewal',
+        service_name: `State RA Renewal -- ${acct.company_name}`,
+        account_id: acct.id,
+        target_stage: 'Upcoming',
+        target_stage_order: 1,
+        status: 'active',
+        start_date: new Date().toISOString().slice(0, 10),
+        notes: 'Legacy onboard',
+      })
+      createdSDs.push('State RA Renewal (Upcoming)')
+    }
+
+    // State Annual Report SD (Client accounts only)
+    if (!isOneTime && !sdTypes.has('State Annual Report')) {
+      await createSD({
+        service_type: 'State Annual Report',
+        service_name: `State Annual Report -- ${acct.company_name}`,
+        account_id: acct.id,
+        target_stage: 'Upcoming',
+        target_stage_order: 1,
+        status: 'active',
+        start_date: new Date().toISOString().slice(0, 10),
+        notes: 'Legacy onboard',
+      })
+      createdSDs.push('State Annual Report (Upcoming)')
+    }
+
     if (createdSDs.length > 0) acctLines.push(`SDs: ${createdSDs.join(', ')}`)
 
     // ── DEADLINES (Client only) ──
@@ -402,13 +455,6 @@ export async function POST(request: NextRequest) {
         createdDL.push(`RA Renewal ${raDue}`)
       }
       if (createdDL.length > 0) acctLines.push(`Deadlines: ${createdDL.join(', ')}`)
-    }
-
-    // ── Tax return check ──
-    if (acct.formation_date && acct.formation_date < '2026-01-01') {
-      const { data: tr } = await supabaseAdmin.from('tax_returns')
-        .select('id').eq('company_name', acct.company_name).eq('tax_year', 2025).maybeSingle()
-      if (!tr) warnings.push(`${acct.company_name}: no 2025 tax return record`)
     }
 
     // ── SET ACCOUNT FLAGS ──
