@@ -5,19 +5,31 @@ import { useRouter } from 'next/navigation'
 import {
   Building2, FileText, CreditCard, Package, Receipt,
   XCircle, Fingerprint, Phone, Send, CheckCircle, ArrowLeft,
-  Loader2, MessageCircle, PlusCircle, User,
+  Loader2, MessageCircle, PlusCircle, User, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { labelForServiceStatic } from '@/lib/services'
+
+type InvoiceTarget = 'partner' | 'end_client'
+type PayoutModel = 'none' | 'price_difference' | 'percentage' | 'flat_fee' | 'credit_note'
 
 interface Account {
   id: string
   company_name: string
 }
 
+interface PartnerDefaults {
+  invoice_target: InvoiceTarget
+  payout_model: PayoutModel
+  payout_rate: number | null
+  label: 'reseller' | 'variant' | null
+}
+
 interface Props {
   contactId: string
+  partnerId: string
   partnerName: string
+  partnerDefaults: PartnerDefaults
   accounts: Account[]
   preselectedAccountId: string | null
   preselectedAccountName: string | null
@@ -43,9 +55,19 @@ const SERVICE_UI: ReadonlyArray<{
   { slug: 'consulting', icon: Phone, color: 'text-teal-600 bg-teal-50', desc: 'One-on-one consultation about your business needs' },
 ]
 
+const PAYOUT_MODEL_LABEL: Record<PayoutModel, string> = {
+  none: 'No payout',
+  price_difference: 'Price difference (paid − TD base cost)',
+  percentage: 'Percentage of payment',
+  flat_fee: 'Flat fee per transaction',
+  credit_note: 'Credit on next partner invoice',
+}
+
 export function PartnerNewRequestClient({
   contactId,
+  partnerId,
   partnerName,
+  partnerDefaults,
   accounts,
   preselectedAccountId,
   preselectedAccountName,
@@ -65,6 +87,15 @@ export function PartnerNewRequestClient({
   const [urgency, setUrgency] = useState<'normal' | 'urgent'>('normal')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [createdOfferToken, setCreatedOfferToken] = useState<string | null>(null)
+
+  // Per-transaction overrides (start empty → fall back to partnerDefaults server-side).
+  const [overridesOpen, setOverridesOpen] = useState(false)
+  const [agreedPrice, setAgreedPrice] = useState<string>('')
+  const [overrideInvoiceTarget, setOverrideInvoiceTarget] = useState<'' | InvoiceTarget>('')
+  const [overridePayoutModel, setOverridePayoutModel] = useState<'' | PayoutModel>('')
+  const [overridePayoutRate, setOverridePayoutRate] = useState<string>('')
 
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
   const clientLabel = isNewClient
@@ -75,9 +106,14 @@ export function PartnerNewRequestClient({
     ? newClientName.trim().length > 0
     : selectedAccountId !== ''
 
+  // Effective values (override → default) — for UI display.
+  const effectiveInvoiceTarget = (overrideInvoiceTarget || partnerDefaults.invoice_target) as InvoiceTarget
+  const effectivePayoutModel = (overridePayoutModel || partnerDefaults.payout_model) as PayoutModel
+
   const handleSubmit = async () => {
     if (!selectedService || !details.trim()) return
     setSubmitting(true)
+    setSubmitError(null)
 
     try {
       const serviceName = labelForServiceStatic(selectedService)
@@ -85,31 +121,73 @@ export function PartnerNewRequestClient({
         ? `${clientLabel} (${newClientEmail})`
         : clientLabel
 
+      // 1. Create the draft offer first so we can include offer_url in the CRM task.
+      let offerToken: string | null = null
+      let offerUrl: string | null = null
+      try {
+        const offerRes = await fetch('/api/portal/partner/create-request-offer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            service_slug: selectedService,
+            service_label: serviceName,
+            partner_id: partnerId,
+            account_id: isNewClient ? null : (selectedAccountId || null),
+            end_client_name: isNewClient ? newClientName.trim() : null,
+            end_client_email: isNewClient ? (newClientEmail.trim() || null) : null,
+            override_invoice_target: overrideInvoiceTarget || null,
+            override_agreed_price: agreedPrice ? Number(agreedPrice) : null,
+            override_payout_model: overridePayoutModel || null,
+            override_payout_rate: overridePayoutRate ? Number(overridePayoutRate) : null,
+            details: details.trim(),
+            urgency,
+            language: 'en',
+          }),
+        })
+        if (!offerRes.ok) {
+          const data = await offerRes.json().catch(() => ({}))
+          throw new Error(data.error || `Offer creation failed (HTTP ${offerRes.status})`)
+        }
+        const offerData = await offerRes.json()
+        offerToken = offerData.token ?? null
+        offerUrl = offerData.offer_url ?? null
+        setCreatedOfferToken(offerToken)
+      } catch (err) {
+        // Surface the real error so the partner knows the offer didn't create.
+        // Chat + task may still go through, but we want the partner to see the failure.
+        setSubmitError(err instanceof Error ? err.message : 'Offer creation failed')
+        setSubmitting(false)
+        return
+      }
+
+      // 2. Send chat message (existing behavior — context for staff).
       await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           account_id: isNewClient ? undefined : (selectedAccountId || undefined),
-          message: `🛎️ PARTNER REQUEST [${partnerName}]\nClient: ${clientInfo}\nService: ${serviceName}\n\nDetails: ${details.trim()}\nUrgency: ${urgency}`,
+          message: `🛎️ PARTNER REQUEST [${partnerName}]\nClient: ${clientInfo}\nService: ${serviceName}\n\nDetails: ${details.trim()}\nUrgency: ${urgency}${offerToken ? `\nDraft offer: ${offerToken}` : ''}`,
           type: 'service_request',
         }),
       })
 
+      // 3. Create CRM task with offer URL inline so staff can review the draft.
+      const offerLine = offerUrl ? `\n\n📝 Draft offer (review & send): ${offerUrl}` : ''
       await fetch('/api/portal/service-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           service_id: selectedService,
           service_name: serviceName,
-          details: `[Partner: ${partnerName}] Client: ${clientInfo}\n\n${details.trim()}`,
+          details: `[Partner: ${partnerName}] Client: ${clientInfo}\n\n${details.trim()}${offerLine}`,
           urgency,
           contact_id: contactId,
         }),
       })
 
       setSubmitted(true)
-    } catch {
-      // Chat message is the primary delivery — silently continue
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       setSubmitting(false)
     }
@@ -122,9 +200,14 @@ export function PartnerNewRequestClient({
           <CheckCircle className="h-8 w-8 text-green-600" />
         </div>
         <h2 className="text-xl font-semibold mb-2">Request Submitted!</h2>
-        <p className="text-zinc-500 text-sm mb-8">
+        <p className="text-zinc-500 text-sm mb-2">
           We&apos;ll review your request for <strong>{clientLabel}</strong> and get back to you shortly via chat.
         </p>
+        {createdOfferToken && (
+          <p className="text-xs text-zinc-400 mb-8">
+            Draft offer reference: <code className="bg-zinc-100 px-1.5 py-0.5 rounded">{createdOfferToken}</code>
+          </p>
+        )}
         <div className="flex gap-3 justify-center">
           <button
             onClick={() => router.push('/portal/partner/clients')}
@@ -342,6 +425,95 @@ export function PartnerNewRequestClient({
                   </button>
                 </div>
               </div>
+
+              {/* Pricing & overrides — collapsed by default. Defaults come from
+                  partner config; partner can override per-request. */}
+              <div className="border rounded-xl overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOverridesOpen(o => !o)}
+                  className="w-full flex items-center justify-between px-4 py-3 bg-zinc-50 hover:bg-zinc-100 text-left transition-colors"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-zinc-900">Pricing &amp; payout</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      Default: invoice {effectiveInvoiceTarget === 'partner' ? partnerName : 'end client'} · payout {PAYOUT_MODEL_LABEL[effectivePayoutModel]}
+                    </p>
+                  </div>
+                  {overridesOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+                </button>
+
+                {overridesOpen && (
+                  <div className="p-4 space-y-3 bg-white">
+                    <div>
+                      <label className="block text-xs font-medium text-zinc-700 mb-1">Agreed price (EUR)</label>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.01"
+                        value={agreedPrice}
+                        onChange={e => setAgreedPrice(e.target.value)}
+                        placeholder="Leave blank for staff to fill in"
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-zinc-700 mb-1">Invoice target</label>
+                      <select
+                        value={overrideInvoiceTarget}
+                        onChange={e => setOverrideInvoiceTarget(e.target.value as '' | InvoiceTarget)}
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Use partner default ({partnerDefaults.invoice_target === 'partner' ? partnerName : 'end client'})</option>
+                        <option value="partner">Bill {partnerName}</option>
+                        <option value="end_client">Bill the end client</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-zinc-700 mb-1">Payout model</label>
+                      <select
+                        value={overridePayoutModel}
+                        onChange={e => setOverridePayoutModel(e.target.value as '' | PayoutModel)}
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Use partner default ({PAYOUT_MODEL_LABEL[partnerDefaults.payout_model]})</option>
+                        <option value="none">No payout</option>
+                        <option value="price_difference">Price difference (paid − TD base cost)</option>
+                        <option value="percentage">Percentage of payment</option>
+                        <option value="flat_fee">Flat fee</option>
+                        <option value="credit_note">Credit note on next invoice</option>
+                      </select>
+                    </div>
+
+                    {(overridePayoutModel === 'percentage' || overridePayoutModel === 'flat_fee' || overridePayoutModel === 'credit_note') && (
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-700 mb-1">
+                          Payout rate {overridePayoutModel === 'percentage' ? '(0.10 = 10%)' : '(EUR)'}
+                        </label>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          step="0.01"
+                          value={overridePayoutRate}
+                          onChange={e => setOverridePayoutRate(e.target.value)}
+                          placeholder={partnerDefaults.payout_rate != null ? String(partnerDefaults.payout_rate) : 'Leave blank for staff to fill in'}
+                          className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {submitError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  {submitError}
+                </div>
+              )}
 
               <button
                 onClick={handleSubmit}

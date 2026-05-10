@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
     // Get the offer to determine contract_type and bundled_pipelines
     const { data: offer } = await supabase
       .from("offers")
-      .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id")
+      .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target")
       .eq("token", activation.offer_token)
       .single()
 
@@ -919,6 +919,11 @@ export async function POST(req: NextRequest) {
     // ─── STEP 3: Unified Invoice + QB Sync (AUTO) ──────────
     // Creates in BOTH client_invoices (portal) and payments (CRM), linked by FK
     // DEDUP: If offer-signed already created an invoice (portal_invoice_id on activation), skip creation and just mark it Paid
+    //
+    // paymentIdForPayout: the payments.id of the just-created/just-paid TD invoice.
+    // Step 3.6 (partner payout) needs this to attach the payout to the source
+    // payment for traceability and FK integrity.
+    let paymentIdForPayout: string | null = null
     if (activation.portal_invoice_id) {
       // Invoice already created at signing — just mark it Paid now.
       // pending_activations.portal_invoice_id references a payments.id (createTDInvoice
@@ -928,6 +933,7 @@ export async function POST(req: NextRequest) {
       // matching row for TD invoices — silent no-op.
       try {
         const today = new Date().toISOString().split("T")[0]
+        paymentIdForPayout = activation.portal_invoice_id
         await syncInvoiceStatus("payment", activation.portal_invoice_id, "Paid", today, Number(activation.amount) || undefined)
 
         // Backfill account_id on the existing invoice if we now have one
@@ -1011,6 +1017,7 @@ export async function POST(req: NextRequest) {
             .eq("id", pending_activation_id),
           "pending_activations.update"
         )
+        paymentIdForPayout = invoiceResult.paymentId
 
         steps.push({
           step: "crm_invoice",
@@ -1146,6 +1153,95 @@ export async function POST(req: NextRequest) {
       }
     } catch (e) {
       steps.push({ step: "referral", status: "error", detail: `Referral step failed: ${e instanceof Error ? e.message : String(e)}` })
+    }
+
+    // ─── STEP 3.6: Partner Payout (Phase 3B, AUTO, non-blocking) ──────
+    // Fires when an offer carries partner_id (managed-partner-driven offer)
+    // and partner_payout_model is set to a non-'none' value. Independent
+    // from Step 3.5 (legacy per-deal referrals) — both can run for the same
+    // offer if it was both referred AND originated by a managed partner.
+    //
+    // Writes a row to referral_payouts with status='pending'. Admin reviews
+    // in the CRM partner detail page and clicks Approve / Mark Paid.
+    try {
+      if (offer?.partner_id && offer.partner_payout_model && offer.partner_payout_model !== "none") {
+        const { calculatePartnerPayout } = await import("@/lib/partners/payout-calc")
+
+        // Read partner's td_base_costs map for the price_difference model.
+        const { data: partnerRow } = await supabase
+          .from("client_partners")
+          .select("td_base_costs, partner_name")
+          .eq("id", offer.partner_id)
+          .single()
+
+        // Resolve service slug used on this offer — the partner request
+        // endpoint stores it as services[0].slug. Falls back to the first
+        // bundled_pipeline label, lowercased, if slug is missing.
+        const offerServices = Array.isArray(offer.services) ? offer.services as Array<Record<string, unknown>> : []
+        const primarySlug = (offerServices[0]?.slug as string | undefined) || null
+        const tdBaseCosts = (partnerRow?.td_base_costs ?? {}) as Record<string, number>
+        const tdBaseCost = primarySlug ? (Number(tdBaseCosts[primarySlug]) || null) : null
+
+        const paymentAmount = Number(activation.amount) || 0
+        const result = calculatePartnerPayout({
+          model: offer.partner_payout_model as Parameters<typeof calculatePartnerPayout>[0]["model"],
+          rate: offer.partner_payout_rate != null ? Number(offer.partner_payout_rate) : null,
+          paymentAmount,
+          tdBaseCost,
+        })
+
+        const payoutCurrency = "EUR"
+        const payoutStatus = result.error ? "manual_review" : "pending"
+
+        const { data: payoutRow, error: payoutErr } = await dbWriteSafe(
+          supabase
+            .from("referral_payouts")
+            .insert({
+              partner_id: offer.partner_id,
+              referral_id: null,
+              payout_type: offer.partner_payout_model,
+              amount: result.amount ?? 0,
+              currency: payoutCurrency,
+              payment_id: paymentIdForPayout,
+              status: payoutStatus,
+              notes: result.note || null,
+            })
+            .select("id")
+            .single(),
+          "referral_payouts.insert"
+        )
+
+        if (payoutErr) {
+          steps.push({ step: "partner_payout", status: "error", detail: `Insert failed: ${payoutErr}` })
+        } else {
+          // Create a follow-up CRM task so payouts show up in the inbox.
+          await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; mirrors Step 3.5 pattern
+            supabase.from("tasks").insert({
+              task_title: `Partner payout — ${partnerRow?.partner_name || "Partner"} → ${activation.client_name} (${result.amount ?? "TBD"} ${payoutCurrency})`,
+              assigned_to: "Antonio",
+              category: "Payment",
+              priority: result.error ? "Urgent" : "Normal",
+              status: "To Do",
+              account_id: autoAccountId || null,
+              description: `Payout pending for partner ${partnerRow?.partner_name || offer.partner_id}.\nModel: ${offer.partner_payout_model}\nAmount: ${result.amount ?? "—"} ${payoutCurrency}\nNote: ${result.note || "—"}\nPayout id: ${payoutRow?.id}\nOffer: ${activation.offer_token}\n\nReview & approve in CRM → Partners → detail page.`,
+            }),
+            "tasks.insert"
+          )
+
+          steps.push({
+            step: "partner_payout",
+            status: result.error ? "manual_review" : "created",
+            detail: `Payout ${payoutRow?.id?.slice(0, 8)}: ${offer.partner_payout_model} ${result.amount ?? "—"} ${payoutCurrency}${result.error ? ` (${result.error})` : ""}`,
+          })
+        }
+      } else if (offer?.partner_id) {
+        steps.push({ step: "partner_payout", status: "skipped", detail: "Partner present but payout_model='none'" })
+      } else {
+        steps.push({ step: "partner_payout", status: "skipped", detail: "No partner on this offer" })
+      }
+    } catch (e) {
+      steps.push({ step: "partner_payout", status: "error", detail: `Partner payout step failed: ${e instanceof Error ? e.message : String(e)}` })
     }
 
     // ─── STEP 4: Data Collection Form (SUPERVISED) ──────────

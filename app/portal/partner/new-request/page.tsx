@@ -20,7 +20,7 @@ export default async function PartnerNewRequestPage({
 
   const { data: partner } = await supabaseAdmin
     .from('client_partners')
-    .select('id, partner_name')
+    .select('id, partner_name, default_invoice_target, default_payout_model, default_payout_rate, label')
     .eq('contact_id', contactId)
     .single()
 
@@ -40,7 +40,14 @@ export default async function PartnerNewRequestPage({
     <div className="p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
       <PartnerNewRequestClient
         contactId={contactId}
+        partnerId={partner.id}
         partnerName={partner.partner_name ?? 'Partner'}
+        partnerDefaults={{
+          invoice_target: (partner.default_invoice_target as 'partner' | 'end_client') ?? 'partner',
+          payout_model: (partner.default_payout_model as 'none' | 'price_difference' | 'percentage' | 'flat_fee' | 'credit_note') ?? 'none',
+          payout_rate: partner.default_payout_rate != null ? Number(partner.default_payout_rate) : null,
+          label: (partner.label as 'reseller' | 'variant' | null) ?? null,
+        }}
         accounts={(accounts ?? []).map(a => ({ id: a.id, company_name: a.company_name ?? '' }))}
         preselectedAccountId={preselectedAccountId}
         preselectedAccountName={preselectedAccountName}

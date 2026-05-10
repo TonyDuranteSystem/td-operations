@@ -11,14 +11,25 @@
  *   remove_client       — Unlink an account from partner (clear partner_id)
  *   create_invoice      — Create TD invoice addressed to partner for a client
  *   update_status       — Change partner status (active/suspended/inactive)
+ *   approve_payout      — Phase 3C: approve a pending partner payout
+ *   mark_payout_paid    — Phase 3C: mark an approved partner payout as paid
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { createClient } from '@/lib/supabase/server'
+import { isClient } from '@/lib/portal-auth'
 
 export async function POST(req: NextRequest) {
   try {
+    // Resolve caller. For Phase 3C admin actions we explicitly require a
+    // non-client (dashboard) user so partners cannot self-approve payouts via
+    // a crafted request. Existing actions are unchanged for back-compat.
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    const isAdmin = !!user && !isClient(user)
+
     const { action, params } = await req.json()
 
     if (!action) {
@@ -68,6 +79,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Update contact referrer_type
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task fda76fd3
         await supabaseAdmin
           .from('contacts')
           .update({ referrer_type: 'partner', updated_at: new Date().toISOString() })
@@ -142,12 +154,14 @@ export async function POST(req: NextRequest) {
           await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
             app_metadata: { ...existingUser.app_metadata, portal_tier: 'active' },
           })
+          /* eslint-disable no-restricted-syntax -- pre-P2.4 raw contacts.update + Phase D1 portal_tier; extract to lib/operations/portal.ts reconcileTier() per dev_task fda76fd3 */
           await supabaseAdmin.from('contacts').update({
             portal_role: 'partner',
             portal_tier: 'active',
             referrer_type: 'partner',
             updated_at: new Date().toISOString(),
           }).eq('id', partner.contact_id)
+          /* eslint-enable no-restricted-syntax */
 
           result = { success: true, detail: `Portal user already exists for ${email}. Updated to partner role.` }
           break
@@ -172,6 +186,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Update contact
+        /* eslint-disable no-restricted-syntax -- pre-P2.4 raw contacts.update + Phase D1 portal_tier; extract to lib/operations/portal.ts reconcileTier() per dev_task fda76fd3 */
         await supabaseAdmin.from('contacts').update({
           portal_role: 'partner',
           portal_tier: 'active',
@@ -180,9 +195,11 @@ export async function POST(req: NextRequest) {
           portal_email_template: 'partner-welcome',
           updated_at: new Date().toISOString(),
         }).eq('id', partner.contact_id)
+        /* eslint-enable no-restricted-syntax */
 
         // Generate referral code
         const code = partner.partner_name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) + '-2026'
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task fda76fd3
         await supabaseAdmin.from('contacts').update({ referral_code: code }).eq('id', partner.contact_id)
 
         // Send welcome email
@@ -231,6 +248,7 @@ export async function POST(req: NextRequest) {
           break
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/ per dev_task fda76fd3
         const { error: linkErr } = await supabaseAdmin
           .from('accounts')
           .update({ partner_id, updated_at: new Date().toISOString() })
@@ -263,6 +281,7 @@ export async function POST(req: NextRequest) {
           break
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.update; extract to lib/operations/ per dev_task fda76fd3
         await supabaseAdmin
           .from('accounts')
           .update({ partner_id: null, updated_at: new Date().toISOString() })
@@ -313,6 +332,119 @@ export async function POST(req: NextRequest) {
         })
 
         result = { success: true, detail: `Invoice ${invResult.invoiceNumber} created: ${invoiceCurrency || 'EUR'} ${invoiceAmount}` }
+        break
+      }
+
+      // ─── APPROVE PARTNER PAYOUT (Phase 3C) ───
+      case 'approve_payout': {
+        if (!isAdmin) {
+          result = { success: false, detail: 'Admin access required' }
+          break
+        }
+        const { payout_id } = params || {}
+        if (!payout_id) {
+          result = { success: false, detail: 'Missing payout_id' }
+          break
+        }
+
+        const { data: existing } = await supabaseAdmin
+          .from('referral_payouts')
+          .select('id, status, partner_id, amount, currency')
+          .eq('id', payout_id)
+          .single()
+
+        if (!existing) {
+          result = { success: false, detail: 'Payout not found' }
+          break
+        }
+        if (existing.status !== 'pending' && existing.status !== 'manual_review') {
+          result = { success: false, detail: `Payout already ${existing.status} — cannot approve` }
+          break
+        }
+
+        const { error: upErr } = await supabaseAdmin
+          .from('referral_payouts')
+          .update({
+            status: 'approved',
+            approved_by: user!.id,
+            approved_at: new Date().toISOString(),
+          })
+          .eq('id', payout_id)
+
+        if (upErr) {
+          result = { success: false, detail: upErr.message }
+          break
+        }
+
+        await supabaseAdmin.from('action_log').insert({
+          actor: user!.email || 'crm-admin',
+          action_type: 'approve_partner_payout',
+          table_name: 'referral_payouts',
+          record_id: payout_id,
+          summary: `Payout approved: ${existing.amount} ${existing.currency || 'EUR'}`,
+          details: { partner_id: existing.partner_id, prev_status: existing.status },
+        })
+
+        result = { success: true, detail: 'Payout approved' }
+        break
+      }
+
+      // ─── MARK PARTNER PAYOUT PAID (Phase 3C) ───
+      case 'mark_payout_paid': {
+        if (!isAdmin) {
+          result = { success: false, detail: 'Admin access required' }
+          break
+        }
+        const { payout_id, payout_method } = params || {}
+        if (!payout_id || !payout_method) {
+          result = { success: false, detail: 'Missing payout_id or payout_method' }
+          break
+        }
+        const ALLOWED_METHODS = ['bank_transfer', 'credit_note', 'invoice_deduction'] as const
+        if (!(ALLOWED_METHODS as readonly string[]).includes(payout_method)) {
+          result = { success: false, detail: `Invalid payout_method. Must be one of: ${ALLOWED_METHODS.join(', ')}` }
+          break
+        }
+
+        const { data: existing } = await supabaseAdmin
+          .from('referral_payouts')
+          .select('id, status, partner_id, amount, currency')
+          .eq('id', payout_id)
+          .single()
+
+        if (!existing) {
+          result = { success: false, detail: 'Payout not found' }
+          break
+        }
+        if (existing.status !== 'approved') {
+          result = { success: false, detail: `Payout must be 'approved' first (current: ${existing.status})` }
+          break
+        }
+
+        const { error: upErr } = await supabaseAdmin
+          .from('referral_payouts')
+          .update({
+            status: 'paid',
+            paid_at: new Date().toISOString(),
+            payout_method,
+          })
+          .eq('id', payout_id)
+
+        if (upErr) {
+          result = { success: false, detail: upErr.message }
+          break
+        }
+
+        await supabaseAdmin.from('action_log').insert({
+          actor: user!.email || 'crm-admin',
+          action_type: 'mark_partner_payout_paid',
+          table_name: 'referral_payouts',
+          record_id: payout_id,
+          summary: `Payout marked paid via ${payout_method}: ${existing.amount} ${existing.currency || 'EUR'}`,
+          details: { partner_id: existing.partner_id, payout_method },
+        })
+
+        result = { success: true, detail: `Payout marked paid via ${payout_method}` }
         break
       }
 
