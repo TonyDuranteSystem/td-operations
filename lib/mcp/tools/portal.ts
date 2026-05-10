@@ -5,6 +5,7 @@ import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
 import { updateAccount } from "@/lib/operations/account"
+import { createSD } from "@/lib/operations/service-delivery"
 import { syncTier } from "@/lib/operations/sync-tier"
 import { collectFilesRecursive, processFile } from "@/lib/mcp/tools/doc"
 import { buildTransitionWelcomeEmail } from "@/lib/mcp/tools/offers"
@@ -318,25 +319,29 @@ export function registerPortalTools(server: McpServer) {
     const createdSDs: string[] = []
 
     if (account.formation_date && !existingSDTypes.has("Company Formation")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "Company Formation", pipeline: "Company Formation",
+      await createSD({
+        service_type: "Company Formation",
         service_name: `Company Formation -- ${account.company_name}`,
-        stage: "Closing", stage_order: 6, status: "completed",
-        start_date: account.formation_date, assigned_to: "Luca",
-        notes: "Legacy onboard", stage_history: [{ to_stage: "Closing", to_order: 6, notes: "Legacy", advanced_at: new Date().toISOString() }],
+        account_id: account.id,
+        target_stage: "Closing",
+        target_stage_order: 6,
+        status: "completed",
+        start_date: account.formation_date,
+        notes: "Legacy onboard",
       })
       createdSDs.push("Company Formation (completed)")
     }
 
     if (account.ein_number && !existingSDTypes.has("EIN")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "EIN", pipeline: "EIN",
+      await createSD({
+        service_type: "EIN",
         service_name: `EIN -- ${account.company_name}`,
-        stage: "EIN Received", stage_order: 4, status: "completed",
-        start_date: account.formation_date || new Date().toISOString().slice(0, 10), assigned_to: "Luca",
-        notes: `Legacy onboard - EIN ${account.ein_number}`, stage_history: [{ to_stage: "EIN Received", to_order: 4, notes: "Legacy", advanced_at: new Date().toISOString() }],
+        account_id: account.id,
+        target_stage: "EIN Received",
+        target_stage_order: 4,
+        status: "completed",
+        start_date: account.formation_date || new Date().toISOString().slice(0, 10),
+        notes: `Legacy onboard - EIN ${account.ein_number}`,
       })
       createdSDs.push("EIN (completed)")
     }
@@ -346,11 +351,17 @@ export function registerPortalTools(server: McpServer) {
     // first installment invoice). No SD tracks the renewal itself.
 
     if (!isOneTime && !existingSDTypes.has("CMRA Mailing Address")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "CMRA Mailing Address",
+      await createSD({
+        service_type: "CMRA Mailing Address",
         service_name: `CMRA -- ${account.company_name}`,
-        status: "active", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        account_id: account.id,
+        // Phase 4 Step 3: legacy onboard means the lease is signed and the
+        // address is in service. Explicit stage avoids createSD's first-stage
+        // default ("Lease Created").
+        target_stage: "CMRA Active",
+        target_stage_order: 3,
+        status: "active",
+        start_date: new Date().toISOString().slice(0, 10),
         notes: `Legacy onboard - address: ${account.physical_address}`,
       })
       createdSDs.push("CMRA (active)")
@@ -363,13 +374,16 @@ export function registerPortalTools(server: McpServer) {
 
       const hasTaxRecord = !!existingTR
       const trStage = hasTaxRecord ? "Data Received" : "1st Installment Paid"
+      const trStageOrder = hasTaxRecord ? 3 : 1
 
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "Tax Return", pipeline: "Tax Return",
+      await createSD({
+        service_type: "Tax Return",
         service_name: `Tax Return -- ${account.company_name}`,
-        stage: trStage, status: "active",
-        start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        account_id: account.id,
+        target_stage: trStage,
+        target_stage_order: trStageOrder,
+        status: "active",
+        start_date: new Date().toISOString().slice(0, 10),
         notes: hasTaxRecord
           ? `Legacy onboard - 2025 tax return record exists (${existingTR?.id})`
           : "Legacy onboard - no 2025 tax return record yet; wizard needed",
@@ -382,11 +396,16 @@ export function registerPortalTools(server: McpServer) {
     }
 
     if (contact.itin_number && !existingSDTypes.has("ITIN")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "ITIN",
+      await createSD({
+        service_type: "ITIN",
         service_name: `ITIN -- ${contact.full_name || account.company_name}`,
-        status: "completed", start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        account_id: account.id,
+        // Phase 4 Step 3: legacy onboard with ITIN already issued. Explicit
+        // stage avoids createSD's first-stage default ("Data Collection").
+        target_stage: "ITIN Approved",
+        target_stage_order: 8,
+        status: "completed",
+        start_date: new Date().toISOString().slice(0, 10),
         notes: `Legacy onboard - ITIN ${contact.itin_number}`,
       })
       createdSDs.push("ITIN (completed)")
@@ -394,12 +413,14 @@ export function registerPortalTools(server: McpServer) {
 
     // State RA Renewal SD (Client accounts only)
     if (!isOneTime && !existingSDTypes.has("State RA Renewal")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "State RA Renewal", pipeline: null,
+      await createSD({
+        service_type: "State RA Renewal",
         service_name: `State RA Renewal -- ${account.company_name}`,
-        stage: "Upcoming", status: "active",
-        start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        account_id: account.id,
+        target_stage: "Upcoming",
+        target_stage_order: 1,
+        status: "active",
+        start_date: new Date().toISOString().slice(0, 10),
         notes: "Legacy onboard",
       })
       createdSDs.push("State RA Renewal (Upcoming)")
@@ -407,12 +428,14 @@ export function registerPortalTools(server: McpServer) {
 
     // State Annual Report SD (Client accounts only)
     if (!isOneTime && !existingSDTypes.has("State Annual Report")) {
-      // eslint-disable-next-line no-restricted-syntax -- dev_task 7ebb1e0c: migrate to lib/operations/
-      await supabaseAdmin.from("service_deliveries").insert({
-        account_id: account.id, service_type: "State Annual Report", pipeline: null,
+      await createSD({
+        service_type: "State Annual Report",
         service_name: `State Annual Report -- ${account.company_name}`,
-        stage: "Upcoming", status: "active",
-        start_date: new Date().toISOString().slice(0, 10), assigned_to: "Luca",
+        account_id: account.id,
+        target_stage: "Upcoming",
+        target_stage_order: 1,
+        status: "active",
+        start_date: new Date().toISOString().slice(0, 10),
         notes: "Legacy onboard",
       })
       createdSDs.push("State Annual Report (Upcoming)")
