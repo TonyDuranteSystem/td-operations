@@ -250,9 +250,11 @@ import {
   getEntryById,
   labelFor,
   listEntries,
+  listPendingReview,
   renameEntry,
   type ResolveExternalResult,
   resolveExternalValue,
+  resolvePendingReview,
   restoreEntry,
   slugFor,
   tagEntry,
@@ -715,6 +717,196 @@ describe("resolveExternalValue", () => {
     )
     expect(store.catalog_pending_review.length).toBe(1)
     expect(b.pendingReview.id).toBe(a.pendingReview.id)
+  })
+})
+
+// ─── listPendingReview ───────────────────────────────────────────────────
+
+describe("listPendingReview", () => {
+  it("returns only pending rows by default", async () => {
+    const a = assertUnmatched(
+      await resolveExternalValue("services", "Mystery A", "whop_webhook", {}),
+    )
+    assertUnmatched(await resolveExternalValue("services", "Mystery B", "stripe_webhook", {}))
+
+    // Resolve one — should fall out of the default list.
+    const taxReturn = findEntryBySlug("tax_return")
+    await resolvePendingReview(
+      a.pendingReview.id,
+      "approved_aliased",
+      taxReturn.id as string,
+      "alias mystery A to tax_return",
+      ACTOR,
+    )
+
+    const pending = await listPendingReview()
+    expect(pending.length).toBe(1)
+    expect(pending[0].submitted_value).toBe("Mystery B")
+    expect(pending[0].status).toBe("pending")
+  })
+
+  it("filters by catalog_id", async () => {
+    assertUnmatched(await resolveExternalValue("services", "Mystery C", "whop_webhook", {}))
+    const rows = await listPendingReview({ catalogId: "services" })
+    expect(rows.length).toBe(1)
+    const empty = await listPendingReview({ catalogId: "does_not_exist" })
+    expect(empty.length).toBe(0)
+  })
+
+  it("status='all' returns every row regardless of resolution", async () => {
+    const a = assertUnmatched(
+      await resolveExternalValue("services", "Mystery D", "whop_webhook", {}),
+    )
+    await resolvePendingReview(
+      a.pendingReview.id,
+      "rejected",
+      null,
+      "spam",
+      ACTOR,
+    )
+    const all = await listPendingReview({ status: "all" })
+    expect(all.length).toBe(1)
+    expect(all[0].status).toBe("rejected")
+  })
+})
+
+// ─── resolvePendingReview ────────────────────────────────────────────────
+
+describe("resolvePendingReview", () => {
+  it("approved_aliased: marks status, links resolved_to_entry_id, stamps reason in source_metadata", async () => {
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Tax Return Premium", "stripe_webhook", {
+        plan: "p1",
+      }),
+    )
+    const taxReturn = findEntryBySlug("tax_return")
+    const resolved = await resolvePendingReview(
+      before.pendingReview.id,
+      "approved_aliased",
+      taxReturn.id as string,
+      "Stripe label drift — alias to tax_return",
+      { kind: "ui", userId: null },
+    )
+    expect(resolved.status).toBe("approved_aliased")
+    expect(resolved.resolved_to_entry_id).toBe(taxReturn.id)
+    expect(resolved.resolved_at).toBeTruthy()
+    const meta = resolved.source_metadata as Record<string, unknown>
+    expect((meta.resolution as Record<string, unknown>).reason).toBe(
+      "Stripe label drift — alias to tax_return",
+    )
+    expect((meta.resolution as Record<string, unknown>).actor_kind).toBe("ui")
+    // Original metadata preserved
+    expect(meta.plan).toBe("p1")
+  })
+
+  it("rejected: status flips to rejected, resolved_to_entry_id stays null", async () => {
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Spam Plan", "whop_webhook", {}),
+    )
+    const resolved = await resolvePendingReview(
+      before.pendingReview.id,
+      "rejected",
+      null,
+      "spam — webhook noise",
+      ACTOR,
+    )
+    expect(resolved.status).toBe("rejected")
+    expect(resolved.resolved_to_entry_id).toBeNull()
+  })
+
+  it("rejects empty reason", async () => {
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Mystery E", "whop_webhook", {}),
+    )
+    await expect(
+      resolvePendingReview(before.pendingReview.id, "rejected", null, "", ACTOR),
+    ).rejects.toThrow(/reason/)
+  })
+
+  it("rejects approved_* without a resolved_to_entry_id", async () => {
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Mystery F", "whop_webhook", {}),
+    )
+    await expect(
+      resolvePendingReview(before.pendingReview.id, "approved_aliased", null, "test", ACTOR),
+    ).rejects.toThrow(/resolvedToEntryId is required/)
+  })
+
+  it("rejects 'rejected' with a non-null resolved_to_entry_id", async () => {
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Mystery G", "whop_webhook", {}),
+    )
+    const taxReturn = findEntryBySlug("tax_return")
+    await expect(
+      resolvePendingReview(
+        before.pendingReview.id,
+        "rejected",
+        taxReturn.id as string,
+        "test",
+        ACTOR,
+      ),
+    ).rejects.toThrow(/must be null when status='rejected'/)
+  })
+
+  it("rejects target entry from a different catalog", async () => {
+    // Seed a second catalog + entry, then try to alias a 'services' pending row to it.
+    store.catalog_definitions.push({
+      id: "other",
+      display_name: "Other",
+      display_name_translations: {},
+      description: null,
+      admin_can_add_rows: true,
+      tags_schema: null,
+      created_at: NOW,
+      updated_at: NOW,
+    })
+    const otherEntry: Row = {
+      id: nextUuid("entry"),
+      catalog_id: "other",
+      slug: "x",
+      display_name: "X",
+      display_name_translations: {},
+      description: null,
+      description_translations: {},
+      status: "active",
+      tags: [],
+      capabilities: {},
+      metadata: {},
+      created_at: NOW,
+      updated_at: NOW,
+      created_by: null,
+      updated_by: null,
+    }
+    store.catalog_entries.push(otherEntry)
+
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Mystery H", "whop_webhook", {}),
+    )
+    await expect(
+      resolvePendingReview(
+        before.pendingReview.id,
+        "approved_aliased",
+        otherEntry.id as string,
+        "test",
+        ACTOR,
+      ),
+    ).rejects.toThrow(/belongs to catalog 'other'/)
+  })
+
+  it("rejects double-resolution of the same row", async () => {
+    const before = assertUnmatched(
+      await resolveExternalValue("services", "Mystery I", "whop_webhook", {}),
+    )
+    await resolvePendingReview(before.pendingReview.id, "rejected", null, "first", ACTOR)
+    await expect(
+      resolvePendingReview(before.pendingReview.id, "rejected", null, "again", ACTOR),
+    ).rejects.toThrow(/already resolved/)
+  })
+
+  it("throws when pending row not found", async () => {
+    await expect(
+      resolvePendingReview("pending-99999999", "rejected", null, "test", ACTOR),
+    ).rejects.toThrow(/not found/)
   })
 })
 
