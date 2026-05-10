@@ -136,6 +136,51 @@ export async function getSDByType(displayName: string): Promise<CatalogEntry | n
   return all.find((e) => e.tags.includes("sd") && e.display_name === displayName) ?? null
 }
 
+/**
+ * Authoritative `service_deliveries.service_type` → catalog slug map.
+ *
+ * Mirrors §1 of `scripts/migrations/20260510-catalog-backfill.sql` so that
+ * SDs created at runtime resolve to the same catalog entry the Phase 2
+ * backfill assigned to historical rows. Any change here MUST be applied to
+ * the migration in the same PR (or vice versa).
+ *
+ * Values not in this map intentionally return `null` — callers (currently
+ * only `lib/operations/service-delivery.ts::createSD`) treat that as a
+ * warning, not an error, so legitimate but unmapped service types
+ * (`Support`, `Client Offboarding`, etc.) still produce SDs.
+ */
+const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
+  "State Annual Report": "state_annual_report",
+  "CMRA Mailing Address": "cmra",
+  "State RA Renewal": "state_ra_renewal",
+  "Tax Return": "tax_return",
+  "Company Formation": "company_formation",
+  "Annual Renewal": "annual_renewal_sd",
+  EIN: "ein",
+  ITIN: "itin",
+  "Banking Fintech": "banking",
+  "Banking Physical": "banking_physical",
+  "Client Onboarding": "client_onboarding",
+  "Company Closure": "closure",
+}
+
+/**
+ * Map a `service_deliveries.service_type` TEXT value (e.g. `"EIN"`,
+ * `"Banking Fintech"`, `"CMRA Mailing Address"`) to its catalog entry.
+ *
+ * Used by `createSD` to populate `service_type_entry_id` on insert. Returns
+ * `null` for values not in `SERVICE_TYPE_TO_SLUG` — caller decides whether
+ * to log/skip/error (today: warn-and-skip).
+ */
+export async function getEntryByServiceType(
+  serviceType: string,
+): Promise<CatalogEntry | null> {
+  const slug = SERVICE_TYPE_TO_SLUG[serviceType]
+  if (!slug) return null
+  const all = await loadEntries()
+  return all.find((e) => e.slug === slug) ?? null
+}
+
 /** True if the SD-type display name corresponds to a row tagged both `sd` and `sellable`. */
 export async function isStandaloneSD(sdType: string): Promise<boolean> {
   const entry = await getSDByType(sdType)
