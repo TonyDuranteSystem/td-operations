@@ -2962,13 +2962,18 @@ export type Database = {
           commission_model: string | null
           contact_id: string
           created_at: string | null
+          default_invoice_target: string
+          default_payout_model: string
+          default_payout_rate: number | null
           id: string
           is_test: boolean | null
+          label: string | null
           notes: string | null
           partner_email: string | null
           partner_name: string
           price_list: Json | null
           status: string | null
+          td_base_costs: Json | null
           updated_at: string | null
         }
         Insert: {
@@ -2977,13 +2982,18 @@ export type Database = {
           commission_model?: string | null
           contact_id: string
           created_at?: string | null
+          default_invoice_target?: string
+          default_payout_model?: string
+          default_payout_rate?: number | null
           id?: string
           is_test?: boolean | null
+          label?: string | null
           notes?: string | null
           partner_email?: string | null
           partner_name: string
           price_list?: Json | null
           status?: string | null
+          td_base_costs?: Json | null
           updated_at?: string | null
         }
         Update: {
@@ -2992,13 +3002,18 @@ export type Database = {
           commission_model?: string | null
           contact_id?: string
           created_at?: string | null
+          default_invoice_target?: string
+          default_payout_model?: string
+          default_payout_rate?: number | null
           id?: string
           is_test?: boolean | null
+          label?: string | null
           notes?: string | null
           partner_email?: string | null
           partner_name?: string
           price_list?: Json | null
           status?: string | null
+          td_base_costs?: Json | null
           updated_at?: string | null
         }
         Relationships: [
@@ -3347,6 +3362,7 @@ export type Database = {
           gender: string | null
           hubspot_id: string | null
           id: string
+          is_partner: boolean | null
           is_test: boolean | null
           itin: string | null
           itin_issue_date: string | null
@@ -3396,6 +3412,7 @@ export type Database = {
           gender?: string | null
           hubspot_id?: string | null
           id?: string
+          is_partner?: boolean | null
           is_test?: boolean | null
           itin?: string | null
           itin_issue_date?: string | null
@@ -3445,6 +3462,7 @@ export type Database = {
           gender?: string | null
           hubspot_id?: string | null
           id?: string
+          is_partner?: boolean | null
           is_test?: boolean | null
           itin?: string | null
           itin_issue_date?: string | null
@@ -6957,6 +6975,11 @@ export type Database = {
           lead_id: string | null
           next_steps: Json | null
           offer_date: string
+          partner_agreed_price: number | null
+          partner_id: string | null
+          partner_invoice_target: string | null
+          partner_payout_model: string | null
+          partner_payout_rate: number | null
           payment_links: Json | null
           payment_type: string | null
           recurring_costs: Json | null
@@ -7009,6 +7032,11 @@ export type Database = {
           lead_id?: string | null
           next_steps?: Json | null
           offer_date?: string
+          partner_agreed_price?: number | null
+          partner_id?: string | null
+          partner_invoice_target?: string | null
+          partner_payout_model?: string | null
+          partner_payout_rate?: number | null
           payment_links?: Json | null
           payment_type?: string | null
           recurring_costs?: Json | null
@@ -7061,6 +7089,11 @@ export type Database = {
           lead_id?: string | null
           next_steps?: Json | null
           offer_date?: string
+          partner_agreed_price?: number | null
+          partner_id?: string | null
+          partner_invoice_target?: string | null
+          partner_payout_model?: string | null
+          partner_payout_rate?: number | null
           payment_links?: Json | null
           payment_type?: string | null
           recurring_costs?: Json | null
@@ -7125,6 +7158,13 @@ export type Database = {
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offers_partner_id_fkey"
+            columns: ["partner_id"]
+            isOneToOne: false
+            referencedRelation: "client_partners"
             referencedColumns: ["id"]
           },
           {
@@ -8499,42 +8539,60 @@ export type Database = {
       referral_payouts: {
         Row: {
           amount: number
+          approved_at: string | null
+          approved_by: string | null
           created_at: string | null
           currency: string | null
           id: string
           invoice_id: string | null
           is_test: boolean | null
           notes: string | null
+          paid_at: string | null
+          partner_id: string | null
           payment_id: string | null
+          payout_method: string | null
           payout_type: string
           reference: string | null
-          referral_id: string
+          referral_id: string | null
+          status: string | null
         }
         Insert: {
           amount: number
+          approved_at?: string | null
+          approved_by?: string | null
           created_at?: string | null
           currency?: string | null
           id?: string
           invoice_id?: string | null
           is_test?: boolean | null
           notes?: string | null
+          paid_at?: string | null
+          partner_id?: string | null
           payment_id?: string | null
+          payout_method?: string | null
           payout_type: string
           reference?: string | null
-          referral_id: string
+          referral_id?: string | null
+          status?: string | null
         }
         Update: {
           amount?: number
+          approved_at?: string | null
+          approved_by?: string | null
           created_at?: string | null
           currency?: string | null
           id?: string
           invoice_id?: string | null
           is_test?: boolean | null
           notes?: string | null
+          paid_at?: string | null
+          partner_id?: string | null
           payment_id?: string | null
+          payout_method?: string | null
           payout_type?: string
           reference?: string | null
-          referral_id?: string
+          referral_id?: string | null
+          status?: string | null
         }
         Relationships: [
           {
@@ -8542,6 +8600,13 @@ export type Database = {
             columns: ["invoice_id"]
             isOneToOne: false
             referencedRelation: "client_invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "referral_payouts_partner_id_fkey"
+            columns: ["partner_id"]
+            isOneToOne: false
+            referencedRelation: "client_partners"
             referencedColumns: ["id"]
           },
           {

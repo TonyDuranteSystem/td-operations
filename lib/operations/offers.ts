@@ -130,6 +130,7 @@ export interface CreateOfferParams {
   lead_id?: string | null
   account_id?: string | null
   deal_id?: string | null
+  contact_id?: string | null
 
   // Token (auto-generated if omitted)
   token?: string
@@ -178,6 +179,15 @@ export interface CreateOfferParams {
   referrer_commission_pct?: number | null
   referrer_agreed_price?: number | null
   referrer_notes?: string | null
+
+  // Partner (Phase 3 — managed-partner-driven offers).
+  // partner_* are per-transaction overrides of client_partners defaults.
+  // Independent from referrer_* (legacy per-deal commissions).
+  partner_id?: string | null
+  partner_invoice_target?: "partner" | "end_client" | null
+  partner_agreed_price?: number | null
+  partner_payout_model?: "none" | "price_difference" | "percentage" | "flat_fee" | "credit_note" | null
+  partner_payout_rate?: number | null
 
   // Control flags
   auto_fill_referrer_from_lead?: boolean // default true
@@ -432,6 +442,12 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         lead_id: params.lead_id ?? null,
         account_id: params.account_id ?? null,
         deal_id: params.deal_id ?? null,
+        contact_id: params.contact_id ?? null,
+        partner_id: params.partner_id ?? null,
+        partner_invoice_target: params.partner_invoice_target ?? null,
+        partner_agreed_price: params.partner_agreed_price ?? null,
+        partner_payout_model: params.partner_payout_model ?? null,
+        partner_payout_rate: params.partner_payout_rate ?? null,
         referrer_name: refName,
         referrer_email: refEmail,
         referrer_type: refType,

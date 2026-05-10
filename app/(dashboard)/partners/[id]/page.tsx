@@ -5,6 +5,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { PartnerHeaderActions, type PartnerData, type ManagedAccount } from './components/partner-actions'
 import { ManagedClientsSection } from './components/managed-clients-section'
+import { PartnerPayoutsSection, type PayoutRow } from './components/partner-payouts-section'
 import { BackButton } from '@/components/ui/back-button'
 import { labelForServiceStatic } from '@/lib/services'
 
@@ -98,6 +99,29 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
       totalCommissionPaid += Number(r.paid_amount) || 0
     }
   }
+
+  // Phase 3C — Partner Payouts (referral_payouts where partner_id = this).
+  // Independent from referrals: payouts here come from offer.partner_id wiring,
+  // not legacy per-deal referrals.
+  const { data: payoutRows } = await supabaseAdmin
+    .from('referral_payouts')
+    .select('id, status, amount, currency, payout_type, payout_method, payment_id, approved_at, paid_at, created_at, notes')
+    .eq('partner_id', params.id)
+    .order('created_at', { ascending: false })
+
+  const payouts: PayoutRow[] = (payoutRows ?? []).map(r => ({
+    id: r.id,
+    status: (r.status ?? 'pending') as PayoutRow['status'],
+    amount: Number(r.amount) || 0,
+    currency: r.currency ?? 'EUR',
+    payout_type: r.payout_type,
+    payout_method: r.payout_method,
+    payment_id: r.payment_id,
+    approved_at: r.approved_at,
+    paid_at: r.paid_at,
+    created_at: r.created_at,
+    notes: r.notes,
+  }))
 
   const priceList = (partner.price_list ?? {}) as Record<string, number>
 
@@ -278,6 +302,9 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
         accounts={managedAccounts}
         servicesByAccount={servicesByAccount}
       />
+
+      {/* Partner Payouts — Phase 3C */}
+      <PartnerPayoutsSection partnerId={partner.id} payouts={payouts} />
     </div>
   )
 }
