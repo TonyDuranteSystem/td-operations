@@ -942,7 +942,6 @@ function QuickActionsBar({
               <ul className="space-y-0.5 text-xs">
                 <li>- Auto-tasks created for the new stage</li>
                 <li>- Portal notification sent to client</li>
-                <li>- Portal tier may upgrade (active → full)</li>
                 <li>- Tax return status synced (if Tax Return Filing)</li>
               </ul>
             </div>
@@ -2316,9 +2315,9 @@ function PortalTab({
                     className="flex-1 px-3 py-2 rounded-lg border text-sm"
                   >
                     <option value="lead">lead</option>
+                    <option value="formation">formation</option>
                     <option value="onboarding">onboarding</option>
                     <option value="active">active</option>
-                    <option value="full">full</option>
                   </select>
                   <button
                     onClick={() => handleAction('change_tier', { tier })}
