@@ -5,6 +5,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
 import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/account-create'
+import { normalizeEIN } from '@/lib/jobs/validation'
+import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import type { Json } from '@/lib/database.types'
 
 export async function updateAccountField(
@@ -30,18 +32,79 @@ export async function updateAccountField(
   }
 
   const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified'])
-  const coercedValue = booleanFields.has(field)
-    ? value === 'true'
-    : (value || null)
 
-  return safeAction(async () => {
-    const result = await updateWithLock('accounts', accountId, { [field]: coercedValue }, updatedAt)
-    if (!result.success) throw new Error(result.error)
+  // EIN inputs are normalized to canonical XX-XXXXXXX. A non-empty input that
+  // fails normalization is rejected — matches the dedicated record-ein-received
+  // endpoint's validation contract.
+  let coercedValue: string | boolean | null
+  if (booleanFields.has(field)) {
+    coercedValue = value === 'true'
+  } else if (field === 'ein_number' && value && value.trim()) {
+    const normalized = normalizeEIN(value)
+    if (!normalized) {
+      return { success: false, error: `Invalid EIN format: "${value}". Expected 9 digits (e.g., 30-1482516).` }
+    }
+    coercedValue = normalized
+  } else {
+    coercedValue = value || null
+  }
+
+  const result = await safeAction(async () => {
+    const writeResult = await updateWithLock('accounts', accountId, { [field]: coercedValue }, updatedAt)
+    if (!writeResult.success) throw new Error(writeResult.error)
     revalidatePath(`/accounts/${accountId}`)
   }, {
     action_type: 'update', table_name: 'accounts', record_id: accountId,
-    summary: `${field} updated`, details: { [field]: value },
+    summary: `${field} updated`, details: { [field]: coercedValue },
   })
+
+  // Inline EIN edit on a formation-tier account triggers the same workflow as
+  // the explicit "Record EIN Received" button (Banking SD + advance Formation
+  // SD + tier→active + welcome package). MMLLC member-info portal message is
+  // intentionally omitted — that side-effect should go through the dedicated
+  // dialog UI. Best-effort: failures are logged but don't break the EIN save.
+  if (result.success && field === 'ein_number' && typeof coercedValue === 'string' && coercedValue) {
+    try {
+      const { data: account } = await supabaseAdmin
+        .from('accounts')
+        .select('portal_tier')
+        .eq('id', accountId)
+        .single()
+
+      if (account?.portal_tier === 'formation') {
+        const wf = await triggerEINReceivedWorkflow({
+          accountId,
+          einNumber: coercedValue,
+          actor: 'dashboard:inline-edit',
+          reason: 'EIN entered via inline edit on Account page',
+        })
+        if (!wf.success) {
+          await supabaseAdmin.from('action_log').insert({
+            actor: 'dashboard:inline-edit',
+            action_type: 'record_ein_received',
+            table_name: 'accounts',
+            record_id: accountId,
+            account_id: accountId,
+            summary: `EIN ${coercedValue} saved via inline edit but workflow trigger skipped: ${wf.error ?? 'unknown'}`,
+            details: { ein_number: coercedValue, error: wf.error, side_effects: wf.side_effects, source: 'inline-edit-skip' },
+          })
+        }
+        revalidatePath(`/accounts/${accountId}`)
+      }
+    } catch (err) {
+      await supabaseAdmin.from('action_log').insert({
+        actor: 'dashboard:inline-edit',
+        action_type: 'record_ein_received',
+        table_name: 'accounts',
+        record_id: accountId,
+        account_id: accountId,
+        summary: `EIN ${coercedValue} saved via inline edit but workflow trigger threw: ${err instanceof Error ? err.message : 'unknown'}`,
+        details: { ein_number: coercedValue, error: err instanceof Error ? err.message : 'unknown', source: 'inline-edit-throw' },
+      })
+    }
+  }
+
+  return result
 }
 
 export async function updateContactField(
