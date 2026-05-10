@@ -9,6 +9,7 @@ import { collectFilesRecursive, processFile } from '@/lib/mcp/tools/doc'
 import { sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
 import { defaultInstallmentAmount } from '@/lib/billing/installment-defaults'
 import type { MailingAddressRow } from '@/lib/addresses'
+import { LLC_MANAGEMENT_BUNDLE_TYPES } from '@/lib/services'
 
 export const maxDuration = 60 // Vercel Pro: 60s
 
@@ -265,7 +266,7 @@ export async function POST(request: NextRequest) {
           language: lang,
           payment_type: 'bank_transfer', status: 'draft', offer_date: today,
           effective_date: `${year}-01-01`,
-          bundled_pipelines: ['CMRA Mailing Address', 'State RA Renewal', 'State Annual Report', 'Tax Return'],
+          bundled_pipelines: [...LLC_MANAGEMENT_BUNDLE_TYPES],
           services: [{ name: 'Annual LLC Management', price: (acct.installment_1_amount || 0) + (acct.installment_2_amount || 0), description: 'Annual management including RA, Annual Report, CMRA, Tax Return, Client Portal' }],
           cost_summary: (() => {
             const inst1 = acct.installment_1_amount ?? defaultInstallmentAmount(acct.entity_type)

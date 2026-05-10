@@ -25,6 +25,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { getRenewalGuard } from "@/lib/billing/renewal-guard"
+import { LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -155,7 +156,7 @@ export async function GET(req: NextRequest) {
             offer_date: today,
             effective_date: `${year}-01-01`,
             skip_january: skipJanuary,
-            bundled_pipelines: ["CMRA Mailing Address", "State RA Renewal", "State Annual Report", "Tax Return"],
+            bundled_pipelines: [...LLC_MANAGEMENT_BUNDLE_TYPES],
             services: [{
               name: "Annual LLC Management",
               price: totalAmount,
