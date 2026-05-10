@@ -82,6 +82,7 @@ import { registerCalendarTools } from "@/lib/mcp/tools/calendar"
 import { registerReferralTools } from "@/lib/mcp/tools/referrals"
 import { registerLockTools } from "@/lib/mcp/tools/locks"
 import { registerMemberInfoTools } from "@/lib/mcp/tools/member-info"
+import { registerCatalogTools } from "@/lib/mcp/tools/catalog"
 import { SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions"
 import { addReminderMiddleware } from "@/lib/mcp/reminder"
 
@@ -137,6 +138,7 @@ const handler = createMcpHandler(
     registerReferralTools(server)
     registerLockTools(server)
     registerMemberInfoTools(server)
+    registerCatalogTools(server)
   },
   {
     capabilities: {},

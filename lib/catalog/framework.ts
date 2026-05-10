@@ -565,3 +565,111 @@ async function recordPendingReview(
   }
   return inserted as CatalogPendingReview
 }
+
+// ── Pending-review governance ────────────────────────────────────────────
+
+export interface ListPendingReviewOptions {
+  catalogId?: string
+  status?: PendingReviewStatus | "all"
+}
+
+export async function listPendingReview(
+  opts: ListPendingReviewOptions = {},
+): Promise<CatalogPendingReview[]> {
+  let query = supabaseAdmin.from("catalog_pending_review").select("*")
+  if (opts.catalogId) query = query.eq("catalog_id", opts.catalogId)
+  // Default to status='pending' so callers see the active queue. Pass
+  // status:'all' to dump every row regardless of resolution state.
+  const status = opts.status ?? "pending"
+  if (status !== "all") query = query.eq("status", status)
+  const { data, error } = await query.order("created_at", { ascending: false })
+  if (error) throw new Error(`listPendingReview: ${error.message}`)
+  return (data ?? []) as CatalogPendingReview[]
+}
+
+export type PendingResolution = "approved_added" | "approved_aliased" | "rejected"
+
+/**
+ * Single canonical write-path for resolving a pending_review row. Both the
+ * MCP catalog_pending tool and the admin UI server action call this so that
+ * the DB state ends up identical regardless of which surface drove the
+ * resolution.
+ *
+ * The reason / actor metadata is appended to source_metadata.resolution
+ * because catalog_pending_review has no dedicated reason column and the
+ * catalog_decision_log action enum does not include a "pending_resolved"
+ * value (would require a migration). The pending_review row itself is the
+ * audit record.
+ */
+export async function resolvePendingReview(
+  pendingId: string,
+  status: PendingResolution,
+  resolvedToEntryId: string | null,
+  reason: string,
+  actor: Actor,
+): Promise<CatalogPendingReview> {
+  requireReason("resolvePendingReview", reason)
+
+  if (status === "rejected" && resolvedToEntryId) {
+    throw new Error(
+      "resolvePendingReview: resolvedToEntryId must be null when status='rejected'",
+    )
+  }
+  if (status !== "rejected" && !resolvedToEntryId) {
+    throw new Error(
+      `resolvePendingReview: resolvedToEntryId is required when status='${status}'`,
+    )
+  }
+
+  const { data: existing, error: fetchError } = await supabaseAdmin
+    .from("catalog_pending_review")
+    .select("*")
+    .eq("id", pendingId)
+    .maybeSingle()
+  if (fetchError) throw new Error(`resolvePendingReview lookup: ${fetchError.message}`)
+  if (!existing) throw new Error(`resolvePendingReview: pending row not found: ${pendingId}`)
+  const before = existing as CatalogPendingReview
+  if (before.status !== "pending") {
+    throw new Error(
+      `resolvePendingReview: row ${pendingId} already resolved (status=${before.status})`,
+    )
+  }
+
+  if (resolvedToEntryId) {
+    const target = await getEntryById(resolvedToEntryId)
+    if (!target) {
+      throw new Error(`resolvePendingReview: target entry not found: ${resolvedToEntryId}`)
+    }
+    if (target.catalog_id !== before.catalog_id) {
+      throw new Error(
+        `resolvePendingReview: target entry belongs to catalog '${target.catalog_id}', expected '${before.catalog_id}'`,
+      )
+    }
+  }
+
+  const now = new Date().toISOString()
+  const newSourceMetadata = {
+    ...(before.source_metadata ?? {}),
+    resolution: {
+      reason,
+      actor_kind: actor.kind,
+      actor_user_id: actor.userId ?? null,
+      at: now,
+    },
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("catalog_pending_review")
+    .update({
+      status,
+      resolved_at: now,
+      resolved_by: actor.userId ?? null,
+      resolved_to_entry_id: resolvedToEntryId,
+      source_metadata: newSourceMetadata as CatalogPendingReviewInsert["source_metadata"],
+    })
+    .eq("id", pendingId)
+    .select()
+    .single()
+  if (error) throw new Error(`resolvePendingReview(${pendingId}): ${error.message}`)
+  return data as CatalogPendingReview
+}
