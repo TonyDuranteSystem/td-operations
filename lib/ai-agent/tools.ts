@@ -442,6 +442,29 @@ export const AGENT_TOOLS: ToolDef[] = [
       },
     },
   },
+  {
+    name: 'save_memory',
+    description: 'Save a persistent memory that will be available in future AI Agent sessions. Use this when Antonio tells you something important that should be remembered across sessions — preferences, policies, client-specific context, standing instructions. Memories are upserted by key, so saving with the same key overwrites the previous value.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Short unique identifier for this memory (e.g. "fee_waiver_policy", "preferred_language", "client_priority_note"). Use snake_case.' },
+        content: { type: 'string', description: 'The memory text. Be specific and self-contained — this will be read in a future session with no other context.' },
+        scope: { type: 'string', description: 'Scope: "global" for general preferences/policies (default), or "client:{account_id}" for client-specific notes.' },
+      },
+      required: ['key', 'content'],
+    },
+  },
+  {
+    name: 'recall_memories',
+    description: 'Retrieve saved memories. Automatically called at session start to load global memories. Can also be called mid-session to load client-specific memories once account_id is known.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: 'Scope to retrieve: "global" (default) or "client:{account_id}" for a specific client.' },
+      },
+    },
+  },
 ]
 
 // ============================================================
@@ -485,6 +508,8 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'advance_service_stage': return await advanceServiceStage(params)
       case 'log_conversation': return await logConversation(params)
       case 'get_client_360': return await getClient360(params)
+      case 'save_memory': return await saveMemory(params)
+      case 'recall_memories': return await recallMemories(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
   } catch (err) {
@@ -1599,4 +1624,43 @@ async function getClient360(p: any) {
     unread_messages: unreadCount,
     upcoming_deadlines: deadlinesRes.data ?? [],
   })
+}
+
+// ============================================================
+// Session Memory
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveMemory(p: any) {
+  const scope = p.scope || 'global'
+  const { error } = await supabaseAdmin
+    .from('agent_memory')
+    .upsert({ scope, key: p.key, content: p.content, updated_at: new Date().toISOString() }, { onConflict: 'scope,key' })
+  if (error) return JSON.stringify({ error: error.message })
+  return JSON.stringify({ success: true, message: `Memory saved: [${scope}] ${p.key}` })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function recallMemories(p: any) {
+  const scope = p.scope || 'global'
+  const { data, error } = await supabaseAdmin
+    .from('agent_memory')
+    .select('key, content, updated_at')
+    .eq('scope', scope)
+    .order('updated_at', { ascending: false })
+  if (error) return JSON.stringify({ error: error.message })
+  if (!data?.length) return JSON.stringify({ memories: [], message: `No memories saved for scope "${scope}".` })
+  return JSON.stringify({ scope, memories: data })
+}
+
+/** Called by providers.ts before the tool loop — injects global memories into the system prompt. */
+export async function loadGlobalMemories(): Promise<string> {
+  const { data } = await supabaseAdmin
+    .from('agent_memory')
+    .select('key, content')
+    .eq('scope', 'global')
+    .order('updated_at', { ascending: false })
+  if (!data?.length) return ''
+  const lines = data.map(m => `- [${m.key}] ${m.content}`).join('\n')
+  return `\n\n## REMEMBERED FROM PREVIOUS SESSIONS\n${lines}`
 }

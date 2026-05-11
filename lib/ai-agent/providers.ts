@@ -86,8 +86,8 @@ const MAX_TOOL_LOOPS = 8
 // ============================================================
 
 async function getTools() {
-  const { AGENT_TOOLS, executeTool } = await import('./tools')
-  return { AGENT_TOOLS, executeTool }
+  const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await import('./tools')
+  return { AGENT_TOOLS, executeTool, loadGlobalMemories }
 }
 
 // ============================================================
@@ -98,7 +98,11 @@ async function callClaude(messages: Message[], attachment?: Attachment): Promise
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured')
 
-  const { AGENT_TOOLS, executeTool } = await getTools()
+  const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await getTools()
+
+  // Load persistent memories and append to system prompt
+  const memorySuffix = await loadGlobalMemories().catch(() => '')
+  const systemPrompt = SYSTEM_PROMPT + memorySuffix
 
   // Convert tools to Claude format
   const claudeTools = AGENT_TOOLS.map(t => ({
@@ -137,7 +141,7 @@ async function callClaude(messages: Message[], attachment?: Attachment): Promise
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 2048,
-        system: SYSTEM_PROMPT,
+        system: systemPrompt,
         tools: claudeTools,
         messages: currentMessages,
       }),
@@ -205,7 +209,11 @@ async function callOpenAI(messages: Message[], attachment?: Attachment): Promise
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
 
-  const { AGENT_TOOLS, executeTool } = await getTools()
+  const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await getTools()
+
+  // Load persistent memories and append to system prompt
+  const memorySuffix = await loadGlobalMemories().catch(() => '')
+  const systemPrompt = SYSTEM_PROMPT + memorySuffix
 
   // Convert tools to OpenAI format
   const openaiTools = AGENT_TOOLS.map(t => ({
@@ -220,7 +228,7 @@ async function callOpenAI(messages: Message[], attachment?: Attachment): Promise
   const toolsUsed: string[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let currentMessages: any[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     ...messages.map(m => ({ role: m.role, content: m.content })),
   ]
 
