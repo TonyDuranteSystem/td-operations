@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
+import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -94,6 +95,7 @@ export async function POST(req: NextRequest) {
           contactId = existing[0].id
         } else {
           const newC = await dbWrite(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
             supabaseAdmin.from("contacts").insert({
               full_name: lead.full_name, email: lead.email, phone: lead.phone,
               language: lead.language === "Italian" ? "it" : "en",
@@ -131,6 +133,7 @@ export async function POST(req: NextRequest) {
         if (Object.keys(updates).length > 0) {
           updates.updated_at = new Date().toISOString()
           await dbWrite(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task fda76fd3
             supabaseAdmin.from("contacts").update(updates).eq("id", contactId),
             "contacts.update"
           )
@@ -244,10 +247,14 @@ export async function POST(req: NextRequest) {
         // has already submitted their ITIN data — we skip the "Data
         // Collection" intake stage.
         try {
+          // Phase 1 ITIN rule (2026-05-11): ITIN SDs always live on contact_id
+          // with account_id=null, even when sub.account_id is set. createSD
+          // enforces this defensively, but we pass null explicitly so the
+          // caller is honest about the architecture.
           const newSd = await createSD({
             service_type: "ITIN",
             service_name: `ITIN - ${clientName}`,
-            account_id: sub.account_id || null,
+            account_id: null,
             contact_id: contactId,
             target_stage: "Document Preparation",
             notes: `Auto-created from ITIN form ${token}`,
@@ -305,12 +312,30 @@ export async function POST(req: NextRequest) {
           }
 
           const slug = `${sd.first_name}_${sd.last_name}`.replace(/\s+/g, "_")
-          await uploadBinaryToDrive(`W-7_${slug}.pdf`, w7Buffer, "application/pdf", itinFolder.id)
-          await uploadBinaryToDrive(`1040-NR_${slug}.pdf`, nrBuffer, "application/pdf", itinFolder.id)
-          await uploadBinaryToDrive(`Schedule_OI_${slug}.pdf`, oiBuffer, "application/pdf", itinFolder.id)
+          const w7Name = `W-7_${slug}.pdf`
+          const nrName = `1040-NR_${slug}.pdf`
+          const oiName = `Schedule_OI_${slug}.pdf`
+          const w7Upload = await uploadBinaryToDrive(w7Name, w7Buffer, "application/pdf", itinFolder.id) as { id?: string }
+          const nrUpload = await uploadBinaryToDrive(nrName, nrBuffer, "application/pdf", itinFolder.id) as { id?: string }
+          const oiUpload = await uploadBinaryToDrive(oiName, oiBuffer, "application/pdf", itinFolder.id) as { id?: string }
 
           docsGenerated = true
-          results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/` })
+
+          // Register PDFs in the portal documents table so the client sees
+          // them under Documents (category=3 Tax, portal_visible=true).
+          // ITIN SDs are contact-only — but the documents table requires
+          // account_id. If the ITIN contact also owns an LLC (sub.account_id
+          // set), file under that account. Pure contact-only ITINs leave the
+          // PDFs in Drive only — extending autoSaveDocument to support
+          // contact_id is deferred (Phase B).
+          if (sub.account_id) {
+            await autoSaveDocument({ accountId: sub.account_id, fileName: w7Name, documentType: "ITIN W-7", category: 3, driveFileId: w7Upload?.id, portalVisible: true })
+            await autoSaveDocument({ accountId: sub.account_id, fileName: nrName, documentType: "ITIN 1040-NR", category: 3, driveFileId: nrUpload?.id, portalVisible: true })
+            await autoSaveDocument({ accountId: sub.account_id, fileName: oiName, documentType: "ITIN Schedule OI", category: 3, driveFileId: oiUpload?.id, portalVisible: true })
+            results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated, uploaded to Drive/ITIN/, and registered in portal documents` })
+          } else {
+            results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/ (contact-only ITIN — portal documents skipped)` })
+          }
         }
       } else {
         results.push({ step: "docs_generated", status: "skipped", detail: "Missing name fields" })
@@ -391,6 +416,7 @@ export async function POST(req: NextRequest) {
 
       if (!existingTask) {
         await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
           supabaseAdmin.from("tasks").insert({
             task_title: taskTitle,
             description: docsGenerated
@@ -421,6 +447,7 @@ export async function POST(req: NextRequest) {
           .from("service_deliveries").select("id, notes").eq("id", deliveryId).single()
         if (sdRec) {
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.update; extract to lib/operations/ per dev_task fda76fd3
             supabaseAdmin.from("service_deliveries").update({
               notes: (sdRec.notes || "") + `\n${new Date().toISOString().split("T")[0]}: ITIN form completed. CRM updated. ${docsGenerated ? "W-7 + 1040-NR generated." : "Doc generation pending."} Luca notified.`,
               updated_at: new Date().toISOString(),
