@@ -28,6 +28,57 @@ const WIZARD_LABELS: Record<string, { en: string; it: string }> = {
   closure: { en: "LLC Closure", it: "Chiusura LLC" },
 }
 
+type WizardRow = {
+  id: string
+  wizard_type: string
+  account_id: string | null
+  contact_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Returns true when the underlying work the wizard tracks is already done via another path.
+// Formation: company already has a formation_date.
+// Onboarding: account portal_tier is 'active' (post-EIN).
+// Tax: no tax_returns row with data_received=false exists for the account (all years already received).
+// Banking (payset/relay), ITIN, closure: no canonical signal — let the normal reminder logic run.
+async function isWizardCompletedElsewhere(w: WizardRow): Promise<boolean> {
+  if (w.wizard_type === "formation") {
+    if (!w.account_id) return false
+    const { data } = await supabaseAdmin
+      .from("accounts")
+      .select("formation_date")
+      .eq("id", w.account_id)
+      .maybeSingle()
+    return !!data?.formation_date
+  }
+
+  if (w.wizard_type === "onboarding") {
+    if (!w.account_id) return false
+    const { data } = await supabaseAdmin
+      .from("accounts")
+      .select("portal_tier")
+      .eq("id", w.account_id)
+      .maybeSingle()
+    return data?.portal_tier === "active"
+  }
+
+  if (w.wizard_type === "tax" || w.wizard_type === "tax_return") {
+    if (!w.account_id) return false
+    // The submit handler picks tax_year from the latest tax_returns row with data_received=false.
+    // If no such row exists, every year on file is already received → wizard has nothing to collect.
+    const { data } = await supabaseAdmin
+      .from("tax_returns")
+      .select("id")
+      .eq("account_id", w.account_id)
+      .eq("data_received", false)
+      .limit(1)
+    return !!data && data.length === 0
+  }
+
+  return false
+}
+
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
   const authHeader = req.headers.get("authorization")
@@ -36,7 +87,7 @@ export async function GET(req: NextRequest) {
   }
 
   const now = Date.now()
-  const results = { reminded_3d: 0, reminded_7d: 0, tasks_created: 0, skipped: 0 }
+  const results = { reminded_3d: 0, reminded_7d: 0, tasks_created: 0, skipped: 0, auto_closed: 0 }
 
   // Get all in-progress wizard forms
   const { data: wizards } = await supabaseAdmin
@@ -55,6 +106,22 @@ export async function GET(req: NextRequest) {
     const ageMs = now - new Date(w.created_at).getTime()
     const lastUpdateMs = now - new Date(w.updated_at).getTime()
     const label = WIZARD_LABELS[w.wizard_type] || { en: w.wizard_type, it: w.wizard_type }
+
+    // Don't remind someone to fill out a form for something that's already done.
+    // The wizard may have been bypassed via another code path (admin entry, CRM action, etc.).
+    // When detected, auto-close the wizard to 'submitted' so this loop is the last time we look at it.
+    const alreadyDone = await isWizardCompletedElsewhere(w)
+    if (alreadyDone) {
+      await supabaseAdmin
+        .from("wizard_progress")
+        .update({ status: "submitted", updated_at: new Date().toISOString() })
+        .eq("id", w.id)
+      console.warn(
+        `[wizard-reminders] Auto-closed wizard ${w.id} for ${w.account_id || w.contact_id} — ${w.wizard_type} already completed.`
+      )
+      results.auto_closed++
+      continue
+    }
 
     // Manual pause switch for tax return reminders (env: PAUSE_TAX_REMINDERS=true)
     if (pauseTaxReminders && (w.wizard_type === "tax" || w.wizard_type === "tax_return")) {
