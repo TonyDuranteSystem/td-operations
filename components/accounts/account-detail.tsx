@@ -958,6 +958,14 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
   const [adding, setAdding] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CrmMember | null>(null)
   const [sendingForm, setSendingForm] = useState(false)
+  const [formRequest, setFormRequest] = useState<{ status: string; created_at: string; submitted_at: string | null } | null>(null)
+
+  const loadFormRequest = () => {
+    fetch(`/api/accounts/${accountId}/member-info-form`)
+      .then(r => r.json())
+      .then(d => setFormRequest(d.request ?? null))
+      .catch(() => {})
+  }
 
   const handleSendMemberInfoForm = async () => {
     setSendingForm(true)
@@ -966,6 +974,7 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to send form')
       toast.success(data.is_existing ? 'Form link re-sent via portal chat' : 'Member info form sent via portal chat')
+      loadFormRequest()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to send form')
     } finally {
@@ -983,6 +992,8 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
       })
       .catch(() => toast.error('Failed to load members'))
       .finally(() => setLoading(false))
+    loadFormRequest()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId])
 
   const displayName = (m: CrmMember) =>
@@ -1074,15 +1085,25 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
           Members ({members.length})
         </h3>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleSendMemberInfoForm}
-            disabled={sendingForm}
-            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
-            title="Send member info form via portal chat"
-          >
-            {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            Send Info Form
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleSendMemberInfoForm}
+              disabled={sendingForm}
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+              title="Send member info form via portal chat"
+            >
+              {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              {formRequest ? 'Resend' : 'Send Info Form'}
+            </button>
+            {formRequest && (
+              <span className="text-xs text-muted-foreground">
+                {formRequest.submitted_at
+                  ? `✓ Submitted ${new Date(formRequest.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                  : `Sent ${new Date(formRequest.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                }
+              </span>
+            )}
+          </div>
           <button
             onClick={() => { setShowAddForm(!showAddForm); setAddDraft({}) }}
             className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"

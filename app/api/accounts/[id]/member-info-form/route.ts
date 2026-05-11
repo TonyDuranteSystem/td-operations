@@ -6,6 +6,25 @@ import { notifyClientOfAdminMessage } from "@/lib/portal/notifications"
 export const dynamic = "force-dynamic"
 
 /**
+ * GET /api/accounts/[id]/member-info-form
+ * Returns the latest member info request for this account (if any).
+ */
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const { data } = await supabaseAdmin
+    .from("member_info_requests")
+    .select("id, status, created_at, submitted_at")
+    .eq("account_id", params.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return NextResponse.json({ request: data ?? null })
+}
+
+/**
  * POST /api/accounts/[id]/member-info-form
  *
  * Creates (or retrieves existing) member info request form for an MMLLC account,
