@@ -18,6 +18,28 @@ function isImageUrl(url: string): boolean {
   return ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
 }
 
+const URL_PATTERN = /(https?:\/\/[^\s]+)/
+
+function renderMessageText(text: string, isOwn: boolean) {
+  const parts = text.split(URL_PATTERN)
+  return parts.map((part, i) =>
+    URL_PATTERN.test(part) ? (
+      <a
+        key={i}
+        href={part}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(
+          'underline underline-offset-2 break-all',
+          isOwn ? 'text-blue-100 hover:text-white' : 'text-blue-600 hover:text-blue-800'
+        )}
+      >
+        {part}
+      </a>
+    ) : part
+  )
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
@@ -538,7 +560,7 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                         </div>
                       )
                     })()}
-                    {msg.message && <p className="whitespace-pre-wrap break-words">{msg.message}</p>}
+                    {msg.message && <p className="whitespace-pre-wrap break-words">{renderMessageText(msg.message, isOwn)}</p>}
                     <p className={cn(
                       'text-[10px] mt-1 flex items-center gap-1',
                       isOwn ? 'text-blue-200 justify-end' : 'text-zinc-400'
