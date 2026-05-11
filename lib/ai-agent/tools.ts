@@ -141,12 +141,18 @@ export const AGENT_TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'check_portal_messages',
-    description: 'Check recent unread portal chat messages from clients.',
+    name: 'search_portal_messages',
+    description: 'Search portal chat messages from clients. Can filter by client name, account, topic, read status, and date. Use this to read a specific client\'s messages or find unread messages. When a client name is provided, automatically resolves their account first.',
     parameters: {
       type: 'object',
       properties: {
-        limit: { type: 'number', description: 'Max results (default 10)' },
+        client_name: { type: 'string', description: 'Client name to search for (e.g. "Riccardo Aversa"). Resolves to account_id automatically.' },
+        account_id: { type: 'string', description: 'Filter by account UUID (use instead of client_name if you already have it).' },
+        unread_only: { type: 'boolean', description: 'If true, only return messages not yet read by admin. Default false = return all messages.' },
+        topic: { type: 'string', description: 'Filter by topic tab (e.g. "B-RAM", "Banking"). Null or omit for general/all messages.' },
+        search: { type: 'string', description: 'Full-text search within message content.' },
+        days_back: { type: 'number', description: 'Only return messages from the last N days (default 30).' },
+        limit: { type: 'number', description: 'Max results (default 20).' },
       },
     },
   },
@@ -425,6 +431,17 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['topic'],
     },
   },
+  {
+    name: 'get_client_360',
+    description: 'Get a complete 360-degree view of a client in one call. Returns account details, all contacts, active services, pending payments, open tasks, recent portal messages (30 days), and upcoming deadlines (60 days). Use this as the FIRST tool call whenever Antonio asks about a specific client — it replaces 5-6 separate lookups.',
+    parameters: {
+      type: 'object',
+      properties: {
+        client_name: { type: 'string', description: 'Client or company name (partial match). Use when you only have a name.' },
+        account_id: { type: 'string', description: 'Account UUID. Use when you already know the account ID.' },
+      },
+    },
+  },
 ]
 
 // ============================================================
@@ -445,7 +462,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_deadlines': return await searchDeadlines(params)
       case 'search_leads': return await searchLeads(params)
       case 'search_deals': return await searchDeals(params)
-      case 'check_portal_messages': return await checkPortalMessages(params)
+      case 'search_portal_messages': return await searchPortalMessages(params)
       case 'create_task': return await createTask(params)
       case 'send_email': return await sendEmail(params)
       case 'get_dashboard_stats': return await getDashboardStats()
@@ -467,6 +484,7 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'update_contact': return await updateContact(params)
       case 'advance_service_stage': return await advanceServiceStage(params)
       case 'log_conversation': return await logConversation(params)
+      case 'get_client_360': return await getClient360(params)
       default: return JSON.stringify({ error: `Unknown tool: ${name}` })
     }
   } catch (err) {
@@ -666,16 +684,64 @@ async function searchDeals(p: any) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function checkPortalMessages(p: any) {
-  const { data, error } = await supabaseAdmin
+async function searchPortalMessages(p: any) {
+  // If client_name provided, resolve to account_id first
+  let resolvedAccountId = p.account_id ?? null
+  if (!resolvedAccountId && p.client_name) {
+    const { data: contacts } = await supabaseAdmin
+      .from('contacts')
+      .select('id, account_contacts(account_id)')
+      .ilike('full_name', `%${p.client_name}%`)
+      .limit(1)
+    const firstContact = contacts?.[0] as any
+    const link = firstContact?.account_contacts?.[0]
+    if (link?.account_id) resolvedAccountId = link.account_id
+    // If still not found, try matching account company_name
+    if (!resolvedAccountId) {
+      const { data: accounts } = await supabaseAdmin
+        .from('accounts')
+        .select('id')
+        .ilike('company_name', `%${p.client_name}%`)
+        .limit(1)
+      if (accounts?.[0]?.id) resolvedAccountId = accounts[0].id
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let q = supabaseAdmin
     .from('portal_messages')
-    .select('id, message, sender_type, created_at, account_id, accounts(company_name)')
-    .eq('sender_type', 'client')
-    .is('read_at', null)
+    .select('id, message, sender_type, sender_context, topic, read_at, created_at, account_id, accounts(company_name)')
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
-    .limit(Number(p.limit) || 10)
+    .limit(Number(p.limit) || 20)
+
+  if (resolvedAccountId) q = q.eq('account_id', resolvedAccountId)
+  if (p.unread_only) q = q.eq('sender_type', 'client').is('read_at', null)
+  if (p.topic !== undefined && p.topic !== null) q = p.topic === '' ? q.is('topic', null) : q.eq('topic', p.topic)
+  if (p.search) q = q.ilike('message', `%${p.search}%`)
+  if (p.days_back) {
+    const since = new Date(Date.now() - Number(p.days_back) * 86400000).toISOString()
+    q = q.gte('created_at', since)
+  }
+
+  const { data, error } = await q
   if (error) return JSON.stringify({ error: error.message })
-  return JSON.stringify(data ?? [])
+
+  const result = (data ?? []).map((m: any) => ({
+    id: m.id,
+    account: (m.accounts as any)?.company_name ?? m.account_id,
+    sender: m.sender_type === 'client' ? (m.sender_context || 'Client') : 'Admin (TD)',
+    topic: m.topic ?? 'General',
+    message: m.message,
+    read: m.read_at !== null,
+    sent_at: m.created_at,
+  }))
+
+  const summary = resolvedAccountId
+    ? `Found ${result.length} messages${p.client_name ? ` for ${p.client_name}` : ''}`
+    : `Found ${result.length} messages across all clients`
+
+  return JSON.stringify({ summary, messages: result })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1410,4 +1476,127 @@ async function logConversation(p: any) {
     .single()
   if (error) return JSON.stringify({ error: error.message })
   return JSON.stringify({ success: true, conversation: data })
+}
+
+// ============================================================
+// Client 360 — one call replaces 5-6 separate tool calls
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getClient360(p: any) {
+  // Resolve account_id from name if needed
+  let accountId: string | null = p.account_id ?? null
+
+  if (!accountId && p.client_name) {
+    // Try contact name match first
+    const { data: contacts } = await supabaseAdmin
+      .from('contacts')
+      .select('id, account_contacts(account_id)')
+      .ilike('full_name', `%${p.client_name}%`)
+      .limit(1)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const link = (contacts?.[0] as any)?.account_contacts?.[0]
+    if (link?.account_id) {
+      accountId = link.account_id
+    } else {
+      // Fall back to company name
+      const { data: accounts } = await supabaseAdmin
+        .from('accounts')
+        .select('id')
+        .ilike('company_name', `%${p.client_name}%`)
+        .limit(1)
+      if (accounts?.[0]?.id) accountId = accounts[0].id
+    }
+  }
+
+  if (!accountId) {
+    return JSON.stringify({ error: `Client not found: "${p.client_name}". Try a different name or use account_id directly.` })
+  }
+
+  const today = new Date().toISOString().split('T')[0]
+  const in60Days = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0]
+  const since30Days = new Date(Date.now() - 30 * 86400000).toISOString()
+
+  const [
+    accountRes,
+    contactsRes,
+    servicesRes,
+    paymentsRes,
+    tasksRes,
+    messagesRes,
+    deadlinesRes,
+  ] = await Promise.all([
+    supabaseAdmin
+      .from('accounts')
+      .select('id, company_name, entity_type, member_structure, status, state_of_formation, ein_number, formation_date, client_health, notes, portal_tier')
+      .eq('id', accountId)
+      .single(),
+    supabaseAdmin
+      .from('account_contacts')
+      .select('role, is_primary, contact:contacts(id, full_name, email, phone, language, citizenship, passport_on_file)')
+      .eq('account_id', accountId),
+    supabaseAdmin
+      .from('service_deliveries')
+      .select('id, service_name, service_type, stage, status, start_date, end_date, notes, updated_at')
+      .eq('account_id', accountId)
+      .neq('status', 'cancelled')
+      .order('updated_at', { ascending: false })
+      .limit(10),
+    supabaseAdmin
+      .from('payments')
+      .select('id, description, amount, amount_currency, status, due_date, paid_date, invoice_number')
+      .eq('account_id', accountId)
+      .in('status', ['Pending', 'Overdue'])
+      .order('due_date')
+      .limit(10),
+    supabaseAdmin
+      .from('tasks')
+      .select('id, task_title, status, priority, due_date, assigned_to, category')
+      .eq('account_id', accountId)
+      .in('status', ['To Do', 'In Progress', 'Waiting'])
+      .order('created_at', { ascending: false })
+      .limit(10),
+    supabaseAdmin
+      .from('portal_messages')
+      .select('id, sender_type, sender_context, topic, message, read_at, created_at')
+      .eq('account_id', accountId)
+      .is('deleted_at', null)
+      .gte('created_at', since30Days)
+      .order('created_at', { ascending: false })
+      .limit(20),
+    supabaseAdmin
+      .from('deadlines')
+      .select('id, deadline_type, due_date, status, notes')
+      .eq('account_id', accountId)
+      .in('status', ['Pending', 'Overdue'])
+      .lte('due_date', in60Days)
+      .gte('due_date', today)
+      .order('due_date')
+      .limit(10),
+  ])
+
+  const messages = (messagesRes.data ?? []).map(m => ({
+    sender: m.sender_type === 'client' ? (m.sender_context || 'Client') : 'Admin (TD)',
+    topic: m.topic ?? 'General',
+    message: m.message,
+    unread: m.sender_type === 'client' && m.read_at === null,
+    sent_at: m.created_at,
+  }))
+
+  const unreadCount = messages.filter(m => m.unread).length
+
+  return JSON.stringify({
+    account: accountRes.data,
+    contacts: (contactsRes.data ?? []).map((c: Record<string, unknown>) => ({
+      ...(c.contact as object),
+      role: c.role,
+      is_primary: c.is_primary,
+    })),
+    services: servicesRes.data ?? [],
+    pending_payments: paymentsRes.data ?? [],
+    open_tasks: tasksRes.data ?? [],
+    recent_messages: messages,
+    unread_messages: unreadCount,
+    upcoming_deadlines: deadlinesRes.data ?? [],
+  })
 }
