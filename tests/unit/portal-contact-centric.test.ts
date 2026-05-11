@@ -1,16 +1,26 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 /**
  * Unit tests for Phase 1: Contact-Centric Migration
  * Tests the new query functions and nav visibility logic.
+ *
+ * Phase C (ITIN Chain Fix 2026-05-11): getContactOnlyNavVisibility is now
+ * async and accepts optional contactId so the ITIN-at-Client-Signing flag can
+ * be computed. When called with no contactId, it skips the DB lookup and
+ * returns the legacy hardcoded shape with itinAtClientSigning=false. The
+ * Supabase admin client is unused in the no-arg path so no mock is needed.
  */
+
+vi.mock('@sentry/nextjs', () => ({
+  captureException: vi.fn(),
+}))
 
 // Import the function that doesn't require DB access
 import { getContactOnlyNavVisibility } from '../../lib/portal/queries'
 
 describe('getContactOnlyNavVisibility', () => {
-  it('returns documents + services: true and account-specific features false', () => {
-    const nav = getContactOnlyNavVisibility()
+  it('returns documents + services: true and account-specific features false', async () => {
+    const nav = await getContactOnlyNavVisibility()
     expect(nav.documents).toBe(true)
     expect(nav.services).toBe(true)
     expect(nav.billing).toBe(false)
@@ -20,9 +30,10 @@ describe('getContactOnlyNavVisibility', () => {
     expect(nav.customers).toBe(false)
   })
 
-  it('returns exactly 7 keys', () => {
-    const nav = getContactOnlyNavVisibility()
-    expect(Object.keys(nav).length).toBe(9)
+  it('returns exactly 10 keys (adds itinAtClientSigning in Phase C)', async () => {
+    const nav = await getContactOnlyNavVisibility()
+    expect(Object.keys(nav).length).toBe(10)
+    expect(nav.itinAtClientSigning).toBe(false)
   })
 })
 

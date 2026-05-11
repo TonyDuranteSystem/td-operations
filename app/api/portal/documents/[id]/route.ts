@@ -24,7 +24,7 @@ export async function GET(
   // Get the document
   const { data: doc } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, account_id, drive_file_id')
+    .select('id, file_name, account_id, contact_id, drive_file_id')
     .eq('id', params.id)
     .single()
 
@@ -32,11 +32,16 @@ export async function GET(
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 
-  // Verify account access
+  // Verify access — allow if EITHER (a) the document belongs to one of the
+  // contact's accounts, OR (b) the document is contact-scoped (no account_id)
+  // and the contact_id matches the requester. Contact-scoped documents exist
+  // for pure contact-only ITIN clients (Phase B, 2026-05-11).
   const contactId = getClientContactId(user)
   if (contactId) {
     const accountIds = await getClientAccountIds(contactId)
-    if (!accountIds.includes(doc.account_id)) {
+    const hasAccountAccess = doc.account_id && accountIds.includes(doc.account_id)
+    const hasContactAccess = !doc.account_id && doc.contact_id === contactId
+    if (!hasAccountAccess && !hasContactAccess) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
   }

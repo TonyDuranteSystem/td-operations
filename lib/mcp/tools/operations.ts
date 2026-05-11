@@ -993,14 +993,28 @@ export function registerOperationsTools(server: McpServer) {
           .eq("status", "active")
           .limit(1)
 
-        // ITIN is always contact-only — createSD will force account_id=null,
-        // so scope idempotency to the contact too so we don't miss existing
-        // contact-scoped ITIN deliveries when the caller still passes account_id.
-        if (service_type === "ITIN") {
-          if (!contact_id) {
-            return { content: [{ type: "text" as const, text: "❌ ITIN requires contact_id (account_id is forced to null per Phase 1 ITIN rule)." }] }
+        // ITIN is always contact-only — createSD will force account_id=null
+        // and auto-resolve contact_id from account_contacts when only account_id
+        // is provided. Scope idempotency to the resolved contact_id so we don't
+        // miss existing contact-scoped ITIN deliveries when the caller still
+        // passes account_id.
+        let itinContactId: string | null = contact_id || null
+        if (service_type === "ITIN" && !itinContactId && account_id) {
+          const { data: links } = await supabaseAdmin
+            .from("account_contacts")
+            .select("contact_id, is_primary")
+            .eq("account_id", account_id)
+            .order("is_primary", { ascending: false })
+            .order("contact_id", { ascending: true })
+            .limit(1)
+          itinContactId = links?.[0]?.contact_id ?? null
+          if (!itinContactId) {
+            return { content: [{ type: "text" as const, text: `❌ ITIN requires a contact. Account "${clientName}" has no linked contacts in account_contacts. Link a contact to the account first, or pass contact_id explicitly.` }] }
           }
-          idempotencyQuery.is("account_id", null).eq("contact_id", contact_id)
+        }
+
+        if (service_type === "ITIN") {
+          idempotencyQuery.is("account_id", null).eq("contact_id", itinContactId!)
         } else if (account_id) {
           idempotencyQuery.eq("account_id", account_id)
         } else {
@@ -1036,18 +1050,20 @@ export function registerOperationsTools(server: McpServer) {
 
         // Route through the P1.6 operation layer (createSD) so we inherit:
         //   - ITIN contact-only enforcement (account_id forced to null,
-        //     contact_id required)
+        //     contact_id auto-resolved from account_contacts when needed)
         //   - service_type_entry_id catalog FK resolution
         //   - is_test propagation from the parent account/contact
         //   - stage validation against pipeline_stages
         // We pre-resolved firstStage above so we can keep the Tax Return
         // intake-stage override AND drive the local auto_tasks loop from the
-        // same stage row.
+        // same stage row. For ITIN we forward the already-resolved contact_id
+        // (via itinContactId) so createSD doesn't repeat the account_contacts
+        // lookup.
         const delivery = await createSD({
           service_type,
           service_name: name,
-          account_id: account_id || null,
-          contact_id: contact_id || null,
+          account_id: service_type === "ITIN" ? null : (account_id || null),
+          contact_id: service_type === "ITIN" ? itinContactId : (contact_id || null),
           deal_id: deal_id || null,
           target_stage: firstStage?.stage_name,
           target_stage_order: firstStage?.stage_order,
