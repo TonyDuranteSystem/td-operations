@@ -20,6 +20,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*__(portal_chat_send|gmail_send|gmail_draft|offer_send|lease_send|oa_send|portal_team_send|msg_send|portal_invoice_send)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/send-guard.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
