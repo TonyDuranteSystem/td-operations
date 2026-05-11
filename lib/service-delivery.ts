@@ -221,6 +221,58 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 8a. Phase 4 (2026-05-11) — explicit SD-stage-advance push notification.
+  // Tagged with sd-advance-<delivery_id> so the OS stacks/replaces older pushes
+  // for the same delivery instead of accumulating. Account-scoped SDs push to
+  // the account; contact-only SDs (ITIN) push to the contact.
+  if (delivery.account_id || delivery.contact_id) {
+    try {
+      const { sendPushToAccount, sendPushToContact } = await import("@/lib/portal/web-push")
+      const serviceLabel = delivery.service_name || delivery.service_type
+      const pushPayload = {
+        title: "Service Update",
+        body: `${serviceLabel} moved to ${targetStage.stage_name}`,
+        url: "/portal/services",
+        tag: `sd-advance-${delivery_id}`,
+      }
+      if (delivery.account_id) {
+        await sendPushToAccount(delivery.account_id, pushPayload)
+      } else if (delivery.contact_id) {
+        await sendPushToContact(delivery.contact_id, pushPayload)
+      }
+      autoTriggers.push(`SD-advance push dispatched (tag: ${pushPayload.tag})`)
+    } catch (pushErr) {
+      autoTriggers.push(`SD-advance push failed: ${pushErr instanceof Error ? pushErr.message : String(pushErr)}`)
+    }
+  }
+
+  // 8b. Phase 4 (2026-05-11) — bilingual stage-change email, gated by
+  // pipeline_stages.notify_client_email. Only fires for milestone stages
+  // (Submitted to IRS, ITIN Approved, TR Filed, TR Completed,
+  // Post-Formation + Banking, Closing) so we don't spam clients on every
+  // internal hop. EN/IT chosen per contacts.language.
+  //
+  // The cast is here (not in database.types.ts) because the column is only
+  // in sandbox until Antonio promotes the migration to production — the
+  // pre-push schema-drift check regenerates types from production and would
+  // strip the field otherwise. The cast collapses to the canonical row
+  // shape once production is migrated and types refresh.
+  const targetStageWithNotify = targetStage as typeof targetStage & { notify_client_email?: boolean | null }
+  if (targetStageWithNotify.notify_client_email && (delivery.account_id || delivery.contact_id)) {
+    try {
+      const { notifyClientOfStageAdvance } = await import("@/lib/portal/notifications")
+      const result = await notifyClientOfStageAdvance({
+        account_id: delivery.account_id ?? undefined,
+        contact_id: delivery.contact_id ?? undefined,
+        service_name: delivery.service_name || delivery.service_type,
+        stage_name: targetStage.stage_name,
+      })
+      autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed`)
+    } catch (emailErr) {
+      autoTriggers.push(`Stage-change email failed: ${emailErr instanceof Error ? emailErr.message : String(emailErr)}`)
+    }
+  }
+
   // 9. Tax Return — sync tax_returns record with SD stage.
   // Canonical service_type is "Tax Return" (matches activate-service,
   // VALID_SERVICE_TYPES, and pipeline_stages). The old "Tax Return Filing"

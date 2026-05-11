@@ -315,6 +315,128 @@ export async function notifyClientOfAdminMessage({
 }
 
 /**
+ * Bilingual stage-change email for service delivery advances.
+ * Phase 4 (2026-05-11): called by advanceServiceDelivery when the target
+ * stage has pipeline_stages.notify_client_email = true. Resolves recipients
+ * via contact_id (preferred) or all account_contacts links (so every member
+ * of a Multi-Member LLC is notified).
+ */
+export async function notifyClientOfStageAdvance(params: {
+  account_id?: string | null
+  contact_id?: string | null
+  service_name: string
+  stage_name: string
+}): Promise<{ sent: number; failed: number }> {
+  const { account_id, contact_id, service_name, stage_name } = params
+
+  type Recipient = { email: string; firstName: string | null; language: string }
+  let recipients: Recipient[] = []
+
+  if (contact_id) {
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('email, full_name, language')
+      .eq('id', contact_id)
+      .single()
+    if (contact?.email) {
+      recipients = [{
+        email: contact.email,
+        firstName: contact.full_name?.split(' ')[0] ?? null,
+        language: contact.language ?? 'en',
+      }]
+    }
+  } else if (account_id) {
+    const { data: links } = await supabaseAdmin
+      .from('account_contacts')
+      .select('contacts(email, full_name, language)')
+      .eq('account_id', account_id)
+    recipients = (links ?? [])
+      .map(l => {
+        const c = l.contacts as { email: string; full_name: string; language: string } | null
+        if (!c?.email) return null
+        return {
+          email: c.email,
+          firstName: c.full_name?.split(' ')[0] ?? null,
+          language: c.language ?? 'en',
+        }
+      })
+      .filter((r): r is Recipient => r !== null)
+  }
+
+  if (recipients.length === 0) return { sent: 0, failed: 0 }
+
+  const { gmailPost } = await import('@/lib/gmail')
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const portalServicesUrl = `${PORTAL_BASE_URL}/portal/services`
+  const safeService = escHtml(service_name)
+  const safeStage = escHtml(stage_name)
+
+  let sent = 0
+  let failed = 0
+
+  for (const recipient of recipients) {
+    const isIt = recipient.language === 'it'
+    const greeting = recipient.firstName
+      ? (isIt ? `Ciao ${escHtml(recipient.firstName)},` : `Hi ${escHtml(recipient.firstName)},`)
+      : (isIt ? 'Ciao,' : 'Hi,')
+    const subject = isIt
+      ? `Aggiornamento servizio: ${service_name} — ${stage_name}`
+      : `Service update: ${service_name} — ${stage_name}`
+    const headline = isIt
+      ? `Il tuo servizio "${safeService}" è passato alla fase "${safeStage}".`
+      : `Your service "${safeService}" has moved to the "${safeStage}" stage.`
+    const bodyText = isIt
+      ? 'Accedi al portale clienti per vedere i dettagli aggiornati.'
+      : 'Log in to the client portal to see the latest details.'
+    const ctaLabel = isIt ? 'Apri il Portale' : 'Open the Portal'
+    const footerText = isIt ? 'Tony Durante LLC — Portale Clienti' : 'Tony Durante LLC — Client Portal'
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+        <div style="background:#0A3161;padding:20px;border-radius:12px 12px 0 0;">
+          <img src="https://app.tonydurante.us/images/logo.jpg" alt="Tony Durante LLC" style="height:40px;" />
+        </div>
+        <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 12px 12px;">
+          <p style="margin:0 0 16px;">${greeting}</p>
+          <p style="margin:0 0 16px;color:#27272a;">${headline}</p>
+          <p style="margin:0 0 24px;color:#4b5563;">${bodyText}</p>
+          <a href="${portalServicesUrl}" style="display:inline-block;padding:12px 28px;background:#0A3161;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;font-family:Georgia,serif;">
+            ${ctaLabel}
+          </a>
+          <p style="color:#9ca3af;font-size:12px;margin-top:24px;">${footerText}</p>
+        </div>
+      </div>
+    `
+
+    try {
+      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+      const boundary = `boundary_${Date.now()}`
+      const raw = [
+        `From: Tony Durante LLC <support@tonydurante.us>`,
+        `To: ${recipient.email}`,
+        `Subject: ${encodedSubject}`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        `Content-Type: text/html; charset=UTF-8`,
+        `Content-Transfer-Encoding: base64`,
+        '',
+        Buffer.from(html).toString('base64'),
+        `--${boundary}--`,
+      ].join('\r\n')
+      await gmailPost('/messages/send', { raw: Buffer.from(raw).toString('base64url') })
+      sent++
+    } catch (err) {
+      console.error(`[notifyClientOfStageAdvance] Email failed for ${recipient.email}:`, err)
+      failed++
+    }
+  }
+
+  return { sent, failed }
+}
+
+/**
  * Get unread notification count.
  * Supports both account-based and contact-based queries.
  */
