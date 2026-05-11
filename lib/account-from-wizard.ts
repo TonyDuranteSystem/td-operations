@@ -62,6 +62,7 @@ export async function createAccountFromWizard(
 
   // 2. Create account
   const entityDisplay = entityType === "MMLLC" ? "Multi Member LLC" : "Single Member LLC"
+  const memberStructure = entityType === "MMLLC" ? "multi_member" : "single_member"
 
   // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { data: newAcct, error: acctErr } = await supabaseAdmin
@@ -69,6 +70,7 @@ export async function createAccountFromWizard(
     .insert({
       company_name: companyName,
       entity_type: entityDisplay,
+      member_structure: memberStructure,
       state_of_formation: stateOfFormation || null,
       account_type: accountType,
       status: "Active",

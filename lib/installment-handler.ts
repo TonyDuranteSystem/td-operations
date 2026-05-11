@@ -41,7 +41,7 @@ export async function onFirstInstallmentPaid(
   // Get account details
   const { data: account } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, entity_type, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date")
+    .select("id, company_name, entity_type, member_structure, state_of_formation, account_type, drive_folder_id, ra_renewal_date, annual_report_due_date, cmra_renewal_date, formation_date")
     .eq("id", accountId)
     .single()
 
@@ -197,10 +197,9 @@ export async function onFirstInstallmentPaid(
         .limit(1)
 
       if (!existingTrRecord?.length) {
-        const entityType = (account.entity_type || "").toUpperCase()
         let returnType = "SMLLC"
-        if (entityType.includes("MULTI") || entityType.includes("MMLLC")) returnType = "MMLLC"
-        else if (entityType.includes("CORP")) returnType = "Corp"
+        if (account.member_structure === "multi_member") returnType = "MMLLC"
+        else if ((account.entity_type || "").toUpperCase().includes("CORP")) returnType = "Corp"
 
         await dbWrite(
           supabaseAdmin.from("tax_returns").insert({

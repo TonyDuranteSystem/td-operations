@@ -190,7 +190,7 @@ export function registerPortalTools(server: McpServer) {
         oaStatus = existingOA.status === "signed" ? "Signed" : `Exists (${existingOA.status})`
         if (existingOA.status !== "signed") pendingDocs.push("Operating Agreement")
       } else {
-        const entityType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+        const entityType = account.member_structure === "multi_member" ? "MMLLC" : "SMLLC"
         const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
         const token = `${companySlug}-oa-${new Date().getFullYear()}`
         const today = new Date().toISOString().slice(0, 10)
@@ -465,7 +465,7 @@ export function registerPortalTools(server: McpServer) {
         const formDay = formDate.getDate()
         const nextYear = new Date().getFullYear() + 1
         const state = account.state_of_formation
-        const llcType = account.entity_type?.toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
+        const llcType = account.member_structure === "multi_member" ? "MMLLC" : "SMLLC"
 
         if (!existingDLTypes.has("Annual Report")) {
           let arDue: string | null = null
@@ -706,7 +706,7 @@ BULK GUARD: requires i_understand_this_is_bulk=true on every call.`,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data: allAccounts } = await (supabaseAdmin as any)
           .from("accounts")
-          .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+          .select("id, company_name, entity_type, member_structure, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
           .in("id", allAccountIds)
           .eq("status", "Active") as { data: Parameters<typeof processAccountForTransition>[0][] | null }
 
@@ -1000,7 +1000,7 @@ Use this for the 2026 legacy portal transition (159 clients). Run portal_transit
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const { data: activeAccounts } = await (supabaseAdmin as any)
               .from("accounts")
-              .select("id, company_name, entity_type, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
+              .select("id, company_name, entity_type, member_structure, state_of_formation, ein_number, formation_date, onboarding_date, status, physical_address, mailing_address:addresses!business_mailing_address_id(is_td_provided), drive_folder_id, portal_account, portal_tier, services_bundle, account_type, installment_1_amount, installment_2_amount, notes")
               .in("id", allContactAccountIds)
               .eq("status", "Active") as { data: Parameters<typeof processAccountForTransition>[0][] | null }
 

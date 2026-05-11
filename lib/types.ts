@@ -119,6 +119,7 @@ export interface Account {
   legal_link_verified: boolean | null
   mailing_link_verified: boolean | null
   ra_link_verified: boolean | null
+  member_structure: 'single_member' | 'multi_member' | null
   created_at: string
   updated_at: string
 }
@@ -295,6 +296,7 @@ export interface LinkedAccount {
   id: string
   company_name: string
   entity_type: string | null
+  member_structure: 'single_member' | 'multi_member' | null
   status: string | null
   state_of_formation: string | null
   ein: string | null
@@ -334,6 +336,7 @@ export interface PortalAccount {
   id: string
   company_name: string
   entity_type: string | null
+  member_structure: 'single_member' | 'multi_member' | null
   state_of_formation: string | null
   ein_number: string | null
   formation_date: string | null

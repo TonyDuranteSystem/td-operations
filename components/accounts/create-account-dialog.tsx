@@ -20,6 +20,7 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
   const router = useRouter()
   const [companyName, setCompanyName] = useState('')
   const [entityType, setEntityType] = useState('')
+  const [memberStructure, setMemberStructure] = useState('')
   const [stateOfFormation, setStateOfFormation] = useState('')
   const [status, setStatus] = useState('Pending Formation')
   const [einNumber, setEinNumber] = useState('')
@@ -31,6 +32,7 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
   const resetForm = () => {
     setCompanyName('')
     setEntityType('')
+    setMemberStructure('')
     setStateOfFormation('')
     setStatus('Pending Formation')
     setEinNumber('')
@@ -51,6 +53,7 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
       const input: CreateAccountInput = {
         company_name: companyName.trim(),
         entity_type: entityType ? (entityType as CreateAccountInput['entity_type']) : undefined,
+        member_structure: memberStructure ? (memberStructure as CreateAccountInput['member_structure']) : undefined,
         state_of_formation: stateOfFormation.trim() || undefined,
         status: status as CreateAccountInput['status'],
         ein_number: einNumber.trim() || undefined,
@@ -114,7 +117,7 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
               )}
             </div>
 
-            {/* Entity Type + Status (side by side) */}
+            {/* Entity Type + Member Structure (side by side) */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium mb-1">Entity Type</label>
@@ -130,6 +133,22 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
                 </select>
               </div>
               <div>
+                <label className="block text-sm font-medium mb-1">Member Structure</label>
+                <select
+                  value={memberStructure}
+                  onChange={e => setMemberStructure(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select...</option>
+                  <option value="single_member">Single Member</option>
+                  <option value="multi_member">Multi Member</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Status + State of Formation (side by side) */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
                 <label className="block text-sm font-medium mb-1">Status</label>
                 <select
                   value={status}
@@ -141,10 +160,6 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
                   ))}
                 </select>
               </div>
-            </div>
-
-            {/* State of Formation + EIN (side by side) */}
-            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium mb-1">State of Formation</label>
                 <input
@@ -161,16 +176,18 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
                   ))}
                 </datalist>
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">EIN Number</label>
-                <input
-                  type="text"
-                  value={einNumber}
-                  onChange={e => setEinNumber(e.target.value)}
-                  placeholder="XX-XXXXXXX"
-                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+            </div>
+
+            {/* EIN Number */}
+            <div>
+              <label className="block text-sm font-medium mb-1">EIN Number</label>
+              <input
+                type="text"
+                value={einNumber}
+                onChange={e => setEinNumber(e.target.value)}
+                placeholder="XX-XXXXXXX"
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
 
             {/* Notes */}

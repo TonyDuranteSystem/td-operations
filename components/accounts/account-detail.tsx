@@ -1392,6 +1392,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
             </button>
           </div>
           <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} onSave={makeAccountSaver('entity_type')} />
+          <EditableField icon={Users} label="Member Structure" value={account.member_structure ?? ''} type="select" options={[{ label: 'Single Member', value: 'single_member' }, { label: 'Multi Member', value: 'multi_member' }]} onSave={makeAccountSaver('member_structure')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
@@ -1481,8 +1482,8 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
         makeContactSaver={makeContactSaver}
       />
 
-      {/* Members — Multi Member LLC only */}
-      {account.entity_type === 'Multi Member LLC' && (
+      {/* Members — any multi-member account (MMLLC or C-Corp Elected with multiple members) */}
+      {account.member_structure === 'multi_member' && (
         <MembersSection accountId={account.id} accountCompanyName={account.company_name} />
       )}
 

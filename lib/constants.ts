@@ -8,6 +8,12 @@ export const COMPANY_TYPE = [
   'Single Member LLC', 'Multi Member LLC', 'C-Corp Elected',
 ] as const
 
+export const MEMBER_STRUCTURE = [
+  'single_member', 'multi_member',
+] as const
+
+export type MemberStructure = typeof MEMBER_STRUCTURE[number]
+
 export const SERVICE_TYPE = [
   'Company Formation', 'Client Onboarding', 'Tax Return', 'State RA Renewal',
   'State Annual Report', 'EIN Application', 'CMRA', 'ITIN',
