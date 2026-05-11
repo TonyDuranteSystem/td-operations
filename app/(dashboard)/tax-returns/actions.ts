@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
 import type { DryRunResult } from '@/lib/operations/destructive'
+import { syncTaxReturnToSD } from '@/lib/operations/tax-return-sd-bridge'
 
 const TOGGLE_ALLOWLIST = ['paid', 'data_received', 'sent_to_india', 'extension_filed'] as const
 type ToggleField = (typeof TOGGLE_ALLOWLIST)[number]
@@ -16,6 +17,12 @@ export async function updateTaxReturnStatus(
   return safeAction(async () => {
     const result = await updateWithLock('tax_returns', id, { status }, updatedAt)
     if (!result.success) throw new Error(result.error)
+    // Phase 3 (2026-05-11): route the status change through the SD pipeline
+    // so the tab and the stepper trigger the same downstream effects
+    // (portal notification, auto-tasks, stage_history). Bridge never
+    // throws — failures degrade silently so SD wiring can't roll back a
+    // legitimate status update.
+    await syncTaxReturnToSD(id)
     revalidatePath('/tax-returns')
   }, {
     action_type: 'update', table_name: 'tax_returns', record_id: id,

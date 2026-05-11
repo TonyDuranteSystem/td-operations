@@ -225,7 +225,10 @@ export async function advanceServiceDelivery(
   // Canonical service_type is "Tax Return" (matches activate-service,
   // VALID_SERVICE_TYPES, and pipeline_stages). The old "Tax Return Filing"
   // guard never fired — fixed 2026-05-11 alongside Phase 1 ITIN.
-  if (delivery.service_type === "Tax Return" && delivery.account_id) {
+  // Phase 3 (2026-05-11): skip the sync when the advance was triggered by
+  // the tax-return tab — the tab already wrote tax_returns.status, syncing
+  // back would overwrite the user's choice in a feedback loop.
+  if (delivery.service_type === "Tax Return" && delivery.account_id && actor !== "tax-return-tab") {
     try {
       const taxYear = new Date().getFullYear()
       const { data: tr } = await supabaseAdmin
