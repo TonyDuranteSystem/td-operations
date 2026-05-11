@@ -251,6 +251,15 @@ export async function POST(req: NextRequest) {
           currency,
           mark_as_paid: false,
           notes: `Auto-created at contract signing. Offer: ${offer_token}`,
+          // Bug 2 fix — keyed on offer_token only (NOT contactId). The contact
+          // is derived at sign time and could change between sign events
+          // (e.g. email typo corrected), so including it would defeat
+          // idempotency. One offer = at most one active TD invoice.
+          // findByIdempotencyKey skips Cancelled rows, and the cascade in
+          // lib/operations/cancel-offer-payments.ts NULLs the key on cancel,
+          // so a re-created offer reusing the same token can mint a fresh
+          // invoice cleanly.
+          idempotency_key: `offer-signed:${offer_token}`,
         })
 
         invoiceId = invoiceResult.paymentId

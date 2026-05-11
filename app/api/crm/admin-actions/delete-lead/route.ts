@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { cancelPaymentsForOfferTokens } from "@/lib/operations/cancel-offer-payments"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
       offers: 0,
       portal_user: 0,
       leads: 0,
+      payments_cancelled: 0,
     }
 
     // 1. Get offer tokens for this lead
@@ -59,6 +61,27 @@ export async function POST(request: Request) {
       .eq("lead_id", lead_id)
 
     const offerTokens = (offers ?? []).map(o => o.token)
+
+    // 1a. Cascade-cancel any TD invoices linked to those offers (Bug 1 fix).
+    //     Must run BEFORE pending_activations are deleted — the
+    //     pending_activations.portal_invoice_id is the only path from
+    //     offer_token to the payment row.
+    if (offerTokens.length > 0) {
+      const cancelResult = await cancelPaymentsForOfferTokens(
+        offerTokens,
+        `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
+      )
+      if (!cancelResult.ok) {
+        return NextResponse.json(
+          {
+            error: cancelResult.error ?? "Failed to cancel linked invoices",
+            blocked_paid: cancelResult.blocked_paid,
+          },
+          { status: 409 },
+        )
+      }
+      deleted.payments_cancelled = cancelResult.cancelled
+    }
 
     // 2. Delete contracts linked to those offers
     if (offerTokens.length > 0) {

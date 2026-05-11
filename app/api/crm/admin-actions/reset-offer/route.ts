@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { cancelPaymentsForOfferTokens } from "@/lib/operations/cancel-offer-payments"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -42,23 +43,43 @@ export async function POST(request: Request) {
     const cleaned: Record<string, number> = {
       contracts: 0,
       pending_activations: 0,
+      payments_cancelled: 0,
     }
 
-    // 1. Delete contracts
+    // 1. Cascade-cancel any TD invoices linked to this offer (Bug 1 fix).
+    //    Must run BEFORE pending_activations are deleted — the
+    //    pending_activations.portal_invoice_id is the only path from
+    //    offer_token to the payment row.
+    const cancelResult = await cancelPaymentsForOfferTokens(
+      [offer_token],
+      `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
+    )
+    if (!cancelResult.ok) {
+      return NextResponse.json(
+        {
+          error: cancelResult.error ?? "Failed to cancel linked invoices",
+          blocked_paid: cancelResult.blocked_paid,
+        },
+        { status: 409 },
+      )
+    }
+    cleaned.payments_cancelled = cancelResult.cancelled
+
+    // 2. Delete contracts
     const { count: cCount } = await supabaseAdmin
       .from("contracts")
       .delete({ count: "exact" })
       .eq("offer_token", offer_token)
     cleaned.contracts = cCount ?? 0
 
-    // 2. Delete pending_activations
+    // 3. Delete pending_activations
     const { count: aCount } = await supabaseAdmin
       .from("pending_activations")
       .delete({ count: "exact" })
       .eq("offer_token", offer_token)
     cleaned.pending_activations = aCount ?? 0
 
-    // 3. Reset offer to draft
+    // 4. Reset offer to draft
     const { error: updateErr } = await supabaseAdmin
       .from("offers")
       .update({
@@ -93,7 +114,7 @@ export async function POST(request: Request) {
       action_type: "update",
       table_name: "offers",
       record_id: offer_token,
-      summary: `Reset offer "${offer_token}" to draft (deleted ${cleaned.contracts} contracts, ${cleaned.pending_activations} activations)`,
+      summary: `Reset offer "${offer_token}" to draft (deleted ${cleaned.contracts} contracts, ${cleaned.pending_activations} activations, ${cleaned.payments_cancelled} invoices cancelled)`,
       details: {
         offer_token,
         lead_id: offer.lead_id,
