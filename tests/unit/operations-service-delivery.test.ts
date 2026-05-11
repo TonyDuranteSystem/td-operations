@@ -260,13 +260,14 @@ describe("createSD — stage resolution", () => {
         stage: "Document Preparation",
         stage_order: 2,
         account_id: null,
-        contact_id: null,
+        contact_id: "contact-1",
       },
       error: null,
     }
 
     await createSD({
       service_type: "ITIN",
+      contact_id: "contact-1", // Phase 1 ITIN rule — contact_id required
       target_stage: "document preparation", // lower-case input
     })
 
@@ -291,7 +292,11 @@ describe("createSD — stage resolution", () => {
       ],
     }
     await expect(
-      createSD({ service_type: "ITIN", target_stage: "Nonexistent Stage" }),
+      createSD({
+        service_type: "ITIN",
+        contact_id: "contact-1", // Phase 1 ITIN rule — contact_id required
+        target_stage: "Nonexistent Stage",
+      }),
     ).rejects.toThrow(/Stage "Nonexistent Stage" not valid for service_type="ITIN"/)
   })
 
@@ -396,6 +401,118 @@ describe("createSD — stage resolution", () => {
     await createSD({ service_type: "EIN" })
 
     expect(insertCapture).toMatchObject({ status: "active" })
+  })
+})
+
+// ─── createSD — Phase 1 ITIN architectural rule (2026-05-11) ─────────────
+
+describe("createSD — ITIN contact-only enforcement", () => {
+  const itinPipeline = {
+    ITIN: [
+      { stage_name: "Data Collection", stage_order: 1 },
+      { stage_name: "Document Preparation", stage_order: 2 },
+    ],
+  }
+  const itinInsertResponse = {
+    data: {
+      id: "sd-itin",
+      service_type: "ITIN",
+      service_name: "ITIN",
+      stage: "Data Collection",
+      stage_order: 1,
+      account_id: null,
+      contact_id: "contact-1",
+    },
+    error: null,
+  }
+
+  it("creates ITIN SD when contact_id is provided (account_id stays null)", async () => {
+    pipelineFixture = itinPipeline
+    insertResponse = itinInsertResponse
+
+    await createSD({ service_type: "ITIN", contact_id: "contact-1" })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "ITIN",
+      contact_id: "contact-1",
+      account_id: null,
+    })
+  })
+
+  it("forces account_id to null when both account_id and contact_id are passed", async () => {
+    pipelineFixture = itinPipeline
+    insertResponse = itinInsertResponse
+
+    await createSD({
+      service_type: "ITIN",
+      account_id: "acct-should-be-stripped",
+      contact_id: "contact-1",
+    })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "ITIN",
+      contact_id: "contact-1",
+      account_id: null,
+    })
+  })
+
+  it("throws when ITIN is created without contact_id", async () => {
+    pipelineFixture = itinPipeline
+    await expect(
+      createSD({ service_type: "ITIN", account_id: "acct-1" }),
+    ).rejects.toThrow(/service_type="ITIN" requires contact_id/)
+  })
+
+  it("does not affect non-ITIN service types (account_id preserved)", async () => {
+    pipelineFixture = {
+      EIN: [{ stage_name: "SS-4 Preparation", stage_order: 1 }],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-ein",
+        service_type: "EIN",
+        service_name: "EIN",
+        stage: "SS-4 Preparation",
+        stage_order: 1,
+        account_id: "acct-1",
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    await createSD({ service_type: "EIN", account_id: "acct-1" })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "EIN",
+      account_id: "acct-1",
+    })
+  })
+
+  it("does not affect 'ITIN Renewal' (only 'ITIN' is enforced by Phase 1)", async () => {
+    // Phase 1 spec only enforces the rule on service_type='ITIN'. ITIN
+    // Renewal sits in a different operational lane and is out of scope.
+    pipelineFixture = {
+      "ITIN Renewal": [{ stage_name: "Data Collection", stage_order: 1 }],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-itin-renew",
+        service_type: "ITIN Renewal",
+        service_name: "ITIN Renewal",
+        stage: "Data Collection",
+        stage_order: 1,
+        account_id: "acct-1",
+        contact_id: null,
+      },
+      error: null,
+    }
+
+    await createSD({ service_type: "ITIN Renewal", account_id: "acct-1" })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "ITIN Renewal",
+      account_id: "acct-1",
+    })
   })
 })
 

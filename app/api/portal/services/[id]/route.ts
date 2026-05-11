@@ -23,11 +23,11 @@ export async function GET(
   // Try service_deliveries first (new table, IDs come from here)
   const { data: sd } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_name, service_type, stage, stage_order, stage_entered_at, stage_history, status, start_date, end_date, notes, account_id')
+    .select('id, service_name, service_type, stage, stage_order, stage_entered_at, stage_history, status, start_date, end_date, notes, account_id, contact_id')
     .eq('id', id)
     .maybeSingle()
 
-  let accountId: string
+  let accountId: string | null
   let serviceBase: {
     id: string; service_name: string; service_type: string; status: string
     current_step: number | null; total_steps: number | null
@@ -37,8 +37,12 @@ export async function GET(
   let delivery: { stage: string; stage_order: number; stage_entered_at: string | null; status: string; start_date: string | null; end_date: string | null; notes: string | null } | null = null
 
   if (sd) {
-    // Access control
-    if (!accountIds.includes(sd.account_id)) {
+    // Access control: allow if the SD belongs to one of the client's accounts
+    // OR if it is a contact-scoped SD owned by the client (Phase 1 ITIN rule:
+    // ITIN SDs have account_id=null and contact_id set).
+    const accountMatch = sd.account_id !== null && accountIds.includes(sd.account_id)
+    const contactMatch = sd.contact_id !== null && sd.contact_id === contactId
+    if (!accountMatch && !contactMatch) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
     accountId = sd.account_id
@@ -107,13 +111,17 @@ export async function GET(
     .eq('service_type', serviceBase.service_type)
     .order('stage_order')
 
-  // Fetch documents linked to this account
-  const { data: documents } = await supabaseAdmin
-    .from('documents')
-    .select('id, file_name, document_type_name, category, drive_file_id, created_at')
-    .eq('account_id', accountId)
-    .order('created_at', { ascending: false })
-    .limit(20)
+  // Fetch documents linked to this account. Contact-only SDs (ITIN per
+  // Phase 1 rule) have no account scope here — return empty for now;
+  // contact-scoped documents are a follow-up.
+  const { data: documents } = accountId
+    ? await supabaseAdmin
+        .from('documents')
+        .select('id, file_name, document_type_name, category, drive_file_id, created_at')
+        .eq('account_id', accountId)
+        .order('created_at', { ascending: false })
+        .limit(20)
+    : { data: [] }
 
   // Build stage timeline
   const stageHistory = (sdForHistory?.stage_history as Array<{ stage: string; entered_at: string; exited_at?: string }> | null) ?? []

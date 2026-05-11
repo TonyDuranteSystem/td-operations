@@ -185,6 +185,22 @@ async function resolveNamedStage(
 export async function createSD(
   params: CreateSDParams,
 ): Promise<CreateSDResult> {
+  // ITIN architectural rule (Phase 1, 2026-05-11): ITIN SDs always live on
+  // contact_id with account_id=null, even when the contact owns an LLC. The
+  // ITIN belongs to the person, not the company. Enforce here so every entry
+  // point (activate-service, MCP sd_create, future callers) gets the same
+  // shape automatically.
+  if (params.service_type === "ITIN") {
+    if (!params.contact_id) {
+      throw new Error(
+        `[createSD] service_type="ITIN" requires contact_id (account_id is forced to null per Phase 1 ITIN rule)`,
+      )
+    }
+    if (params.account_id) {
+      params = { ...params, account_id: null }
+    }
+  }
+
   let stage: string
   let stage_order: number
 

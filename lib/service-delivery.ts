@@ -175,7 +175,10 @@ export async function advanceServiceDelivery(
             priority: (taskDef.priority || "Normal") as never,
             description: taskDef.description || `Auto-created by pipeline advance to "${targetStage.stage_name}"`,
             status: "To Do",
+            // Phase 1 ITIN rule (2026-05-11): propagate contact_id so contact-
+            // only SDs (account_id=null) still produce attributable tasks.
             account_id: delivery.account_id,
+            contact_id: delivery.contact_id,
             deal_id: delivery.deal_id,
             delivery_id: delivery.id,
             stage_order: targetStage.stage_order,
@@ -192,8 +195,10 @@ export async function advanceServiceDelivery(
 
   const autoTriggers: string[] = []
 
-  // 8. Portal notification for client
-  if (delivery.account_id) {
+  // 8. Portal notification for client. Accept either account-scoped SDs or
+  // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
+  // the client too.
+  if (delivery.account_id || delivery.contact_id) {
     try {
       const { createPortalNotification } = await import("@/lib/portal/notifications")
       const title = isCompleted
@@ -203,7 +208,8 @@ export async function advanceServiceDelivery(
         ? "Your service has been completed."
         : `Status updated to: ${targetStage.stage_name}`
       await createPortalNotification({
-        account_id: delivery.account_id,
+        account_id: delivery.account_id ?? undefined,
+        contact_id: delivery.contact_id ?? undefined,
         type: "service",
         title,
         body,
@@ -215,8 +221,11 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 9. Tax Return — sync tax_returns record with SD stage
-  if (delivery.service_type === "Tax Return Filing" && delivery.account_id) {
+  // 9. Tax Return — sync tax_returns record with SD stage.
+  // Canonical service_type is "Tax Return" (matches activate-service,
+  // VALID_SERVICE_TYPES, and pipeline_stages). The old "Tax Return Filing"
+  // guard never fired — fixed 2026-05-11 alongside Phase 1 ITIN.
+  if (delivery.service_type === "Tax Return" && delivery.account_id) {
     try {
       const taxYear = new Date().getFullYear()
       const { data: tr } = await supabaseAdmin

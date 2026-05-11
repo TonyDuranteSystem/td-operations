@@ -52,9 +52,19 @@ export default async function PortalServicesPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
 
   const locale = getLocale(user)
-  const services = selectedAccountId
-    ? await getPortalServices(selectedAccountId)
-    : await getPortalServicesByContact(contactId)
+  // Phase 1 ITIN rule (2026-05-11): always merge contact-level SDs so ITIN
+  // services (account_id=null, contact_id set) stay visible even when the
+  // client picks one of their LLCs from the account switcher. Dedup by id —
+  // SDs that carry both account_id and contact_id (Tax Return, Onboarding)
+  // would otherwise appear twice.
+  const [accountServices, contactServices] = await Promise.all([
+    selectedAccountId ? getPortalServices(selectedAccountId) : Promise.resolve([]),
+    getPortalServicesByContact(contactId),
+  ])
+  const byId = new Map<string, typeof accountServices[number]>()
+  for (const s of accountServices) byId.set(s.id, s)
+  for (const s of contactServices) byId.set(s.id, s)
+  const services = Array.from(byId.values())
   const active = services.filter(s => s.status !== 'Completed' && s.status !== 'completed')
   const completed = services.filter(s => s.status === 'Completed' || s.status === 'completed')
 

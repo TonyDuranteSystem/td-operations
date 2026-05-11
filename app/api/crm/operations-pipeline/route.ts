@@ -49,10 +49,11 @@ export async function GET() {
         .is('activated_at', null)
         .order('payment_confirmed_at', { ascending: true }),
 
-      // 4. Active service deliveries grouped by account
+      // 4. Active service deliveries grouped by account (or by contact for
+      //    contact-only SDs — Phase 1 ITIN rule, 2026-05-11).
       supabaseAdmin
         .from('service_deliveries')
-        .select('id, account_id, service_name, service_type, stage, status, updated_at, pipeline')
+        .select('id, account_id, contact_id, service_name, service_type, stage, status, updated_at, pipeline')
         .eq('status', 'active')
         .order('updated_at', { ascending: false }),
 
@@ -127,12 +128,24 @@ export async function GET() {
       }
     })
 
-    // Process active services - group by account
-    const servicesByAccount = new Map<string, Array<{ service_name: string | null; stage: string | null; pipeline: string | null; updated_at: string }>>()
+    // Process active services — group by owner. The owner key is the
+    // account_id when present, otherwise `contact:<contact_id>` so contact-
+    // only SDs (Phase 1 ITIN rule) get their own group instead of being
+    // dropped or folded into an unrelated company.
+    const servicesByOwner = new Map<string, Array<{ service_name: string | null; stage: string | null; pipeline: string | null; updated_at: string }>>()
+    const ownerIsContact = new Map<string, boolean>()
     for (const sd of activeServicesResult.data ?? []) {
-      if (!sd.account_id) continue
-      if (!servicesByAccount.has(sd.account_id)) servicesByAccount.set(sd.account_id, [])
-      servicesByAccount.get(sd.account_id)!.push({
+      let ownerKey: string | null = null
+      if (sd.account_id) {
+        ownerKey = sd.account_id
+        ownerIsContact.set(ownerKey, false)
+      } else if (sd.contact_id) {
+        ownerKey = `contact:${sd.contact_id}`
+        ownerIsContact.set(ownerKey, true)
+      }
+      if (!ownerKey) continue
+      if (!servicesByOwner.has(ownerKey)) servicesByOwner.set(ownerKey, [])
+      servicesByOwner.get(ownerKey)!.push({
         service_name: sd.service_name,
         stage: sd.stage,
         pipeline: sd.pipeline,
@@ -140,16 +153,31 @@ export async function GET() {
       })
     }
 
-    // Fetch account names for service accounts
-    const accountIds = Array.from(servicesByAccount.keys())
-    const accountNames: Record<string, string> = {}
-    if (accountIds.length > 0) {
+    // Fetch display names: company_name for account owners, full_name for
+    // contact-only owners.
+    const accountOwnerIds: string[] = []
+    const contactOwnerIds: string[] = []
+    for (const [key, isContact] of Array.from(ownerIsContact.entries())) {
+      if (isContact) contactOwnerIds.push(key.slice('contact:'.length))
+      else accountOwnerIds.push(key)
+    }
+    const ownerNames: Record<string, string> = {}
+    if (accountOwnerIds.length > 0) {
       const { data: accounts } = await supabaseAdmin
         .from('accounts')
         .select('id, company_name')
-        .in('id', accountIds)
+        .in('id', accountOwnerIds)
       for (const a of accounts ?? []) {
-        accountNames[a.id] = a.company_name
+        ownerNames[a.id] = a.company_name
+      }
+    }
+    if (contactOwnerIds.length > 0) {
+      const { data: contacts } = await supabaseAdmin
+        .from('contacts')
+        .select('id, full_name, email')
+        .in('id', contactOwnerIds)
+      for (const c of contacts ?? []) {
+        ownerNames[`contact:${c.id}`] = c.full_name || c.email || 'Unknown contact'
       }
     }
 
@@ -158,21 +186,21 @@ export async function GET() {
     const onboarding: Array<{ account_id: string; company_name: string; services: Array<{ service_name: string | null; stage: string | null }> }> = []
     const inService: Array<{ account_id: string; company_name: string; services: Array<{ service_name: string | null; stage: string | null; days_in_stage: number }> }> = []
 
-    for (const [accountId, services] of Array.from(servicesByAccount.entries())) {
-      const companyName = accountNames[accountId] ?? 'Unknown'
+    for (const [ownerKey, services] of Array.from(servicesByOwner.entries())) {
+      const displayName = ownerNames[ownerKey] ?? 'Unknown'
       const earlyServices = services.filter(s => EARLY_STAGES.includes(s.stage ?? ''))
       const laterServices = services.filter(s => !EARLY_STAGES.includes(s.stage ?? ''))
 
       if (earlyServices.length > 0 && laterServices.length === 0) {
         onboarding.push({
-          account_id: accountId,
-          company_name: companyName,
+          account_id: ownerKey,
+          company_name: displayName,
           services: earlyServices.map(s => ({ service_name: s.service_name, stage: s.stage })),
         })
       } else if (laterServices.length > 0) {
         inService.push({
-          account_id: accountId,
-          company_name: companyName,
+          account_id: ownerKey,
+          company_name: displayName,
           services: laterServices.map(s => ({
             service_name: s.service_name,
             stage: s.stage,
