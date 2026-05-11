@@ -488,6 +488,32 @@ describe("createSD — ITIN contact-only enforcement", () => {
     })
   })
 
+  it("strips account_id for ITIN even when target_stage AND target_stage_order are both passed (sd_create refactor path, 2026-05-11)", async () => {
+    // Regression for the sd_create MCP tool refactor (ITIN Chain Fix Phase A):
+    // sd_create now passes BOTH target_stage and target_stage_order to createSD
+    // (it pre-resolves firstStage and forwards both to skip name validation).
+    // The ITIN architectural enforcement must run BEFORE the stage resolution
+    // branch — confirm an account_id passed alongside ITIN still gets stripped.
+    pipelineFixture = itinPipeline
+    insertResponse = itinInsertResponse
+
+    await createSD({
+      service_type: "ITIN",
+      account_id: "acct-should-be-stripped",
+      contact_id: "contact-1",
+      target_stage: "Data Collection",
+      target_stage_order: 1,
+    })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "ITIN",
+      contact_id: "contact-1",
+      account_id: null,
+      stage: "Data Collection",
+      stage_order: 1,
+    })
+  })
+
   it("does not affect 'ITIN Renewal' (only 'ITIN' is enforced by Phase 1)", async () => {
     // Phase 1 spec only enforces the rule on service_type='ITIN'. ITIN
     // Renewal sits in a different operational lane and is out of scope.

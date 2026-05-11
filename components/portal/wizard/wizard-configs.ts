@@ -443,7 +443,7 @@ export const ITIN_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'previous_itin', label: 'Previous ITIN Number', labelIt: 'Numero ITIN Precedente', type: 'text', required: true, conditional: { field: 'has_previous_itin', value: 'Yes' } },
   ],
   review: [
-    { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate and I understand the passport must be mailed physically', labelIt: 'Confermo che le informazioni sono corrette e comprendo che il passaporto deve essere spedito fisicamente', type: 'checkbox', required: true },
+    { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate. After the W-7 and 1040-NR forms are generated, I will print them in double copy, sign them, include two copies of my passport pages, and mail everything to Tony Durante LLC.', labelIt: 'Confermo che le informazioni sono corrette. Dopo la generazione dei moduli W-7 e 1040-NR, li stamperò in doppia copia, li firmerò, includerò due copie delle pagine del passaporto e spedirò tutto a Tony Durante LLC.', type: 'checkbox', required: true },
   ],
 }
 

@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { createSD } from "@/lib/operations/service-delivery"
 
 export function registerOperationsTools(server: McpServer) {
 
@@ -209,6 +210,7 @@ export function registerOperationsTools(server: McpServer) {
           created_by: "Claude",
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
         const { data, error } = await supabaseAdmin
           .from("tasks")
           .insert(insert as never)
@@ -426,6 +428,7 @@ export function registerOperationsTools(server: McpServer) {
           referral_status: refStatus,
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw accounts.insert; extract to lib/operations/ per dev_task fda76fd3
         const { data, error } = await supabaseAdmin
           .from("accounts")
           .insert(insert as never)
@@ -496,6 +499,7 @@ export function registerOperationsTools(server: McpServer) {
           gender: gender || null,
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
         const { data, error } = await supabaseAdmin
           .from("contacts")
           .insert(insert as never)
@@ -989,8 +993,19 @@ export function registerOperationsTools(server: McpServer) {
           .eq("status", "active")
           .limit(1)
 
-        if (account_id) idempotencyQuery.eq("account_id", account_id)
-        else idempotencyQuery.is("account_id", null).eq("contact_id", contact_id!)
+        // ITIN is always contact-only — createSD will force account_id=null,
+        // so scope idempotency to the contact too so we don't miss existing
+        // contact-scoped ITIN deliveries when the caller still passes account_id.
+        if (service_type === "ITIN") {
+          if (!contact_id) {
+            return { content: [{ type: "text" as const, text: "❌ ITIN requires contact_id (account_id is forced to null per Phase 1 ITIN rule)." }] }
+          }
+          idempotencyQuery.is("account_id", null).eq("contact_id", contact_id)
+        } else if (account_id) {
+          idempotencyQuery.eq("account_id", account_id)
+        } else {
+          idempotencyQuery.is("account_id", null).eq("contact_id", contact_id!)
+        }
 
         const { data: existingSD } = await idempotencyQuery
 
@@ -1019,37 +1034,34 @@ export function registerOperationsTools(server: McpServer) {
           if (trDefault) firstStage = trDefault
         }
 
-        // Create delivery
-        const { data: delivery, error: cErr } = await supabaseAdmin
-          .from("service_deliveries")
-          .insert({
-            service_name: name,
-            service_type,
-            pipeline: service_type,
-            stage: firstStage?.stage_name || null,
-            stage_order: firstStage?.stage_order || null,
-            stage_entered_at: new Date().toISOString(),
-            stage_history: firstStage ? [{ to_stage: firstStage.stage_name, to_order: firstStage.stage_order, advanced_at: new Date().toISOString(), notes: "Created" }] : [],
-            account_id: account_id || null,
-            contact_id: contact_id || null,
-            deal_id: deal_id || null,
-            status: "active",
-            start_date: new Date().toISOString().split("T")[0],
-            assigned_to: assigned_to || "Luca",
-            amount: amount || null,
-            amount_currency: amount_currency || "USD",
-            current_step: 1,
-            total_steps: firstStage ? undefined : undefined,
-            notes: notes || null,
-          })
-          .select()
-          .single()
-        if (cErr) throw new Error(cErr.message)
+        // Route through the P1.6 operation layer (createSD) so we inherit:
+        //   - ITIN contact-only enforcement (account_id forced to null,
+        //     contact_id required)
+        //   - service_type_entry_id catalog FK resolution
+        //   - is_test propagation from the parent account/contact
+        //   - stage validation against pipeline_stages
+        // We pre-resolved firstStage above so we can keep the Tax Return
+        // intake-stage override AND drive the local auto_tasks loop from the
+        // same stage row.
+        const delivery = await createSD({
+          service_type,
+          service_name: name,
+          account_id: account_id || null,
+          contact_id: contact_id || null,
+          deal_id: deal_id || null,
+          target_stage: firstStage?.stage_name,
+          target_stage_order: firstStage?.stage_order,
+          assigned_to,
+          amount,
+          amount_currency,
+          notes,
+        })
 
         // Auto-create tasks for first stage
         const createdTasks: string[] = []
         if (firstStage?.auto_tasks && Array.isArray(firstStage.auto_tasks)) {
           for (const taskDef of firstStage.auto_tasks as Array<{ title: string; assigned_to: string; category: string; priority: string }>) {
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
             await supabaseAdmin.from("tasks").insert({
               task_title: `[${name}] ${taskDef.title}`,
               assigned_to: taskDef.assigned_to || "Luca",
@@ -1059,7 +1071,7 @@ export function registerOperationsTools(server: McpServer) {
               status: "To Do",
               account_id,
               deal_id: deal_id || null,
-              delivery_id: delivery?.id,
+              delivery_id: delivery.id,
               stage_order: firstStage?.stage_order || null,
             })
             createdTasks.push(taskDef.title)
@@ -1069,7 +1081,7 @@ export function registerOperationsTools(server: McpServer) {
         logAction({
           action_type: "create",
           table_name: "service_deliveries",
-          record_id: delivery?.id,
+          record_id: delivery.id,
           account_id: account_id,
           summary: `Service delivery created: ${name} (${service_type})`,
           details: { service_type, service_name: name, assigned_to, first_stage: firstStage?.stage_name, tasks_created: createdTasks },
@@ -1078,7 +1090,7 @@ export function registerOperationsTools(server: McpServer) {
         const lines = [
           `✅ Service delivery created`,
           `📋 ${name}`,
-          `🆔 ${delivery?.id}`,
+          `🆔 ${delivery.id}`,
           `📊 Stage: ${firstStage?.stage_name || "No pipeline defined"}`,
         ]
         if (createdTasks.length > 0) {
@@ -1125,6 +1137,7 @@ export function registerOperationsTools(server: McpServer) {
         // 3. Find tasks still open where related service was updated recently
         // Fixed 2026-04-14 P0.6: was { query: ... } — exec_sql expects
         // { sql_query: ... }. Silently returned empty results from Claude.ai.
+        // eslint-disable-next-line no-restricted-syntax -- audit_crm's read-only diagnostics use exec_sql directly; refactor tracked in dev_task fda76fd3
         const { data: openTasksWithUpdatedServices } = await supabaseAdmin.rpc("exec_sql", {
           sql_query: `
             SELECT t.id, t.task_title, t.status, t.account_id, a.company_name,
@@ -1148,6 +1161,7 @@ export function registerOperationsTools(server: McpServer) {
         // 4. Find active deliveries with stage but open tasks from previous stages
         // Fixed 2026-04-14 P0.6: was { query: ... } — exec_sql expects
         // { sql_query: ... }. Silently returned empty results from Claude.ai.
+        // eslint-disable-next-line no-restricted-syntax -- audit_crm's read-only diagnostics use exec_sql directly; refactor tracked in dev_task fda76fd3
         const { data: stageOrphans } = await supabaseAdmin.rpc("exec_sql", {
           sql_query: `
             SELECT sd.id as delivery_id, sd.service_name, sd.stage, sd.stage_order,
