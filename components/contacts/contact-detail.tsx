@@ -24,6 +24,8 @@ import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { CreateOfferDialog } from '@/components/offers/create-offer-dialog'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
+import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
+import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
 import { EditableField } from '@/components/accounts/editable-field'
@@ -238,6 +240,8 @@ interface ContactDetailProps {
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
+  stepperDeliveries?: ServiceDeliveryForStepper[]
+  stagesByServiceType?: Record<string, PipelineStage[]>
 }
 
 // ─── Main Component ───
@@ -254,6 +258,8 @@ export function ContactDetail({
   offers = [],
   pendingActivations = [],
   wizardProgress = [],
+  stepperDeliveries = [],
+  stagesByServiceType = {},
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
@@ -360,6 +366,16 @@ export function ContactDetail({
         serviceDeliveries={serviceDeliveries}
         contact={contact}
       />
+
+      {/* Pipeline Stepper — click-to-advance for contact-only SDs (ITIN post Phase 1). */}
+      {stepperDeliveries.length > 0 && (
+        <ServiceDeliveriesSection
+          deliveries={stepperDeliveries}
+          stagesByServiceType={stagesByServiceType}
+          title="Contact-Level Service Deliveries"
+          emptyMessage="No contact-level service deliveries (ITIN, etc.)."
+        />
+      )}
 
       {/* Lifecycle Timeline */}
       <LifecycleTimeline events={timelineEvents} defaultOpen={false} />
