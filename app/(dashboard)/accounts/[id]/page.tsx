@@ -58,7 +58,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Services (from service_deliveries — source of truth)
     supabase
       .from('service_deliveries')
-      .select('id, service_name, service_type, stage, status, start_date, end_date, notes, updated_at, account_id')
+      .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, account_id, contact_id')
       .eq('account_id', params.id)
       .neq('status', 'cancelled')
       .order('updated_at', { ascending: false }),
@@ -314,6 +314,43 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     account_id: sd.account_id,
   }))
 
+  // SDs for the pipeline stepper section — carries fields the stepper needs
+  // (id, stage_order, updated_at) that the legacy `services` mapping strips.
+  const stepperDeliveries = (servicesResult.data ?? [])
+    .filter(sd => sd.status !== 'cancelled')
+    .map(sd => ({
+      id: sd.id,
+      service_type: sd.service_type ?? '',
+      service_name: sd.service_name ?? sd.service_type ?? 'Service',
+      stage: sd.stage ?? null,
+      stage_order: sd.stage_order ?? null,
+      status: sd.status ?? 'active',
+      updated_at: sd.updated_at ?? new Date().toISOString(),
+      account_id: sd.account_id,
+      contact_id: sd.contact_id ?? null,
+    }))
+
+  // Fetch pipeline_stages for every service_type present, in one query.
+  // The stepper renders the current → next progression from this set.
+  const serviceTypesPresent = Array.from(
+    new Set(stepperDeliveries.map(d => d.service_type).filter(Boolean)),
+  )
+  let stagesByServiceType: Record<string, Array<{ stage_name: string; stage_order: number }>> = {}
+  if (serviceTypesPresent.length > 0) {
+    const { data: stagesRows } = await supabaseAdmin
+      .from('pipeline_stages')
+      .select('service_type, stage_name, stage_order')
+      .in('service_type', serviceTypesPresent)
+      .order('stage_order', { ascending: true })
+    const grouped: Record<string, Array<{ stage_name: string; stage_order: number }>> = {}
+    for (const row of stagesRows ?? []) {
+      const key = row.service_type as string
+      if (!grouped[key]) grouped[key] = []
+      grouped[key].push({ stage_name: row.stage_name as string, stage_order: row.stage_order as number })
+    }
+    stagesByServiceType = grouped
+  }
+
   return (
     <div className="p-6 lg:p-8">
       <AccountDetail
@@ -335,6 +372,8 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         bankReferrals={bankReferrals}
         ss4Applications={ss4Applications}
         ss4ServiceDeliveries={ss4ServiceDeliveries}
+        stepperDeliveries={stepperDeliveries}
+        stagesByServiceType={stagesByServiceType}
       />
     </div>
   )

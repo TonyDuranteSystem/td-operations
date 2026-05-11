@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
@@ -28,7 +29,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Service deliveries (by contact_id directly OR by linked account_ids — we'll merge below)
     supabase
       .from('service_deliveries')
-      .select('id, service_name, service_type, pipeline, stage, status, assigned_to, account_id, contact_id, start_date, updated_at')
+      .select('id, service_name, service_type, pipeline, stage, stage_order, status, assigned_to, account_id, contact_id, start_date, updated_at')
       .eq('contact_id', params.id)
       .is('account_id', null)
       .order('updated_at', { ascending: false }),
@@ -162,6 +163,42 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
 
   const conversations = (conversationsResult.data ?? []) as ConversationEntry[]
 
+  // SDs for the pipeline stepper (contact-only — ITIN post Phase 1).
+  // The query already restricts to account_id IS NULL on this page.
+  const stepperDeliveries = serviceDeliveries
+    .filter(sd => sd.status !== 'cancelled')
+    .map(sd => ({
+      id: sd.id,
+      service_type: sd.service_type ?? '',
+      service_name: sd.service_name ?? sd.service_type ?? 'Service',
+      stage: sd.stage ?? null,
+      stage_order:
+        (sd as unknown as { stage_order: number | null }).stage_order ?? null,
+      status: sd.status ?? 'active',
+      updated_at: sd.updated_at,
+      account_id: sd.account_id ?? null,
+      contact_id: sd.contact_id ?? null,
+    }))
+
+  const stepperServiceTypes = Array.from(
+    new Set(stepperDeliveries.map(d => d.service_type).filter(Boolean)),
+  )
+  let stagesByServiceType: Record<string, Array<{ stage_name: string; stage_order: number }>> = {}
+  if (stepperServiceTypes.length > 0) {
+    const { data: stagesRows } = await supabaseAdmin
+      .from('pipeline_stages')
+      .select('service_type, stage_name, stage_order')
+      .in('service_type', stepperServiceTypes)
+      .order('stage_order', { ascending: true })
+    const grouped: Record<string, Array<{ stage_name: string; stage_order: number }>> = {}
+    for (const row of stagesRows ?? []) {
+      const key = row.service_type as string
+      if (!grouped[key]) grouped[key] = []
+      grouped[key].push({ stage_name: row.stage_name as string, stage_order: row.stage_order as number })
+    }
+    stagesByServiceType = grouped
+  }
+
   // Portal auth status
   let portalAuth: { exists: boolean; lastLogin: string | null; createdAt: string | null } = {
     exists: false, lastLogin: null, createdAt: null,
@@ -196,6 +233,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         offers={offers}
         pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}
+        stepperDeliveries={stepperDeliveries}
+        stagesByServiceType={stagesByServiceType}
       />
     </div>
   )

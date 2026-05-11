@@ -20,6 +20,8 @@ import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/gen
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
+import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from './service-deliveries-section'
+import type { PipelineStage } from './sd-pipeline-stepper'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
@@ -186,6 +188,8 @@ interface AccountDetailProps {
     status: string
     account_id: string | null
   }>
+  stepperDeliveries?: ServiceDeliveryForStepper[]
+  stagesByServiceType?: Record<string, PipelineStage[]>
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -469,7 +473,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [] }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {} }: AccountDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
   const [showOADialog, setShowOADialog] = useState(false)
@@ -647,6 +651,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
           serviceDeliveries={ss4ServiceDeliveries}
           accounts={[{ id: account.id, company_name: account.company_name, ein: account.ein_number ?? null }]}
           contactId={primaryContact?.id ?? ''}
+        />
+      )}
+
+      {/* Pipeline Stepper — click-to-advance for every active SD on this account. */}
+      {stepperDeliveries.length > 0 && (
+        <ServiceDeliveriesSection
+          deliveries={stepperDeliveries}
+          stagesByServiceType={stagesByServiceType}
         />
       )}
 
