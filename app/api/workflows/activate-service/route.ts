@@ -642,6 +642,17 @@ export async function POST(req: NextRequest) {
                   notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
                 }
               }
+            } else if (pipeline === "ITIN") {
+              // Phase 1 ITIN rule (2026-05-11): ITIN SDs live on contact_id
+              // with account_id=null, even when the contact owns an LLC.
+              // createSD enforces this defensively too.
+              createParams = {
+                service_type: pipeline,
+                service_name: sdName,
+                account_id: null,
+                contact_id: contactId,
+                notes: `Auto-created from offer ${activation.offer_token}`,
+              }
             } else {
               // All other pipelines — createSD resolves the first stage
               // from pipeline_stages automatically.
@@ -672,7 +683,10 @@ export async function POST(req: NextRequest) {
                     priority: (taskDef.priority || "Normal") as never,
                     description: "Auto-created on service delivery creation",
                     status: "To Do",
-                    account_id: accountId,
+                    // Use the SD's resolved ids so contact-only SDs (ITIN per
+                    // Phase 1 rule) get contact-scoped tasks with null account_id.
+                    account_id: sd.account_id,
+                    contact_id: sd.contact_id,
                     delivery_id: sd.id,
                     stage_order: stageData.stage_order,
                   }),
