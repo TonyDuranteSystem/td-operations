@@ -299,12 +299,20 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
 /**
  * Look up an existing TD invoice by idempotency_key.
  * Returns null if none exists.
+ *
+ * Cancelled rows are skipped so that a re-signed offer (after the prior
+ * invoice was voided via cancelPaymentsForOfferTokens) can mint a fresh
+ * invoice instead of returning the dead one. The cascade also NULLs the key
+ * on cancel, so this filter is belt-and-suspenders for callers that bypass
+ * the cascade.
  */
 async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null> {
   const { data: payment } = await supabaseAdmin
     .from('payments')
-    .select('id, invoice_number, total, invoice_status')
+    .select('id, invoice_number, total, invoice_status, status')
     .eq('idempotency_key', key)
+    .neq('status', 'Cancelled')
+    .neq('invoice_status', 'Cancelled')
     .limit(1)
     .maybeSingle()
 
