@@ -185,7 +185,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       result.steps.push(step("oa", "skipped", `State "${account.state_of_formation}" not supported`))
     } else {
       // Use entity_type from accounts table (set at account creation from contract)
-      const entityType = (account.entity_type as string | null) === "MMLLC" ? "MMLLC" : "SMLLC"
+      const entityType = ((account.entity_type as string | null) || "").toLowerCase().includes("multi") ? "MMLLC" : "SMLLC"
       const isMMLC = entityType === "MMLLC"
 
       let membersJson: Record<string, unknown>[] | null = null
