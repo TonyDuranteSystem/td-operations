@@ -390,9 +390,133 @@ export interface PortalNavVisibility {
   customers: boolean      // same as invoices
   pendingSignatures: boolean  // has unsigned OA or Lease agreements
   documentGenerator: boolean  // can generate distribution resolutions and tax statements
+  itinAtClientSigning: boolean // contact has an active ITIN SD at "Client Signing" stage
 }
 
-export async function getPortalNavVisibility(accountId: string): Promise<PortalNavVisibility> {
+/**
+ * Phase C (ITIN Chain Fix 2026-05-11): true iff the contact has an active ITIN
+ * SD currently at "Client Signing" stage. ITIN SDs are contact-only by Phase 1
+ * rule (account_id is forced to null), so this is queried by contact_id.
+ *
+ * Drives the conditional "ITIN Documents" sidebar entry and the
+ * /portal/itin-documents page guard.
+ */
+export async function hasItinAtClientSigning(contactId: string): Promise<boolean> {
+  const { count } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id', { count: 'exact', head: true })
+    .eq('contact_id', contactId)
+    .eq('service_type', 'ITIN')
+    .eq('stage', 'Client Signing')
+    .eq('status', 'active')
+  return (count ?? 0) > 0
+}
+
+export interface ItinAtClientSigningView {
+  sdId: string
+  serviceName: string
+  documents: Array<{
+    id: string
+    file_name: string
+    document_type_name: string | null
+    drive_file_id: string | null
+  }>
+}
+
+/**
+ * Fetch the ITIN SD at "Client Signing" for a contact, along with its W-7 +
+ * 1040-NR + Schedule OI PDFs from the documents table. Returns null when the
+ * contact has no such SD (caller is expected to redirect).
+ *
+ * Documents may be filed either contact-scoped (pure contact-only ITIN, no
+ * LLC) or account-scoped (contact also owns an LLC — autoSaveDocument files
+ * under the account so other members of the account can see them too). We
+ * query both shapes restricted to the contact's accessible accounts and the
+ * known ITIN document_type_name values written by itin-form-completed.
+ */
+export async function getItinAtClientSigning(contactId: string): Promise<ItinAtClientSigningView | null> {
+  const { data: sd } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name')
+    .eq('contact_id', contactId)
+    .eq('service_type', 'ITIN')
+    .eq('stage', 'Client Signing')
+    .eq('status', 'active')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!sd) return null
+
+  // The PDF rows written by app/api/itin-form-completed/route.ts use these
+  // document_type_name values (R093: verified at lines 332-335 of that file).
+  const ITIN_DOC_TYPES = ['ITIN W-7', 'ITIN 1040-NR', 'ITIN Schedule OI']
+
+  // Account-linked ITINs save docs under the contact's account(s). Look those
+  // up so we don't miss them.
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('account_id')
+    .eq('contact_id', contactId)
+  const accountIds = (links ?? []).map(l => l.account_id).filter((id): id is string => typeof id === 'string')
+
+  // Build the OR filter: contact-scoped docs (contact_id=this contact AND
+  // account_id IS NULL) OR account-scoped docs (account_id IN this contact's
+  // accounts). Supabase's .or() doesn't compose .and() inline cleanly, so we
+  // do two queries and merge.
+  const contactScopedQ = supabaseAdmin
+    .from('documents')
+    .select('id, file_name, document_type_name, drive_file_id, created_at')
+    .is('account_id', null)
+    .eq('contact_id', contactId)
+    .in('document_type_name', ITIN_DOC_TYPES)
+    .eq('portal_visible', true)
+
+  const accountScopedQ = accountIds.length
+    ? supabaseAdmin
+        .from('documents')
+        .select('id, file_name, document_type_name, drive_file_id, created_at')
+        .in('account_id', accountIds)
+        .in('document_type_name', ITIN_DOC_TYPES)
+        .eq('portal_visible', true)
+    : Promise.resolve({ data: [] as Array<{ id: string; file_name: string; document_type_name: string | null; drive_file_id: string | null; created_at: string }> })
+
+  const [contactDocsRes, accountDocsRes] = await Promise.all([contactScopedQ, accountScopedQ])
+
+  // Dedup by document id (in case any row qualifies via both filters) and
+  // sort W-7 → 1040-NR → Schedule OI for a stable reading order. Fall back
+  // to filename comparison for unknowns.
+  const ORDER = new Map([
+    ['ITIN W-7', 0],
+    ['ITIN 1040-NR', 1],
+    ['ITIN Schedule OI', 2],
+  ])
+  const merged = new Map<string, { id: string; file_name: string; document_type_name: string | null; drive_file_id: string | null }>()
+  for (const d of [...(contactDocsRes.data ?? []), ...(accountDocsRes.data ?? [])]) {
+    if (!merged.has(d.id)) {
+      merged.set(d.id, {
+        id: d.id,
+        file_name: d.file_name,
+        document_type_name: d.document_type_name,
+        drive_file_id: d.drive_file_id,
+      })
+    }
+  }
+  const documents = Array.from(merged.values()).sort((a, b) => {
+    const ao = ORDER.get(a.document_type_name ?? '') ?? 99
+    const bo = ORDER.get(b.document_type_name ?? '') ?? 99
+    if (ao !== bo) return ao - bo
+    return a.file_name.localeCompare(b.file_name)
+  })
+
+  return {
+    sdId: sd.id,
+    serviceName: sd.service_name || 'ITIN',
+    documents,
+  }
+}
+
+export async function getPortalNavVisibility(accountId: string, contactId?: string): Promise<PortalNavVisibility> {
   // Run all checks in parallel
   const [
     serviceDeliveries,
@@ -468,6 +592,10 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
 
   const hasTaxSD = (taxSDs ?? []).length > 0
 
+  // ITIN visibility is contact-scoped (SDs are contact-only by Phase 1 rule),
+  // not account-scoped. Skip the lookup if the caller didn't pass contactId.
+  const itinAtClientSigning = contactId ? await hasItinAtClientSigning(contactId) : false
+
   return {
     services: serviceDeliveries.count > 0,
     billing: billingCount > 0,
@@ -478,6 +606,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     customers: true,      // always visible — tier-config gates access (active/full only)
     pendingSignatures: unsignedDocCount > 0,
     documentGenerator: true, // always visible — tier-config gates access (active/full only)
+    itinAtClientSigning,
   }
 }
 
@@ -523,8 +652,13 @@ export async function getPortalRoleByContact(contactId: string): Promise<string 
 /**
  * Nav visibility for contacts WITHOUT any account (e.g., ITIN-only clients).
  * Only contact-level features are visible.
+ *
+ * Phase C (2026-05-11): accepts optional contactId so the ITIN-at-Client-Signing
+ * flag can light up for pure contact-only ITIN clients. When contactId is
+ * omitted, falls back to the legacy hardcoded shape.
  */
-export function getContactOnlyNavVisibility(): PortalNavVisibility {
+export async function getContactOnlyNavVisibility(contactId?: string): Promise<PortalNavVisibility> {
+  const itinAtClientSigning = contactId ? await hasItinAtClientSigning(contactId) : false
   return {
     services: true,
     billing: false,
@@ -535,6 +669,7 @@ export function getContactOnlyNavVisibility(): PortalNavVisibility {
     customers: false,
     pendingSignatures: false,
     documentGenerator: false,
+    itinAtClientSigning,
   }
 }
 

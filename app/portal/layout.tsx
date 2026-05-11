@@ -81,13 +81,20 @@ export default async function PortalLayout({
     : [(user.app_metadata?.portal_tier as string) || 'lead', null]
 
   // Account-level data: only if an account is selected
+  // Phase C (ITIN Chain Fix 2026-05-11): pass contactId so the ITIN-at-Client-
+  // Signing flag can light up. ITIN SDs are contact-scoped, so they exist
+  // whether or not the contact has an account.
   const [activeServices, navVisibility, unreadChatCount] = selectedAccountId
     ? await Promise.all([
         getPortalActiveServices(selectedAccountId),
-        getPortalNavVisibility(selectedAccountId),
+        getPortalNavVisibility(selectedAccountId, contactId || undefined),
         contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
-    : [[] as string[], getContactOnlyNavVisibility(), contactId ? await getUnreadChatCount(contactId) : 0]
+    : await Promise.all([
+        Promise.resolve([] as string[]),
+        getContactOnlyNavVisibility(contactId || undefined),
+        contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
+      ])
 
   // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
   // for the three branches (SD-by-account, SD-by-contact, tier-based

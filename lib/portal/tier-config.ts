@@ -29,6 +29,12 @@ export const TIER_ORDER: Record<PortalTier, number> = {
 
 // Which nav item keys are allowed at each tier
 // Each tier INCLUDES all features from previous tiers
+//
+// ITIN note (Phase C, 2026-05-11): `itinAtClientSigning` is allowed at every
+// tier. ITIN service is purchased standalone (contact-only, no LLC, tier=lead)
+// AND as an add-on for LLC owners (tier=formation/onboarding/active). The data
+// presence — having an active ITIN SD at "Client Signing" — is the real gate;
+// the tier check would just be a second-order block with no business reason.
 const TIER_FEATURES: Record<PortalTier, string[]> = {
   lead: [
     'dashboard',
@@ -37,6 +43,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'profile',
     'guide',
     'documents',   // Limited — only offer/contract docs
+    'itinAtClientSigning',
   ],
   formation: [
     'dashboard',
@@ -46,6 +53,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'guide',
     'documents',   // Full document upload
     'pendingSignatures', // SS-4, OA, lease signing during formation
+    'itinAtClientSigning',
   ],
   onboarding: [
     'dashboard',
@@ -55,6 +63,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'guide',
     'documents',   // Full document upload
     'pendingSignatures', // SS-4, OA, lease signing during formation
+    'itinAtClientSigning',
   ],
   active: [
     'dashboard',
@@ -71,6 +80,7 @@ const TIER_FEATURES: Record<PortalTier, string[]> = {
     'customers',
     'referralManagement',
     'documentGenerator',
+    'itinAtClientSigning',
   ],
 }
 

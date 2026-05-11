@@ -188,15 +188,35 @@ export async function createSD(
   // ITIN architectural rule (Phase 1, 2026-05-11): ITIN SDs always live on
   // contact_id with account_id=null, even when the contact owns an LLC. The
   // ITIN belongs to the person, not the company. Enforce here so every entry
-  // point (activate-service, MCP sd_create, future callers) gets the same
-  // shape automatically.
+  // point (activate-service, MCP sd_create, CRM create-service, future callers)
+  // gets the same shape automatically.
+  //
+  // Phase B (2026-05-11): when only account_id is supplied (admin-created ITIN
+  // SD from the CRM), auto-resolve the contact_id from account_contacts so the
+  // caller doesn't have to know the architectural rule. Picks the primary
+  // contact (is_primary=true) with contact_id alphabetical as a stable
+  // tiebreaker — `account_contacts` does not store a created_at column.
   if (params.service_type === "ITIN") {
-    if (!params.contact_id) {
+    if (!params.contact_id && params.account_id) {
+      const { data: links } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contact_id, is_primary")
+        .eq("account_id", params.account_id)
+        .order("is_primary", { ascending: false })
+        .order("contact_id", { ascending: true })
+        .limit(1)
+      const resolvedContactId = links?.[0]?.contact_id
+      if (!resolvedContactId) {
+        throw new Error(
+          `[createSD] service_type="ITIN" with account_id=${params.account_id} has no linked contacts in account_contacts. Link a contact to the account first, or pass contact_id explicitly.`,
+        )
+      }
+      params = { ...params, contact_id: resolvedContactId, account_id: null }
+    } else if (!params.contact_id) {
       throw new Error(
         `[createSD] service_type="ITIN" requires contact_id (account_id is forced to null per Phase 1 ITIN rule)`,
       )
-    }
-    if (params.account_id) {
+    } else if (params.account_id) {
       params = { ...params, account_id: null }
     }
   }

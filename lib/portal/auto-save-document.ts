@@ -1,25 +1,36 @@
 /**
  * Auto-save a document to the portal's documents table.
  *
- * Called when signed documents are created (contract, OA, lease)
+ * Called when signed documents are created (contract, OA, lease, ITIN forms)
  * so they automatically appear in the client's portal Documents page.
  *
  * Does NOT do OCR/classification — just creates a record with known type.
+ *
+ * Phase B (ITIN Chain Fix 2026-05-11): supports contact-only documents
+ * (contactId without accountId) for pure contact-only ITIN clients who don't
+ * own an LLC. Exactly one of accountId / contactId must be set.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 interface AutoSaveDocumentParams {
-  accountId: string
+  /** Set when the document belongs to a company account. */
+  accountId?: string
+  /** Set when the document belongs to a contact only (e.g. contact-only ITIN). */
+  contactId?: string
   fileName: string
-  documentType: string  // e.g. 'Signed Contract', 'Operating Agreement', 'Lease Agreement'
+  documentType: string  // e.g. 'Signed Contract', 'Operating Agreement', 'Lease Agreement', 'ITIN W-7'
   category: number      // 1=Company, 2=Contacts, 3=Tax, 4=Banking, 5=Correspondence
   driveFileId?: string
   portalVisible?: boolean  // true = visible to client in portal Documents page
 }
 
 export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<{ id?: string; error?: string }> {
-  const { accountId, fileName, documentType, category, driveFileId } = params
+  const { accountId, contactId, fileName, documentType, category, driveFileId } = params
+
+  if (!accountId && !contactId) {
+    return { error: 'autoSaveDocument requires accountId or contactId' }
+  }
 
   try {
     // Check if already exists (idempotent)
@@ -37,7 +48,8 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
     }
 
     const record: Record<string, unknown> = {
-      account_id: accountId,
+      account_id: accountId ?? null,
+      contact_id: contactId ?? null,
       file_name: fileName,
       document_type_name: documentType,
       category,

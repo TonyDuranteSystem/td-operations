@@ -32,7 +32,17 @@ interface StageRow {
   stage_order: number
 }
 
+interface AccountContactRow {
+  contact_id: string
+  is_primary: boolean
+}
+
 let pipelineFixture: Record<string, StageRow[]> = {}
+// Per-account_id fixture for account_contacts. ITIN Phase B resolution
+// (lib/operations/service-delivery.ts) queries this table when an admin
+// creates an ITIN SD with only account_id — the lookup picks the primary
+// contact (or earliest-linked) so callers don't have to know the rule.
+let accountContactsFixture: Record<string, AccountContactRow[]> = {}
 let insertCapture: unknown = null
 let insertResponse: { data: unknown; error: unknown } = {
   data: {
@@ -118,6 +128,33 @@ vi.mock("@/lib/supabase-admin", () => {
           }
           return c
         }
+        if (table === "account_contacts") {
+          // ITIN Phase B: createSD queries account_contacts when only
+          // account_id is provided so it can auto-resolve the contact_id.
+          // The chain is `.eq("account_id", X).order("is_primary", desc).order("contact_id", asc).limit(1)`.
+          // account_contacts has no created_at column (verified in
+          // information_schema 2026-05-11), so contact_id is the stable
+          // tiebreaker.
+          let currentAccountId = ""
+          const chain = {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn((_col: string, value: string) => {
+              currentAccountId = value
+              return chain
+            }),
+            order: vi.fn().mockReturnThis(),
+            limit: vi.fn((n: number) => {
+              const rows = accountContactsFixture[currentAccountId] ?? []
+              // Mirror the SQL: is_primary DESC, contact_id ASC, limit n.
+              const sorted = [...rows].sort((a, b) => {
+                if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
+                return a.contact_id.localeCompare(b.contact_id)
+              })
+              return Promise.resolve({ data: sorted.slice(0, n), error: null })
+            }),
+          }
+          return chain
+        }
         // Unused tables get a no-op chain
         return buildPipelineChain("__unused__")
       },
@@ -130,6 +167,7 @@ import { createSD } from "@/lib/operations/service-delivery"
 
 beforeEach(() => {
   pipelineFixture = {}
+  accountContactsFixture = {}
   insertCapture = null
   insertResponse = {
     data: {
@@ -456,11 +494,84 @@ describe("createSD — ITIN contact-only enforcement", () => {
     })
   })
 
-  it("throws when ITIN is created without contact_id", async () => {
+  it("throws when ITIN is created with neither account_id nor contact_id", async () => {
     pipelineFixture = itinPipeline
+    // With no account_id, there's no way to resolve a contact — fail loudly.
     await expect(
-      createSD({ service_type: "ITIN", account_id: "acct-1" }),
+      createSD({ service_type: "ITIN" }),
     ).rejects.toThrow(/service_type="ITIN" requires contact_id/)
+  })
+
+  it("Phase B: auto-resolves contact_id from account_contacts when ITIN is created with account_id only", async () => {
+    // Phase B (ITIN Chain Fix 2026-05-11): admin creates an ITIN SD from
+    // the CRM by passing only account_id — createSD looks up the primary
+    // contact via account_contacts and uses it, setting account_id=null.
+    pipelineFixture = itinPipeline
+    accountContactsFixture = {
+      "acct-with-contact": [
+        { contact_id: "primary-contact", is_primary: true },
+        { contact_id: "alpha-contact", is_primary: false },
+      ],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-itin",
+        service_type: "ITIN",
+        service_name: "ITIN",
+        stage: "Data Collection",
+        stage_order: 1,
+        account_id: null,
+        contact_id: "primary-contact",
+      },
+      error: null,
+    }
+
+    await createSD({ service_type: "ITIN", account_id: "acct-with-contact" })
+
+    expect(insertCapture).toMatchObject({
+      service_type: "ITIN",
+      contact_id: "primary-contact",
+      account_id: null,
+    })
+  })
+
+  it("Phase B: falls back to alphabetically-first contact_id when no primary is set", async () => {
+    // account_contacts has no created_at column — contact_id alphabetical
+    // is the stable tiebreaker (verified in information_schema 2026-05-11).
+    pipelineFixture = itinPipeline
+    accountContactsFixture = {
+      "acct-no-primary": [
+        { contact_id: "zeta", is_primary: false },
+        { contact_id: "alpha", is_primary: false },
+      ],
+    }
+    insertResponse = {
+      data: {
+        id: "sd-itin",
+        service_type: "ITIN",
+        service_name: "ITIN",
+        stage: "Data Collection",
+        stage_order: 1,
+        account_id: null,
+        contact_id: "alpha",
+      },
+      error: null,
+    }
+
+    await createSD({ service_type: "ITIN", account_id: "acct-no-primary" })
+
+    expect(insertCapture).toMatchObject({
+      contact_id: "alpha",
+      account_id: null,
+    })
+  })
+
+  it("Phase B: throws a clear error when ITIN account has no linked contacts", async () => {
+    pipelineFixture = itinPipeline
+    accountContactsFixture = {} // No links for any account.
+    await expect(
+      createSD({ service_type: "ITIN", account_id: "acct-empty" }),
+    ).rejects.toThrow(/has no linked contacts in account_contacts/)
   })
 
   it("does not affect non-ITIN service types (account_id preserved)", async () => {

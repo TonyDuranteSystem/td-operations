@@ -23,6 +23,7 @@ import {
   PenLine,
   FilePen,
   PlusCircle,
+  Mail,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -82,6 +83,11 @@ interface NavItem {
 const personalItems: NavItem[] = [
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
   { key: 'nav.requestService', href: '/portal/services/request', icon: PlusCircle },
+  // ITIN Documents — conditional on the contact having an active ITIN SD at
+  // "Client Signing" stage (Phase C, 2026-05-11). The page shows the generated
+  // W-7 + 1040-NR PDFs and the mailing instructions for the client to mail to
+  // Antonio's CAA office.
+  { key: 'nav.itinDocuments', href: '/portal/itin-documents', icon: Mail, visibilityKey: 'itinAtClientSigning' },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
   { key: 'nav.profile', href: '/portal/profile', icon: User },
 ]
