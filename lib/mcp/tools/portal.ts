@@ -65,7 +65,7 @@ export function registerPortalTools(server: McpServer) {
   // Returns per-account report lines, flags, and pending docs
   async function processAccountForTransition(
     account: {
-      id: string; company_name: string; entity_type: string | null; state_of_formation: string | null
+      id: string; company_name: string; entity_type: string | null; member_structure: string | null; state_of_formation: string | null
       ein_number: string | null; formation_date: string | null; onboarding_date: string | null; status: string; physical_address: string | null
       mailing_address?: Pick<MailingAddressRow, 'is_td_provided'> | null
       drive_folder_id: string | null; portal_account: boolean | null; portal_tier: string | null

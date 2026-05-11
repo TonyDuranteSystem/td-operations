@@ -124,6 +124,7 @@ export type Database = {
           lead_source: string | null
           legal_link_verified: boolean
           mailing_link_verified: boolean
+          member_structure: string | null
           notes: string | null
           onboarding_date: string | null
           partner_id: string | null
