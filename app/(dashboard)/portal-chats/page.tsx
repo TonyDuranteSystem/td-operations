@@ -538,15 +538,15 @@ export default function PortalChatsPage() {
     },
   })
 
-  // Mark messages as read when admin opens a thread
+  // Mark messages as read when admin opens a thread (general tab only)
   useEffect(() => {
     if (!selectedAccountId && !selectedContactId) return
     setAiSuggestion('')
     setReplyToMsg(null)
     lastSuggestedMsgRef.current = null
     const readBody = selectedAccountId
-      ? { account_id: selectedAccountId }
-      : { contact_id: selectedContactId }
+      ? { account_id: selectedAccountId, topic: null }
+      : { contact_id: selectedContactId, topic: null }
     fetch('/api/portal/chat/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -555,6 +555,22 @@ export default function PortalChatsPage() {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     }).catch(() => {})
   }, [selectedAccountId, selectedContactId, queryClient])
+
+  // Mark topic messages as read when admin switches to a named topic tab
+  useEffect(() => {
+    if (!adminActiveTopic) return
+    if (!selectedAccountId && !selectedContactId) return
+    const readBody = selectedAccountId
+      ? { account_id: selectedAccountId, topic: adminActiveTopic }
+      : { contact_id: selectedContactId, topic: adminActiveTopic }
+    fetch('/api/portal/chat/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(readBody),
+    }).then(() => {
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+    }).catch(() => {})
+  }, [adminActiveTopic, selectedAccountId, selectedContactId, queryClient])
 
   // Auto-suggest reply when last message is from client
   useEffect(() => {

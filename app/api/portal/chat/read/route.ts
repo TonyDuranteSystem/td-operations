@@ -10,13 +10,19 @@ import { NextRequest, NextResponse } from 'next/server'
  * Accepts { account_id } or { contact_id } for contact-only chats.
  * - Admin calling: marks client messages as read (admin has seen them)
  * - Client calling: marks admin messages as read (client has seen them)
+ *
+ * Optional `topic` param (admin only):
+ *   - Omitted: marks all messages (backwards compat)
+ *   - null: marks only general (null-topic) messages
+ *   - string: marks only messages in that specific topic
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { account_id, contact_id } = await request.json()
+  const body = await request.json()
+  const { account_id, contact_id } = body
   if (!account_id && !contact_id) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
@@ -40,16 +46,23 @@ export async function POST(request: NextRequest) {
   // Mark opposite sender's messages as read
   const senderTypeToMark = dashUser ? 'client' : 'admin'
 
+  // topic filter (admin only): null = general tab, string = named topic, absent = all
+  const topicFilterPresent = dashUser && 'topic' in body
+  const topicFilter: string | null = topicFilterPresent ? (body.topic ?? null) : null
+
   const now = new Date().toISOString()
 
   if (account_id) {
-    // Account-scoped: mark messages for this account only
-    const { error, count } = await supabaseAdmin
+    let q = supabaseAdmin
       .from('portal_messages')
       .update({ read_at: now })
       .eq('account_id', account_id)
       .eq('sender_type', senderTypeToMark)
       .is('read_at', null)
+    if (topicFilterPresent) {
+      q = topicFilter === null ? q.is('topic', null) : q.eq('topic', topicFilter)
+    }
+    const { error, count } = await q
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ marked: count ?? 0 })
   }
@@ -65,24 +78,32 @@ export async function POST(request: NextRequest) {
   const linkedAccountIds = (acRows ?? []).map(r => r.account_id)
 
   // (a) messages tagged with contact_id
-  const { error: e1, count: c1 } = await supabaseAdmin
+  let q1 = supabaseAdmin
     .from('portal_messages')
     .update({ read_at: now })
     .eq('contact_id', contact_id)
     .eq('sender_type', senderTypeToMark)
     .is('read_at', null)
+  if (topicFilterPresent) {
+    q1 = topicFilter === null ? q1.is('topic', null) : q1.eq('topic', topicFilter)
+  }
+  const { error: e1, count: c1 } = await q1
   if (e1) return NextResponse.json({ error: e1.message }, { status: 500 })
 
   // (b) legacy messages with no contact_id but linked account
   let c2 = 0
   if (linkedAccountIds.length > 0) {
-    const { error: e2, count } = await supabaseAdmin
+    let q2 = supabaseAdmin
       .from('portal_messages')
       .update({ read_at: now })
       .is('contact_id', null)
       .in('account_id', linkedAccountIds)
       .eq('sender_type', senderTypeToMark)
       .is('read_at', null)
+    if (topicFilterPresent) {
+      q2 = topicFilter === null ? q2.is('topic', null) : q2.eq('topic', topicFilter)
+    }
+    const { error: e2, count } = await q2
     if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
     c2 = count ?? 0
   }
