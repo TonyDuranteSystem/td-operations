@@ -62,6 +62,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 
 interface NavItem {
   id: string
@@ -421,6 +422,7 @@ export function Sidebar({
           <Menu className="h-5 w-5" />
         </button>
         <span className="ml-3 font-semibold flex-1">TD Operations</span>
+        <DashboardPushToggle compact refreshOnMount />
         <button
           onClick={() => document.dispatchEvent(new CustomEvent('open-command-palette'))}
           className="p-2 rounded-md hover:bg-zinc-100 text-zinc-500"

@@ -9,7 +9,7 @@ export function DashboardHeader() {
       <div className="flex-1 max-w-2xl">
         <GlobalSearch searchEndpoint="/api/search" mode="crm" placeholder="Search accounts, contacts, tasks, leads..." />
       </div>
-      <DashboardPushToggle />
+      <DashboardPushToggle refreshOnMount />
     </header>
   )
 }
