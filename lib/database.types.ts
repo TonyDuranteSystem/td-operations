@@ -14,33 +14,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      agent_memory: {
-        Row: {
-          id: string
-          scope: string
-          key: string
-          content: string
-          created_at: string | null
-          updated_at: string | null
-        }
-        Insert: {
-          id?: string
-          scope?: string
-          key: string
-          content: string
-          created_at?: string | null
-          updated_at?: string | null
-        }
-        Update: {
-          id?: string
-          scope?: string
-          key?: string
-          content?: string
-          created_at?: string | null
-          updated_at?: string | null
-        }
-        Relationships: []
-      }
       account_contacts: {
         Row: {
           account_id: string
@@ -659,6 +632,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      agent_memory: {
+        Row: {
+          content: string
+          created_at: string | null
+          id: string
+          key: string
+          scope: string
+          updated_at: string | null
+        }
+        Insert: {
+          content: string
+          created_at?: string | null
+          id?: string
+          key: string
+          scope?: string
+          updated_at?: string | null
+        }
+        Update: {
+          content?: string
+          created_at?: string | null
+          id?: string
+          key?: string
+          scope?: string
+          updated_at?: string | null
+        }
+        Relationships: []
       }
       ai_delegations: {
         Row: {
@@ -7159,13 +7159,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "offers_contact_id_fkey"
-            columns: ["contact_id"]
-            isOneToOne: false
-            referencedRelation: "contacts"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "offers_account_id_fkey"
             columns: ["account_id"]
             isOneToOne: false
@@ -7185,6 +7178,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_sla_monitor"
             referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "offers_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offers_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
           {
             foreignKeyName: "offers_deal_id_fkey"
@@ -8013,6 +8020,7 @@ export type Database = {
           client_description: string | null
           created_at: string | null
           id: string
+          notify_client_email: boolean
           requires_approval: boolean | null
           service_type: string
           service_type_entry_id: string | null
@@ -8028,6 +8036,7 @@ export type Database = {
           client_description?: string | null
           created_at?: string | null
           id?: string
+          notify_client_email?: boolean
           requires_approval?: boolean | null
           service_type: string
           service_type_entry_id?: string | null
@@ -8043,6 +8052,7 @@ export type Database = {
           client_description?: string | null
           created_at?: string | null
           id?: string
+          notify_client_email?: boolean
           requires_approval?: boolean | null
           service_type?: string
           service_type_entry_id?: string | null
