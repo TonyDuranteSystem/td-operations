@@ -6986,6 +6986,7 @@ export type Database = {
           bundled_pipelines: string[] | null
           client_email: string | null
           client_name: string
+          contact_id: string | null
           contract_type: string | null
           cost_summary: Json | null
           created_at: string | null
@@ -7043,6 +7044,7 @@ export type Database = {
           bundled_pipelines?: string[] | null
           client_email?: string | null
           client_name: string
+          contact_id?: string | null
           contract_type?: string | null
           cost_summary?: Json | null
           created_at?: string | null
@@ -7100,6 +7102,7 @@ export type Database = {
           bundled_pipelines?: string[] | null
           client_email?: string | null
           client_name?: string
+          contact_id?: string | null
           contract_type?: string | null
           cost_summary?: Json | null
           created_at?: string | null
@@ -7153,6 +7156,13 @@ export type Database = {
             columns: ["account_id"]
             isOneToOne: false
             referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offers_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
             referencedColumns: ["id"]
           },
           {
