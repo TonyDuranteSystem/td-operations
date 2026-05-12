@@ -26,6 +26,8 @@ import {
   rule24_incompleteCompanyDetails,
   rule25_onboardingDetection,
   rule26_taxReturnStageVsPayments,
+  rule27_taxReturnYearValidation,
+  rule28_duplicatePayments,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -578,6 +580,83 @@ describe("rule7_renewalDates", () => {
     })
     const findings = rule7_renewalDates(ctx, NOW)
     expect(findings.some(f => f.description.includes("not in the annual report policy"))).toBe(false)
+  })
+
+  it("for ONBOARDING client (offer contract_type), accepts any ra_renewal_date — no drift / equality error", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        formation_date: "2020-01-01",
+        ra_renewal_date: "2026-09-15",
+        state_of_formation: "WY",
+      }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.description.includes("days off"))).toBe(false)
+    expect(findings.some(f => f.description.includes("equals formation_date"))).toBe(false)
+  })
+
+  it("for ONBOARDING client even when ra_renewal_date === formation_date (no equality error)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        formation_date: "2020-01-01",
+        ra_renewal_date: "2020-01-01",
+        state_of_formation: "WY",
+      }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.severity === "error" && f.description.includes("equals formation_date"))).toBe(false)
+  })
+
+  it("for ONBOARDING client with NULL ra_renewal_date, emits onboarding-specific message", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        formation_date: "2020-01-01",
+        ra_renewal_date: null,
+        state_of_formation: "WY",
+      }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    const onboardingFinding = findings.find(f =>
+      f.rule_id === "R7" && f.description.includes("switched the registered agent"),
+    )
+    expect(onboardingFinding).toBeDefined()
+    expect(onboardingFinding?.severity).toBe("warning")
+    // The generic "Client account missing ra_renewal_date" must NOT fire alongside.
+    expect(findings.some(f => f.description.includes("Client account missing ra_renewal_date"))).toBe(false)
+  })
+
+  it("for ONBOARDING client detected by R25 gap (formation > 6 months before first payment)", () => {
+    // No onboarding offer, but formation 2020 and first payment in 2026 → gap > 182 days.
+    const ctx = emptyCtx({
+      account: baseAccount({
+        formation_date: "2020-01-01",
+        ra_renewal_date: "2030-08-01", // would be 4+ years off, normally flagged
+        state_of_formation: "WY",
+      }),
+      payments: [
+        { id: "p1", description: "Onboarding setup", status: "Paid", amount: 1000, paid_date: "2026-01-01", created_at: "2026-01-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.description.includes("days off"))).toBe(false)
+  })
+
+  it("does NOT treat client as onboarding when first payment is within 6 months of formation", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        formation_date: "2025-06-01",
+        ra_renewal_date: "2030-01-01", // way off → should flag
+        state_of_formation: "WY",
+      }),
+      payments: [
+        { id: "p1", description: "Setup fee", status: "Paid", amount: 1000, paid_date: "2025-08-01", created_at: "2025-08-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.description.includes("days off"))).toBe(true)
   })
 })
 
@@ -1926,6 +2005,167 @@ describe("rule26_taxReturnStageVsPayments", () => {
       ],
     })
     expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+})
+
+// ── R27: TAX RETURN YEAR VALIDATION ────────────────────────────────────────
+
+describe("rule27_taxReturnYearValidation", () => {
+  const NOW = new Date("2026-06-01T00:00:00Z")
+
+  it("returns no findings when there are no tax_returns rows", () => {
+    expect(rule27_taxReturnYearValidation(emptyCtx(), NOW)).toEqual([])
+  })
+
+  it("flags a tax_year in the future (> current year)", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2027, status: "Draft" }],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.severity === "warning" && f.description.includes("in the future"))).toBe(true)
+  })
+
+  it("does NOT flag tax_year === current year", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2026, status: "Draft" }],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.description.includes("in the future"))).toBe(false)
+  })
+
+  it("flags single tax_return whose year > formation_year", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2023-04-15" }),
+      tax_returns: [{ id: "tr1", tax_year: 2024, status: "Filed" }],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    const m = findings.find(f => f.description.includes("first tax return should be for year 2023"))
+    expect(m).toBeDefined()
+    expect(m?.severity).toBe("warning")
+  })
+
+  it("does NOT fire first-year check when more than one tax_return exists", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2023-04-15" }),
+      tax_returns: [
+        { id: "tr1", tax_year: 2023, status: "Filed" },
+        { id: "tr2", tax_year: 2024, status: "Filed" },
+      ],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.description.includes("first tax return should be for"))).toBe(false)
+  })
+
+  it("does NOT fire first-year check when tax_year === formation_year", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2023-04-15" }),
+      tax_returns: [{ id: "tr1", tax_year: 2023, status: "Filed" }],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.description.includes("first tax return should be for"))).toBe(false)
+  })
+
+  it("does NOT fire first-year check when formation_date is null", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2024, status: "Filed" }],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.description.includes("first tax return should be for"))).toBe(false)
+  })
+
+  it("ignores tax_returns rows with null tax_year", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2023-04-15" }),
+      tax_returns: [{ id: "tr1", tax_year: null, status: "Draft" }],
+    })
+    expect(rule27_taxReturnYearValidation(ctx, NOW)).toEqual([])
+  })
+})
+
+// ── R28: DUPLICATE PAYMENTS ────────────────────────────────────────────────
+
+describe("rule28_duplicatePayments", () => {
+  it("returns no findings when fewer than 2 payments exist", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: 100, paid_date: null, created_at: "2026-01-01T00:00:00Z" },
+      ],
+    })
+    expect(rule28_duplicatePayments(ctx)).toEqual([])
+  })
+
+  it("flags two payments with same amount AND same created_at", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: 250, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p2", description: "y", status: "Paid", amount: 250, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+      ],
+    })
+    const findings = rule28_duplicatePayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].rule_id).toBe("R28")
+    expect(findings[0].description).toContain("2 payments of 250")
+    expect(findings[0].current_value).toContain("p1")
+    expect(findings[0].current_value).toContain("p2")
+  })
+
+  it("does NOT flag payments with same amount but different created_at", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: 100, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p2", description: "y", status: "Paid", amount: 100, paid_date: null, created_at: "2026-01-16T10:00:00Z" },
+      ],
+    })
+    expect(rule28_duplicatePayments(ctx)).toEqual([])
+  })
+
+  it("does NOT flag payments with same created_at but different amounts", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: 100, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p2", description: "y", status: "Paid", amount: 200, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+      ],
+    })
+    expect(rule28_duplicatePayments(ctx)).toEqual([])
+  })
+
+  it("emits a separate finding per (amount, created_at) collision group", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: 100, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p2", description: "y", status: "Paid", amount: 100, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p3", description: "z", status: "Paid", amount: 300, paid_date: null, created_at: "2026-02-01T09:00:00Z" },
+        { id: "p4", description: "w", status: "Paid", amount: 300, paid_date: null, created_at: "2026-02-01T09:00:00Z" },
+      ],
+    })
+    const findings = rule28_duplicatePayments(ctx)
+    expect(findings).toHaveLength(2)
+  })
+
+  it("reports correct count when more than 2 payments collide", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: 50, paid_date: null, created_at: "2026-03-01T12:00:00Z" },
+        { id: "p2", description: "y", status: "Paid", amount: 50, paid_date: null, created_at: "2026-03-01T12:00:00Z" },
+        { id: "p3", description: "z", status: "Paid", amount: 50, paid_date: null, created_at: "2026-03-01T12:00:00Z" },
+      ],
+    })
+    const findings = rule28_duplicatePayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("3 payments of 50")
+  })
+
+  it("ignores payments with null amount or null created_at", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "x", status: "Paid", amount: null, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p2", description: "y", status: "Paid", amount: null, paid_date: null, created_at: "2026-01-15T10:00:00Z" },
+        { id: "p3", description: "z", status: "Paid", amount: 100, paid_date: null, created_at: null },
+        { id: "p4", description: "w", status: "Paid", amount: 100, paid_date: null, created_at: null },
+      ],
+    })
+    expect(rule28_duplicatePayments(ctx)).toEqual([])
   })
 })
 

@@ -223,6 +223,43 @@ function currentYear(now: Date = new Date()): number {
   return now.getUTCFullYear()
 }
 
+// Onboarding threshold: when first payment is more than 6 months after the
+// company's formation_date, the relationship started long after the company
+// was formed. Used by Rules 7 and 25.
+const ONBOARDING_GAP_DAYS = 182
+
+function earliestPaymentMs(ctx: HealthContext): number | null {
+  return ctx.payments
+    .map(p => {
+      const ts = p.paid_date || p.created_at
+      return ts ? new Date(ts).getTime() : null
+    })
+    .filter((t): t is number => t !== null && Number.isFinite(t))
+    .reduce<number | null>((min, t) => (min === null || t < min ? t : min), null)
+}
+
+/**
+ * True when the client is an onboarding (not formation) relationship. Two
+ * signals trigger it:
+ *   - most-recent offer carries contract_type='onboarding'; OR
+ *   - the R25 heuristic — first payment > 6 months after formation_date.
+ */
+function isOnboardingClient(ctx: HealthContext): boolean {
+  const offerType = (ctx.most_recent_offer?.contract_type || "").toLowerCase()
+  if (offerType === "onboarding") return true
+
+  const a = ctx.account
+  if (!a.formation_date) return false
+  const formationMs = new Date(a.formation_date).getTime()
+  if (!Number.isFinite(formationMs)) return false
+
+  const firstPaymentMs = earliestPaymentMs(ctx)
+  if (firstPaymentMs === null) return false
+
+  const gapDays = (firstPaymentMs - formationMs) / (1000 * 60 * 60 * 24)
+  return gapDays > ONBOARDING_GAP_DAYS
+}
+
 // ── Rule 1: TIER CONSISTENCY ───────────────────────────────────────────────
 
 export function rule1_tierConsistency(ctx: HealthContext): Finding[] {
@@ -532,31 +569,46 @@ export function rule7_renewalDates(ctx: HealthContext, now: Date = new Date()): 
   if (!isClient(a)) return [] // only applies to Client account_type
   const findings: Finding[] = []
 
-  // RA renewal = formation_date + 1 year (approximately; ±60 days OK).
+  // RA renewal: for FORMATION clients we expect formation_date + 1 year
+  // (±60 days). For ONBOARDING clients the RA renewal date reflects WHEN TD
+  // took over as registered agent — it has no relationship to formation_date,
+  // so do not compare it.
+  const onboarding = isOnboardingClient(ctx)
   if (a.ra_renewal_date) {
-    if (a.ra_renewal_date === a.formation_date) {
-      findings.push({
-        rule_id: "R7",
-        rule_title: "Renewal dates",
-        severity: "error",
-        description: "ra_renewal_date equals formation_date (known bug — never seeded forward).",
-        current_value: `ra_renewal_date=${a.ra_renewal_date}`,
-        expected_value: `formation_date + 1 year (≈ ${addYears(a.formation_date, 1)})`,
-      })
-    } else {
-      const expected = addYears(a.formation_date, 1)
-      const drift = daysBetween(a.ra_renewal_date, expected)
-      if (drift > 60) {
+    if (!onboarding) {
+      if (a.ra_renewal_date === a.formation_date) {
         findings.push({
           rule_id: "R7",
           rule_title: "Renewal dates",
-          severity: "warning",
-          description: `ra_renewal_date is ${drift} days off from formation_date + 1 year (tolerance: ±60 days).`,
+          severity: "error",
+          description: "ra_renewal_date equals formation_date (known bug — never seeded forward).",
           current_value: `ra_renewal_date=${a.ra_renewal_date}`,
-          expected_value: `≈ ${expected}`,
+          expected_value: `formation_date + 1 year (≈ ${addYears(a.formation_date, 1)})`,
         })
+      } else {
+        const expected = addYears(a.formation_date, 1)
+        const drift = daysBetween(a.ra_renewal_date, expected)
+        if (drift > 60) {
+          findings.push({
+            rule_id: "R7",
+            rule_title: "Renewal dates",
+            severity: "warning",
+            description: `ra_renewal_date is ${drift} days off from formation_date + 1 year (tolerance: ±60 days).`,
+            current_value: `ra_renewal_date=${a.ra_renewal_date}`,
+            expected_value: `≈ ${expected}`,
+          })
+        }
       }
     }
+  } else if (onboarding) {
+    findings.push({
+      rule_id: "R7",
+      rule_title: "Renewal dates",
+      severity: "warning",
+      description: "Onboarding client — RA renewal date should be set to the date we switched the registered agent.",
+      current_value: "null",
+      expected_value: "date we switched RA to our vendor",
+    })
   } else {
     findings.push({
       rule_id: "R7",
@@ -1317,8 +1369,6 @@ export function rule24_incompleteCompanyDetails(ctx: HealthContext): Finding[] {
 // hides that fact. Info-severity nudge so staff can capture the relationship
 // start date explicitly.
 
-const ONBOARDING_GAP_DAYS = 182
-
 export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
   const a = ctx.account
   if (!a.formation_date) return []
@@ -1327,14 +1377,7 @@ export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
   const formationMs = new Date(a.formation_date).getTime()
   if (!Number.isFinite(formationMs)) return []
 
-  const firstPaymentMs = ctx.payments
-    .map(p => {
-      const ts = p.paid_date || p.created_at
-      return ts ? new Date(ts).getTime() : null
-    })
-    .filter((t): t is number => t !== null && Number.isFinite(t))
-    .reduce<number | null>((min, t) => (min === null || t < min ? t : min), null)
-
+  const firstPaymentMs = earliestPaymentMs(ctx)
   if (firstPaymentMs === null) return []
 
   const gapDays = (firstPaymentMs - formationMs) / (1000 * 60 * 60 * 24)
@@ -1389,6 +1432,96 @@ export function rule26_taxReturnStageVsPayments(ctx: HealthContext): Finding[] {
   }]
 }
 
+// ── Rule 27: TAX RETURN YEAR VALIDATION ────────────────────────────────────
+//
+// Two checks on tax_returns.tax_year:
+//
+// 1. Future year — tax_year must be <= current year. A return for a year that
+//    hasn't ended is almost always a data-entry slip (typo, dropdown miswire).
+// 2. First return misaligned with formation year — if the company was formed
+//    in year X, the first tax return covers year X (filed in X+1). When the
+//    only tax_returns row is for a year AFTER the formation year, it almost
+//    always means the prior-year filing was skipped or the row was created
+//    against the wrong year. Only fires when there's exactly ONE tax_returns
+//    row — multiple rows imply a deliberate filing history.
+
+export function rule27_taxReturnYearValidation(ctx: HealthContext, now: Date = new Date()): Finding[] {
+  if (ctx.tax_returns.length === 0) return []
+
+  const findings: Finding[] = []
+  const thisYear = now.getUTCFullYear()
+
+  for (const tr of ctx.tax_returns) {
+    if (tr.tax_year === null) continue
+    if (tr.tax_year > thisYear) {
+      findings.push({
+        rule_id: "R27",
+        rule_title: "Tax return year validation",
+        severity: "warning",
+        description: `Tax return year ${tr.tax_year} is in the future (current year: ${thisYear}).`,
+        current_value: `tax_returns.tax_year=${tr.tax_year}`,
+        expected_value: `<= ${thisYear}`,
+      })
+    }
+  }
+
+  const a = ctx.account
+  if (a.formation_date && ctx.tax_returns.length === 1) {
+    const formationYear = new Date(a.formation_date).getUTCFullYear()
+    const tr = ctx.tax_returns[0]
+    if (Number.isFinite(formationYear) && tr.tax_year !== null && tr.tax_year > formationYear) {
+      findings.push({
+        rule_id: "R27",
+        rule_title: "Tax return year validation",
+        severity: "warning",
+        description: `Tax return year ${tr.tax_year} but company formed in ${formationYear} — first tax return should be for year ${formationYear}.`,
+        current_value: `tax_returns.tax_year=${tr.tax_year}, formation_year=${formationYear}`,
+        expected_value: `tax_year=${formationYear}`,
+      })
+    }
+  }
+
+  return findings
+}
+
+// ── Rule 28: DUPLICATE PAYMENTS ────────────────────────────────────────────
+//
+// When two or more payment rows share the same amount AND the same
+// created_at timestamp, it's almost always a double-insert from a webhook
+// retry, a manual duplication, or a stale form resubmit. One finding is
+// emitted per (amount, created_at) collision group.
+
+export function rule28_duplicatePayments(ctx: HealthContext): Finding[] {
+  if (ctx.payments.length < 2) return []
+
+  const groups = new Map<string, PaymentRow[]>()
+  for (const p of ctx.payments) {
+    if (p.amount === null) continue
+    if (!p.created_at) continue
+    const key = `${p.amount}|${p.created_at}`
+    const list = groups.get(key) ?? []
+    list.push(p)
+    groups.set(key, list)
+  }
+
+  const findings: Finding[] = []
+  for (const entry of Array.from(groups.entries())) {
+    const [key, list] = entry
+    if (list.length < 2) continue
+    const [amountStr, createdAt] = key.split("|")
+    findings.push({
+      rule_id: "R28",
+      rule_title: "Duplicate payments",
+      severity: "warning",
+      description: `Possible duplicate payments — ${list.length} payments of ${amountStr} created at the same time.`,
+      current_value: `payment_ids=[${list.map(p => p.id).join(",")}], amount=${amountStr}, created_at=${createdAt}`,
+      expected_value: "no duplicates",
+    })
+  }
+
+  return findings
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -1418,6 +1551,8 @@ export const RULE_FUNCTIONS = [
   rule24_incompleteCompanyDetails,
   rule25_onboardingDetection,
   rule26_taxReturnStageVsPayments,
+  rule27_taxReturnYearValidation,
+  rule28_duplicatePayments,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
