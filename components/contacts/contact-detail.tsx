@@ -689,6 +689,7 @@ function OverviewTab({
         offers={offers}
         pendingActivations={pendingActivations}
         accounts={accounts}
+        contactId={contact.id}
         contactName={contact.full_name ?? ''}
         contactEmail={contact.email ?? ''}
       />
@@ -1235,12 +1236,14 @@ function OfferStatusCard({
   offers,
   pendingActivations,
   accounts,
+  contactId,
   contactName,
   contactEmail,
 }: {
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   accounts: LinkedAccount[]
+  contactId: string
   contactName: string
   contactEmail: string
 }) {
@@ -1252,13 +1255,13 @@ function OfferStatusCard({
   const isOfferClosed = primaryOffer && (primaryOffer.status === 'expired' || primaryOffer.status === 'completed' || primaryOffer.contract_type === 'renewal')
   const canCreateOffer = !primaryOffer || !!isOfferClosed
 
+  // MASTER A6 / MM8: a contact can buy individual services (ITIN, Banking
+  // Physical, etc.) without an account. Allow offer creation as long as
+  // email is set; the offer's service_context per line drives whether
+  // account_id is required.
   const handleCreateOffer = () => {
     if (!contactEmail) {
       toast.error('Contact needs an email before creating an offer')
-      return
-    }
-    if (!selectedAccountId) {
-      toast.error('Contact must be linked to an account before creating an offer')
       return
     }
     setShowCreateOffer(true)
@@ -1282,21 +1285,20 @@ function OfferStatusCard({
           )}
           <div className="text-center py-2">
             <p className="text-sm text-muted-foreground mb-3">No offer found</p>
-            {accounts.length > 0 && (
-              <button
-                onClick={handleCreateOffer}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-              >
-                <FileText className="h-4 w-4" />
-                Create Offer
-              </button>
-            )}
+            <button
+              onClick={handleCreateOffer}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+            >
+              <FileText className="h-4 w-4" />
+              Create Offer
+            </button>
           </div>
         </div>
         <CreateOfferDialog
           open={showCreateOffer}
           onClose={() => setShowCreateOffer(false)}
-          accountId={selectedAccountId}
+          accountId={selectedAccountId || null}
+          contactId={contactId}
           clientName={accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName}
           clientEmail={contactEmail}
         />
@@ -1395,7 +1397,7 @@ function OfferStatusCard({
       </div>
 
       {/* Create new offer when current one is closed */}
-      {canCreateOffer && accounts.length > 0 && (
+      {canCreateOffer && (
         <div className="border-t pt-3 space-y-2">
           {accounts.length > 1 && (
             <select
@@ -1421,7 +1423,8 @@ function OfferStatusCard({
       <CreateOfferDialog
         open={showCreateOffer}
         onClose={() => setShowCreateOffer(false)}
-        accountId={selectedAccountId}
+        accountId={selectedAccountId || null}
+        contactId={contactId}
         clientName={accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName}
         clientEmail={contactEmail}
       />

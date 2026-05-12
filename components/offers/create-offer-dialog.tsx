@@ -17,6 +17,11 @@ interface CatalogService {
   default_price: number | null
   default_currency: string | null
   supports_quantity: boolean
+  // Per-service default for the individual/business/ask dropdown. NULL means
+  // not configured — dialog falls back to 'ask'. Populate via the catalog
+  // row's default_service_context column (data-driven, no code edit needed
+  // when adding a new service). See migration 20260512-1500.
+  default_service_context: 'individual' | 'business' | 'ask' | null
 }
 
 interface SelectedService {
@@ -89,7 +94,9 @@ interface NoteSource {
 interface CreateOfferDialogProps {
   open: boolean
   onClose: () => void
-  // Either lead or account — one must be provided
+  // At least one of lead_id / account_id / contact_id must be provided.
+  // contact_id is required for individual-only offers (ITIN, Banking Physical)
+  // per MASTER A6 (contact can buy individual services without an account).
   leadId?: string | null
   accountId?: string | null
   contactId?: string | null
@@ -127,18 +134,23 @@ export function CreateOfferDialog({
       .then(r => r.json())
       .then(d => {
         const services = (d.services ?? []) as Array<Record<string, unknown>>
-        setCatalog(services.map(s => ({
-          id: (s.slug as string) || (s.id as string),
-          slug: (s.slug as string) || '',
-          name: s.name as string,
-          pipeline: (s.pipeline as string | null) ?? null,
-          contract_type: (s.contract_type as string | null) ?? null,
-          has_annual: (s.has_annual as boolean) ?? false,
-          category: (s.category as string) || 'addon',
-          default_price: s.default_price != null ? Number(s.default_price) : null,
-          default_currency: (s.default_currency as string | null) ?? null,
-          supports_quantity: (s.supports_quantity as boolean) ?? false,
-        })))
+        setCatalog(services.map(s => {
+          const ctx = s.default_service_context as string | null | undefined
+          return {
+            id: (s.slug as string) || (s.id as string),
+            slug: (s.slug as string) || '',
+            name: s.name as string,
+            pipeline: (s.pipeline as string | null) ?? null,
+            contract_type: (s.contract_type as string | null) ?? null,
+            has_annual: (s.has_annual as boolean) ?? false,
+            category: (s.category as string) || 'addon',
+            default_price: s.default_price != null ? Number(s.default_price) : null,
+            default_currency: (s.default_currency as string | null) ?? null,
+            supports_quantity: (s.supports_quantity as boolean) ?? false,
+            default_service_context:
+              ctx === 'individual' || ctx === 'business' || ctx === 'ask' ? ctx : null,
+          }
+        }))
       })
       .catch(() => toast.error('Failed to load service catalog'))
       .finally(() => setCatalogLoading(false))
@@ -363,30 +375,12 @@ export function CreateOfferDialog({
 
   const totalAmount = servicesTotalAmount + preconditionsTotalAmount
 
-  // Default service_context routing keyed by canonical service-catalog slug.
-  // svc.id is the catalog slug (set in the loader at line ~130). Anything
-  // not in these sets falls through to 'ask'.
-  const INDIVIDUAL_DEFAULT_SLUGS: ReadonlySet<string> = new Set(['itin'])
-  const BUSINESS_DEFAULT_SLUGS: ReadonlySet<string> = new Set([
-    'llc_formation',
-    'onboarding',
-    'company_formation',
-    'client_onboarding',
-    'ein',
-    'banking',
-    'closure',
-    'cmra',
-    'state_ra_renewal',
-    'state_annual_report',
-  ])
-  const ASK_DEFAULT_SLUGS: ReadonlySet<string> = new Set(['tax_return'])
-
+  // Data-driven default for the per-service individual/business/ask
+  // dropdown. The value comes from service_catalog.default_service_context
+  // (see migration 20260512-1500). Adding a new individual-level service
+  // means setting that column on its catalog row — no code change here.
   const getDefaultContext = (svc: CatalogService | undefined): 'individual' | 'business' | 'ask' => {
-    if (!svc) return 'ask'
-    if (INDIVIDUAL_DEFAULT_SLUGS.has(svc.id)) return 'individual'
-    if (BUSINESS_DEFAULT_SLUGS.has(svc.id)) return 'business'
-    if (ASK_DEFAULT_SLUGS.has(svc.id)) return 'ask'
-    return 'ask'
+    return svc?.default_service_context ?? 'ask'
   }
 
   const toggleService = (id: string) => {
@@ -562,6 +556,7 @@ export function CreateOfferDialog({
           body: JSON.stringify({
             lead_id: leadId || null,
             account_id: accountId || null,
+            contact_id: contactId || null,
             client_name: clientName,
             client_email: clientEmail,
             language,

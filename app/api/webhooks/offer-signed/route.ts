@@ -147,8 +147,31 @@ export async function POST(req: NextRequest) {
     // checks if contact exists before creating, so no duplication risk.
     let contactId: string | null = null
     try {
+      // Prefer the offer's contact_id FK when set (post-2026-05-12). For
+      // existing-contact offers (e.g. standalone ITIN for a current client),
+      // this is the most reliable link and skips the fragile email lookup.
+      // Falls through to the email/lead path when contact_id is null (lead-
+      // flow offers that haven't been linked yet).
+      if (offer.contact_id) {
+        const { data: existingContact } = await supabase
+          .from("contacts")
+          .select("id, full_name")
+          .eq("id", offer.contact_id)
+          .maybeSingle()
+        if (existingContact) {
+          contactId = existingContact.id
+          if (!existingContact.full_name && offer.client_name) {
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.update; extract to lib/operations/ per dev_task 98484283
+            await supabase
+              .from("contacts")
+              .update({ full_name: offer.client_name, updated_at: new Date().toISOString() })
+              .eq("id", contactId)
+          }
+        }
+      }
+
       // First check if contact already exists by email
-      if (offer.client_email) {
+      if (!contactId && offer.client_email) {
         const { data: existingContact } = await supabase
           .from("contacts")
           .select("id, full_name")

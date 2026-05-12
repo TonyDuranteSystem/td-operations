@@ -8841,6 +8841,7 @@ export type Database = {
           created_at: string | null
           default_currency: string | null
           default_price: number | null
+          default_service_context: string | null
           description: string | null
           has_annual: boolean
           id: string
@@ -8858,6 +8859,7 @@ export type Database = {
           created_at?: string | null
           default_currency?: string | null
           default_price?: number | null
+          default_service_context?: string | null
           description?: string | null
           has_annual?: boolean
           id?: string
@@ -8875,6 +8877,7 @@ export type Database = {
           created_at?: string | null
           default_currency?: string | null
           default_price?: number | null
+          default_service_context?: string | null
           description?: string | null
           has_annual?: boolean
           id?: string
