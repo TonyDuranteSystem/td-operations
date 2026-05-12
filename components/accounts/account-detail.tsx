@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -8,7 +8,7 @@ import {
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
   Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
-  Rocket,
+  Rocket, Upload, Hash, DollarSign,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -30,7 +30,7 @@ import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
@@ -204,9 +204,19 @@ interface AccountDetailProps {
     end_date: string | null
     notes: string | null
     updated_at: string
+    // dba_details row fields. detail_id / detail_updated_at are nullable
+    // because a DBA SD can exist before its details row is inserted (legacy
+    // data path); the UI shows "—" and disables editing in that case.
+    detail_id: string | null
+    detail_updated_at: string | null
     dba_name: string | null
     jurisdiction: string | null
+    filed_date: string | null
     registration_number: string | null
+    renewal_date: string | null
+    renewal_period: string | null
+    filing_fee: number | null
+    detail_notes: string | null
   }>
 }
 
@@ -976,6 +986,182 @@ type CrmMember = {
   representative_address_country: string | null
 }
 
+type UpdateDBADetailsArg = Partial<{
+  dba_name: string | null
+  jurisdiction: string | null
+  filed_date: string | null
+  registration_number: string | null
+  renewal_date: string | null
+  renewal_period: string | null
+  filing_fee: number | null
+  notes: string | null
+}>
+
+const RENEWAL_PERIOD_OPTIONS = [
+  { label: '—', value: '' },
+  { label: 'None', value: 'none' },
+  { label: '1-year', value: '1-year' },
+  { label: '2-year', value: '2-year' },
+  { label: '5-year', value: '5-year' },
+  { label: '10-year', value: '10-year' },
+]
+
+function DBARow({
+  accountId,
+  d,
+}: {
+  accountId: string
+  d: NonNullable<AccountDetailProps['dbaServiceDeliveries']>[number]
+}) {
+  const router = useRouter()
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement | null>(null)
+
+  // updated_at for optimistic locking — only the detail row has it; if a DBA
+  // SD pre-dates the dba_details row (legacy), edits are disabled until the
+  // row is backfilled via a save through the Add form.
+  const detailId = d.detail_id
+  const detailUpdatedAt = d.detail_updated_at
+  const canEdit = Boolean(detailId && detailUpdatedAt)
+
+  const makeSaver = (field: 'dba_name' | 'jurisdiction' | 'filed_date' | 'registration_number' | 'renewal_date' | 'renewal_period' | 'filing_fee' | 'notes') => {
+    return async (value: string) => {
+      if (!detailId || !detailUpdatedAt) {
+        return { success: false, error: 'No DBA detail row to update' }
+      }
+      const updates: UpdateDBADetailsArg = {}
+      if (field === 'filing_fee') {
+        const n = value.trim() === '' ? null : Number(value)
+        updates.filing_fee = n == null || Number.isNaN(n) ? null : n
+      } else {
+        updates[field] = value
+      }
+      const r = await updateDBADetails(detailId, updates, detailUpdatedAt)
+      if (r.success) {
+        toast.success('Saved')
+        router.refresh()
+      } else {
+        toast.error(r.error ?? 'Failed to save')
+      }
+      return { success: r.success, error: r.error }
+    }
+  }
+
+  const handleUploadClick = () => {
+    fileRef.current?.click()
+  }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!detailId) {
+      toast.error('Save the DBA before uploading documents')
+      e.target.value = ''
+      return
+    }
+    setUploading(true)
+    try {
+      const storagePath = `crm-dba-uploads/${accountId}/${detailId}/${Date.now()}_${file.name}`
+      // 1. Signed URL for Supabase Storage (bypass Vercel 4.5MB body limit).
+      const sigRes = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'onboarding-uploads',
+          path: storagePath,
+          contentType: file.type || 'application/pdf',
+        }),
+      })
+      if (!sigRes.ok) {
+        const errBody = await sigRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to get upload URL')
+      }
+      const { signedUrl } = await sigRes.json()
+      if (!signedUrl) throw new Error('No signed URL returned')
+
+      // 2. PUT the file directly to Supabase Storage.
+      const putRes = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/pdf' },
+        body: file,
+      })
+      if (!putRes.ok) throw new Error('File upload to storage failed')
+
+      // 3. Register in CRM — uploads to Drive, runs OCR, auto-fills empty fields.
+      const apiRes = await fetch(`/api/accounts/${accountId}/dba/${detailId}/upload-document`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type || 'application/pdf',
+        }),
+      })
+      const data = await apiRes.json()
+      if (!apiRes.ok || !data.success) {
+        throw new Error(data.detail || data.error || 'Upload failed')
+      }
+      toast.success(data.detail || 'DBA document uploaded')
+      if (data.side_effects?.length) {
+        toast.info(data.side_effects.join(' | '))
+      }
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Upload failed — try again')
+    } finally {
+      setUploading(false)
+      if (e.target) e.target.value = ''
+    }
+  }
+
+  const displayName = d.dba_name ?? d.service_name ?? 'DBA'
+
+  return (
+    <div className="border border-zinc-100 rounded-md p-3 bg-zinc-50/40 space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-medium text-sm truncate">{displayName}</p>
+        </div>
+        <div className="text-right text-xs text-muted-foreground shrink-0">
+          {d.start_date && <p>Start {formatDate(d.start_date)}</p>}
+          {d.end_date && <p>End {formatDate(d.end_date)}</p>}
+        </div>
+      </div>
+
+      <div className="grid gap-1 sm:grid-cols-2">
+        <EditableField icon={Briefcase} label="DBA Name" value={d.dba_name ?? ''} onSave={makeSaver('dba_name')} readOnly={!canEdit} />
+        <EditableField icon={MapPin} label="Jurisdiction" value={d.jurisdiction ?? ''} onSave={makeSaver('jurisdiction')} readOnly={!canEdit} />
+        <EditableField icon={Calendar} label="Filed Date" type="date" value={d.filed_date ?? ''} onSave={makeSaver('filed_date')} readOnly={!canEdit} />
+        <EditableField icon={Hash} label="Reg. Number" value={d.registration_number ?? ''} onSave={makeSaver('registration_number')} readOnly={!canEdit} />
+        <EditableField icon={Calendar} label="Renewal Date" type="date" value={d.renewal_date ?? ''} onSave={makeSaver('renewal_date')} readOnly={!canEdit} />
+        <EditableField icon={Clock} label="Renewal Period" type="select" options={RENEWAL_PERIOD_OPTIONS} value={d.renewal_period ?? ''} onSave={makeSaver('renewal_period')} readOnly={!canEdit} />
+        <EditableField icon={DollarSign} label="Filing Fee" value={d.filing_fee != null ? String(d.filing_fee) : ''} onSave={makeSaver('filing_fee')} readOnly={!canEdit} />
+        <EditableField icon={FileText} label="Notes" type="textarea" value={d.detail_notes ?? ''} onSave={makeSaver('notes')} readOnly={!canEdit} />
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/pdf,image/png,image/jpeg,image/tiff,image/webp"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+        <button
+          type="button"
+          onClick={handleUploadClick}
+          disabled={uploading || !detailId}
+          title={!detailId ? 'Save the DBA before uploading documents' : 'Upload a document for this DBA. OCR will try to auto-fill missing fields.'}
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-zinc-50 disabled:opacity-50"
+        >
+          {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          {uploading ? 'Uploading…' : 'Upload Document'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function DBASection({
   accountId,
   dbaServiceDeliveries,
@@ -989,8 +1175,24 @@ function DBASection({
   const [showForm, setShowForm] = useState(false)
   const [dbaName, setDbaName] = useState('')
   const [jurisdiction, setJurisdiction] = useState('')
+  const [filedDate, setFiledDate] = useState('')
+  const [registrationNumber, setRegistrationNumber] = useState('')
+  const [renewalDate, setRenewalDate] = useState('')
+  const [renewalPeriod, setRenewalPeriod] = useState('')
+  const [filingFee, setFilingFee] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const resetForm = () => {
+    setDbaName('')
+    setJurisdiction('')
+    setFiledDate('')
+    setRegistrationNumber('')
+    setRenewalDate('')
+    setRenewalPeriod('')
+    setFilingFee('')
+    setNotes('')
+  }
 
   const handleAdd = async () => {
     const name = dbaName.trim()
@@ -999,18 +1201,26 @@ function DBASection({
       toast.error('DBA name and jurisdiction are required')
       return
     }
+    const feeNum = filingFee.trim() === '' ? null : Number(filingFee)
+    if (feeNum != null && Number.isNaN(feeNum)) {
+      toast.error('Filing fee must be a number')
+      return
+    }
     setSaving(true)
     const result = await createDBA(accountId, {
       dba_name: name,
       jurisdiction: juris,
+      filed_date: filedDate.trim() || null,
+      registration_number: registrationNumber.trim() || null,
+      renewal_date: renewalDate.trim() || null,
+      renewal_period: renewalPeriod.trim() || null,
+      filing_fee: feeNum,
       notes: notes.trim() || null,
     })
     setSaving(false)
     if (result.success) {
       toast.success('DBA created')
-      setDbaName('')
-      setJurisdiction('')
-      setNotes('')
+      resetForm()
       setShowForm(false)
       router.refresh()
     } else {
@@ -1061,6 +1271,62 @@ function DBASection({
                 disabled={saving}
               />
             </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Filed Date</label>
+              <input
+                type="date"
+                value={filedDate}
+                onChange={e => setFiledDate(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Registration Number</label>
+              <input
+                type="text"
+                value={registrationNumber}
+                onChange={e => setRegistrationNumber(e.target.value)}
+                placeholder="Optional"
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Renewal Date</label>
+              <input
+                type="date"
+                value={renewalDate}
+                onChange={e => setRenewalDate(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Renewal Period</label>
+              <select
+                value={renewalPeriod}
+                onChange={e => setRenewalPeriod(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              >
+                {RENEWAL_PERIOD_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Filing Fee</label>
+              <input
+                type="number"
+                step="0.01"
+                value={filingFee}
+                onChange={e => setFilingFee(e.target.value)}
+                placeholder="0.00"
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
           </div>
           <div>
             <label className="block text-xs text-muted-foreground mb-1">Notes</label>
@@ -1078,9 +1344,7 @@ function DBASection({
               type="button"
               onClick={() => {
                 setShowForm(false)
-                setDbaName('')
-                setJurisdiction('')
-                setNotes('')
+                resetForm()
               }}
               disabled={saving}
               className="px-3 py-1.5 text-sm rounded-md border hover:bg-zinc-50 disabled:opacity-50"
@@ -1107,19 +1371,8 @@ function DBASection({
             const displayName = d.dba_name ?? d.service_name ?? 'DBA'
             const isActive = d.status !== 'completed' && d.status !== 'cancelled'
             return (
-              <div key={d.id} className="border border-zinc-100 rounded-md p-3 bg-zinc-50/40">
-                <div className="flex items-baseline justify-between gap-2 mb-2">
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">{displayName}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {[d.jurisdiction, d.registration_number].filter(Boolean).join(' · ') || '—'}
-                    </p>
-                  </div>
-                  <div className="text-right text-xs text-muted-foreground shrink-0">
-                    {d.start_date && <p>Start {formatDate(d.start_date)}</p>}
-                    {d.end_date && <p>End {formatDate(d.end_date)}</p>}
-                  </div>
-                </div>
+              <div key={d.id} className="space-y-2">
+                <DBARow accountId={accountId} d={d} />
                 {isActive && dbaStages.length > 0 ? (
                   <SdPipelineStepper
                     deliveryId={d.id}
@@ -1131,12 +1384,9 @@ function DBASection({
                     stages={dbaStages}
                   />
                 ) : (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground pl-3">
                     {[d.stage, d.status].filter(Boolean).join(' · ') || '—'}
                   </p>
-                )}
-                {d.notes && (
-                  <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap">{d.notes}</p>
                 )}
               </div>
             )

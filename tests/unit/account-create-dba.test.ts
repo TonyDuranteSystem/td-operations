@@ -118,11 +118,16 @@ describe('createDBA', () => {
         notes: 'Filed in Manhattan',
       }),
     )
-    expect(lastDbaInsertPayload).toEqual({
+    expect(lastDbaInsertPayload).toMatchObject({
       delivery_id: 'sd-new-1',
       dba_name: 'Acme Trading',
       jurisdiction: 'New York',
       notes: 'Filed in Manhattan',
+      filed_date: null,
+      registration_number: null,
+      renewal_date: null,
+      renewal_period: null,
+      filing_fee: null,
     })
     expect(revalidatePathCalls).toContain('/accounts/acct-1')
   })
@@ -133,7 +138,7 @@ describe('createDBA', () => {
       jurisdiction: '  NY  ',
       notes: '  hi  ',
     })
-    expect(lastDbaInsertPayload).toEqual({
+    expect(lastDbaInsertPayload).toMatchObject({
       delivery_id: 'sd-new-1',
       dba_name: 'Acme',
       jurisdiction: 'NY',
@@ -147,11 +152,30 @@ describe('createDBA', () => {
       jurisdiction: 'NY',
       notes: '   ',
     })
-    expect(lastDbaInsertPayload).toEqual({
+    expect(lastDbaInsertPayload).toMatchObject({
       delivery_id: 'sd-new-1',
       dba_name: 'Acme',
       jurisdiction: 'NY',
       notes: null,
+    })
+  })
+
+  it('carries through the new optional dba_details fields', async () => {
+    await createDBA('acct-1', {
+      dba_name: 'Acme',
+      jurisdiction: 'NY',
+      filed_date: '2026-01-15',
+      registration_number: 'DBA-12345',
+      renewal_date: '2031-01-15',
+      renewal_period: '5-year',
+      filing_fee: 125.5,
+    })
+    expect(lastDbaInsertPayload).toMatchObject({
+      filed_date: '2026-01-15',
+      registration_number: 'DBA-12345',
+      renewal_date: '2031-01-15',
+      renewal_period: '5-year',
+      filing_fee: 125.5,
     })
   })
 

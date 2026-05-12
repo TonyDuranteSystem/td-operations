@@ -343,43 +343,63 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .eq('service_type', 'DBA')
     .order('updated_at', { ascending: false })
   const dbaSDIds = (dbaRows ?? []).map(d => d.id)
-  let dbaDetailsById: Record<string, { dba_name: string; jurisdiction: string; registration_number: string | null }> = {}
+  type DbaDetailRow = {
+    id: string
+    delivery_id: string
+    dba_name: string
+    jurisdiction: string
+    filed_date: string | null
+    registration_number: string | null
+    renewal_date: string | null
+    renewal_period: string | null
+    filing_fee: number | null
+    notes: string | null
+    updated_at: string | null
+  }
+  let dbaDetailsById: Record<string, DbaDetailRow> = {}
   if (dbaSDIds.length > 0) {
     // dba_details is not yet in the generated DB types — cast once here so the
     // call typechecks without leaking `any` into the result rows.
     const untyped = supabaseAdmin as unknown as {
       from: (table: string) => {
         select: (sel: string) => {
-          in: (col: string, vals: string[]) => Promise<{ data: Array<{ delivery_id: string; dba_name: string; jurisdiction: string; registration_number: string | null }> | null }>
+          in: (col: string, vals: string[]) => Promise<{ data: Array<DbaDetailRow> | null }>
         }
       }
     }
     const { data: detailsRows } = await untyped
       .from('dba_details')
-      .select('delivery_id, dba_name, jurisdiction, registration_number')
+      .select('id, delivery_id, dba_name, jurisdiction, filed_date, registration_number, renewal_date, renewal_period, filing_fee, notes, updated_at')
       .in('delivery_id', dbaSDIds)
     dbaDetailsById = Object.fromEntries(
-      (detailsRows ?? []).map(r => [r.delivery_id, {
-        dba_name: r.dba_name,
-        jurisdiction: r.jurisdiction,
-        registration_number: r.registration_number,
-      }]),
+      (detailsRows ?? []).map(r => [r.delivery_id, r]),
     )
   }
-  const dbaServiceDeliveries = (dbaRows ?? []).map(d => ({
-    id: d.id,
-    service_name: d.service_name ?? null,
-    stage: d.stage ?? null,
-    stage_order: d.stage_order ?? null,
-    status: d.status ?? null,
-    start_date: d.start_date ?? null,
-    end_date: d.end_date ?? null,
-    notes: d.notes ?? null,
-    updated_at: d.updated_at ?? new Date().toISOString(),
-    dba_name: dbaDetailsById[d.id]?.dba_name ?? d.service_name ?? null,
-    jurisdiction: dbaDetailsById[d.id]?.jurisdiction ?? null,
-    registration_number: dbaDetailsById[d.id]?.registration_number ?? null,
-  }))
+  const dbaServiceDeliveries = (dbaRows ?? []).map(d => {
+    const detail = dbaDetailsById[d.id]
+    return {
+      id: d.id,
+      service_name: d.service_name ?? null,
+      stage: d.stage ?? null,
+      stage_order: d.stage_order ?? null,
+      status: d.status ?? null,
+      start_date: d.start_date ?? null,
+      end_date: d.end_date ?? null,
+      notes: d.notes ?? null,
+      updated_at: d.updated_at ?? new Date().toISOString(),
+      // dba_details columns (nullable when no detail row exists yet)
+      detail_id: detail?.id ?? null,
+      detail_updated_at: detail?.updated_at ?? null,
+      dba_name: detail?.dba_name ?? d.service_name ?? null,
+      jurisdiction: detail?.jurisdiction ?? null,
+      filed_date: detail?.filed_date ?? null,
+      registration_number: detail?.registration_number ?? null,
+      renewal_date: detail?.renewal_date ?? null,
+      renewal_period: detail?.renewal_period ?? null,
+      filing_fee: detail?.filing_fee ?? null,
+      detail_notes: detail?.notes ?? null,
+    }
+  })
 
   // Fetch pipeline_stages for every service_type present, in one query.
   // The stepper renders the current → next progression from this set.
