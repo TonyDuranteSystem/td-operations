@@ -1562,14 +1562,15 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
         )}
       </div>
 
-      {/* DBA — minimal listing of any DBA service deliveries on this account.
-          Full DBA management UI is future work; this section just surfaces
-          existing rows so they're discoverable from Overview. */}
-      {dbaServiceDeliveries.length > 0 && (
-        <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
-          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-            DBA ({dbaServiceDeliveries.length})
-          </h3>
+      {/* DBA / Trade Names — always visible. Shows existing DBA service
+          deliveries when present, or an empty-state message otherwise. */}
+      <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+          DBA / Trade Names{dbaServiceDeliveries.length > 0 ? ` (${dbaServiceDeliveries.length})` : ''}
+        </h3>
+        {dbaServiceDeliveries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No DBA registrations</p>
+        ) : (
           <div className="space-y-2">
             {dbaServiceDeliveries.map(d => (
               <div key={d.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">
@@ -1589,8 +1590,8 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Deals */}
       {deals.length > 0 && (
