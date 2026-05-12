@@ -25,6 +25,7 @@ import {
   rule23_missingTaxReturnRow,
   rule24_incompleteCompanyDetails,
   rule25_onboardingDetection,
+  rule26_taxReturnStageVsPayments,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -1729,7 +1730,7 @@ describe("rule24_incompleteCompanyDetails", () => {
 // ── R25: ONBOARDING DETECTION ──────────────────────────────────────────────
 
 describe("rule25_onboardingDetection", () => {
-  it("flags first payment > 12 months after formation_date as INFO", () => {
+  it("flags first payment > 6 months after formation_date as INFO", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2022-01-01" }),
       payments: [
@@ -1741,6 +1742,18 @@ describe("rule25_onboardingDetection", () => {
     expect(findings[0].severity).toBe("info")
     expect(findings[0].description).toContain("likely an onboarding client")
     expect(findings[0].description).toContain("client_since")
+    expect(findings[0].expected_value).toContain("6 months")
+  })
+
+  it("flags first payment between 6 and 12 months after formation (new threshold)", () => {
+    // Gap of ~8 months — would NOT have flagged at the old 12-month threshold.
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2025-01-01" }),
+      payments: [
+        { id: "p1", description: "Onboarding fee", status: "Paid", amount: 1000, paid_date: "2025-09-15", created_at: "2025-09-15T00:00:00Z" },
+      ],
+    })
+    expect(rule25_onboardingDetection(ctx)).toHaveLength(1)
   })
 
   it("uses paid_date when present, falls back to created_at otherwise", () => {
@@ -1761,11 +1774,11 @@ describe("rule25_onboardingDetection", () => {
         { id: "p2", description: "Renewal", status: "Paid", amount: 1000, paid_date: "2025-01-01", created_at: "2025-01-01T00:00:00Z" },
       ],
     })
-    // First payment was within 12 months of formation → no finding.
+    // First payment was within 6 months of formation → no finding.
     expect(rule25_onboardingDetection(ctx)).toEqual([])
   })
 
-  it("does NOT flag when first payment is within 12 months of formation", () => {
+  it("does NOT flag when first payment is within 6 months of formation", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2025-01-01" }),
       payments: [
@@ -1799,6 +1812,120 @@ describe("rule25_onboardingDetection", () => {
       ],
     })
     expect(rule25_onboardingDetection(ctx)).toEqual([])
+  })
+})
+
+// ── R26: TAX RETURN SD STAGE VS PAYMENT CONTEXT ────────────────────────────
+
+describe("rule26_taxReturnStageVsPayments", () => {
+  it("flags Tax Return SD at '1st Installment Paid' when no installment payment exists", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "1st Installment Paid",
+          stage_order: 10, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Onboarding fee", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+        { id: "p2", description: "Setup", status: "Paid", amount: 200, paid_date: "2026-01-20", created_at: "2026-01-20T00:00:00Z" },
+      ],
+    })
+    const findings = rule26_taxReturnStageVsPayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].rule_id).toBe("R26")
+    expect(findings[0].description).toContain("setup/onboarding fee")
+  })
+
+  it("does NOT flag when an installment payment exists (case-insensitive match)", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "1st Installment Paid",
+          stage_order: 10, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "1st INSTALLMENT", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when no Tax Return SD exists", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Company Formation", status: "in_progress", stage: "1st Installment Paid",
+          stage_order: 10, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Onboarding", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when Tax Return SD is at a different stage", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Data Received",
+          stage_order: 20, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Onboarding", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when Tax Return SD is cancelled", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "cancelled", stage: "1st Installment Paid",
+          stage_order: 10, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Onboarding", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("flags when payments list is empty (SD claims 1st Installment Paid with zero payment rows on file)", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "1st Installment Paid",
+          stage_order: 10, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [],
+    })
+    const findings = rule26_taxReturnStageVsPayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R26")
+  })
+
+  it("matches 'Installment' anywhere in description (e.g. 'Tax Return 2nd installment')", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "1st Installment Paid",
+          stage_order: 10, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Tax Return 2nd installment for 2025", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
   })
 })
 

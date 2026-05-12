@@ -1311,11 +1311,13 @@ export function rule24_incompleteCompanyDetails(ctx: HealthContext): Finding[] {
 //
 // Learned from MFCompany: when a company was formed long before TD started
 // managing it, the formation_date column reflects a historical event, not
-// when TD's relationship began. If the first payment is more than 12 months
+// when TD's relationship began. If the first payment is more than 6 months
 // after formation, this is almost certainly an onboarding client (not a
 // formation client) — and the absence of a separate client_since-style date
 // hides that fact. Info-severity nudge so staff can capture the relationship
 // start date explicitly.
+
+const ONBOARDING_GAP_DAYS = 182
 
 export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
   const a = ctx.account
@@ -1336,7 +1338,7 @@ export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
   if (firstPaymentMs === null) return []
 
   const gapDays = (firstPaymentMs - formationMs) / (1000 * 60 * 60 * 24)
-  if (gapDays <= 365) return []
+  if (gapDays <= ONBOARDING_GAP_DAYS) return []
 
   const firstPaymentISO = new Date(firstPaymentMs).toISOString().slice(0, 10)
   return [{
@@ -1345,7 +1347,45 @@ export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
     severity: "info",
     description: `Company formed ${a.formation_date} but first payment ${firstPaymentISO} — likely an onboarding client, not a formation. Consider adding client_since date.`,
     current_value: `formation_date=${a.formation_date}, first_payment=${firstPaymentISO}, gap=${Math.round(gapDays)}d`,
-    expected_value: "first payment within 12 months of formation (or capture client_since)",
+    expected_value: "first payment within 6 months of formation (or capture client_since)",
+  }]
+}
+
+// ── Rule 26: TAX RETURN SD STAGE VS PAYMENT CONTEXT ────────────────────────
+//
+// The Tax Return SD pipeline starts at stage "1st Installment Paid" — the
+// stage name asserts a billing fact (an installment was received). When the
+// account's payments contain no row whose description matches "installment"
+// (case-insensitive), the SD's stage is lying: most likely the client paid
+// a setup/onboarding fee that bumped the SD to this stage by accident, or
+// the SD was advanced manually without a matching payment row. Either way,
+// downstream automations that key off the SD stage (renewal billing,
+// installment scheduling, year-end reconciliation) will misfire. Warning
+// severity — the data is internally inconsistent but the client experience
+// is not broken yet.
+
+export function rule26_taxReturnStageVsPayments(ctx: HealthContext): Finding[] {
+  const trSD = ctx.service_deliveries.find(
+    sd =>
+      sd.service_type === "Tax Return" &&
+      (sd.status || "").toLowerCase() !== "cancelled" &&
+      (sd.stage || "").trim() === "1st Installment Paid",
+  )
+  if (!trSD) return []
+
+  const hasInstallmentPayment = ctx.payments.some(p =>
+    (p.description || "").toLowerCase().includes("installment"),
+  )
+  if (hasInstallmentPayment) return []
+
+  return [{
+    rule_id: "R26",
+    rule_title: "Tax Return SD stage vs payment context",
+    severity: "warning",
+    description:
+      "Tax Return SD at '1st Installment Paid' but no installment payment found — client may have paid a setup/onboarding fee instead. SD stage name doesn't match payment reality.",
+    current_value: `tax_return_sd=${trSD.id}, stage="1st Installment Paid", installment_payments=0`,
+    expected_value: ">= 1 payment with description matching /installment/i",
   }]
 }
 
@@ -1377,6 +1417,7 @@ export const RULE_FUNCTIONS = [
   rule23_missingTaxReturnRow,
   rule24_incompleteCompanyDetails,
   rule25_onboardingDetection,
+  rule26_taxReturnStageVsPayments,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
