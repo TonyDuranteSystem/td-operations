@@ -4,6 +4,9 @@
  * DO NOT EDIT — regenerate with: npx tsx scripts/gen-check-types.ts
  */
 
+/** accounts.member_structure — CHECK constraint */
+export type AccountsMemberStructure = "single_member" | "multi_member"
+
 /** accounts.portal_tier — CHECK constraint */
 export type AccountsPortalTier = "lead" | "formation" | "onboarding" | "active" | "suspended" | "inactive"
 
@@ -51,3 +54,6 @@ export type PortalAnnouncementsType = "info" | "warning" | "success"
 
 /** portal_messages.sender_context — CHECK constraint */
 export type PortalMessagesSenderContext = "person" | "company"
+
+/** service_catalog.default_service_context — CHECK constraint */
+export type ServiceCatalogDefaultServiceContext = "individual" | "business" | "ask"
