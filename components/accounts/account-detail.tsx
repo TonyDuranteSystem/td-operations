@@ -190,6 +190,19 @@ interface AccountDetailProps {
   }>
   stepperDeliveries?: ServiceDeliveryForStepper[]
   stagesByServiceType?: Record<string, PipelineStage[]>
+  // DBA service deliveries for this account. Full DBA management UI is future
+  // work; for now we just list any rows so they're discoverable on the
+  // Overview tab. Empty array when there are none (or when no DBA was ever
+  // bundled for this account).
+  dbaServiceDeliveries?: Array<{
+    id: string
+    service_name: string | null
+    stage: string | null
+    status: string | null
+    start_date: string | null
+    end_date: string | null
+    notes: string | null
+  }>
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -473,7 +486,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {} }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [] }: AccountDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
   const [showOADialog, setShowOADialog] = useState(false)
@@ -757,7 +770,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'overview' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} />
       )}
       {activeTab === 'services' && (
         <ServiziTab services={services} today={today} accountId={account.id} />
@@ -1358,7 +1371,7 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [] }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -1428,6 +1441,8 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Users} label="Member Structure" value={account.member_structure ?? ''} type="select" options={[{ label: 'Single Member', value: 'single_member' }, { label: 'Multi Member', value: 'multi_member' }]} onSave={makeAccountSaver('member_structure')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
+          <EditableField icon={Calendar} label="Client Since" value={account.client_since ?? ''} type="date" onSave={makeAccountSaver('client_since')} />
+          <EditableField icon={Calendar} label="RA Switch Date" value={account.ra_switch_date ?? ''} type="date" onSave={makeAccountSaver('ra_switch_date')} />
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
           <EditableField icon={Mail} label="Business Email" value={account.communication_email ?? ''} onSave={makeAccountSaver('communication_email')} />
           <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
@@ -1546,6 +1561,36 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <p className="text-sm text-muted-foreground">No notes</p>
         )}
       </div>
+
+      {/* DBA — minimal listing of any DBA service deliveries on this account.
+          Full DBA management UI is future work; this section just surfaces
+          existing rows so they're discoverable from Overview. */}
+      {dbaServiceDeliveries.length > 0 && (
+        <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+            DBA ({dbaServiceDeliveries.length})
+          </h3>
+          <div className="space-y-2">
+            {dbaServiceDeliveries.map(d => (
+              <div key={d.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">
+                <div>
+                  <p className="font-medium">{d.service_name ?? 'DBA'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {[d.stage, d.status].filter(Boolean).join(' · ') || '—'}
+                  </p>
+                  {d.notes && (
+                    <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{d.notes}</p>
+                  )}
+                </div>
+                <div className="text-right text-xs text-muted-foreground">
+                  {d.start_date && <p>Start {formatDate(d.start_date)}</p>}
+                  {d.end_date && <p>End {formatDate(d.end_date)}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Deals */}
       {deals.length > 0 && (

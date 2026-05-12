@@ -330,6 +330,25 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       contact_id: sd.contact_id ?? null,
     }))
 
+  // DBA service deliveries (full set, including cancelled — surfaces history
+  // even after a DBA is closed). Service type catalog uses literal 'DBA' for
+  // doing-business-as filings. Full DBA UI is future work.
+  const { data: dbaRows } = await supabaseAdmin
+    .from('service_deliveries')
+    .select('id, service_name, stage, status, start_date, end_date, notes')
+    .eq('account_id', params.id)
+    .eq('service_type', 'DBA')
+    .order('updated_at', { ascending: false })
+  const dbaServiceDeliveries = (dbaRows ?? []) as Array<{
+    id: string
+    service_name: string | null
+    stage: string | null
+    status: string | null
+    start_date: string | null
+    end_date: string | null
+    notes: string | null
+  }>
+
   // Fetch pipeline_stages for every service_type present, in one query.
   // The stepper renders the current → next progression from this set.
   const serviceTypesPresent = Array.from(
@@ -374,6 +393,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         ss4ServiceDeliveries={ss4ServiceDeliveries}
         stepperDeliveries={stepperDeliveries}
         stagesByServiceType={stagesByServiceType}
+        dbaServiceDeliveries={dbaServiceDeliveries}
       />
     </div>
   )

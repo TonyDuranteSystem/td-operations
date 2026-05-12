@@ -19,7 +19,7 @@ export async function updateAccountField(
   const allowedFields = [
     'company_name', 'entity_type', 'member_structure', 'account_type', 'status', 'ein_number', 'filing_id',
     'state_of_formation', 'formation_date', 'physical_address',
-    'registered_agent_provider', 'ra_renewal_date', 'notes',
+    'registered_agent_provider', 'ra_renewal_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
     'communication_email',
@@ -106,6 +106,35 @@ export async function updateAccountField(
   }
 
   return result
+}
+
+// Dedicated bulk-update helper for the lifecycle date pair (client_since +
+// ra_switch_date). Single round-trip when both are edited together (e.g. from
+// a future form). Inline edits continue to go through updateAccountField.
+export async function updateAccountDates(
+  accountId: string,
+  dates: { client_since?: string | null; ra_switch_date?: string | null },
+  updatedAt: string,
+): Promise<ActionResult> {
+  const patch: Record<string, string | null> = {}
+  if (Object.prototype.hasOwnProperty.call(dates, 'client_since')) {
+    patch.client_since = dates.client_since || null
+  }
+  if (Object.prototype.hasOwnProperty.call(dates, 'ra_switch_date')) {
+    patch.ra_switch_date = dates.ra_switch_date || null
+  }
+  if (Object.keys(patch).length === 0) {
+    return { success: false, error: 'No date fields supplied' }
+  }
+
+  return safeAction(async () => {
+    const writeResult = await updateWithLock('accounts', accountId, patch, updatedAt)
+    if (!writeResult.success) throw new Error(writeResult.error)
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'update', table_name: 'accounts', record_id: accountId,
+    summary: 'Account lifecycle dates updated', details: patch,
+  })
 }
 
 export async function updateContactField(

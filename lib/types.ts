@@ -84,6 +84,11 @@ export interface Account {
   physical_address: string | null
   registered_agent_provider: string | null
   ra_renewal_date: string | null
+  // Optional: columns exist in sandbox but may be absent in production until
+  // the migration ships. Access yields `undefined` when the column is missing;
+  // the `?` keeps callers safe via `??` fallback.
+  client_since?: string | null
+  ra_switch_date?: string | null
   portal_account: boolean | null
   portal_created_date: string | null
   services_bundle: string[] | null
