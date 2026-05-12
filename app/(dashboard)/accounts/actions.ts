@@ -8,6 +8,7 @@ import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/acco
 import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
+import { createSD } from '@/lib/operations/service-delivery'
 import type { Json } from '@/lib/database.types'
 
 export async function updateAccountField(
@@ -830,4 +831,68 @@ export async function changeAccountStatus(
     cascadesApplied,
     cascadesFailed,
   }
+}
+
+// ── DBA Creation ───────────────────────────────────────────────────
+// Creates a DBA service delivery + dba_details row from the account detail
+// page. The SD is the parent (pipeline lives there: Data Collection → ... →
+// Registered → Renewal Due); dba_details carries the registration-specific
+// fields (name, jurisdiction, registration_number, etc.) keyed by delivery_id.
+// Service name on the SD is set to the DBA name so it surfaces in the
+// stepper and account-wide service lists without an extra join.
+
+export interface CreateDBAInput {
+  dba_name: string
+  jurisdiction: string
+  notes?: string | null
+}
+
+export async function createDBA(
+  accountId: string,
+  input: CreateDBAInput,
+): Promise<ActionResult<{ id: string }>> {
+  const dba_name = input.dba_name?.trim()
+  const jurisdiction = input.jurisdiction?.trim()
+  const notes = input.notes?.trim() || null
+
+  if (!dba_name) return { success: false, error: 'DBA name is required' }
+  if (!jurisdiction) return { success: false, error: 'Jurisdiction is required' }
+
+  return safeAction(async () => {
+    const sd = await createSD({
+      service_type: 'DBA',
+      service_name: dba_name,
+      account_id: accountId,
+      notes,
+    })
+
+    // dba_details is not yet in the generated DB types — cast once here so the
+    // insert call typechecks. Drop the cast when types are regenerated.
+    const untyped = supabaseAdmin as unknown as {
+      from: (table: string) => {
+        insert: (row: Record<string, unknown>) => Promise<{ error: { message: string } | null }>
+      }
+    }
+    const { error: detailsErr } = await untyped
+      .from('dba_details')
+      .insert({
+        delivery_id: sd.id,
+        dba_name,
+        jurisdiction,
+        notes,
+      })
+
+    if (detailsErr) {
+      throw new Error(`SD created (${sd.id}) but dba_details insert failed: ${detailsErr.message}`)
+    }
+
+    revalidatePath(`/accounts/${accountId}`)
+    return { id: sd.id }
+  }, {
+    action_type: 'create',
+    table_name: 'service_deliveries',
+    account_id: accountId,
+    summary: `Created DBA: ${dba_name} (${jurisdiction})`,
+    details: { dba_name, jurisdiction, notes },
+  })
 }

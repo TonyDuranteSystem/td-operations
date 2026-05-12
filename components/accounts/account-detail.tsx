@@ -21,7 +21,7 @@ import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from './service-deliveries-section'
-import type { PipelineStage } from './sd-pipeline-stepper'
+import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
@@ -30,7 +30,7 @@ import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
@@ -190,18 +190,23 @@ interface AccountDetailProps {
   }>
   stepperDeliveries?: ServiceDeliveryForStepper[]
   stagesByServiceType?: Record<string, PipelineStage[]>
-  // DBA service deliveries for this account. Full DBA management UI is future
-  // work; for now we just list any rows so they're discoverable on the
-  // Overview tab. Empty array when there are none (or when no DBA was ever
-  // bundled for this account).
+  // DBA service deliveries for this account. Joined with dba_details so the
+  // registration-specific fields (dba_name, jurisdiction) render alongside
+  // the pipeline stage. stage_order + updated_at carry the optimistic-lock
+  // payload that the SdPipelineStepper needs to advance the stage.
   dbaServiceDeliveries?: Array<{
     id: string
     service_name: string | null
     stage: string | null
+    stage_order: number | null
     status: string | null
     start_date: string | null
     end_date: string | null
     notes: string | null
+    updated_at: string
+    dba_name: string | null
+    jurisdiction: string | null
+    registration_number: string | null
   }>
 }
 
@@ -770,7 +775,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'overview' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
       )}
       {activeTab === 'services' && (
         <ServiziTab services={services} today={today} accountId={account.id} />
@@ -969,6 +974,177 @@ type CrmMember = {
   representative_address_state: string | null
   representative_address_zip: string | null
   representative_address_country: string | null
+}
+
+function DBASection({
+  accountId,
+  dbaServiceDeliveries,
+  dbaStages,
+}: {
+  accountId: string
+  dbaServiceDeliveries: NonNullable<AccountDetailProps['dbaServiceDeliveries']>
+  dbaStages: PipelineStage[]
+}) {
+  const router = useRouter()
+  const [showForm, setShowForm] = useState(false)
+  const [dbaName, setDbaName] = useState('')
+  const [jurisdiction, setJurisdiction] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const handleAdd = async () => {
+    const name = dbaName.trim()
+    const juris = jurisdiction.trim()
+    if (!name || !juris) {
+      toast.error('DBA name and jurisdiction are required')
+      return
+    }
+    setSaving(true)
+    const result = await createDBA(accountId, {
+      dba_name: name,
+      jurisdiction: juris,
+      notes: notes.trim() || null,
+    })
+    setSaving(false)
+    if (result.success) {
+      toast.success('DBA created')
+      setDbaName('')
+      setJurisdiction('')
+      setNotes('')
+      setShowForm(false)
+      router.refresh()
+    } else {
+      toast.error(result.error ?? 'Failed to create DBA')
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+          DBA / Trade Names{dbaServiceDeliveries.length > 0 ? ` (${dbaServiceDeliveries.length})` : ''}
+        </h3>
+        {!showForm && (
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-zinc-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add DBA
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div className="border border-zinc-200 rounded-md p-3 space-y-2 bg-zinc-50/40">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">DBA Name *</label>
+              <input
+                type="text"
+                value={dbaName}
+                onChange={e => setDbaName(e.target.value)}
+                placeholder="e.g. Acme Trading Co."
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">State / Jurisdiction *</label>
+              <input
+                type="text"
+                value={jurisdiction}
+                onChange={e => setJurisdiction(e.target.value)}
+                placeholder="e.g. New York"
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Notes</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Optional"
+              className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={saving}
+            />
+          </div>
+          <div className="flex gap-2 justify-end pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setShowForm(false)
+                setDbaName('')
+                setJurisdiction('')
+                setNotes('')
+              }}
+              disabled={saving}
+              className="px-3 py-1.5 text-sm rounded-md border hover:bg-zinc-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleAdd}
+              disabled={saving || !dbaName.trim() || !jurisdiction.trim()}
+              className="px-3 py-1.5 text-sm rounded-md bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {saving ? 'Creating…' : 'Create DBA'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {dbaServiceDeliveries.length === 0 ? (
+        !showForm && <p className="text-sm text-muted-foreground">No DBA registrations</p>
+      ) : (
+        <div className="space-y-3">
+          {dbaServiceDeliveries.map(d => {
+            const displayName = d.dba_name ?? d.service_name ?? 'DBA'
+            const isActive = d.status !== 'completed' && d.status !== 'cancelled'
+            return (
+              <div key={d.id} className="border border-zinc-100 rounded-md p-3 bg-zinc-50/40">
+                <div className="flex items-baseline justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{displayName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {[d.jurisdiction, d.registration_number].filter(Boolean).join(' · ') || '—'}
+                    </p>
+                  </div>
+                  <div className="text-right text-xs text-muted-foreground shrink-0">
+                    {d.start_date && <p>Start {formatDate(d.start_date)}</p>}
+                    {d.end_date && <p>End {formatDate(d.end_date)}</p>}
+                  </div>
+                </div>
+                {isActive && dbaStages.length > 0 ? (
+                  <SdPipelineStepper
+                    deliveryId={d.id}
+                    serviceType="DBA"
+                    serviceName={displayName}
+                    currentStage={d.stage}
+                    status={d.status ?? 'active'}
+                    updatedAt={d.updated_at}
+                    stages={dbaStages}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {[d.stage, d.status].filter(Boolean).join(' · ') || '—'}
+                  </p>
+                )}
+                {d.notes && (
+                  <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap">{d.notes}</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function MembersSection({ accountId, accountCompanyName }: { accountId: string; accountCompanyName: string }) {
@@ -1371,7 +1547,7 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [] }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {} }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -1563,35 +1739,13 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
       </div>
 
       {/* DBA / Trade Names — always visible. Shows existing DBA service
-          deliveries when present, or an empty-state message otherwise. */}
-      <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
-          DBA / Trade Names{dbaServiceDeliveries.length > 0 ? ` (${dbaServiceDeliveries.length})` : ''}
-        </h3>
-        {dbaServiceDeliveries.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No DBA registrations</p>
-        ) : (
-          <div className="space-y-2">
-            {dbaServiceDeliveries.map(d => (
-              <div key={d.id} className="flex items-center justify-between py-2 border-b last:border-b-0 text-sm">
-                <div>
-                  <p className="font-medium">{d.service_name ?? 'DBA'}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {[d.stage, d.status].filter(Boolean).join(' · ') || '—'}
-                  </p>
-                  {d.notes && (
-                    <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{d.notes}</p>
-                  )}
-                </div>
-                <div className="text-right text-xs text-muted-foreground">
-                  {d.start_date && <p>Start {formatDate(d.start_date)}</p>}
-                  {d.end_date && <p>End {formatDate(d.end_date)}</p>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+          deliveries when present, with the pipeline stepper inline so the
+          stage can be advanced from the Overview tab. */}
+      <DBASection
+        accountId={account.id}
+        dbaServiceDeliveries={dbaServiceDeliveries}
+        dbaStages={stagesByServiceType['DBA'] ?? []}
+      />
 
       {/* Deals */}
       {deals.length > 0 && (

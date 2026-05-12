@@ -332,22 +332,54 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   // DBA service deliveries (full set, including cancelled — surfaces history
   // even after a DBA is closed). Service type catalog uses literal 'DBA' for
-  // doing-business-as filings. Full DBA UI is future work.
+  // doing-business-as filings. We carry stage_order + updated_at so the
+  // SdPipelineStepper can be rendered inline per DBA, and join dba_details
+  // for the registration-specific fields (jurisdiction, dba_name) keyed by
+  // delivery_id.
   const { data: dbaRows } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_name, stage, status, start_date, end_date, notes')
+    .select('id, service_name, stage, stage_order, status, start_date, end_date, notes, updated_at')
     .eq('account_id', params.id)
     .eq('service_type', 'DBA')
     .order('updated_at', { ascending: false })
-  const dbaServiceDeliveries = (dbaRows ?? []) as Array<{
-    id: string
-    service_name: string | null
-    stage: string | null
-    status: string | null
-    start_date: string | null
-    end_date: string | null
-    notes: string | null
-  }>
+  const dbaSDIds = (dbaRows ?? []).map(d => d.id)
+  let dbaDetailsById: Record<string, { dba_name: string; jurisdiction: string; registration_number: string | null }> = {}
+  if (dbaSDIds.length > 0) {
+    // dba_details is not yet in the generated DB types — cast once here so the
+    // call typechecks without leaking `any` into the result rows.
+    const untyped = supabaseAdmin as unknown as {
+      from: (table: string) => {
+        select: (sel: string) => {
+          in: (col: string, vals: string[]) => Promise<{ data: Array<{ delivery_id: string; dba_name: string; jurisdiction: string; registration_number: string | null }> | null }>
+        }
+      }
+    }
+    const { data: detailsRows } = await untyped
+      .from('dba_details')
+      .select('delivery_id, dba_name, jurisdiction, registration_number')
+      .in('delivery_id', dbaSDIds)
+    dbaDetailsById = Object.fromEntries(
+      (detailsRows ?? []).map(r => [r.delivery_id, {
+        dba_name: r.dba_name,
+        jurisdiction: r.jurisdiction,
+        registration_number: r.registration_number,
+      }]),
+    )
+  }
+  const dbaServiceDeliveries = (dbaRows ?? []).map(d => ({
+    id: d.id,
+    service_name: d.service_name ?? null,
+    stage: d.stage ?? null,
+    stage_order: d.stage_order ?? null,
+    status: d.status ?? null,
+    start_date: d.start_date ?? null,
+    end_date: d.end_date ?? null,
+    notes: d.notes ?? null,
+    updated_at: d.updated_at ?? new Date().toISOString(),
+    dba_name: dbaDetailsById[d.id]?.dba_name ?? d.service_name ?? null,
+    jurisdiction: dbaDetailsById[d.id]?.jurisdiction ?? null,
+    registration_number: dbaDetailsById[d.id]?.registration_number ?? null,
+  }))
 
   // Fetch pipeline_stages for every service_type present, in one query.
   // The stepper renders the current → next progression from this set.
