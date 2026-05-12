@@ -12,6 +12,10 @@ import {
   rule10_taxReturnDualTracking,
   rule11_offerTypeConsistency,
   rule12_leadLinkage,
+  rule13_dbaTracking,
+  rule14_mmllcMemberCompleteness,
+  rule15_oaSignerCount,
+  rule16_closedAccountPortalAccess,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -27,6 +31,7 @@ function baseAccount(over: Partial<AccountRow> = {}): AccountRow {
     company_name: "Test LLC",
     account_type: "Client",
     status: "Active",
+    entity_type: null,
     ein_number: null,
     formation_date: null,
     state_of_formation: null,
@@ -50,6 +55,8 @@ function emptyCtx(over: Partial<HealthContext> = {}): HealthContext {
     tax_returns: [],
     most_recent_offer: null,
     leads: [],
+    members: [],
+    oa_agreements: [],
     has_renewal_offer: false,
     has_auth_user: false,
     ...over,
@@ -508,7 +515,7 @@ describe("rule8_documentsCompleteness", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
       ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
-      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "Operating Agreement" }],
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "Operating Agreement", file_name: "oa.pdf" }],
     })
     const findings = rule8_documentsCompleteness(ctx)
     expect(findings.some(f => f.description.includes("SS-4 PDF"))).toBe(true)
@@ -518,7 +525,7 @@ describe("rule8_documentsCompleteness", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
       ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
-      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "SS-4 Application" }],
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "SS-4 Application", file_name: "ss4.pdf" }],
     })
     const findings = rule8_documentsCompleteness(ctx)
     expect(findings.some(f => f.description.includes("SS-4 PDF"))).toBe(false)
@@ -534,7 +541,7 @@ describe("rule8_documentsCompleteness", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
       contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
-      documents: [{ id: "d1", account_id: null, contact_id: "c1", document_type_name: "Passport" }],
+      documents: [{ id: "d1", account_id: null, contact_id: "c1", document_type_name: "Passport", file_name: "passport.pdf" }],
     })
     const findings = rule8_documentsCompleteness(ctx)
     expect(findings.some(f => f.description.includes("zero documents"))).toBe(false)
@@ -769,6 +776,247 @@ describe("rule12_leadLinkage", () => {
   })
 })
 
+// ── R13: DBA TRACKING ──────────────────────────────────────────────────────
+
+describe("rule13_dbaTracking", () => {
+  it("flags document with 'DBA' in document_type_name", () => {
+    const ctx = emptyCtx({
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "DBA Filing", file_name: "dba.pdf" }],
+    })
+    const findings = rule13_dbaTracking(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("no DBA tracking")
+  })
+
+  it("flags document with 'Trade Name' in file_name", () => {
+    const ctx = emptyCtx({
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "Other", file_name: "Trade Name Certificate.pdf" }],
+    })
+    const findings = rule13_dbaTracking(ctx)
+    expect(findings).toHaveLength(1)
+  })
+
+  it("flags document with 'Fictitious Name' (case-insensitive)", () => {
+    const ctx = emptyCtx({
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "fictitious name registration", file_name: "f.pdf" }],
+    })
+    expect(rule13_dbaTracking(ctx)).toHaveLength(1)
+  })
+
+  it("considers contact-linked docs alongside account-linked", () => {
+    const ctx = emptyCtx({
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      documents: [{ id: "d1", account_id: null, contact_id: "c1", document_type_name: "DBA", file_name: "dba.pdf" }],
+    })
+    expect(rule13_dbaTracking(ctx)).toHaveLength(1)
+  })
+
+  it("does NOT flag when no document matches DBA keywords", () => {
+    const ctx = emptyCtx({
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "Operating Agreement", file_name: "oa.pdf" }],
+    })
+    expect(rule13_dbaTracking(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when no documents exist", () => {
+    expect(rule13_dbaTracking(emptyCtx())).toEqual([])
+  })
+})
+
+// ── R14: MMLLC MEMBER COMPLETENESS ─────────────────────────────────────────
+
+describe("rule14_mmllcMemberCompleteness", () => {
+  it("does NOT fire for non-MMLLC accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Single Member LLC" }),
+      members: [],
+    })
+    expect(rule14_mmllcMemberCompleteness(ctx)).toEqual([])
+  })
+
+  it("flags MMLLC with fewer than 2 members", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 100, contact_id: "c1" },
+      ],
+    })
+    const findings = rule14_mmllcMemberCompleteness(ctx)
+    expect(findings.some(f => f.description.includes("fewer than 2 members"))).toBe(true)
+  })
+
+  it("flags MMLLC with no primary member", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "individual", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    const findings = rule14_mmllcMemberCompleteness(ctx)
+    expect(findings.some(f => f.description.includes("no primary member"))).toBe(true)
+  })
+
+  it("flags MMLLC with a company member missing representative_name", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "company", full_name: "Acme Holdings", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    const findings = rule14_mmllcMemberCompleteness(ctx)
+    expect(findings.some(f => f.description.includes("missing representative_name"))).toBe(true)
+  })
+
+  it("flags MMLLC member missing contact_id", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "individual", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: null },
+      ],
+    })
+    const findings = rule14_mmllcMemberCompleteness(ctx)
+    expect(findings.some(f => f.description.includes("not linked to a contact"))).toBe(true)
+  })
+
+  it("emits no findings for a complete MMLLC", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "company", full_name: "Acme Holdings", representative_name: "Bob Smith", is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    expect(rule14_mmllcMemberCompleteness(ctx)).toEqual([])
+  })
+})
+
+// ── R15: OA SIGNER COUNT ───────────────────────────────────────────────────
+
+describe("rule15_oaSignerCount", () => {
+  it("does NOT fire for non-MMLLC accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Single Member LLC" }),
+      oa_agreements: [{ id: "oa1", total_signers: 1, status: "signed" }],
+      members: [
+        { member_type: "individual", full_name: "Solo", representative_name: null, is_primary: true, ownership_pct: 100, contact_id: "c1" },
+      ],
+    })
+    expect(rule15_oaSignerCount(ctx)).toEqual([])
+  })
+
+  it("flags OA total_signers < member count", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      oa_agreements: [{ id: "oa1", total_signers: 1, status: "signed" }],
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "individual", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    const findings = rule15_oaSignerCount(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("OA may need to be regenerated")
+  })
+
+  it("does NOT flag when total_signers equals member count", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      oa_agreements: [{ id: "oa1", total_signers: 2, status: "signed" }],
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "individual", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    expect(rule15_oaSignerCount(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when total_signers is null (unknown)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      oa_agreements: [{ id: "oa1", total_signers: null, status: "draft" }],
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "individual", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    expect(rule15_oaSignerCount(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when no OA exists", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "individual", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c1" },
+        { member_type: "individual", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c2" },
+      ],
+    })
+    expect(rule15_oaSignerCount(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when members list is empty (R14 covers this)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      oa_agreements: [{ id: "oa1", total_signers: 0, status: "draft" }],
+      members: [],
+    })
+    expect(rule15_oaSignerCount(ctx)).toEqual([])
+  })
+})
+
+// ── R16: CLOSED ACCOUNT PORTAL ACCESS ──────────────────────────────────────
+
+describe("rule16_closedAccountPortalAccess", () => {
+  it("flags Cancelled account with portal_tier set as error", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Cancelled", portal_tier: "active" }),
+    })
+    const findings = rule16_closedAccountPortalAccess(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("error")
+    expect(findings[0].description).toContain("security issue")
+  })
+
+  it("flags Closed account with portal_tier", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Closed", portal_tier: "onboarding" }),
+    })
+    expect(rule16_closedAccountPortalAccess(ctx)).toHaveLength(1)
+  })
+
+  it("flags Suspended account with portal_tier", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Suspended", portal_tier: "lead" }),
+    })
+    expect(rule16_closedAccountPortalAccess(ctx)).toHaveLength(1)
+  })
+
+  it("flags Offboarding account with portal_tier", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Offboarding", portal_tier: "formation" }),
+    })
+    expect(rule16_closedAccountPortalAccess(ctx)).toHaveLength(1)
+  })
+
+  it("does NOT flag Cancelled account with portal_tier=null", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Cancelled", portal_tier: null }),
+    })
+    expect(rule16_closedAccountPortalAccess(ctx)).toEqual([])
+  })
+
+  it("does NOT flag Active account even with portal_tier set", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Active", portal_tier: "active" }),
+    })
+    expect(rule16_closedAccountPortalAccess(ctx)).toEqual([])
+  })
+})
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 describe("runRules", () => {
@@ -793,7 +1041,7 @@ describe("runRules", () => {
       ],
       ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
       documents: [
-        { id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "SS-4 Application" },
+        { id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "SS-4 Application", file_name: "ss4.pdf" },
       ],
       has_auth_user: true,
       most_recent_offer: { contract_type: "formation" },

@@ -50,6 +50,7 @@ export interface AccountRow {
   company_name: string | null
   account_type: string | null
   status: string | null
+  entity_type: string | null
   ein_number: string | null
   formation_date: string | null
   state_of_formation: string | null
@@ -104,6 +105,22 @@ export interface DocumentRow {
   account_id: string | null
   contact_id: string | null
   document_type_name: string | null
+  file_name: string | null
+}
+
+export interface MemberRow {
+  member_type: string
+  full_name: string | null
+  representative_name: string | null
+  is_primary: boolean | null
+  ownership_pct: number | null
+  contact_id: string | null
+}
+
+export interface OARow {
+  id: string
+  total_signers: number | null
+  status: string | null
 }
 
 export interface TaxReturnRow {
@@ -127,6 +144,10 @@ export interface HealthContext {
   most_recent_offer: OfferRow | null
   /** Leads linked to any contact on this account by email match. */
   leads: LeadRow[]
+  /** Members rows linked to this account (populated for MMLLCs). */
+  members: MemberRow[]
+  /** OA agreement rows linked to this account. */
+  oa_agreements: OARow[]
   /** True iff any offer on this account has contract_type='renewal'. */
   has_renewal_offer: boolean
   /** True iff at least one linked contact has an auth.users row. */
@@ -773,6 +794,169 @@ export function rule12_leadLinkage(ctx: HealthContext): Finding[] {
   return findings
 }
 
+// ── Rule 13: DBA TRACKING ──────────────────────────────────────────────────
+//
+// Learned from reviewing Everboost and Fiscalot: clients sometimes operate
+// under a DBA (Doing Business As) / Trade Name / Fictitious Name, but the
+// system has no first-class column for it. The signal we DO have is a
+// document filed under that label. Surfacing the document tells staff to
+// capture the DBA structurally somewhere.
+
+const DBA_KEYWORDS = ["dba", "trade name", "fictitious name"]
+
+function matchesDBA(value: string | null): boolean {
+  if (!value) return false
+  const v = value.toLowerCase()
+  return DBA_KEYWORDS.some(k => v.includes(k))
+}
+
+export function rule13_dbaTracking(ctx: HealthContext): Finding[] {
+  const a = ctx.account
+  const accountDocs = ctx.documents.filter(d => d.account_id === a.id)
+  const contactIds = new Set(ctx.contacts.map(c => c.id))
+  const contactDocs = ctx.documents.filter(d => d.contact_id && contactIds.has(d.contact_id))
+  const allDocs = [...accountDocs, ...contactDocs]
+
+  const dbaDoc = allDocs.find(d => matchesDBA(d.document_type_name) || matchesDBA(d.file_name))
+  if (!dbaDoc) return []
+
+  const label = dbaDoc.document_type_name || dbaDoc.file_name || "unknown"
+  return [{
+    rule_id: "R13",
+    rule_title: "DBA tracking",
+    severity: "info",
+    description: "DBA document found but no DBA tracking in the system.",
+    current_value: `document=${label}`,
+    expected_value: "first-class DBA field on account",
+  }]
+}
+
+// ── Rule 14: MMLLC MEMBER COMPLETENESS ─────────────────────────────────────
+//
+// Learned from reviewing B&P International and Azarexa: MMLLCs require
+// structured member rows for OA generation, signature collection, and
+// downstream filings. If the `members` table for the account is incomplete,
+// the member-info form should be sent so the client fills the gaps. The rule
+// only fires when `entity_type` indicates a multi-member entity.
+
+function isMultiMember(a: AccountRow): boolean {
+  return (a.entity_type || "").toLowerCase().includes("multi member")
+}
+
+export function rule14_mmllcMemberCompleteness(ctx: HealthContext): Finding[] {
+  if (!isMultiMember(ctx.account)) return []
+  const findings: Finding[] = []
+  const members = ctx.members
+
+  if (members.length < 2) {
+    findings.push({
+      rule_id: "R14",
+      rule_title: "MMLLC member completeness",
+      severity: "warning",
+      description: "MMLLC member info incomplete — member info form should be sent (fewer than 2 members on file).",
+      current_value: `members=${members.length}`,
+      expected_value: ">= 2",
+    })
+  }
+
+  if (members.length > 0 && !members.some(m => m.is_primary === true)) {
+    findings.push({
+      rule_id: "R14",
+      rule_title: "MMLLC member completeness",
+      severity: "warning",
+      description: "MMLLC member info incomplete — no primary member flagged (is_primary=true).",
+      current_value: "is_primary=true count=0",
+      expected_value: ">= 1 primary member",
+    })
+  }
+
+  for (const m of members) {
+    if (m.member_type === "company" && !m.representative_name) {
+      findings.push({
+        rule_id: "R14",
+        rule_title: "MMLLC member completeness",
+        severity: "warning",
+        description: `MMLLC member info incomplete — company-type member (${m.full_name ?? "unnamed"}) missing representative_name.`,
+        current_value: "representative_name=null",
+        expected_value: "non-null representative_name",
+      })
+    }
+  }
+
+  for (const m of members) {
+    if (!m.contact_id) {
+      findings.push({
+        rule_id: "R14",
+        rule_title: "MMLLC member completeness",
+        severity: "warning",
+        description: `MMLLC member info incomplete — member (${m.full_name ?? "unnamed"}) not linked to a contact (contact_id=null).`,
+        current_value: "contact_id=null",
+        expected_value: "linked contact row",
+      })
+    }
+  }
+
+  return findings
+}
+
+// ── Rule 15: OA SIGNER COUNT ───────────────────────────────────────────────
+//
+// Learned from reviewing B&P International and Azarexa: when an MMLLC has an
+// OA on file, the OA's `total_signers` should match the number of members in
+// the `members` table. A mismatch usually means the OA was generated before
+// all members were captured, so it needs to be regenerated to collect all
+// required signatures.
+
+export function rule15_oaSignerCount(ctx: HealthContext): Finding[] {
+  if (!isMultiMember(ctx.account)) return []
+  if (ctx.oa_agreements.length === 0) return []
+
+  const memberCount = ctx.members.length
+  if (memberCount === 0) return [] // R14 already covers "no members on MMLLC"
+
+  const findings: Finding[] = []
+  for (const oa of ctx.oa_agreements) {
+    if (oa.total_signers == null) continue
+    if (oa.total_signers < memberCount) {
+      findings.push({
+        rule_id: "R15",
+        rule_title: "OA signer count",
+        severity: "warning",
+        description: "OA total_signers doesn't match member count — OA may need to be regenerated.",
+        current_value: `oa.total_signers=${oa.total_signers}, members=${memberCount}`,
+        expected_value: `total_signers >= ${memberCount}`,
+      })
+    }
+  }
+  return findings
+}
+
+// ── Rule 16: CANCELLED/CLOSED PORTAL ACCESS ────────────────────────────────
+//
+// Learned from reviewing Amtor LLC: when an account has been cancelled or
+// closed, portal access should be revoked. Leaving `portal_tier` set on a
+// closed account means the former client could still log in and see data —
+// a security issue. Statuses that should trigger revocation: Cancelled,
+// Closed, Suspended, Offboarding (plus "Inactive" defensively, even though
+// it is not currently in the `account_status` enum).
+
+const CLOSED_STATUSES = new Set(["Cancelled", "Closed", "Inactive", "Suspended", "Offboarding"])
+
+export function rule16_closedAccountPortalAccess(ctx: HealthContext): Finding[] {
+  const a = ctx.account
+  if (!a.status || !CLOSED_STATUSES.has(a.status)) return []
+  const tier = (a.portal_tier || "").trim()
+  if (!tier) return []
+  return [{
+    rule_id: "R16",
+    rule_title: "Closed account portal access",
+    severity: "error",
+    description: "Cancelled/closed account still has portal access — security issue.",
+    current_value: `status=${a.status}, portal_tier=${tier}`,
+    expected_value: "portal_tier=null",
+  }]
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -788,6 +972,10 @@ export const RULE_FUNCTIONS = [
   rule10_taxReturnDualTracking,
   rule11_offerTypeConsistency,
   rule12_leadLinkage,
+  rule13_dbaTracking,
+  rule14_mmllcMemberCompleteness,
+  rule15_oaSignerCount,
+  rule16_closedAccountPortalAccess,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
@@ -825,7 +1013,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
   const { data: account, error: accountErr } = await supabaseAdmin
     .from("accounts")
     .select(
-      "id, company_name, account_type, status, ein_number, formation_date, state_of_formation, portal_tier, portal_account, ra_renewal_date, cmra_renewal_date, annual_report_due_date",
+      "id, company_name, account_type, status, entity_type, ein_number, formation_date, state_of_formation, portal_tier, portal_account, ra_renewal_date, cmra_renewal_date, annual_report_due_date",
     )
     .eq("id", accountId)
     .single()
@@ -849,7 +1037,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
 
   const contactEmails = contacts.map(c => c.email).filter((e): e is string => !!e)
 
-  const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult, leadsResult] = await Promise.all([
+  const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult, leadsResult, membersResult, oaResult] = await Promise.all([
     supabaseAdmin
       .from("service_deliveries")
       .select("id, service_type, status, stage, stage_order, account_id, contact_id, created_at")
@@ -864,7 +1052,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       .eq("account_id", accountId),
     supabaseAdmin
       .from("documents")
-      .select("id, account_id, contact_id, document_type_name")
+      .select("id, account_id, contact_id, document_type_name, file_name")
       .or(orClauses.join(",")),
     supabaseAdmin
       .from("tax_returns")
@@ -881,6 +1069,14 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
           .select("id, email, status, converted_to_contact_id, converted_to_account_id")
           .in("email", contactEmails)
       : Promise.resolve({ data: [] as LeadRow[] }),
+    supabaseAdmin
+      .from("members")
+      .select("member_type, full_name, representative_name, is_primary, ownership_pct, contact_id")
+      .eq("account_id", accountId),
+    supabaseAdmin
+      .from("oa_agreements")
+      .select("id, total_signers, status")
+      .eq("account_id", accountId),
   ])
 
   // Auth user check — only call findAuthUserByEmail if at least one contact
@@ -914,6 +1110,8 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
     tax_returns: (taxReturnsResult.data || []) as TaxReturnRow[],
     most_recent_offer: allOffers[0] || null,
     leads: (leadsResult.data || []) as LeadRow[],
+    members: (membersResult.data || []) as MemberRow[],
+    oa_agreements: (oaResult.data || []) as OARow[],
     has_renewal_offer: hasRenewalOffer,
     has_auth_user: hasAuthUser,
   }
