@@ -7159,13 +7159,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "offers_contact_id_fkey"
-            columns: ["contact_id"]
-            isOneToOne: false
-            referencedRelation: "contacts"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "offers_account_id_fkey"
             columns: ["account_id"]
             isOneToOne: false
@@ -7185,6 +7178,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_sla_monitor"
             referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "offers_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offers_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
           },
           {
             foreignKeyName: "offers_deal_id_fkey"
