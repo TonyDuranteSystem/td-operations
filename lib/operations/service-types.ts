@@ -33,6 +33,7 @@ export const VALID_SERVICE_TYPES = [
   "Public Notary",
   "Shipping",
   "Support",
+  "DBA",
 ] as const
 
 export type ValidServiceType = (typeof VALID_SERVICE_TYPES)[number]

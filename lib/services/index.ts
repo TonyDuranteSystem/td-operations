@@ -191,6 +191,7 @@ const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
   "Banking Physical": "banking_physical",
   "Client Onboarding": "client_onboarding",
   "Company Closure": "closure",
+  DBA: "dba",
 }
 
 /**
