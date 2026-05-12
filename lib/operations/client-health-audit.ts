@@ -137,6 +137,8 @@ export interface PaymentRow {
   id: string
   description: string | null
   status: string | null
+  amount: number | null
+  paid_date: string | null
   created_at: string | null
 }
 
@@ -1157,6 +1159,196 @@ export function rule20_entityTypeValidation(ctx: HealthContext): Finding[] {
   }]
 }
 
+// ── Rule 21: ZERO-AMOUNT / SAME-YEAR INSTALLMENT PAYMENTS ──────────────────
+//
+// Two checks on the payments table:
+//
+// 1. Same-year installment (ERROR). If the client's first payment is in the
+//    current year AND they have an installment-line payment dated this year
+//    with amount = 0, that's the wrong invoice — the setup fee covers year 1;
+//    installments start NEXT year. The zero-amount line is the symptom of the
+//    misfire: the installment schedule was seeded for the formation year by
+//    mistake.
+// 2. Generic $0 payment (WARNING). Any Paid payment with amount = 0 is
+//    suspicious — usually a data entry slip. Skipped when the same payment
+//    already triggered (1) so we don't double-flag.
+//
+// "First payment date" uses paid_date when present, falling back to created_at
+// — installments seeded but never paid don't have a paid_date and should not
+// suppress the same-year heuristic on the real first payment.
+
+function paymentYear(p: PaymentRow): number | null {
+  const ts = p.paid_date || p.created_at
+  if (!ts) return null
+  const y = new Date(ts).getUTCFullYear()
+  return Number.isFinite(y) ? y : null
+}
+
+export function rule21_zeroAmountInstallment(ctx: HealthContext, now: Date = new Date()): Finding[] {
+  if (ctx.payments.length === 0) return []
+  const thisYear = now.getUTCFullYear()
+
+  // Earliest payment year across all rows (paid or not).
+  const years = ctx.payments
+    .map(p => paymentYear(p))
+    .filter((y): y is number => y !== null)
+  if (years.length === 0) return []
+  const firstYear = Math.min(...years)
+
+  const findings: Finding[] = []
+  const sameYearInstallmentIds = new Set<string>()
+
+  if (firstYear === thisYear) {
+    for (const p of ctx.payments) {
+      if (p.amount !== 0) continue
+      const desc = (p.description || "").toLowerCase()
+      if (!desc.includes("installment")) continue
+      const py = paymentYear(p)
+      if (py !== thisYear) continue
+      sameYearInstallmentIds.add(p.id)
+      findings.push({
+        rule_id: "R21",
+        rule_title: "Zero-amount / same-year installment",
+        severity: "error",
+        description:
+          `Zero-amount installment for same year as onboarding — client's setup fee covers this year. Installments start next year.`,
+        current_value: `payment.id=${p.id}, amount=0, description="${p.description ?? ""}", year=${thisYear}`,
+        expected_value: `installments dated ${thisYear + 1} or later`,
+      })
+    }
+  }
+
+  for (const p of ctx.payments) {
+    if (p.amount !== 0) continue
+    if ((p.status || "").trim() !== "Paid") continue
+    if (sameYearInstallmentIds.has(p.id)) continue
+    findings.push({
+      rule_id: "R21",
+      rule_title: "Zero-amount / same-year installment",
+      severity: "warning",
+      description: "$0 payment exists — verify this is intentional.",
+      current_value: `payment.id=${p.id}, status=Paid, amount=0, description="${p.description ?? ""}"`,
+      expected_value: "amount > 0 or status != 'Paid'",
+    })
+  }
+
+  return findings
+}
+
+// ── Rule 22: ONE-TIME TIER VALIDATION ──────────────────────────────────────
+//
+// One-Time clients buy standalone services (ITIN, EIN, etc.). They should
+// have portal_tier = 'lead' (before pay) or 'active' (after delivery). The
+// 'formation' and 'onboarding' tiers are reserved for annual-management
+// clients going through company setup — never appropriate for One-Time.
+
+export function rule22_oneTimeTier(ctx: HealthContext): Finding[] {
+  const a = ctx.account
+  if (!isOneTime(a)) return []
+  const tier = (a.portal_tier || "").trim()
+  if (tier !== "formation" && tier !== "onboarding") return []
+  return [{
+    rule_id: "R22",
+    rule_title: "One-Time tier validation",
+    severity: "warning",
+    description: `One-Time client has tier '${tier}' — One-Time clients should not be in formation/onboarding tier.`,
+    current_value: `account_type=One-Time, portal_tier=${tier}`,
+    expected_value: "active | lead",
+  }]
+}
+
+// ── Rule 23: MISSING tax_returns RECORD WHEN TAX RETURN SD EXISTS ──────────
+//
+// Inverse of Rule 10. R10 fires when there's a tax_returns row but no Tax
+// Return SD. R23 fires when there's an active Tax Return SD but no row in
+// tax_returns — the SD covers the payment lifecycle, but filing tracking
+// needs the tax_returns row. Cancelled SDs are excluded.
+
+export function rule23_missingTaxReturnRow(ctx: HealthContext): Finding[] {
+  const trSD = ctx.service_deliveries.find(
+    sd => sd.service_type === "Tax Return" && (sd.status || "").toLowerCase() !== "cancelled",
+  )
+  if (!trSD) return []
+  if (ctx.tax_returns.length > 0) return []
+  return [{
+    rule_id: "R23",
+    rule_title: "Tax Return SD without tax_returns row",
+    severity: "warning",
+    description: "Tax Return service delivery exists but no tax_returns tracking record.",
+    current_value: `tax_return_sd=${trSD.id}, tax_returns=0`,
+    expected_value: ">= 1 tax_returns row",
+  }]
+}
+
+// ── Rule 24: INCOMPLETE COMPANY DETAILS ────────────────────────────────────
+//
+// Active recurring clients should have both state_of_formation and
+// formation_date on file — these are needed for annual report scheduling,
+// renewal-date math, and document generation. Missing either suggests the
+// onboarding intake form was never run, or the company was migrated without
+// full details. One-Time accounts skip this — they may not need full company
+// details for the work TD performs.
+
+export function rule24_incompleteCompanyDetails(ctx: HealthContext): Finding[] {
+  const a = ctx.account
+  if ((a.status || "").trim() !== "Active") return []
+  if (!isClient(a)) return []
+  const missing: string[] = []
+  if (!a.state_of_formation) missing.push("state_of_formation")
+  if (!a.formation_date) missing.push("formation_date")
+  if (missing.length === 0) return []
+  return [{
+    rule_id: "R24",
+    rule_title: "Incomplete company details",
+    severity: "info",
+    description: `Company details incomplete — missing ${missing.join(", ")}. Check if this is an onboarding client whose details weren't collected.`,
+    current_value: `state_of_formation=${a.state_of_formation ?? "null"}, formation_date=${a.formation_date ?? "null"}`,
+    expected_value: "both fields populated",
+  }]
+}
+
+// ── Rule 25: ONBOARDING DETECTION (FORMATION-VS-ONBOARDING GAP) ────────────
+//
+// Learned from MFCompany: when a company was formed long before TD started
+// managing it, the formation_date column reflects a historical event, not
+// when TD's relationship began. If the first payment is more than 12 months
+// after formation, this is almost certainly an onboarding client (not a
+// formation client) — and the absence of a separate client_since-style date
+// hides that fact. Info-severity nudge so staff can capture the relationship
+// start date explicitly.
+
+export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
+  const a = ctx.account
+  if (!a.formation_date) return []
+  if (ctx.payments.length === 0) return []
+
+  const formationMs = new Date(a.formation_date).getTime()
+  if (!Number.isFinite(formationMs)) return []
+
+  const firstPaymentMs = ctx.payments
+    .map(p => {
+      const ts = p.paid_date || p.created_at
+      return ts ? new Date(ts).getTime() : null
+    })
+    .filter((t): t is number => t !== null && Number.isFinite(t))
+    .reduce<number | null>((min, t) => (min === null || t < min ? t : min), null)
+
+  if (firstPaymentMs === null) return []
+
+  const gapDays = (firstPaymentMs - formationMs) / (1000 * 60 * 60 * 24)
+  if (gapDays <= 365) return []
+
+  const firstPaymentISO = new Date(firstPaymentMs).toISOString().slice(0, 10)
+  return [{
+    rule_id: "R25",
+    rule_title: "Onboarding detection",
+    severity: "info",
+    description: `Company formed ${a.formation_date} but first payment ${firstPaymentISO} — likely an onboarding client, not a formation. Consider adding client_since date.`,
+    current_value: `formation_date=${a.formation_date}, first_payment=${firstPaymentISO}, gap=${Math.round(gapDays)}d`,
+    expected_value: "first payment within 12 months of formation (or capture client_since)",
+  }]
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -1180,6 +1372,11 @@ export const RULE_FUNCTIONS = [
   rule18_partnerServiceScope,
   rule19_legacyStatuses,
   rule20_entityTypeValidation,
+  rule21_zeroAmountInstallment,
+  rule22_oneTimeTier,
+  rule23_missingTaxReturnRow,
+  rule24_incompleteCompanyDetails,
+  rule25_onboardingDetection,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
@@ -1283,7 +1480,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       .eq("account_id", accountId),
     supabaseAdmin
       .from("payments")
-      .select("id, description, status, created_at")
+      .select("id, description, status, amount, paid_date, created_at")
       .eq("account_id", accountId),
     contactIds.length > 0
       ? supabaseAdmin

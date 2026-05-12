@@ -20,6 +20,11 @@ import {
   rule18_partnerServiceScope,
   rule19_legacyStatuses,
   rule20_entityTypeValidation,
+  rule21_zeroAmountInstallment,
+  rule22_oneTimeTier,
+  rule23_missingTaxReturnRow,
+  rule24_incompleteCompanyDetails,
+  rule25_onboardingDetection,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -460,7 +465,7 @@ describe("rule6_oneTimeScope", () => {
           stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
         },
       ],
-      payments: [{ id: "p1", description: "EIN service", status: "Paid", created_at: "2026-01-02T00:00:00Z" }],
+      payments: [{ id: "p1", description: "EIN service", status: "Paid", amount: 350, paid_date: null, created_at: "2026-01-02T00:00:00Z" }],
     })
     expect(rule6_oneTimeScope(ctx).some(f => f.description.includes("no payment records"))).toBe(false)
   })
@@ -1119,7 +1124,7 @@ describe("rule17_sameYearTaxReturn", () => {
   it("flags formation-year Tax Return payment (description contains 'Tax Return')", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2026-03-15" }),
-      payments: [{ id: "p1", description: "Tax Return 2025", status: "Paid", created_at: "2026-04-01T00:00:00Z" }],
+      payments: [{ id: "p1", description: "Tax Return 2025", status: "Paid", amount: 750, paid_date: null, created_at: "2026-04-01T00:00:00Z" }],
     })
     const findings = rule17_sameYearTaxReturn(ctx, NOW)
     expect(findings).toHaveLength(1)
@@ -1129,7 +1134,7 @@ describe("rule17_sameYearTaxReturn", () => {
   it("description match is case-insensitive", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2026-03-15" }),
-      payments: [{ id: "p1", description: "TAX RETURN service", status: "Paid", created_at: null }],
+      payments: [{ id: "p1", description: "TAX RETURN service", status: "Paid", amount: 750, paid_date: null, created_at: null }],
     })
     expect(rule17_sameYearTaxReturn(ctx, NOW)).toHaveLength(1)
   })
@@ -1144,7 +1149,7 @@ describe("rule17_sameYearTaxReturn", () => {
           stage_order: -1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-04-01T00:00:00Z",
         },
       ],
-      payments: [{ id: "p1", description: "Tax Return", status: "Paid", created_at: null }],
+      payments: [{ id: "p1", description: "Tax Return", status: "Paid", amount: 750, paid_date: null, created_at: null }],
     })
     const findings = rule17_sameYearTaxReturn(ctx, NOW)
     expect(findings).toHaveLength(1)
@@ -1192,7 +1197,7 @@ describe("rule17_sameYearTaxReturn", () => {
   it("does NOT flag payments whose description doesn't mention Tax Return", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2026-03-15" }),
-      payments: [{ id: "p1", description: "Formation fee", status: "Paid", created_at: null }],
+      payments: [{ id: "p1", description: "Formation fee", status: "Paid", amount: 1000, paid_date: null, created_at: null }],
     })
     expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
   })
@@ -1336,6 +1341,7 @@ describe("rule19_legacyStatuses", () => {
     const ctx = emptyCtx({
       payments: [{
         id: "p1", description: "Annual fee", status: "Pending",
+        amount: 500, paid_date: null,
         created_at: "2026-04-01T00:00:00Z", // 61 days before NOW
       }],
     })
@@ -1350,6 +1356,7 @@ describe("rule19_legacyStatuses", () => {
     const ctx = emptyCtx({
       payments: [{
         id: "p1", description: "Recent invoice", status: "Pending",
+        amount: 500, paid_date: null,
         created_at: "2026-05-15T00:00:00Z", // 17 days before NOW
       }],
     })
@@ -1360,6 +1367,7 @@ describe("rule19_legacyStatuses", () => {
     const ctx = emptyCtx({
       payments: [{
         id: "p1", description: "Old payment", status: "Paid",
+        amount: 500, paid_date: null,
         created_at: "2024-01-01T00:00:00Z",
       }],
     })
@@ -1368,7 +1376,7 @@ describe("rule19_legacyStatuses", () => {
 
   it("does NOT flag a Pending payment with null created_at (can't compute age)", () => {
     const ctx = emptyCtx({
-      payments: [{ id: "p1", description: "Unknown date", status: "Pending", created_at: null }],
+      payments: [{ id: "p1", description: "Unknown date", status: "Pending", amount: 500, paid_date: null, created_at: null }],
     })
     expect(rule19_legacyStatuses(ctx, NOW)).toEqual([])
   })
@@ -1377,6 +1385,7 @@ describe("rule19_legacyStatuses", () => {
     const ctx = emptyCtx({
       payments: [{
         id: "abc-123", description: null, status: "Pending",
+        amount: 500, paid_date: null,
         created_at: "2026-04-01T00:00:00Z",
       }],
     })
@@ -1390,6 +1399,7 @@ describe("rule19_legacyStatuses", () => {
       tax_returns: [{ id: "t1", tax_year: 2025, status: "Not Invoiced" }],
       payments: [{
         id: "p1", description: "Old fee", status: "Pending",
+        amount: 500, paid_date: null,
         created_at: "2026-04-01T00:00:00Z",
       }],
     })
@@ -1454,6 +1464,341 @@ describe("rule20_entityTypeValidation", () => {
     })
     const findings = rule20_entityTypeValidation(ctx)
     expect(findings).toHaveLength(1)
+  })
+})
+
+// ── R21: ZERO-AMOUNT / SAME-YEAR INSTALLMENT ───────────────────────────────
+
+describe("rule21_zeroAmountInstallment", () => {
+  const NOW = new Date("2026-06-01T00:00:00Z")
+
+  it("flags zero-amount installment in same year as first payment as ERROR", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Setup Fee", status: "Paid", amount: 1000, paid_date: "2026-02-01", created_at: "2026-02-01T00:00:00Z" },
+        { id: "p2", description: "Installment 1", status: "Pending", amount: 0, paid_date: null, created_at: "2026-03-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule21_zeroAmountInstallment(ctx, NOW)
+    expect(findings.some(f => f.severity === "error" && f.description.includes("same year as onboarding"))).toBe(true)
+  })
+
+  it("does NOT flag installment whose first payment year is a prior year", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Setup Fee", status: "Paid", amount: 1000, paid_date: "2025-02-01", created_at: "2025-02-01T00:00:00Z" },
+        { id: "p2", description: "Installment 1", status: "Pending", amount: 0, paid_date: null, created_at: "2026-03-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule21_zeroAmountInstallment(ctx, NOW)
+    expect(findings.some(f => f.severity === "error")).toBe(false)
+  })
+
+  it("flags any zero-amount Paid payment as WARNING", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Some service", status: "Paid", amount: 0, paid_date: "2025-01-01", created_at: "2025-01-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule21_zeroAmountInstallment(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("$0 payment exists")
+  })
+
+  it("does NOT double-flag a same-year zero-amount installment that is Paid (error only)", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Setup Fee", status: "Paid", amount: 1000, paid_date: "2026-02-01", created_at: "2026-02-01T00:00:00Z" },
+        { id: "p2", description: "Installment 1", status: "Paid", amount: 0, paid_date: "2026-03-01", created_at: "2026-03-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule21_zeroAmountInstallment(ctx, NOW)
+    expect(findings.filter(f => f.current_value?.includes("p2"))).toHaveLength(1)
+    expect(findings.find(f => f.current_value?.includes("p2"))?.severity).toBe("error")
+  })
+
+  it("does NOT flag a non-installment zero-amount Pending payment", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Quote draft", status: "Pending", amount: 0, paid_date: null, created_at: "2026-03-01T00:00:00Z" },
+      ],
+    })
+    expect(rule21_zeroAmountInstallment(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag a non-zero installment in same year", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Installment 1", status: "Paid", amount: 500, paid_date: "2026-02-01", created_at: "2026-02-01T00:00:00Z" },
+      ],
+    })
+    expect(rule21_zeroAmountInstallment(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT fire when no payments exist", () => {
+    expect(rule21_zeroAmountInstallment(emptyCtx(), NOW)).toEqual([])
+  })
+
+  it("matches 'installment' case-insensitively in description", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Setup", status: "Paid", amount: 1000, paid_date: "2026-02-01", created_at: "2026-02-01T00:00:00Z" },
+        { id: "p2", description: "INSTALLMENT 2 of 4", status: "Pending", amount: 0, paid_date: null, created_at: "2026-04-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule21_zeroAmountInstallment(ctx, NOW)
+    expect(findings.some(f => f.severity === "error")).toBe(true)
+  })
+})
+
+// ── R22: ONE-TIME TIER VALIDATION ──────────────────────────────────────────
+
+describe("rule22_oneTimeTier", () => {
+  it("flags One-Time with portal_tier='onboarding' as WARNING", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", portal_tier: "onboarding" }),
+    })
+    const findings = rule22_oneTimeTier(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("'onboarding'")
+  })
+
+  it("flags One-Time with portal_tier='formation'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", portal_tier: "formation" }),
+    })
+    const findings = rule22_oneTimeTier(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("'formation'")
+  })
+
+  it("does NOT flag One-Time with portal_tier='active'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", portal_tier: "active" }),
+    })
+    expect(rule22_oneTimeTier(ctx)).toEqual([])
+  })
+
+  it("does NOT flag One-Time with portal_tier='lead'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", portal_tier: "lead" }),
+    })
+    expect(rule22_oneTimeTier(ctx)).toEqual([])
+  })
+
+  it("does NOT flag Client account with portal_tier='onboarding'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client", portal_tier: "onboarding" }),
+    })
+    expect(rule22_oneTimeTier(ctx)).toEqual([])
+  })
+
+  it("does NOT flag One-Time with portal_tier=null", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", portal_tier: null }),
+    })
+    expect(rule22_oneTimeTier(ctx)).toEqual([])
+  })
+})
+
+// ── R23: MISSING tax_returns RECORD ────────────────────────────────────────
+
+describe("rule23_missingTaxReturnRow", () => {
+  it("flags active Tax Return SD with no tax_returns rows as WARNING", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Data Pending",
+          stage_order: -1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      tax_returns: [],
+    })
+    const findings = rule23_missingTaxReturnRow(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("no tax_returns tracking record")
+  })
+
+  it("does NOT flag when tax_returns row exists", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Data Pending",
+          stage_order: -1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "pending" }],
+    })
+    expect(rule23_missingTaxReturnRow(ctx)).toEqual([])
+  })
+
+  it("does NOT flag a cancelled Tax Return SD", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "cancelled", stage: "Cancelled",
+          stage_order: 99, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      tax_returns: [],
+    })
+    expect(rule23_missingTaxReturnRow(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when no Tax Return SD exists at all", () => {
+    expect(rule23_missingTaxReturnRow(emptyCtx())).toEqual([])
+  })
+})
+
+// ── R24: INCOMPLETE COMPANY DETAILS ────────────────────────────────────────
+
+describe("rule24_incompleteCompanyDetails", () => {
+  it("flags Active Client missing state_of_formation as INFO", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        status: "Active", account_type: "Client",
+        formation_date: "2025-01-01", state_of_formation: null,
+      }),
+    })
+    const findings = rule24_incompleteCompanyDetails(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("state_of_formation")
+    expect(findings[0].description).toContain("onboarding client")
+  })
+
+  it("flags Active Client missing formation_date", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        status: "Active", account_type: "Client",
+        formation_date: null, state_of_formation: "WY",
+      }),
+    })
+    const findings = rule24_incompleteCompanyDetails(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("formation_date")
+  })
+
+  it("flags Active Client missing BOTH fields in a single finding listing both", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        status: "Active", account_type: "Client",
+        formation_date: null, state_of_formation: null,
+      }),
+    })
+    const findings = rule24_incompleteCompanyDetails(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("state_of_formation")
+    expect(findings[0].description).toContain("formation_date")
+  })
+
+  it("does NOT flag One-Time accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        status: "Active", account_type: "One-Time",
+        formation_date: null, state_of_formation: null,
+      }),
+    })
+    expect(rule24_incompleteCompanyDetails(ctx)).toEqual([])
+  })
+
+  it("does NOT flag inactive accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        status: "Cancelled", account_type: "Client",
+        formation_date: null, state_of_formation: null,
+      }),
+    })
+    expect(rule24_incompleteCompanyDetails(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when both fields are populated", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        status: "Active", account_type: "Client",
+        formation_date: "2025-01-01", state_of_formation: "WY",
+      }),
+    })
+    expect(rule24_incompleteCompanyDetails(ctx)).toEqual([])
+  })
+})
+
+// ── R25: ONBOARDING DETECTION ──────────────────────────────────────────────
+
+describe("rule25_onboardingDetection", () => {
+  it("flags first payment > 12 months after formation_date as INFO", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2022-01-01" }),
+      payments: [
+        { id: "p1", description: "Onboarding fee", status: "Paid", amount: 1000, paid_date: "2024-03-01", created_at: "2024-03-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule25_onboardingDetection(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("likely an onboarding client")
+    expect(findings[0].description).toContain("client_since")
+  })
+
+  it("uses paid_date when present, falls back to created_at otherwise", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2022-01-01" }),
+      payments: [
+        { id: "p1", description: "Onboarding fee", status: "Paid", amount: 1000, paid_date: null, created_at: "2024-03-01T00:00:00Z" },
+      ],
+    })
+    expect(rule25_onboardingDetection(ctx)).toHaveLength(1)
+  })
+
+  it("uses the EARLIEST payment when multiple exist", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2022-01-01" }),
+      payments: [
+        { id: "p1", description: "Old onboarding", status: "Paid", amount: 1000, paid_date: "2022-02-01", created_at: "2022-02-01T00:00:00Z" },
+        { id: "p2", description: "Renewal", status: "Paid", amount: 1000, paid_date: "2025-01-01", created_at: "2025-01-01T00:00:00Z" },
+      ],
+    })
+    // First payment was within 12 months of formation → no finding.
+    expect(rule25_onboardingDetection(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when first payment is within 12 months of formation", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2025-01-01" }),
+      payments: [
+        { id: "p1", description: "Setup", status: "Paid", amount: 1000, paid_date: "2025-04-01", created_at: "2025-04-01T00:00:00Z" },
+      ],
+    })
+    expect(rule25_onboardingDetection(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when no formation_date is set", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Setup", status: "Paid", amount: 1000, paid_date: "2024-03-01", created_at: "2024-03-01T00:00:00Z" },
+      ],
+    })
+    expect(rule25_onboardingDetection(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when no payments exist", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2022-01-01" }),
+    })
+    expect(rule25_onboardingDetection(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when every payment has null dates", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2022-01-01" }),
+      payments: [
+        { id: "p1", description: "Unknown date", status: "Pending", amount: 500, paid_date: null, created_at: null },
+      ],
+    })
+    expect(rule25_onboardingDetection(ctx)).toEqual([])
   })
 })
 
