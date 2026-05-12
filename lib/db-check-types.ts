@@ -4,6 +4,9 @@
  * DO NOT EDIT — regenerate with: npx tsx scripts/gen-check-types.ts
  */
 
+/** accounts.member_structure — CHECK constraint */
+export type AccountsMemberStructure = "single_member" | "multi_member"
+
 /** accounts.portal_tier — CHECK constraint */
 export type AccountsPortalTier = "lead" | "formation" | "onboarding" | "active" | "suspended" | "inactive"
 
