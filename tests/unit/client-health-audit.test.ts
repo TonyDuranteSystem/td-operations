@@ -18,6 +18,8 @@ import {
   rule16_closedAccountPortalAccess,
   rule17_sameYearTaxReturn,
   rule18_partnerServiceScope,
+  rule19_legacyStatuses,
+  rule20_entityTypeValidation,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -458,7 +460,7 @@ describe("rule6_oneTimeScope", () => {
           stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
         },
       ],
-      payments: [{ id: "p1", description: "EIN service", created_at: "2026-01-02T00:00:00Z" }],
+      payments: [{ id: "p1", description: "EIN service", status: "Paid", created_at: "2026-01-02T00:00:00Z" }],
     })
     expect(rule6_oneTimeScope(ctx).some(f => f.description.includes("no payment records"))).toBe(false)
   })
@@ -1117,7 +1119,7 @@ describe("rule17_sameYearTaxReturn", () => {
   it("flags formation-year Tax Return payment (description contains 'Tax Return')", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2026-03-15" }),
-      payments: [{ id: "p1", description: "Tax Return 2025", created_at: "2026-04-01T00:00:00Z" }],
+      payments: [{ id: "p1", description: "Tax Return 2025", status: "Paid", created_at: "2026-04-01T00:00:00Z" }],
     })
     const findings = rule17_sameYearTaxReturn(ctx, NOW)
     expect(findings).toHaveLength(1)
@@ -1127,7 +1129,7 @@ describe("rule17_sameYearTaxReturn", () => {
   it("description match is case-insensitive", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2026-03-15" }),
-      payments: [{ id: "p1", description: "TAX RETURN service", created_at: null }],
+      payments: [{ id: "p1", description: "TAX RETURN service", status: "Paid", created_at: null }],
     })
     expect(rule17_sameYearTaxReturn(ctx, NOW)).toHaveLength(1)
   })
@@ -1142,7 +1144,7 @@ describe("rule17_sameYearTaxReturn", () => {
           stage_order: -1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-04-01T00:00:00Z",
         },
       ],
-      payments: [{ id: "p1", description: "Tax Return", created_at: null }],
+      payments: [{ id: "p1", description: "Tax Return", status: "Paid", created_at: null }],
     })
     const findings = rule17_sameYearTaxReturn(ctx, NOW)
     expect(findings).toHaveLength(1)
@@ -1190,7 +1192,7 @@ describe("rule17_sameYearTaxReturn", () => {
   it("does NOT flag payments whose description doesn't mention Tax Return", () => {
     const ctx = emptyCtx({
       account: baseAccount({ formation_date: "2026-03-15" }),
-      payments: [{ id: "p1", description: "Formation fee", created_at: null }],
+      payments: [{ id: "p1", description: "Formation fee", status: "Paid", created_at: null }],
     })
     expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
   })
@@ -1295,6 +1297,163 @@ describe("rule18_partnerServiceScope", () => {
       ],
     })
     expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+})
+
+// ── R19: LEGACY / STALE STATUSES ───────────────────────────────────────────
+
+describe("rule19_legacyStatuses", () => {
+  const NOW = new Date("2026-06-01T00:00:00Z")
+
+  it("flags tax_returns row with legacy status 'Activated - Need Link'", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Activated - Need Link" }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("legacy status 'Activated - Need Link'")
+    expect(findings[0].description).toContain("imported from old system")
+  })
+
+  it("flags tax_returns row with legacy status 'Not Invoiced'", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Not Invoiced" }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("Not Invoiced")
+  })
+
+  it("does NOT flag tax_returns row with a current-workflow status", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Data Received" }],
+    })
+    expect(rule19_legacyStatuses(ctx, NOW)).toEqual([])
+  })
+
+  it("flags payment that has been Pending for more than 30 days", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Annual fee", status: "Pending",
+        created_at: "2026-04-01T00:00:00Z", // 61 days before NOW
+      }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("'Annual fee'")
+    expect(findings[0].description).toContain("Pending for 61 days")
+  })
+
+  it("does NOT flag a Pending payment that's less than 30 days old", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Recent invoice", status: "Pending",
+        created_at: "2026-05-15T00:00:00Z", // 17 days before NOW
+      }],
+    })
+    expect(rule19_legacyStatuses(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag a Paid payment regardless of age", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Old payment", status: "Paid",
+        created_at: "2024-01-01T00:00:00Z",
+      }],
+    })
+    expect(rule19_legacyStatuses(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag a Pending payment with null created_at (can't compute age)", () => {
+    const ctx = emptyCtx({
+      payments: [{ id: "p1", description: "Unknown date", status: "Pending", created_at: null }],
+    })
+    expect(rule19_legacyStatuses(ctx, NOW)).toEqual([])
+  })
+
+  it("falls back to payment id when description is null", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "abc-123", description: null, status: "Pending",
+        created_at: "2026-04-01T00:00:00Z",
+      }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("'abc-123'")
+  })
+
+  it("flags BOTH a legacy tax_returns row AND a stale pending payment in one pass", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Not Invoiced" }],
+      payments: [{
+        id: "p1", description: "Old fee", status: "Pending",
+        created_at: "2026-04-01T00:00:00Z",
+      }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(2)
+    expect(findings.some(f => f.severity === "warning")).toBe(true)
+    expect(findings.some(f => f.severity === "info")).toBe(true)
+  })
+})
+
+// ── R20: ENTITY TYPE VALIDATION ────────────────────────────────────────────
+
+describe("rule20_entityTypeValidation", () => {
+  it("flags active account with null entity_type", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Active", entity_type: null }),
+    })
+    const findings = rule20_entityTypeValidation(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toBe("Entity type not set.")
+  })
+
+  it("does NOT flag active account with entity_type='Single Member LLC'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Active", entity_type: "Single Member LLC" }),
+    })
+    expect(rule20_entityTypeValidation(ctx)).toEqual([])
+  })
+
+  it("does NOT flag active account with entity_type='Multi Member LLC'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Active", entity_type: "Multi Member LLC" }),
+    })
+    expect(rule20_entityTypeValidation(ctx)).toEqual([])
+  })
+
+  it("does NOT flag active account with entity_type='C-Corp Elected'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Active", entity_type: "C-Corp Elected" }),
+    })
+    expect(rule20_entityTypeValidation(ctx)).toEqual([])
+  })
+
+  it("does NOT flag a Cancelled account with null entity_type", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Cancelled", entity_type: null }),
+    })
+    expect(rule20_entityTypeValidation(ctx)).toEqual([])
+  })
+
+  it("does NOT flag a Closed account with null entity_type", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Closed", entity_type: null }),
+    })
+    expect(rule20_entityTypeValidation(ctx)).toEqual([])
+  })
+
+  it("treats empty-string entity_type the same as null", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ status: "Active", entity_type: "" }),
+    })
+    const findings = rule20_entityTypeValidation(ctx)
+    expect(findings).toHaveLength(1)
   })
 })
 

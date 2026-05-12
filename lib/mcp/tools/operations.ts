@@ -1326,7 +1326,7 @@ export function registerOperationsTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "audit_client_health",
-    "Run the 10-rule client health audit on a single account. Returns findings only (no fix actions). Rules cover: tier consistency, portal access, SS-4 sync, CMRA SD advance after lease, Formation SD continuity, One-Time scope, renewal dates, document completeness, onboarding vs formation context, Tax Return dual tracking. Pure data audit — does NOT mutate state.",
+    "Run the 20-rule client health audit on a single account. Returns findings only (no fix actions). Rules cover: tier consistency, portal access, SS-4 sync, CMRA SD advance after lease, Formation SD continuity, One-Time scope, renewal dates, document completeness, onboarding vs formation context, Tax Return dual tracking, offer type consistency, lead linkage, DBA tracking, MMLLC member completeness, OA signer count, closed-account portal access, same-year tax return on new formation, partner client service scope, legacy/stale statuses (legacy tax_return statuses + pending payments > 30d), entity type validation. Pure data audit — does NOT mutate state.",
     {
       account_id: z.string().uuid().describe("Account UUID to audit"),
     },

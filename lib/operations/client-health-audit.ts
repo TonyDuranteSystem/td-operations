@@ -136,6 +136,7 @@ export interface OfferRow {
 export interface PaymentRow {
   id: string
   description: string | null
+  status: string | null
   created_at: string | null
 }
 
@@ -1082,6 +1083,80 @@ export function rule18_partnerServiceScope(ctx: HealthContext): Finding[] {
   }]
 }
 
+// ── Rule 19: LEGACY / STALE STATUSES ───────────────────────────────────────
+//
+// Two checks for stale state imported from older systems or stuck records:
+//
+// 1. tax_returns.status carrying legacy Airtable-imported values
+//    ("Activated - Need Link", "Not Invoiced") that don't match the current
+//    workflow — flag as warning so staff can manually re-map.
+// 2. Any payment in 'Pending' status for more than 30 days — usually means
+//    the payment was either fulfilled (and never marked Paid) or abandoned
+//    (and never marked Cancelled). Surfacing as info nudges cleanup without
+//    blocking on a single threshold.
+
+const LEGACY_TAX_RETURN_STATUSES = new Set(["Activated - Need Link", "Not Invoiced"])
+
+export function rule19_legacyStatuses(ctx: HealthContext, now: Date = new Date()): Finding[] {
+  const findings: Finding[] = []
+
+  for (const tr of ctx.tax_returns) {
+    const status = (tr.status || "").trim()
+    if (!status) continue
+    if (LEGACY_TAX_RETURN_STATUSES.has(status)) {
+      findings.push({
+        rule_id: "R19",
+        rule_title: "Legacy / stale statuses",
+        severity: "warning",
+        description: `Tax return has legacy status '${status}' — imported from old system, needs manual review.`,
+        current_value: `tax_returns.status=${status}`,
+        expected_value: "current-workflow status",
+      })
+    }
+  }
+
+  for (const p of ctx.payments) {
+    const status = (p.status || "").trim()
+    if (status !== "Pending") continue
+    if (!p.created_at) continue
+    const ageDays = Math.floor((now.getTime() - new Date(p.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    if (ageDays <= 30) continue
+    const label = p.description || p.id
+    findings.push({
+      rule_id: "R19",
+      rule_title: "Legacy / stale statuses",
+      severity: "info",
+      description: `Payment '${label}' has been Pending for ${ageDays} days — may need to be marked as Paid or Cancelled.`,
+      current_value: `payments.status=Pending, age=${ageDays}d`,
+      expected_value: "Paid | Cancelled",
+    })
+  }
+
+  return findings
+}
+
+// ── Rule 20: ENTITY TYPE VALIDATION ────────────────────────────────────────
+//
+// Current entity_type enum: Single Member LLC, Multi Member LLC, C-Corp
+// Elected. An active account without entity_type set means downstream code
+// (OA generation, MMLLC member rules, formation pipelines) can't branch
+// correctly. C-Corp single/multi-member expansion is on the roadmap but not
+// yet in the enum — do NOT flag 'C-Corp Elected' as wrong.
+
+export function rule20_entityTypeValidation(ctx: HealthContext): Finding[] {
+  const a = ctx.account
+  if ((a.status || "").trim() !== "Active") return []
+  if (a.entity_type && a.entity_type.trim() !== "") return []
+  return [{
+    rule_id: "R20",
+    rule_title: "Entity type validation",
+    severity: "warning",
+    description: "Entity type not set.",
+    current_value: `entity_type=${a.entity_type ?? "null"}`,
+    expected_value: "Single Member LLC | Multi Member LLC | C-Corp Elected",
+  }]
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -1103,6 +1178,8 @@ export const RULE_FUNCTIONS = [
   rule16_closedAccountPortalAccess,
   rule17_sameYearTaxReturn,
   rule18_partnerServiceScope,
+  rule19_legacyStatuses,
+  rule20_entityTypeValidation,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
@@ -1206,7 +1283,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       .eq("account_id", accountId),
     supabaseAdmin
       .from("payments")
-      .select("id, description, created_at")
+      .select("id, description, status, created_at")
       .eq("account_id", accountId),
     contactIds.length > 0
       ? supabaseAdmin
