@@ -16,6 +16,8 @@ import {
   rule14_mmllcMemberCompleteness,
   rule15_oaSignerCount,
   rule16_closedAccountPortalAccess,
+  rule17_sameYearTaxReturn,
+  rule18_partnerServiceScope,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -57,6 +59,8 @@ function emptyCtx(over: Partial<HealthContext> = {}): HealthContext {
     leads: [],
     members: [],
     oa_agreements: [],
+    payments: [],
+    client_partners: [],
     has_renewal_offer: false,
     has_auth_user: false,
     ...over,
@@ -426,6 +430,67 @@ describe("rule6_oneTimeScope", () => {
   it("does NOT flag when account_type is Client", () => {
     const ctx = emptyCtx({
       account: baseAccount({ account_type: "Client", ra_renewal_date: "2027-01-01" }),
+    })
+    expect(rule6_oneTimeScope(ctx)).toEqual([])
+  })
+
+  it("emits INFO when One-Time has active SDs but no payments", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "EIN", status: "active", stage: "In Progress",
+          stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [],
+    })
+    const findings = rule6_oneTimeScope(ctx)
+    expect(findings.some(f => f.severity === "info" && f.description.includes("no payment records"))).toBe(true)
+  })
+
+  it("does NOT emit no-payments info when at least one payment exists", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "EIN", status: "active", stage: "In Progress",
+          stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [{ id: "p1", description: "EIN service", created_at: "2026-01-02T00:00:00Z" }],
+    })
+    expect(rule6_oneTimeScope(ctx).some(f => f.description.includes("no payment records"))).toBe(false)
+  })
+
+  it("does NOT emit no-payments info when SDs are all cancelled/completed", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "EIN", status: "completed", stage: "Done",
+          stage_order: 99, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "sd2", service_type: "ITIN", status: "cancelled", stage: "Cancelled",
+          stage_order: 99, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [],
+    })
+    expect(rule6_oneTimeScope(ctx).some(f => f.description.includes("no payment records"))).toBe(false)
+  })
+
+  it("does NOT emit no-payments info on Client accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "EIN", status: "active", stage: "In Progress",
+          stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [],
     })
     expect(rule6_oneTimeScope(ctx)).toEqual([])
   })
@@ -1014,6 +1079,222 @@ describe("rule16_closedAccountPortalAccess", () => {
       account: baseAccount({ status: "Active", portal_tier: "active" }),
     })
     expect(rule16_closedAccountPortalAccess(ctx)).toEqual([])
+  })
+})
+
+// ── R17: SAME-YEAR TAX RETURN ──────────────────────────────────────────────
+
+describe("rule17_sameYearTaxReturn", () => {
+  const NOW = new Date("2026-06-01T00:00:00Z")
+
+  it("flags formation-year tax_returns row as ERROR", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      tax_returns: [{ id: "t1", tax_year: 2026, status: "pending" }],
+    })
+    const findings = rule17_sameYearTaxReturn(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("error")
+    expect(findings[0].description).toContain("Company formed in 2026")
+    expect(findings[0].description).toContain("filed in 2027")
+  })
+
+  it("flags formation-year Tax Return SD", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Data Pending",
+          stage_order: -1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-04-01T00:00:00Z",
+        },
+      ],
+    })
+    const findings = rule17_sameYearTaxReturn(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].current_value).toContain("service_deliveries.service_type='Tax Return'")
+  })
+
+  it("flags formation-year Tax Return payment (description contains 'Tax Return')", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      payments: [{ id: "p1", description: "Tax Return 2025", created_at: "2026-04-01T00:00:00Z" }],
+    })
+    const findings = rule17_sameYearTaxReturn(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].current_value).toContain("payments.description")
+  })
+
+  it("description match is case-insensitive", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      payments: [{ id: "p1", description: "TAX RETURN service", created_at: null }],
+    })
+    expect(rule17_sameYearTaxReturn(ctx, NOW)).toHaveLength(1)
+  })
+
+  it("collapses multiple triggers into a single finding listing all of them", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      tax_returns: [{ id: "t1", tax_year: 2026, status: "pending" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Data Pending",
+          stage_order: -1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-04-01T00:00:00Z",
+        },
+      ],
+      payments: [{ id: "p1", description: "Tax Return", created_at: null }],
+    })
+    const findings = rule17_sameYearTaxReturn(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].current_value).toContain("tax_returns.tax_year=2026")
+    expect(findings[0].current_value).toContain("service_deliveries.service_type='Tax Return'")
+    expect(findings[0].current_value).toContain("payments.description")
+  })
+
+  it("does NOT flag when formation_date is in a prior year", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2024-03-15" }),
+      tax_returns: [{ id: "t1", tax_year: 2026, status: "pending" }],
+    })
+    expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag when no formation_date", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2026, status: "pending" }],
+    })
+    expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag a tax_returns row for a different tax_year", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "filed" }],
+    })
+    expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag a cancelled Tax Return SD", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "cancelled", stage: "Cancelled",
+          stage_order: 99, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-04-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag payments whose description doesn't mention Tax Return", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-03-15" }),
+      payments: [{ id: "p1", description: "Formation fee", created_at: null }],
+    })
+    expect(rule17_sameYearTaxReturn(ctx, NOW)).toEqual([])
+  })
+})
+
+// ── R18: PARTNER CLIENT SERVICE SCOPE ──────────────────────────────────────
+
+describe("rule18_partnerServiceScope", () => {
+  it("flags One-Time partner client with renewal date for service NOT in agreed_services", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        account_type: "One-Time",
+        ra_renewal_date: "2027-01-01",
+        annual_report_due_date: "2027-05-01",
+      }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [{ id: "p1", contact_id: "c1", partner_name: "Maxscale", agreed_services: ["cmra"] }],
+    })
+    const findings = rule18_partnerServiceScope(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("not in the partner agreement")
+    expect(findings[0].current_value).toContain("RA renewal")
+    expect(findings[0].current_value).toContain("annual report")
+    expect(findings[0].current_value).toContain("Maxscale")
+  })
+
+  it("does NOT flag when the renewal date IS in the partner's agreed_services (slug match)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", cmra_renewal_date: "2026-12-31" }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [{ id: "p1", contact_id: "c1", partner_name: "Maxscale", agreed_services: ["cmra"] }],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("accepts legacy aliases (ra_renewal, annual_report)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        account_type: "One-Time",
+        ra_renewal_date: "2027-01-01",
+        annual_report_due_date: "2027-05-01",
+      }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [{
+        id: "p1", contact_id: "c1", partner_name: "Legacy Partner",
+        agreed_services: ["ra_renewal", "annual_report"],
+      }],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("does NOT fire on Client accounts (only One-Time)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client", ra_renewal_date: "2027-01-01" }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [{ id: "p1", contact_id: "c1", partner_name: "Maxscale", agreed_services: ["cmra"] }],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when no client_partners are linked", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", ra_renewal_date: "2027-01-01" }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when no renewal-date columns are set", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [{ id: "p1", contact_id: "c1", partner_name: "Maxscale", agreed_services: ["cmra"] }],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("treats null agreed_services as empty (every renewal date is out-of-scope)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time", cmra_renewal_date: "2026-12-31" }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [{ id: "p1", contact_id: "c1", partner_name: "Empty Partner", agreed_services: null }],
+    })
+    const findings = rule18_partnerServiceScope(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].current_value).toContain("CMRA")
+  })
+
+  it("unions agreed_services across multiple partner rows", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        account_type: "One-Time",
+        cmra_renewal_date: "2026-12-31",
+        ra_renewal_date: "2027-01-01",
+      }),
+      contacts: [{ id: "c1", email: "x@y.com", portal_tier: null }],
+      client_partners: [
+        { id: "p1", contact_id: "c1", partner_name: "Partner A", agreed_services: ["cmra"] },
+        { id: "p2", contact_id: "c1", partner_name: "Partner B", agreed_services: ["state_ra_renewal"] },
+      ],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
   })
 })
 

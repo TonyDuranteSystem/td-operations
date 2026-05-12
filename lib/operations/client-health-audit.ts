@@ -1,8 +1,8 @@
 /**
  * Client Health Audit
  *
- * Pure-data audit over a single account, derived from 10 rules learned while
- * reviewing 9 real clients with Antonio (May 2026). Each rule is an
+ * Pure-data audit over a single account, derived from rules learned while
+ * reviewing real clients with Antonio (May 2026). Each rule is an
  * independent pure function from `HealthContext` to zero-or-more findings.
  *
  * The shape of a finding is intentionally narrow and machine-friendly so the
@@ -133,6 +133,19 @@ export interface OfferRow {
   contract_type: string | null
 }
 
+export interface PaymentRow {
+  id: string
+  description: string | null
+  created_at: string | null
+}
+
+export interface PartnerRow {
+  id: string
+  contact_id: string
+  partner_name: string
+  agreed_services: string[] | null
+}
+
 export interface HealthContext {
   account: AccountRow
   contacts: ContactRow[]
@@ -148,6 +161,10 @@ export interface HealthContext {
   members: MemberRow[]
   /** OA agreement rows linked to this account. */
   oa_agreements: OARow[]
+  /** Payments linked to this account (any status). */
+  payments: PaymentRow[]
+  /** Partner registry rows linked to any contact on this account. */
+  client_partners: PartnerRow[]
   /** True iff any offer on this account has contract_type='renewal'. */
   has_renewal_offer: boolean
   /** True iff at least one linked contact has an auth.users row. */
@@ -482,6 +499,25 @@ export function rule6_oneTimeScope(ctx: HealthContext): Finding[] {
       expected_value: "null",
     })
   }
+
+  // Active SDs without a single payment record on a One-Time = bookkeeping
+  // gap. One-Time work should always be paid up front, so the absence of any
+  // payment row alongside live SDs suggests the invoice was never created.
+  const activeSDs = ctx.service_deliveries.filter(sd => {
+    const s = (sd.status || "").toLowerCase()
+    return s !== "cancelled" && s !== "completed" && s !== "done"
+  })
+  if (activeSDs.length > 0 && ctx.payments.length === 0) {
+    findings.push({
+      rule_id: "R6",
+      rule_title: "One-Time scope",
+      severity: "info",
+      description: "One-Time account has active services but no payment records.",
+      current_value: `active_sds=${activeSDs.length}, payments=0`,
+      expected_value: ">= 1 payment per active SD",
+    })
+  }
+
   return findings
 }
 
@@ -957,6 +993,95 @@ export function rule16_closedAccountPortalAccess(ctx: HealthContext): Finding[] 
   }]
 }
 
+// ── Rule 17: SAME-YEAR TAX RETURN ──────────────────────────────────────────
+//
+// Learned from reviewing clients 13-16: when an account is formed in year N,
+// the first tax return covers tax year N and is filed in year N+1. There
+// should be NO tax return record (tax_returns row, Tax Return SD, or Tax
+// Return payment) dated within year N for that company. Catching this early
+// stops staff from creating wrong invoices for newly-formed entities.
+
+export function rule17_sameYearTaxReturn(ctx: HealthContext, now: Date = new Date()): Finding[] {
+  const a = ctx.account
+  if (!a.formation_date) return []
+
+  const formationYear = new Date(a.formation_date).getUTCFullYear()
+  const thisYear = now.getUTCFullYear()
+  if (formationYear !== thisYear) return []
+
+  const trCurrentYear = ctx.tax_returns.find(tr => tr.tax_year === thisYear)
+  const trSD = ctx.service_deliveries.find(
+    sd => sd.service_type === "Tax Return" && (sd.status || "").toLowerCase() !== "cancelled",
+  )
+  const trPayment = ctx.payments.find(p => (p.description || "").toLowerCase().includes("tax return"))
+
+  const triggers: string[] = []
+  if (trCurrentYear) triggers.push(`tax_returns.tax_year=${thisYear}`)
+  if (trSD) triggers.push(`service_deliveries.service_type='Tax Return'`)
+  if (trPayment) triggers.push(`payments.description~'Tax Return'`)
+  if (triggers.length === 0) return []
+
+  return [{
+    rule_id: "R17",
+    rule_title: "Same-year tax return on new formation",
+    severity: "error",
+    description: `Company formed in ${formationYear} cannot have a tax return in the same year. First tax return is for tax year ${formationYear}, filed in ${formationYear + 1}.`,
+    current_value: triggers.join("; "),
+    expected_value: `no tax return artifacts in ${formationYear}`,
+  }]
+}
+
+// ── Rule 18: PARTNER CLIENT SERVICE SCOPE ──────────────────────────────────
+//
+// Learned from reviewing clients 13-16 (e.g., Atlas Compliance under the
+// Maxscale partner — CMRA only): when a contact has a `client_partners` row,
+// the partner's `agreed_services` list scopes what TD manages for that
+// client. A One-Time partner client should NOT have renewal dates seeded for
+// services outside that scope.
+//
+// Renewal-date column → service slug mapping:
+//   ra_renewal_date         → 'state_ra_renewal' (legacy alias 'ra_renewal')
+//   cmra_renewal_date       → 'cmra'
+//   annual_report_due_date  → 'state_annual_report' (legacy alias 'annual_report')
+
+const RENEWAL_COLUMN_TO_SLUGS: Array<{ column: keyof AccountRow; slugs: string[]; label: string }> = [
+  { column: "ra_renewal_date", slugs: ["state_ra_renewal", "ra_renewal"], label: "RA renewal" },
+  { column: "cmra_renewal_date", slugs: ["cmra"], label: "CMRA" },
+  { column: "annual_report_due_date", slugs: ["state_annual_report", "annual_report"], label: "annual report" },
+]
+
+export function rule18_partnerServiceScope(ctx: HealthContext): Finding[] {
+  if (!isOneTime(ctx.account)) return []
+  if (ctx.client_partners.length === 0) return []
+
+  // Union of every agreed service across all partner rows linked to this
+  // account's contacts.
+  const agreed = new Set<string>()
+  for (const p of ctx.client_partners) {
+    for (const s of p.agreed_services ?? []) agreed.add(s)
+  }
+
+  const offending: string[] = []
+  for (const { column, slugs, label } of RENEWAL_COLUMN_TO_SLUGS) {
+    const value = ctx.account[column]
+    if (!value) continue
+    const inScope = slugs.some(s => agreed.has(s))
+    if (!inScope) offending.push(`${label} (${column}=${value})`)
+  }
+
+  if (offending.length === 0) return []
+
+  const partnerNames = ctx.client_partners.map(p => p.partner_name).join(", ")
+  return [{
+    rule_id: "R18",
+    rule_title: "Partner client service scope",
+    severity: "warning",
+    description: "One-Time partner client has renewal dates for services not in the partner agreement.",
+    current_value: `partner=${partnerNames}; out_of_scope=${offending.join(", ")}; agreed_services=[${Array.from(agreed).join(",")}]`,
+    expected_value: "renewal dates only for services in agreed_services (or null)",
+  }]
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -976,6 +1101,8 @@ export const RULE_FUNCTIONS = [
   rule14_mmllcMemberCompleteness,
   rule15_oaSignerCount,
   rule16_closedAccountPortalAccess,
+  rule17_sameYearTaxReturn,
+  rule18_partnerServiceScope,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
@@ -1037,7 +1164,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
 
   const contactEmails = contacts.map(c => c.email).filter((e): e is string => !!e)
 
-  const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult, leadsResult, membersResult, oaResult] = await Promise.all([
+  const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult, leadsResult, membersResult, oaResult, paymentsResult, partnersResult] = await Promise.all([
     supabaseAdmin
       .from("service_deliveries")
       .select("id, service_type, status, stage, stage_order, account_id, contact_id, created_at")
@@ -1077,6 +1204,16 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       .from("oa_agreements")
       .select("id, total_signers, status")
       .eq("account_id", accountId),
+    supabaseAdmin
+      .from("payments")
+      .select("id, description, created_at")
+      .eq("account_id", accountId),
+    contactIds.length > 0
+      ? supabaseAdmin
+          .from("client_partners")
+          .select("id, contact_id, partner_name, agreed_services")
+          .in("contact_id", contactIds)
+      : Promise.resolve({ data: [] as PartnerRow[] }),
   ])
 
   // Auth user check — only call findAuthUserByEmail if at least one contact
@@ -1112,6 +1249,8 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
     leads: (leadsResult.data || []) as LeadRow[],
     members: (membersResult.data || []) as MemberRow[],
     oa_agreements: (oaResult.data || []) as OARow[],
+    payments: (paymentsResult.data || []) as PaymentRow[],
+    client_partners: (partnersResult.data || []) as PartnerRow[],
     has_renewal_offer: hasRenewalOffer,
     has_auth_user: hasAuthUser,
   }
