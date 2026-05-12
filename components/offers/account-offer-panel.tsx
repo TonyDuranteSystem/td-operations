@@ -18,7 +18,7 @@ const OFFER_STATUS_COLORS: Record<string, string> = {
   expired: 'bg-red-100 text-red-700',
 }
 
-interface OfferData {
+export interface OfferData {
   token: string
   status: string
   contract_type: string | null
@@ -31,7 +31,7 @@ interface OfferData {
 }
 
 interface AccountOfferPanelProps {
-  accountId: string
+  accountId: string | null
   companyName: string
   clientEmail: string
   clientLanguage?: string | null
