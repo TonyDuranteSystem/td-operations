@@ -21,6 +21,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
+import { mapTaxReturnStatusToSDStage } from "@/lib/operations/tax-return-sd-bridge"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -80,12 +81,22 @@ export interface SS4Row {
   id: string
   status: string | null
   pdf_signed_drive_id: string | null
+  created_at: string | null
+  updated_at: string | null
 }
 
 export interface LeaseRow {
   id: string
   status: string | null
   signed_at: string | null
+}
+
+export interface LeadRow {
+  id: string
+  email: string | null
+  status: string | null
+  converted_to_contact_id: string | null
+  converted_to_account_id: string | null
 }
 
 export interface DocumentRow {
@@ -114,6 +125,10 @@ export interface HealthContext {
   documents: DocumentRow[]
   tax_returns: TaxReturnRow[]
   most_recent_offer: OfferRow | null
+  /** Leads linked to any contact on this account by email match. */
+  leads: LeadRow[]
+  /** True iff any offer on this account has contract_type='renewal'. */
+  has_renewal_offer: boolean
   /** True iff at least one linked contact has an auth.users row. */
   has_auth_user: boolean
 }
@@ -250,40 +265,66 @@ export function rule2_portalAccess(ctx: HealthContext): Finding[] {
 }
 
 // ── Rule 3: SS-4 STATUS SYNC ───────────────────────────────────────────────
+//
+// Valid SS4 statuses (lib/constants.ts:46): draft, awaiting_signature, signed,
+// submitted, done, fax_failed.
+// `lib/operations/ein-received.ts` does NOT touch ss4_applications — confirmed
+// by grep returning zero matches. That means EIN-arrival never advances the
+// SS-4 record automatically; this rule is the safety net.
 
-export function rule3_ss4StatusSync(ctx: HealthContext): Finding[] {
-  const a = ctx.account
-  if (!a.ein_number) return []
+export function rule3_ss4StatusSync(ctx: HealthContext, now: Date = new Date()): Finding[] {
   if (ctx.ss4_applications.length === 0) return []
 
+  const a = ctx.account
   const findings: Finding[] = []
-  const STALE_STATUSES = new Set(["awaiting_signature", "submitted", "signed"])
-  const TERMINAL_OK = new Set(["done", "ein_received"])
 
   for (const ss4 of ctx.ss4_applications) {
     const status = (ss4.status || "").trim().toLowerCase()
     if (!status) continue
-    if (STALE_STATUSES.has(status)) {
+
+    // 1. EIN exists but SS4 is not 'done'.
+    if (a.ein_number && status !== "done") {
+      findings.push({
+        rule_id: "R3",
+        rule_title: "SS-4 status sync",
+        severity: "error",
+        description:
+          "EIN received but SS-4 not marked done — ein-received handler doesn't update SS-4 status.",
+        current_value: `ss4.status=${status}`,
+        expected_value: "done",
+      })
+    }
+
+    // 2. Signed PDF exists but status is still 'awaiting_signature'.
+    if (ss4.pdf_signed_drive_id && status === "awaiting_signature") {
       findings.push({
         rule_id: "R3",
         rule_title: "SS-4 status sync",
         severity: "warning",
-        description:
-          "Account has an EIN recorded but SS-4 record is still in a pre-EIN status. Mark SS-4 as 'done' / 'ein_received'.",
-        current_value: `ss4.status=${status}`,
-        expected_value: "done | ein_received",
+        description: "SS-4 was signed (pdf_signed_drive_id present) but status not updated.",
+        current_value: `ss4.status=${status}, pdf_signed_drive_id present`,
+        expected_value: "signed | submitted | done",
       })
-    } else if (!TERMINAL_OK.has(status)) {
-      // Non-terminal but not in the well-known stale set — surface as info so
-      // staff can investigate ad-hoc values without false errors.
-      findings.push({
-        rule_id: "R3",
-        rule_title: "SS-4 status sync",
-        severity: "info",
-        description: "Account has an EIN but SS-4 status is not a known terminal value.",
-        current_value: `ss4.status=${status}`,
-        expected_value: "done | ein_received",
-      })
+    }
+
+    // 3. SS-4 stale: created > 21 days ago AND status unchanged since creation.
+    if (ss4.created_at && ss4.updated_at) {
+      const created = new Date(ss4.created_at).getTime()
+      const updated = new Date(ss4.updated_at).getTime()
+      const ageDays = (now.getTime() - created) / (1000 * 60 * 60 * 24)
+      // Allow 1-second tolerance: timestamps can differ by ms even when status
+      // hasn't changed.
+      const unchanged = Math.abs(updated - created) < 1000
+      if (ageDays > 21 && unchanged) {
+        findings.push({
+          rule_id: "R3",
+          rule_title: "SS-4 status sync",
+          severity: "warning",
+          description: `SS-4 status unchanged for 3+ weeks (${Math.round(ageDays)} days) — may be stale.`,
+          current_value: `ss4.status=${status}, age=${Math.round(ageDays)}d`,
+          expected_value: "status progression",
+        })
+      }
     }
   }
 
@@ -292,9 +333,30 @@ export function rule3_ss4StatusSync(ctx: HealthContext): Finding[] {
 
 // ── Rule 4: CMRA SD ADVANCE AFTER LEASE SIGNED ─────────────────────────────
 
-export function rule4_cmraAfterLease(ctx: HealthContext): Finding[] {
+export function rule4_cmraAfterLease(ctx: HealthContext, now: Date = new Date()): Finding[] {
   const signedLease = ctx.lease_agreements.find(l => (l.status || "").toLowerCase() === "signed")
   if (!signedLease) return []
+
+  // Year-1 formation exemption. LLC_MANAGEMENT_BUNDLE_TYPES (CMRA, RA Renewal,
+  // Annual Report, Tax Return) are year 2+ services created at renewal. In
+  // year 1, CMRA is managed as a DOCUMENT (lease agreement in Generate
+  // Documents) — not as a separate SD. So if formation_date is in the current
+  // year and no renewal offer has been issued, the absence/stagnation of a
+  // CMRA SD is expected, not a defect.
+  const a = ctx.account
+  if (a.formation_date && !ctx.has_renewal_offer) {
+    const formationYear = new Date(a.formation_date).getUTCFullYear()
+    if (formationYear === now.getUTCFullYear()) {
+      return [{
+        rule_id: "R4",
+        rule_title: "CMRA SD advance after lease",
+        severity: "info",
+        description: "Year-1 formation client — CMRA is managed as a document, not a service delivery.",
+        current_value: `formation_date=${a.formation_date}, has_renewal_offer=false`,
+        expected_value: "no CMRA SD expected until renewal",
+      }]
+    }
+  }
 
   const cmraSD = ctx.service_deliveries.find(
     sd => sd.service_type === "CMRA Mailing Address" && (sd.status || "").toLowerCase() !== "cancelled",
@@ -484,9 +546,19 @@ export function rule7_renewalDates(ctx: HealthContext, now: Date = new Date()): 
           expected_value: policy.fixed_mmdd ? `next ${policy.fixed_mmdd}` : "anniversary of formation",
         })
       }
+    } else {
+      // Unknown state — codebase (lib/service-delivery.ts:457-461) only
+      // hard-codes FL/DE/WY/NM. Surface an info finding so staff verify
+      // annual-report handling manually for outliers.
+      findings.push({
+        rule_id: "R7",
+        rule_title: "Renewal dates",
+        severity: "info",
+        description: `State ${a.state_of_formation} is not in the annual report policy table — manual verification needed.`,
+        current_value: `state_of_formation=${a.state_of_formation}`,
+        expected_value: "policy entry in STATE_ANNUAL_REPORT_POLICY",
+      })
     }
-    // If state isn't in the policy table, intentionally do not flag — unknown
-    // states stay quiet rather than producing false positives.
   }
 
   return findings
@@ -578,18 +650,127 @@ export function rule9_onboardingVsFormation(ctx: HealthContext): Finding[] {
 
 export function rule10_taxReturnDualTracking(ctx: HealthContext): Finding[] {
   if (ctx.tax_returns.length === 0) return []
-  const hasTaxReturnSD = ctx.service_deliveries.some(sd => sd.service_type === "Tax Return")
-  if (hasTaxReturnSD) return []
+
+  const taxReturnSD = ctx.service_deliveries.find(sd => sd.service_type === "Tax Return")
+  if (!taxReturnSD) {
+    return [{
+      rule_id: "R10",
+      rule_title: "Tax Return dual tracking",
+      severity: "warning",
+      description:
+        "Tax return record exists but no Tax Return SD found. The two track different things — the SD covers payment lifecycle and should exist alongside the tax_returns row.",
+      current_value: "service_deliveries.tax_return=0",
+      expected_value: ">= 1 Tax Return SD",
+    }]
+  }
+
+  // Both rows exist — compare SD stage to the stage mapped from TR status via
+  // the Phase 3 bridge. Differences are info, not errors: the two systems
+  // track different aspects (SD = payment lifecycle, tax_returns = filing
+  // status) and the bridge keeps them aligned going forward.
+  const findings: Finding[] = []
+  const currentStage = (taxReturnSD.stage || "").trim()
+
+  for (const tr of ctx.tax_returns) {
+    const mapped = mapTaxReturnStatusToSDStage(tr.status)
+    if (!mapped) continue
+
+    if (currentStage === mapped.stage_name) {
+      findings.push({
+        rule_id: "R10",
+        rule_title: "Tax Return dual tracking",
+        severity: "info",
+        description: "Tax Return SD and tax_returns are in sync.",
+        current_value: `sd.stage=${currentStage}, tax_returns.status=${tr.status}`,
+        expected_value: `synced (${mapped.stage_name})`,
+      })
+    } else {
+      findings.push({
+        rule_id: "R10",
+        rule_title: "Tax Return dual tracking",
+        severity: "info",
+        description:
+          `Tax Return SD at '${currentStage}' while tax_returns at '${tr.status}'. Note: these track different aspects (SD = payment lifecycle, tax_returns = filing status). Phase 3 bridge syncs going forward.`,
+        current_value: `sd.stage=${currentStage}, tax_returns.status=${tr.status}`,
+        expected_value: `sd.stage=${mapped.stage_name}`,
+      })
+    }
+  }
+
+  return findings
+}
+
+// ── Rule 11: OFFER TYPE CONSISTENCY ────────────────────────────────────────
+//
+// Per `app/api/workflows/activate-service/route.ts`, valid initial contract
+// types are `formation` and `onboarding`; `renewal` is for year-2+ clients and
+// is refused by activate-service (handled by agreement-signed instead). A
+// renewal offer on a recently formed company is therefore suspect — either
+// the wrong contract_type was selected or the formation_date is wrong.
+
+export function rule11_offerTypeConsistency(ctx: HealthContext, now: Date = new Date()): Finding[] {
+  const a = ctx.account
+  if (!a.formation_date) return []
+  if (!ctx.most_recent_offer) return []
+  if ((ctx.most_recent_offer.contract_type || "").toLowerCase() !== "renewal") return []
+
+  // "Recently formed" = within the last 12 months.
+  const formedMs = new Date(a.formation_date).getTime()
+  const ageDays = (now.getTime() - formedMs) / (1000 * 60 * 60 * 24)
+  if (ageDays > 365) return []
 
   return [{
-    rule_id: "R10",
-    rule_title: "Tax Return dual tracking",
+    rule_id: "R11",
+    rule_title: "Offer type consistency",
     severity: "warning",
-    description:
-      "Tax return record exists but no Tax Return SD found. The two track different things — the SD covers payment lifecycle and should exist alongside the tax_returns row.",
-    current_value: "service_deliveries.tax_return=0",
-    expected_value: ">= 1 Tax Return SD",
+    description: "Renewal offer on a recently formed company — verify this is correct.",
+    current_value: `most_recent_offer.contract_type=renewal, formation_date=${a.formation_date}`,
+    expected_value: "formation | onboarding for new companies",
   }]
+}
+
+// ── Rule 12: LEAD LINKAGE ──────────────────────────────────────────────────
+//
+// `app/api/webhooks/offer-signed/route.ts:214` sets `leads.converted_to_contact_id`
+// at offer-sign time. `lib/portal/auto-create.ts:494-497` sets
+// `leads.converted_to_account_id` when the account is created via the wizard.
+// A lead with status='Converted' that's missing either pointer means a step
+// in the conversion chain didn't fire — worth surfacing.
+
+export function rule12_leadLinkage(ctx: HealthContext): Finding[] {
+  const findings: Finding[] = []
+
+  for (const lead of ctx.leads) {
+    if ((lead.status || "").trim() !== "Converted") continue
+
+    if (!lead.converted_to_contact_id) {
+      findings.push({
+        rule_id: "R12",
+        rule_title: "Lead linkage",
+        severity: "warning",
+        description: `Lead ${lead.email ?? lead.id} is 'Converted' but converted_to_contact_id is not set (offer-signed should have linked it).`,
+        current_value: "converted_to_contact_id=null",
+        expected_value: "contact_id linked at offer-sign",
+      })
+    }
+
+    // Per spec: only flag converted_to_account_id=null when an account exists.
+    // The audited account exists by definition (audit is per-account), so flag
+    // the lead if the pointer is null. auto-create.ts sets this when the
+    // wizard creates the account; null means the wizard step didn't run.
+    if (!lead.converted_to_account_id) {
+      findings.push({
+        rule_id: "R12",
+        rule_title: "Lead linkage",
+        severity: "warning",
+        description: `Lead ${lead.email ?? lead.id} is 'Converted' and account ${ctx.account.id} exists, but converted_to_account_id is not set.`,
+        current_value: "converted_to_account_id=null",
+        expected_value: ctx.account.id,
+      })
+    }
+  }
+
+  return findings
 }
 
 // ── Aggregator ─────────────────────────────────────────────────────────────
@@ -605,6 +786,8 @@ export const RULE_FUNCTIONS = [
   rule8_documentsCompleteness,
   rule9_onboardingVsFormation,
   rule10_taxReturnDualTracking,
+  rule11_offerTypeConsistency,
+  rule12_leadLinkage,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
@@ -664,14 +847,16 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
   const orClauses: string[] = [`account_id.eq.${accountId}`]
   if (contactIds.length > 0) orClauses.push(`contact_id.in.(${contactIds.join(",")})`)
 
-  const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult] = await Promise.all([
+  const contactEmails = contacts.map(c => c.email).filter((e): e is string => !!e)
+
+  const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult, leadsResult] = await Promise.all([
     supabaseAdmin
       .from("service_deliveries")
       .select("id, service_type, status, stage, stage_order, account_id, contact_id, created_at")
       .or(orClauses.join(",")),
     supabaseAdmin
       .from("ss4_applications")
-      .select("id, status, pdf_signed_drive_id")
+      .select("id, status, pdf_signed_drive_id, created_at, updated_at")
       .eq("account_id", accountId),
     supabaseAdmin
       .from("lease_agreements")
@@ -689,8 +874,13 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       .from("offers")
       .select("contract_type")
       .eq("account_id", accountId)
-      .order("created_at", { ascending: false })
-      .limit(1),
+      .order("created_at", { ascending: false }),
+    contactEmails.length > 0
+      ? supabaseAdmin
+          .from("leads")
+          .select("id, email, status, converted_to_contact_id, converted_to_account_id")
+          .in("email", contactEmails)
+      : Promise.resolve({ data: [] as LeadRow[] }),
   ])
 
   // Auth user check — only call findAuthUserByEmail if at least one contact
@@ -709,6 +899,11 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
     }
   }
 
+  const allOffers = (offersResult.data || []) as OfferRow[]
+  const hasRenewalOffer = allOffers.some(
+    o => (o.contract_type || "").toLowerCase() === "renewal",
+  )
+
   const ctx: HealthContext = {
     account: account as AccountRow,
     contacts,
@@ -717,7 +912,9 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
     lease_agreements: (leaseResult.data || []) as LeaseRow[],
     documents: (docsResult.data || []) as DocumentRow[],
     tax_returns: (taxReturnsResult.data || []) as TaxReturnRow[],
-    most_recent_offer: ((offersResult.data || [])[0] as OfferRow | undefined) || null,
+    most_recent_offer: allOffers[0] || null,
+    leads: (leadsResult.data || []) as LeadRow[],
+    has_renewal_offer: hasRenewalOffer,
     has_auth_user: hasAuthUser,
   }
 

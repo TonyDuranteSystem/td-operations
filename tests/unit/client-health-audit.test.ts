@@ -10,6 +10,8 @@ import {
   rule8_documentsCompleteness,
   rule9_onboardingVsFormation,
   rule10_taxReturnDualTracking,
+  rule11_offerTypeConsistency,
+  rule12_leadLinkage,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -47,6 +49,8 @@ function emptyCtx(over: Partial<HealthContext> = {}): HealthContext {
     documents: [],
     tax_returns: [],
     most_recent_offer: null,
+    leads: [],
+    has_renewal_offer: false,
     has_auth_user: false,
     ...over,
   }
@@ -140,27 +144,28 @@ describe("rule2_portalAccess", () => {
 // ── R3: SS-4 STATUS SYNC ───────────────────────────────────────────────────
 
 describe("rule3_ss4StatusSync", () => {
-  it("flags EIN set but SS-4 still in awaiting_signature", () => {
+  it("flags EIN set but SS-4 still in awaiting_signature as ERROR", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
-      ss4_applications: [{ id: "s1", status: "awaiting_signature", pdf_signed_drive_id: null }],
+      ss4_applications: [{ id: "s1", status: "awaiting_signature", pdf_signed_drive_id: null, created_at: null, updated_at: null }],
     })
     const findings = rule3_ss4StatusSync(ctx)
     expect(findings).toHaveLength(1)
-    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].severity).toBe("error")
+    expect(findings[0].description).toContain("ein-received handler doesn't update SS-4")
   })
 
   it("does NOT flag SS-4 status=done with EIN", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
-      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1" }],
+      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
     })
     expect(rule3_ss4StatusSync(ctx)).toEqual([])
   })
 
-  it("does NOT flag when no EIN is recorded", () => {
+  it("does NOT flag when no EIN is recorded and SS-4 is fresh", () => {
     const ctx = emptyCtx({
-      ss4_applications: [{ id: "s1", status: "awaiting_signature", pdf_signed_drive_id: null }],
+      ss4_applications: [{ id: "s1", status: "awaiting_signature", pdf_signed_drive_id: null, created_at: null, updated_at: null }],
     })
     expect(rule3_ss4StatusSync(ctx)).toEqual([])
   })
@@ -168,9 +173,61 @@ describe("rule3_ss4StatusSync", () => {
   it("flags 'signed' status too (EIN should have arrived by then)", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
-      ss4_applications: [{ id: "s1", status: "signed", pdf_signed_drive_id: "drive-1" }],
+      ss4_applications: [{ id: "s1", status: "signed", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
     })
-    expect(rule3_ss4StatusSync(ctx)).toHaveLength(1)
+    const findings = rule3_ss4StatusSync(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("error")
+  })
+
+  it("flags signed PDF but status still awaiting_signature (no EIN)", () => {
+    const ctx = emptyCtx({
+      ss4_applications: [{ id: "s1", status: "awaiting_signature", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
+    })
+    const findings = rule3_ss4StatusSync(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("pdf_signed_drive_id present")
+  })
+
+  it("flags stale SS-4 (>21d, unchanged since creation)", () => {
+    const NOW = new Date("2026-06-01T00:00:00Z")
+    const ts = "2026-04-01T00:00:00Z" // 61 days before NOW
+    const ctx = emptyCtx({
+      ss4_applications: [{ id: "s1", status: "draft", pdf_signed_drive_id: null, created_at: ts, updated_at: ts }],
+    })
+    const findings = rule3_ss4StatusSync(ctx, NOW)
+    expect(findings.some(f => f.description.includes("unchanged for 3+ weeks"))).toBe(true)
+  })
+
+  it("does NOT flag stale when status has progressed (updated_at > created_at)", () => {
+    const NOW = new Date("2026-06-01T00:00:00Z")
+    const ctx = emptyCtx({
+      ss4_applications: [{
+        id: "s1",
+        status: "submitted",
+        pdf_signed_drive_id: null,
+        created_at: "2026-04-01T00:00:00Z",
+        updated_at: "2026-05-15T00:00:00Z",
+      }],
+    })
+    const findings = rule3_ss4StatusSync(ctx, NOW)
+    expect(findings.some(f => f.description.includes("unchanged for 3+ weeks"))).toBe(false)
+  })
+
+  it("EIN + done = no findings (golden path)", () => {
+    const NOW = new Date("2026-06-01T00:00:00Z")
+    const ctx = emptyCtx({
+      account: baseAccount({ ein_number: "12-3456789" }),
+      ss4_applications: [{
+        id: "s1",
+        status: "done",
+        pdf_signed_drive_id: "drive-1",
+        created_at: "2026-05-25T00:00:00Z",
+        updated_at: "2026-05-30T00:00:00Z",
+      }],
+    })
+    expect(rule3_ss4StatusSync(ctx, NOW)).toEqual([])
   })
 })
 
@@ -230,6 +287,62 @@ describe("rule4_cmraAfterLease", () => {
       ],
     })
     expect(rule4_cmraAfterLease(ctx)).toEqual([])
+  })
+
+  it("YEAR-1 EXEMPTION: formation_date in current year + no renewal offer → info, skip CMRA SD check", () => {
+    const NOW = new Date("2026-06-01T00:00:00Z")
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-02-15" }),
+      lease_agreements: [{ id: "l1", status: "signed", signed_at: "2026-03-01T00:00:00Z" }],
+      service_deliveries: [
+        // Stuck CMRA SD that would normally flag — should be IGNORED in year 1.
+        {
+          id: "sd1", service_type: "CMRA Mailing Address", status: "active", stage: "Lease Created",
+          stage_order: 1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      has_renewal_offer: false,
+    })
+    const findings = rule4_cmraAfterLease(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("Year-1 formation client")
+  })
+
+  it("YEAR-1 EXEMPTION does NOT apply when a renewal offer exists", () => {
+    const NOW = new Date("2026-06-01T00:00:00Z")
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-02-15" }),
+      lease_agreements: [{ id: "l1", status: "signed", signed_at: "2026-03-01T00:00:00Z" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "CMRA Mailing Address", status: "active", stage: "Lease Created",
+          stage_order: 1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      has_renewal_offer: true,
+    })
+    const findings = rule4_cmraAfterLease(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("CMRA SD is still at stage 'Lease Created'")
+  })
+
+  it("YEAR-1 EXEMPTION does NOT apply when formation was in a prior year", () => {
+    const NOW = new Date("2026-06-01T00:00:00Z")
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2024-02-15" }),
+      lease_agreements: [{ id: "l1", status: "signed", signed_at: "2026-03-01T00:00:00Z" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "CMRA Mailing Address", status: "active", stage: "Lease Created",
+          stage_order: 1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      has_renewal_offer: false,
+    })
+    const findings = rule4_cmraAfterLease(ctx, NOW)
+    expect(findings[0].severity).toBe("warning")
   })
 })
 
@@ -370,6 +483,22 @@ describe("rule7_renewalDates", () => {
     const findings = rule7_renewalDates(ctx, NOW)
     expect(findings.some(f => f.expected_value === "2026-12-31")).toBe(true)
   })
+
+  it("emits INFO for an unknown state_of_formation (not in policy table)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2025-01-01", ra_renewal_date: "2026-01-01", state_of_formation: "CA" }),
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.severity === "info" && f.description.includes("not in the annual report policy"))).toBe(true)
+  })
+
+  it("does NOT emit unknown-state info for a known state (WY)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2025-01-01", ra_renewal_date: "2026-01-01", state_of_formation: "WY" }),
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.description.includes("not in the annual report policy"))).toBe(false)
+  })
 })
 
 // ── R8: DOCUMENTS COMPLETENESS ─────────────────────────────────────────────
@@ -378,7 +507,7 @@ describe("rule8_documentsCompleteness", () => {
   it("flags signed SS-4 with no SS-4 document indexed", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
-      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1" }],
+      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
       documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "Operating Agreement" }],
     })
     const findings = rule8_documentsCompleteness(ctx)
@@ -388,7 +517,7 @@ describe("rule8_documentsCompleteness", () => {
   it("does NOT flag SS-4 when an SS-4 doc exists", () => {
     const ctx = emptyCtx({
       account: baseAccount({ ein_number: "12-3456789" }),
-      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1" }],
+      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
       documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "SS-4 Application" }],
     })
     const findings = rule8_documentsCompleteness(ctx)
@@ -478,6 +607,166 @@ describe("rule10_taxReturnDualTracking", () => {
     const ctx = emptyCtx()
     expect(rule10_taxReturnDualTracking(ctx)).toEqual([])
   })
+
+  it("emits INFO 'in sync' when SD stage matches mapped TR status", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Data Received" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    const findings = rule10_taxReturnDualTracking(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("in sync")
+  })
+
+  it("emits INFO 'tracks different aspects' when SD stage and TR status disagree", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "TR Filed" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Preparation",
+          stage_order: 5, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    const findings = rule10_taxReturnDualTracking(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("track different aspects")
+    expect(findings[0].description).toContain("SD = payment lifecycle")
+  })
+
+  it("emits no finding when TR status doesn't map to any SD stage", () => {
+    const ctx = emptyCtx({
+      // "pending" is not in TAX_RETURN_STATUS_TO_SD_STAGE — mapper returns null.
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "pending" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "active", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule10_taxReturnDualTracking(ctx)).toEqual([])
+  })
+})
+
+// ── R11: OFFER TYPE CONSISTENCY ────────────────────────────────────────────
+
+describe("rule11_offerTypeConsistency", () => {
+  const NOW = new Date("2026-06-01T00:00:00Z")
+
+  it("flags renewal offer on a recently formed company", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-02-01" }), // 4 months ago
+      most_recent_offer: { contract_type: "renewal" },
+    })
+    const findings = rule11_offerTypeConsistency(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("recently formed")
+  })
+
+  it("does NOT flag renewal on a company formed > 12 months ago", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2024-01-01" }), // ~29 months ago
+      most_recent_offer: { contract_type: "renewal" },
+    })
+    expect(rule11_offerTypeConsistency(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag formation/onboarding offers", () => {
+    const ctx1 = emptyCtx({
+      account: baseAccount({ formation_date: "2026-02-01" }),
+      most_recent_offer: { contract_type: "formation" },
+    })
+    const ctx2 = emptyCtx({
+      account: baseAccount({ formation_date: "2026-02-01" }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    expect(rule11_offerTypeConsistency(ctx1, NOW)).toEqual([])
+    expect(rule11_offerTypeConsistency(ctx2, NOW)).toEqual([])
+  })
+
+  it("does NOT flag when there's no formation_date", () => {
+    const ctx = emptyCtx({
+      most_recent_offer: { contract_type: "renewal" },
+    })
+    expect(rule11_offerTypeConsistency(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag when there's no offer", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-02-01" }),
+      most_recent_offer: null,
+    })
+    expect(rule11_offerTypeConsistency(ctx, NOW)).toEqual([])
+  })
+})
+
+// ── R12: LEAD LINKAGE ──────────────────────────────────────────────────────
+
+describe("rule12_leadLinkage", () => {
+  it("flags Converted lead missing converted_to_contact_id", () => {
+    const ctx = emptyCtx({
+      leads: [{
+        id: "lead-1", email: "x@y.com", status: "Converted",
+        converted_to_contact_id: null, converted_to_account_id: ACCOUNT_ID,
+      }],
+    })
+    const findings = rule12_leadLinkage(ctx)
+    expect(findings.some(f => f.description.includes("converted_to_contact_id"))).toBe(true)
+  })
+
+  it("flags Converted lead missing converted_to_account_id (account exists)", () => {
+    const ctx = emptyCtx({
+      leads: [{
+        id: "lead-1", email: "x@y.com", status: "Converted",
+        converted_to_contact_id: "c1", converted_to_account_id: null,
+      }],
+    })
+    const findings = rule12_leadLinkage(ctx)
+    expect(findings.some(f => f.description.includes("converted_to_account_id is not set"))).toBe(true)
+  })
+
+  it("flags BOTH pointers null on a Converted lead", () => {
+    const ctx = emptyCtx({
+      leads: [{
+        id: "lead-1", email: "x@y.com", status: "Converted",
+        converted_to_contact_id: null, converted_to_account_id: null,
+      }],
+    })
+    expect(rule12_leadLinkage(ctx)).toHaveLength(2)
+  })
+
+  it("does NOT flag a fully-linked Converted lead", () => {
+    const ctx = emptyCtx({
+      leads: [{
+        id: "lead-1", email: "x@y.com", status: "Converted",
+        converted_to_contact_id: "c1", converted_to_account_id: ACCOUNT_ID,
+      }],
+    })
+    expect(rule12_leadLinkage(ctx)).toEqual([])
+  })
+
+  it("does NOT flag a lead whose status is NOT 'Converted'", () => {
+    const ctx = emptyCtx({
+      leads: [{
+        id: "lead-1", email: "x@y.com", status: "Qualified",
+        converted_to_contact_id: null, converted_to_account_id: null,
+      }],
+    })
+    expect(rule12_leadLinkage(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when no leads are linked", () => {
+    expect(rule12_leadLinkage(emptyCtx())).toEqual([])
+  })
 })
 
 // ── Aggregator ─────────────────────────────────────────────────────────────
@@ -502,7 +791,7 @@ describe("runRules", () => {
           stage_order: 99, account_id: ACCOUNT_ID, contact_id: null, created_at: "2025-06-01T00:00:00Z",
         },
       ],
-      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1" }],
+      ss4_applications: [{ id: "s1", status: "done", pdf_signed_drive_id: "drive-1", created_at: null, updated_at: null }],
       documents: [
         { id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "SS-4 Application" },
       ],
