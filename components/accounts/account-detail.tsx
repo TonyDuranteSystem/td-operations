@@ -1139,7 +1139,7 @@ function DBARow({
         <EditableField icon={FileText} label="Notes" type="textarea" value={d.detail_notes ?? ''} onSave={makeSaver('notes')} readOnly={!canEdit} />
       </div>
 
-      <div className="flex items-center gap-2 pt-1">
+      <div className="flex items-center gap-2 pt-2 border-t border-zinc-100">
         <input
           ref={fileRef}
           type="file"
@@ -1152,11 +1152,14 @@ function DBARow({
           onClick={handleUploadClick}
           disabled={uploading || !detailId}
           title={!detailId ? 'Save the DBA before uploading documents' : 'Upload a document for this DBA. OCR will try to auto-fill missing fields.'}
-          className="flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-zinc-50 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
           {uploading ? 'Uploading…' : 'Upload Document'}
         </button>
+        {!detailId && (
+          <span className="text-xs text-muted-foreground">Save the DBA first to enable upload</span>
+        )}
       </div>
     </div>
   )
