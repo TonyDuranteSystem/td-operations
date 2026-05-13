@@ -11,6 +11,7 @@ import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
 import { ProfileEditor } from '@/components/portal/profile-editor'
+import { LanguageSwitcher } from '@/components/portal/language-switcher'
 
 export default async function PortalProfilePage() {
   const supabase = createClient()
@@ -121,13 +122,19 @@ export default async function PortalProfilePage() {
       )}
 
       {/* Actions */}
-      <div className="flex gap-3">
-        <Link
-          href="/portal/settings"
-          className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50 transition-colors"
-        >
-          {t('profile.changePassword', locale)}
-        </Link>
+      <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <p className="text-sm font-semibold text-zinc-900 uppercase tracking-wide mb-1">{t('settings.language', locale)}</p>
+            <LanguageSwitcher />
+          </div>
+          <Link
+            href="/portal/settings"
+            className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50 transition-colors self-end"
+          >
+            {t('profile.changePassword', locale)}
+          </Link>
+        </div>
       </div>
 
       <p className="text-xs text-zinc-400">
