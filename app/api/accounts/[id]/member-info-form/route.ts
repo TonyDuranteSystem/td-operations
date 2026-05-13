@@ -7,21 +7,30 @@ export const dynamic = "force-dynamic"
 
 /**
  * GET /api/accounts/[id]/member-info-form
- * Returns the latest member info request for this account (if any).
+ * Returns the latest member info request for this account (if any),
+ * plus whether a primary contact is set (so the UI can disable the button proactively).
  */
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { data } = await supabaseAdmin
-    .from("member_info_requests")
-    .select("id, status, created_at, submitted_at")
-    .eq("account_id", params.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  const [{ data: request }, { data: primary }] = await Promise.all([
+    supabaseAdmin
+      .from("member_info_requests")
+      .select("id, status, created_at, submitted_at")
+      .eq("account_id", params.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", params.id)
+      .eq("is_primary", true)
+      .maybeSingle(),
+  ])
 
-  return NextResponse.json({ request: data ?? null })
+  return NextResponse.json({ request: request ?? null, has_primary_contact: !!primary?.contact_id })
 }
 
 /**
@@ -119,7 +128,8 @@ export async function POST(
   const formUrl = `${APP_BASE_URL}/member-info/${token}/${accessCode}`
   const adminPreviewUrl = `${formUrl}?preview=td`
 
-  // Resolve primary contact for language-aware message + email notification
+  // Resolve primary contact — required. If none is set, return a clear error
+  // so the admin knows to mark a primary contact before sending the form.
   const { data: primaryContact } = await supabaseAdmin
     .from("account_contacts")
     .select("contact_id, contacts(language)")
@@ -127,8 +137,15 @@ export async function POST(
     .eq("is_primary", true)
     .maybeSingle()
 
-  const contactId = primaryContact?.contact_id ?? null
-  const contactRow = primaryContact?.contacts as { language?: string | null } | null
+  if (!primaryContact?.contact_id) {
+    return NextResponse.json(
+      { error: "No primary contact set for this account. Please mark a contact as primary before sending the form." },
+      { status: 400 }
+    )
+  }
+
+  const contactId = primaryContact.contact_id
+  const contactRow = primaryContact.contacts as { language?: string | null } | null
   const lang = contactRow?.language ?? "en"
   const isItalian = lang === "it" || lang === "Italian"
 

@@ -1413,11 +1413,15 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
   const [deleteTarget, setDeleteTarget] = useState<CrmMember | null>(null)
   const [sendingForm, setSendingForm] = useState(false)
   const [formRequest, setFormRequest] = useState<{ status: string; created_at: string; submitted_at: string | null } | null>(null)
+  const [hasPrimaryContact, setHasPrimaryContact] = useState(true)
 
   const loadFormRequest = () => {
     fetch(`/api/accounts/${accountId}/member-info-form`)
       .then(r => r.json())
-      .then(d => setFormRequest(d.request ?? null))
+      .then(d => {
+        setFormRequest(d.request ?? null)
+        setHasPrimaryContact(d.has_primary_contact ?? true)
+      })
       .catch(() => {})
   }
 
@@ -1542,14 +1546,17 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
           <div className="flex items-center gap-1.5">
             <button
               onClick={handleSendMemberInfoForm}
-              disabled={sendingForm}
-              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
-              title="Send member info form via portal chat"
+              disabled={sendingForm || !hasPrimaryContact}
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={!hasPrimaryContact ? 'No primary contact set — mark a contact as primary in the Contacts section above' : 'Send member info form via portal chat'}
             >
               {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               {formRequest ? 'Resend' : 'Send Info Form'}
             </button>
-            {formRequest && (
+            {!hasPrimaryContact && (
+              <span className="text-xs text-amber-600">No primary contact</span>
+            )}
+            {hasPrimaryContact && formRequest && (
               <span className="text-xs text-muted-foreground">
                 {formRequest.submitted_at
                   ? `✓ Submitted ${new Date(formRequest.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
