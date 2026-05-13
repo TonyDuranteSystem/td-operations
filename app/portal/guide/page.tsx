@@ -405,7 +405,7 @@ const ARTICLES_EN: Article[] = [
     desc: 'Change your password, switch language, or enable push notifications',
     keywords: ['settings', 'password', 'language', 'english', 'italian', 'italiano', 'notification', 'push', 'impostazioni', 'password', 'lingua', 'notifiche', 'change password', 'cambia password', 'lingua portale'],
     steps: [
-      { text: 'Click "Profile" in the left menu, then click "Settings" (or click the gear icon at the top right of the Profile page).' },
+      { text: 'Click "Profile" in the left menu, then scroll to the bottom of the page and click "Change Password" — this opens the Settings page where you can manage language, password, and notifications.' },
       { text: 'Language: click "English" or "Italiano" to switch the portal language. The change takes effect immediately.', sub: 'Your language preference is saved so it applies every time you log in.' },
       { text: 'Password: enter your new password (minimum 8 characters), confirm it, then click "Update Password".' },
       { text: 'Push Notifications: click the toggle to enable browser notifications for new chat messages, deadlines, and documents.', sub: 'Your browser will ask for permission the first time.' },
@@ -815,7 +815,7 @@ const ARTICLES_IT: Article[] = [
     desc: 'Cambia la password, cambia lingua o attiva le notifiche push',
     keywords: ['impostazioni', 'password', 'lingua', 'italiano', 'english', 'notifiche', 'push', 'settings', 'cambia password', 'lingua portale', 'change language', 'notifications'],
     steps: [
-      { text: 'Clicca "Profilo" nel menu a sinistra, poi clicca "Impostazioni" (o clicca l\'icona ingranaggio in alto a destra della pagina Profilo).' },
+      { text: 'Clicca "Profilo" nel menu a sinistra, poi scorri fino in fondo alla pagina e clicca "Cambia Password" — si apre la pagina Impostazioni dove puoi gestire lingua, password e notifiche.' },
       { text: 'Lingua: clicca "English" o "Italiano" per cambiare la lingua del portale. Il cambio ha effetto immediato.', sub: 'La tua preferenza viene salvata e si applica ogni volta che accedi.' },
       { text: 'Password: inserisci la nuova password (minimo 8 caratteri), confermala, poi clicca "Aggiorna Password".' },
       { text: 'Notifiche Push: clicca il toggle per abilitare le notifiche browser per nuovi messaggi in chat, scadenze e documenti.', sub: 'Il browser chiederà il permesso la prima volta.' },
