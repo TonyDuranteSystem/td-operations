@@ -2,8 +2,8 @@
  * Unit tests for lib/operations/tax-return-sd-bridge.ts.
  *
  * Covers:
- *   - mapTaxReturnStatusToSDStage: the mapped tax_return_status enum values,
- *     the unmapped pre-payment values (Payment Pending / Not Invoiced),
+ *   - mapTaxReturnStatusToSDStage: every mapped tax_return_status enum
+ *     value (including the pre-payment "Company Data Pending" entries),
  *     unknown values, and null/undefined input.
  *   - syncTaxReturnToSD: TR not found, no mapping, no account_id, SD not
  *     present (createSD path), SD already at target (noop), SD at different
@@ -95,11 +95,13 @@ beforeEach(() => {
 
 describe("mapTaxReturnStatusToSDStage", () => {
   it.each([
+    ["Payment Pending", "Company Data Pending", -1],
+    ["Not Invoiced", "Company Data Pending", -1],
     ["Paid - Not Started", "1st Installment Paid", 1],
+    ["1st Installment Paid", "1st Installment Paid", 1],
     ["Activated - Need Link", "1st Installment Paid", 1],
     ["Extension Requested", "Extension Filed", 2],
     ["Extension Filed", "Extension Filed", 2],
-    ["2nd Installment Paid", "Wizard Available", 4],
     ["Wizard Available", "Wizard Available", 4],
     ["Link Sent - Awaiting Data", "Wizard Available", 4],
     ["Data Received", "Data Received", 5],
@@ -112,13 +114,6 @@ describe("mapTaxReturnStatusToSDStage", () => {
       stage_order: stageOrder,
     })
   })
-
-  it.each(["Payment Pending", "Not Invoiced"])(
-    "returns null for pre-payment status %s (no SD stage in pipeline)",
-    (status) => {
-      expect(mapTaxReturnStatusToSDStage(status)).toBeNull()
-    },
-  )
 
   it("returns null for unknown status values", () => {
     expect(mapTaxReturnStatusToSDStage("Bogus Status")).toBeNull()

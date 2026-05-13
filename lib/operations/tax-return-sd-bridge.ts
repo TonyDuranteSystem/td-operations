@@ -8,19 +8,17 @@
  *      if present.
  *
  * Mapping rationale (TR status → SD stage):
- *   Verified against the live sandbox `tax_return_status` enum (13 values
- *   after the 2026-05-13 'Wizard Available' addition) and `pipeline_stages`
- *   rows for `service_type='Tax Return'` (9 stages, canonical order 1..9
- *   after the same migration). The bundle pipeline gates the wizard behind
- *   the 2nd-installment payment; the matching SD stage is "Wizard Available"
+ *   Verified against the production `pipeline_stages` rows for
+ *   `service_type='Tax Return'` (11 stages, canonical order -1..9 after the
+ *   2026-05-13 expansion that added "Company Data Pending" (-1) and "Wizard
+ *   Available" (4)). The bundle pipeline gates the wizard behind the
+ *   2nd-installment payment; the matching SD stage is "Wizard Available"
  *   (stage_order=4), the name the client sees in the portal.
  *
- *   Pre-payment statuses ("Payment Pending", "Not Invoiced") have no SD
- *   stage in the new pipeline — billing hasn't produced an installment yet —
- *   so they return null (no SD created or advanced). "2nd Installment Paid"
- *   is retained for historical rows and aliases to the new "Wizard Available"
- *   stage. "Sent to India" maps to "Preparation" because that's the stage
- *   the accountant works at while the return is at India Adas.
+ *   Pre-payment statuses ("Payment Pending", "Not Invoiced") map to the
+ *   new "Company Data Pending" stage (stage_order=-1) so an SD exists from
+ *   intake onward. "Sent to India" maps to "Preparation" because that's the
+ *   stage the accountant works at while the return is at India Adas.
  *
  * The inverse map (SD stage → TR status) lives in
  * `lib/service-delivery.ts::advanceServiceDelivery` step 9. When the bridge
@@ -40,23 +38,24 @@ export interface TaxReturnSDStage {
 
 /**
  * Canonical TR status → SD stage map. Keys are the literal
- * `tax_return_status` enum values. Statuses that have no corresponding
- * pipeline row (the pre-payment states) return null so the bridge skips
- * SD creation rather than fabricating a stage that doesn't exist.
+ * `tax_return_status` enum values. Every mapped status has a corresponding
+ * pipeline row; pre-payment statuses point at "Company Data Pending" (-1)
+ * so an SD is materialised from intake.
  */
 const TAX_RETURN_STATUS_TO_SD_STAGE: Record<string, TaxReturnSDStage> = {
-  "Paid - Not Started":                 { stage_name: "1st Installment Paid", stage_order: 1 },
-  "Activated - Need Link":              { stage_name: "1st Installment Paid", stage_order: 1 },
-  "Extension Requested":                { stage_name: "Extension Filed",      stage_order: 2 },
-  "Extension Filed":                    { stage_name: "Extension Filed",      stage_order: 2 },
-  "2nd Installment Paid":               { stage_name: "Wizard Available",     stage_order: 4 },
-  "Wizard Available":                   { stage_name: "Wizard Available",     stage_order: 4 },
-  "Link Sent - Awaiting Data":          { stage_name: "Wizard Available",     stage_order: 4 },
-  "Data Received":                      { stage_name: "Data Received",        stage_order: 5 },
-  "Sent to India":                      { stage_name: "Preparation",          stage_order: 6 },
-  "TR Completed - Awaiting Signature":  { stage_name: "TR Completed",         stage_order: 7 },
-  "TR Filed":                           { stage_name: "TR Filed",             stage_order: 8 },
-  // "Payment Pending" and "Not Invoiced" intentionally absent — no SD stage.
+  "Payment Pending":                    { stage_name: "Company Data Pending",  stage_order: -1 },
+  "Not Invoiced":                       { stage_name: "Company Data Pending",  stage_order: -1 },
+  "Paid - Not Started":                 { stage_name: "1st Installment Paid",  stage_order: 1  },
+  "1st Installment Paid":               { stage_name: "1st Installment Paid",  stage_order: 1  },
+  "Activated - Need Link":              { stage_name: "1st Installment Paid",  stage_order: 1  },
+  "Extension Requested":                { stage_name: "Extension Filed",       stage_order: 2  },
+  "Extension Filed":                    { stage_name: "Extension Filed",       stage_order: 2  },
+  "Wizard Available":                   { stage_name: "Wizard Available",      stage_order: 4  },
+  "Link Sent - Awaiting Data":          { stage_name: "Wizard Available",      stage_order: 4  },
+  "Data Received":                      { stage_name: "Data Received",         stage_order: 5  },
+  "Sent to India":                      { stage_name: "Preparation",           stage_order: 6  },
+  "TR Completed - Awaiting Signature":  { stage_name: "TR Completed",          stage_order: 7  },
+  "TR Filed":                           { stage_name: "TR Filed",              stage_order: 8  },
 }
 
 export function mapTaxReturnStatusToSDStage(status: string | null | undefined): TaxReturnSDStage | null {
