@@ -92,8 +92,8 @@ export default async function WizardPage({
   if (!forcedType && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
     const sdQuery = accountId
-      ? supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('account_id', accountId).in('status', ['active']).limit(10)
-      : supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('contact_id', contactId).in('status', ['active']).limit(10)
+      ? supabaseAdmin.from('service_deliveries').select('service_type, stage, stage_order').eq('account_id', accountId).in('status', ['active']).limit(10)
+      : supabaseAdmin.from('service_deliveries').select('service_type, stage, stage_order').eq('contact_id', contactId).in('status', ['active']).limit(10)
 
     const { data: sds } = await sdQuery
 
@@ -125,14 +125,25 @@ export default async function WizardPage({
     } else if (types.includes('ITIN')) {
       pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
     }
-    if (types.includes('Tax Return')) {
-      // Stage-based gating for standalone business Tax Return:
-      // If SD is at "Company Data Pending", show company_info wizard instead of tax wizard.
-      const taxReturnSd = (sds || []).find(s => s.service_type === 'Tax Return')
-      if (taxReturnSd?.stage === 'Company Data Pending') {
-        pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType: 'Tax Return' })
-      } else {
-        pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: 'Tax Return' })
+    if (types.includes('Tax Return') || types.includes('Tax Return One-Time')) {
+      // Post-redesign 2026-05-13: stage-based gating uses 'Wizard Available'
+      // as the canonical "client can fill the tax data wizard" milestone.
+      //   - Annual pipeline (service_type='Tax Return'): wizard appears at
+      //     stage_order >= 4 ("Wizard Available", "Data Received",
+      //     "Preparation", "TR Completed", "TR Filed").
+      //   - One-Time pipeline (service_type='Tax Return One-Time'): wizard
+      //     appears at stage_order >= 2 ("Wizard Available", "Data Received",
+      //     "Preparation", "TR Completed", "TR Filed").
+      // Before the wizard milestone we surface a placeholder so the client
+      // sees status, not a confusingly editable form. The legacy
+      // 'Company Data Pending' stage is gone — the standalone One-Time flow
+      // tracks 'Payment Pending'/'Payment Received' instead.
+      const annualSd = (sds || []).find(s => s.service_type === 'Tax Return')
+      const oneTimeSd = (sds || []).find(s => s.service_type === 'Tax Return One-Time')
+      const annualGateOpen = annualSd && (annualSd.stage_order ?? -1) >= 4
+      const oneTimeGateOpen = oneTimeSd && (oneTimeSd.stage_order ?? -1) >= 2
+      if (annualGateOpen || oneTimeGateOpen) {
+        pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: annualSd ? 'Tax Return' : 'Tax Return One-Time' })
       }
     }
 
@@ -358,7 +369,19 @@ export default async function WizardPage({
       // receipt stage, don't render the pause banner — the wizard gate
       // should unblock so the client can still reach their data. This
       // mirrors the portal home check in app/portal/page.tsx.
-      const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Extension Filed'])
+      // Post-redesign 2026-05-13: 'Wizard Available' is the canonical
+      // pre-data-received status. Legacy values ('Activated - Need Link',
+      // 'Link Sent - Awaiting Data', 'Paid - Not Started') are kept for
+      // historical rows that haven't been re-written by the new SD bridge.
+      const PAUSE_ELIGIBLE_TR_STATUS = new Set([
+        'Payment Pending',
+        'Paid - Not Started',
+        'Activated - Need Link',
+        'Wizard Available',
+        'Link Sent - Awaiting Data',
+        'Extension Requested',
+        'Extension Filed',
+      ])
       const pauseEligible = !trStatus || PAUSE_ELIGIBLE_TR_STATUS.has(trStatus)
       if (pauseEligible) {
         const resolved = resolveExtensionDeadline(deadlineIso, taxYear, returnType)

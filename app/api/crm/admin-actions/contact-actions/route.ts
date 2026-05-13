@@ -236,17 +236,37 @@ export async function POST(req: NextRequest) {
           sideEffects.push("Client notified via portal")
         }
 
-        // 9. Tax Return sync
-        if (delivery.service_type === "Tax Return Filing" && delivery.account_id) {
+        // 9. Tax Return sync — both annual ("Tax Return") and one-time
+        // ("Tax Return One-Time") pipelines feed tax_returns.status. Stage
+        // names below match the post-redesign 2026-05-13 pipeline_stages
+        // rows; legacy stage names ("Payment Verified", "Data Link Sent",
+        // "Sent to be filed") map forward where they overlap.
+        if (
+          (delivery.service_type === "Tax Return" ||
+            delivery.service_type === "Tax Return One-Time" ||
+            delivery.service_type === "Tax Return Filing") &&
+          delivery.account_id
+        ) {
           const stageToStatus: Record<string, string> = {
-            "Payment Verified": "Activated - Need Link",
-            "Data Link Sent": "Link Sent - Awaiting Data",
-            "Extension Requested": "Extension Requested",
-            "Extension Filed": "Extension Filed",
+            // Annual pipeline (Tax Return)
+            "1st Installment Paid": "Paid - Not Started",
+            "Awaiting 2nd Payment": "Paid - Not Started",
+            "Wizard Available": "Wizard Available",
             "Data Received": "Data Received",
-            "Sent to be filed": "Sent to India",
+            "Preparation": "Sent to India",
             "TR Completed": "TR Completed - Awaiting Signature",
             "TR Filed": "TR Filed",
+            "Extension Requested": "Extension Requested",
+            "Extension Filed": "Extension Filed",
+            "Terminated - Non Payment": "Not Invoiced",
+            // One-Time pipeline (Tax Return One-Time)
+            "Payment Pending": "Payment Pending",
+            "Payment Received": "Paid - Not Started",
+            "Terminated": "Not Invoiced",
+            // Legacy stage names kept for historical advance_stage payloads
+            "Payment Verified": "Activated - Need Link",
+            "Data Link Sent": "Link Sent - Awaiting Data",
+            "Sent to be filed": "Sent to India",
           }
           const taxStatus = stageToStatus[targetStage.stage_name]
           if (taxStatus) {

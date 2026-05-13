@@ -301,7 +301,7 @@ interface SeedEntry {
 }
 
 /**
- * Mirror of the 18 production seeds for catalog_id='services'. Used both as
+ * Mirror of the 19 production seeds for catalog_id='services'. Used both as
  * fixture data and as drift-detector for the hand-maintained ServiceSlug
  * union in `lib/services/index.ts`.
  */
@@ -309,6 +309,7 @@ const SERVICES_SEED: SeedEntry[] = [
   { slug: "llc_formation", display_name: "LLC Formation", status: "active", tags: ["service", "sellable", "entry_to_management"], display_name_translations: { it: "Costituzione LLC" } },
   { slug: "onboarding", display_name: "Onboarding", status: "active", tags: ["service", "sellable", "entry_to_management"], display_name_translations: { it: "Onboarding LLC esistente" } },
   { slug: "tax_return", display_name: "Tax Return", status: "active", tags: ["service", "sd", "sellable", "auto_bundled_with_management"], display_name_translations: { it: "Dichiarazione Fiscale" } },
+  { slug: "tax_return_one_time", display_name: "Tax Return One-Time", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Dichiarazione Fiscale (Una Tantum)" } },
   { slug: "itin", display_name: "ITIN Application", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Richiesta ITIN" } },
   { slug: "ein", display_name: "EIN Application", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Richiesta EIN" } },
   { slug: "banking", display_name: "Banking", status: "active", tags: ["service", "sd", "sellable"], display_name_translations: { it: "Apertura conto bancario" } },
@@ -397,13 +398,13 @@ describe("getCatalog", () => {
 describe("listEntries", () => {
   it("excludes deprecated by default", async () => {
     const rows = await listEntries("services")
-    expect(rows.length).toBe(17)
+    expect(rows.length).toBe(18)
     expect(rows.find((r) => r.slug === "annual_renewal_sd")).toBeUndefined()
   })
 
   it("includes deprecated when includeDeprecated=true", async () => {
     const rows = await listEntries("services", { includeDeprecated: true })
-    expect(rows.length).toBe(18)
+    expect(rows.length).toBe(19)
     expect(rows.find((r) => r.slug === "annual_renewal_sd")).toBeDefined()
   })
 
@@ -414,7 +415,7 @@ describe("listEntries", () => {
 
   it("filters by tags (jsonb @>)", async () => {
     const services = await listEntries("services", { tags: ["service"] })
-    expect(services.length).toBe(11)
+    expect(services.length).toBe(12)
     expect(services.every((r) => r.tags.includes("service"))).toBe(true)
   })
 
@@ -913,15 +914,15 @@ describe("resolvePendingReview", () => {
 // ─── lib/services/index.ts accessors ─────────────────────────────────────
 
 describe("lib/services/index", () => {
-  it("getAllServices returns the 11 active rows tagged 'service'", async () => {
+  it("getAllServices returns the 12 active rows tagged 'service'", async () => {
     const services = await getAllServices()
-    expect(services.length).toBe(11)
+    expect(services.length).toBe(12)
     expect(services.every((s) => s.status === "active" && s.tags.includes("service"))).toBe(true)
   })
 
-  it("getAllSDTypes returns the 10 rows tagged 'sd' (annual_renewal_sd is tagged deprecated, not sd)", async () => {
+  it("getAllSDTypes returns the 11 rows tagged 'sd' (annual_renewal_sd is tagged deprecated, not sd)", async () => {
     const sds = await getAllSDTypes()
-    expect(sds.length).toBe(10)
+    expect(sds.length).toBe(11)
     expect(sds.every((s) => s.tags.includes("sd"))).toBe(true)
     expect(sds.find((s) => s.slug === "annual_renewal_sd")).toBeUndefined()
   })
@@ -961,9 +962,9 @@ describe("lib/services/index", () => {
     )
   })
 
-  it("getAllSellableServices returns the 11 sellable rows", async () => {
+  it("getAllSellableServices returns the 12 sellable rows", async () => {
     const sellable = await getAllSellableServices()
-    expect(sellable.length).toBe(11)
+    expect(sellable.length).toBe(12)
     expect(sellable.every((s) => s.tags.includes("sellable"))).toBe(true)
   })
 
@@ -1001,13 +1002,14 @@ describe("lib/services/index", () => {
   })
 
   // ── Build-time drift detector: ServiceSlug union vs DB seed ──
-  it("ServiceSlug union covers exactly the 11 seeded rows tagged 'service'", () => {
+  it("ServiceSlug union covers exactly the 12 seeded rows tagged 'service'", () => {
     // Hand-mirrored from `lib/services/index.ts::ServiceSlug`. If this list
     // diverges from the type union, TS will fail on the `satisfies` below.
     const SERVICE_SLUGS_FROM_TYPE = [
       "llc_formation",
       "onboarding",
       "tax_return",
+      "tax_return_one_time",
       "itin",
       "ein",
       "banking",
@@ -1022,8 +1024,8 @@ describe("lib/services/index", () => {
     expect(SERVICE_SLUGS_FROM_TYPE.slice().sort()).toEqual(fromSeed.slice().sort())
   })
 
-  it("seed contains exactly 18 entries (matches DB)", () => {
-    expect(SERVICES_SEED.length).toBe(18)
+  it("seed contains exactly 19 entries (matches DB)", () => {
+    expect(SERVICES_SEED.length).toBe(19)
   })
 })
 
@@ -1048,21 +1050,21 @@ describe("SERVICES_STATIC", () => {
     }
   })
 
-  it("SERVICES_STATIC_SELLABLE matches getAllServices() (11 active rows tagged 'service')", async () => {
+  it("SERVICES_STATIC_SELLABLE matches getAllServices() (12 active rows tagged 'service')", async () => {
     const dynamic = await getAllServices()
     expect(SERVICES_STATIC_SELLABLE.map((e) => e.slug).sort()).toEqual(
       dynamic.map((e) => e.slug).sort(),
     )
-    expect(SERVICES_STATIC_SELLABLE.length).toBe(11)
+    expect(SERVICES_STATIC_SELLABLE.length).toBe(12)
   })
 
-  it("SD_STATIC matches active 'sd'-tagged rows (10 rows; annual_renewal_sd is deprecated)", async () => {
+  it("SD_STATIC matches active 'sd'-tagged rows (11 rows; annual_renewal_sd is deprecated)", async () => {
     const dynamic = await getAllSDTypes()
     const dynamicActive = dynamic.filter((e) => e.status === "active")
     expect(SD_STATIC.map((e) => e.slug).sort()).toEqual(
       dynamicActive.map((e) => e.slug).sort(),
     )
-    expect(SD_STATIC.length).toBe(10)
+    expect(SD_STATIC.length).toBe(11)
   })
 
   it("getServiceBySlugStatic returns the same slug as getServiceBySlug for known slugs", async () => {

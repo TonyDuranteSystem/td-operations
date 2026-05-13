@@ -120,10 +120,18 @@ export const TASK_CATEGORY = [
 
 export const TAX_RETURN_TYPE = ['SMLLC', 'MMLLC', 'Corp', 'LSE'] as const
 
+// 'Wizard Available' is the canonical post-redesign status for "client can
+// now fill the data-collection wizard" (2026-05-13). The following three are
+// legacy values kept in the union for backwards compat with existing rows
+// and historical reports; new writes should use 'Wizard Available' instead:
+//   - 'Activated - Need Link'       (deprecated 2026-05-13)
+//   - 'Link Sent - Awaiting Data'   (deprecated 2026-05-13)
+//   - 'Paid - Not Started'          (deprecated 2026-05-13)
 export const TAX_RETURN_STATUS = [
-  'Payment Pending', 'Link Sent - Awaiting Data', 'Data Received',
-  'Sent to India', 'Extension Filed', 'TR Completed - Awaiting Signature',
-  'TR Filed', 'Paid - Not Started', 'Activated - Need Link', 'Not Invoiced',
+  'Payment Pending', 'Wizard Available', 'Link Sent - Awaiting Data',
+  'Data Received', 'Sent to India', 'Extension Filed',
+  'TR Completed - Awaiting Signature', 'TR Filed',
+  'Paid - Not Started', 'Activated - Need Link', 'Not Invoiced',
   'Extension Requested',
 ] as const
 
