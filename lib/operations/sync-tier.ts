@@ -10,6 +10,12 @@ export interface SyncTierParams {
   newTier: PortalTier
   reason: string
   actor?: string
+  /**
+   * Allow downgrading to a lower tier (e.g. lead < formation < onboarding < active).
+   * Defaults to false — most callers should never downgrade an existing client.
+   * Set true only for intentional demotions (account closure, service cancellation, admin override).
+   */
+  allowDowngrade?: boolean
 }
 
 export interface ContactTierUpdate {
@@ -141,7 +147,7 @@ export async function syncContactTiersForAccount(
  * Writes to accounts, recomputes contact tier for all linked contacts, syncs auth metadata.
  */
 export async function syncTier(params: SyncTierParams): Promise<SyncTierResult> {
-  const { accountId, newTier, reason, actor = 'system' } = params
+  const { accountId, newTier, reason, actor = 'system', allowDowngrade = false } = params
 
   // Validate tier
   if (!PORTAL_TIERS.includes(newTier)) {
@@ -160,6 +166,17 @@ export async function syncTier(params: SyncTierParams): Promise<SyncTierResult> 
   }
 
   const previousTier = account.portal_tier as string | null
+
+  // Downgrade guard: refuse to lower a client's tier unless explicitly allowed.
+  // This prevents offer-publish (tier:'lead') from overwriting active/onboarding/formation clients.
+  if (!allowDowngrade && previousTier && previousTier in TIER_ORDER) {
+    const prevOrder = TIER_ORDER[previousTier as PortalTier]
+    const newOrder = TIER_ORDER[newTier]
+    if (newOrder < prevOrder) {
+      // Silent no-op — return success so callers don't blow up, but don't touch the DB
+      return { success: true, previousTier, newTier: previousTier as PortalTier, contactsUpdated: [] }
+    }
+  }
 
   // Write new tier to account
   const { error: writeErr } = await supabaseAdmin

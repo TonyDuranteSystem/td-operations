@@ -415,4 +415,55 @@ describe("syncTier", () => {
     expect(result.contactsUpdated).toHaveLength(0)
     expect(updateLog.filter(w => w.table === "contacts")).toHaveLength(0)
   })
+
+  // Downgrade guard tests (R: offer-publish bug 2026-05-13)
+  it("refuses downgrade by default — active account ignores tier:lead from offer-publish", async () => {
+    accountMap.set("acc-A", { portal_tier: "active" })
+    contactMap.set("c1", { id: "c1", email: "user@example.com", portal_tier: "active" })
+    acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
+    ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
+
+    const result = await syncTier({ accountId: "acc-A", newTier: "lead", reason: "portal user updated" })
+
+    // Should succeed (no error) but make no DB writes
+    expect(result.success).toBe(true)
+    expect(result.previousTier).toBe("active")
+    expect(result.newTier).toBe("active") // returned tier = unchanged current tier
+    expect(result.contactsUpdated).toHaveLength(0)
+    // No DB writes of any kind
+    expect(updateLog).toHaveLength(0)
+    expect(insertLog).toHaveLength(0)
+  })
+
+  it("allows downgrade when allowDowngrade:true is explicitly set", async () => {
+    accountMap.set("acc-A", { portal_tier: "active" })
+    contactMap.set("c1", { id: "c1", email: null, portal_tier: "active" })
+    acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
+    ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
+
+    const result = await syncTier({
+      accountId: "acc-A",
+      newTier: "lead",
+      reason: "account-closed",
+      allowDowngrade: true,
+    })
+
+    expect(result.success).toBe(true)
+    const acctUpdate = updateLog.find(w => w.table === "accounts")
+    expect(acctUpdate?.payload).toMatchObject({ portal_tier: "lead" })
+  })
+
+  it("does not apply downgrade guard when account has no current tier (null)", async () => {
+    accountMap.set("acc-A", { portal_tier: null })
+    contactMap.set("c1", { id: "c1", email: null, portal_tier: null })
+    acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
+    ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
+
+    const result = await syncTier({ accountId: "acc-A", newTier: "lead", reason: "new-portal-user" })
+
+    // null → lead is allowed (no previous tier to protect)
+    expect(result.success).toBe(true)
+    const acctUpdate = updateLog.find(w => w.table === "accounts")
+    expect(acctUpdate?.payload).toMatchObject({ portal_tier: "lead" })
+  })
 })
