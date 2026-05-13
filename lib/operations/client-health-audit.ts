@@ -195,6 +195,32 @@ export const STATE_ANNUAL_REPORT_POLICY: Record<string, AnnualReportPolicy> = {
   NM: { fixed_mmdd: null, none: true },  // no annual report
 }
 
+// `accounts.state_of_formation` stores full state names ("Florida"), while the
+// policy table above is keyed by 2-letter codes. Normalise before lookup so
+// Rule 7 doesn't false-flag every state as "unknown".
+const STATE_NAME_TO_CODE: Record<string, string> = {
+  "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+  "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+  "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+  "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+  "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+  "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+  "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+  "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+  "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+  "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+}
+
+export function normalizeStateCode(input: string | null | undefined): string | null {
+  if (!input) return null
+  const trimmed = input.trim()
+  if (trimmed.length === 2) return trimmed.toUpperCase()
+  return STATE_NAME_TO_CODE[trimmed.toLowerCase()] ?? null
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const ONE_TIME = "One-Time"
@@ -635,7 +661,8 @@ export function rule7_renewalDates(ctx: HealthContext, now: Date = new Date()): 
 
   // Annual report due date — state-driven.
   if (a.state_of_formation) {
-    const policy = STATE_ANNUAL_REPORT_POLICY[a.state_of_formation.toUpperCase()]
+    const stateCode = normalizeStateCode(a.state_of_formation)
+    const policy = stateCode ? STATE_ANNUAL_REPORT_POLICY[stateCode] : undefined
     if (policy) {
       if (policy.none) {
         if (a.annual_report_due_date) {
