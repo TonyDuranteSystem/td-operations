@@ -21,7 +21,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
-import { createSD } from "@/lib/operations/service-delivery"
+import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
 
@@ -330,7 +330,8 @@ export async function onSecondInstallmentPaid(
 
   // ─── 2. Advance Tax Return SD if at "Awaiting 2nd Payment" ───
   // 2nd installment paid = green light to send client data to India team.
-  // Advance to "Wizard Available" (stage_order=4).
+  // Routed through advanceStageIfAt so stage_history, action_log, auto-tasks,
+  // portal notification, and tax_returns sync all fire from the canonical helper.
   try {
     const { data: taxSd } = await supabaseAdmin
       .from("service_deliveries")
@@ -340,23 +341,30 @@ export async function onSecondInstallmentPaid(
       .eq("status", "active")
       .maybeSingle()
 
-    if (taxSd && taxSd.stage === "Awaiting 2nd Payment") {
-      await dbWrite(
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        supabaseAdmin
-          .from("service_deliveries")
-          .update({
-            stage: "Wizard Available",
-            stage_order: 4,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", taxSd.id),
-        "service_deliveries.update"
-      )
+    if (taxSd) {
+      const advanceResult = await advanceStageIfAt({
+        delivery_id: taxSd.id,
+        if_current_stage: "Awaiting 2nd Payment",
+        target_stage: "Wizard Available",
+        actor: "installment-handler",
+        notes: "2nd installment paid",
+      })
 
-      steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Wizard Available` })
-    } else if (taxSd) {
-      steps.push({ step: "tax_sd_advance", status: "skipped", detail: `SD at "${taxSd.stage}", not awaiting payment` })
+      if (advanceResult.advanced) {
+        steps.push({ step: "tax_sd_advance", status: "ok", detail: `SD ${taxSd.id} -> Wizard Available` })
+      } else if (advanceResult.current_stage === "Awaiting 2nd Payment") {
+        steps.push({
+          step: "tax_sd_advance",
+          status: "error",
+          detail: advanceResult.result?.error || advanceResult.reason || "advanceStageIfAt failed",
+        })
+      } else {
+        steps.push({
+          step: "tax_sd_advance",
+          status: "skipped",
+          detail: `SD at "${advanceResult.current_stage}", not awaiting payment`,
+        })
+      }
     }
   } catch (e) {
     steps.push({ step: "tax_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
