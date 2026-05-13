@@ -124,7 +124,7 @@ export const TAX_RETURN_STATUS = [
   'Payment Pending', 'Link Sent - Awaiting Data', 'Data Received',
   'Sent to India', 'Extension Filed', 'TR Completed - Awaiting Signature',
   'TR Filed', 'Paid - Not Started', 'Activated - Need Link', 'Not Invoiced',
-  'Extension Requested',
+  'Extension Requested', 'Wizard Available',
 ] as const
 
 export const CONVERSATION_CHANNEL = [
