@@ -3,8 +3,8 @@
 import {
   MessageCircle, Package, LayoutDashboard, Building2, CalendarDays,
   FileText, PenLine, ScrollText, Users, Receipt, Bookmark, Building,
-  CreditCard, User, ImageIcon, Landmark, Link2, Globe, Lock,
-  Gift, ChevronDown, Search, X, ArrowRight,
+  CreditCard, User, ImageIcon, Landmark, Link2, Lock,
+  Gift, ChevronDown, Search, X, ArrowRight, Globe, CheckCircle2,
 } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useState, useMemo } from 'react'
@@ -29,6 +29,13 @@ interface Article {
   keywords: string[]
   steps: Step[]
   link?: { href: string; label: string }
+  tip?: string
+}
+
+interface RoadmapItem {
+  number: number
+  title: string
+  desc: string
 }
 
 interface Content {
@@ -39,9 +46,36 @@ interface Content {
   searchResultCount: (n: number) => string
   sections: string[]
   articles: Article[]
+  roadmapTitle: string
+  roadmapItems: RoadmapItem[]
   helpTitle: string
   helpDesc: string
   chatBtn: string
+}
+
+// ─── Roadmap Banner ───────────────────────────────────────────
+
+function RoadmapBanner({ items, title }: { items: RoadmapItem[]; title: string }) {
+  return (
+    <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b bg-gradient-to-r from-blue-600 to-blue-700">
+        <p className="text-sm font-semibold text-white">{title}</p>
+      </div>
+      <div className="divide-y">
+        {items.map(item => (
+          <div key={item.number} className="flex items-start gap-4 px-5 py-3">
+            <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+              {item.number}
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-zinc-900">{item.title}</p>
+              <p className="text-xs text-zinc-500 mt-0.5">{item.desc}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 // ─── Article Component ────────────────────────────────────────
@@ -80,6 +114,12 @@ function ArticleCard({ article, defaultOpen }: { article: Article; defaultOpen?:
               </li>
             ))}
           </ol>
+          {article.tip && (
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <CheckCircle2 className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800">{article.tip}</p>
+            </div>
+          )}
           {article.link && (
             <Link
               href={article.link.href}
@@ -186,6 +226,9 @@ export default function PortalGuidePage() {
       {/* Grouped sections (when not searching) */}
       {filtered === null && (
         <>
+          {/* Onboarding roadmap */}
+          <RoadmapBanner items={content.roadmapItems} title={content.roadmapTitle} />
+
           {content.sections.map(section => {
             const articles = groupedArticles[section]
             if (!articles?.length) return null
@@ -263,82 +306,140 @@ export default function PortalGuidePage() {
 // ─── ENGLISH CONTENT ──────────────────────────────────────────
 
 const SECTIONS_EN = [
-  'Communication',
-  'Your Company',
-  'Documents',
-  'Finance & Invoicing',
-  'Profile',
+  'Step 1 — Set Up Your Account',
+  'Step 2 — Know Your Portal',
+  'Step 3 — Your Documents',
+  'Step 4 — Invoice Your Clients',
+  'Step 5 — Communicate With Us',
   'Referrals',
 ]
 
 const ARTICLES_EN: Article[] = [
-  // ── Communication ──
+  // ── Step 1 — Set Up Your Account ──
   {
-    id: 'chat',
-    section: 'Communication',
-    icon: MessageCircle,
+    id: 'edit-profile',
+    section: 'Step 1 — Set Up Your Account',
+    icon: User,
+    iconBg: 'bg-zinc-100',
+    iconColor: 'text-zinc-600',
+    title: '1.1 — Personal Information',
+    desc: 'Update your name, phone, address, and citizenship',
+    keywords: ['profile', 'personal info', 'name', 'phone', 'address', 'citizenship', 'language', 'edit', 'profilo', 'dati personali', 'modifica', 'nome', 'telefono', 'indirizzo', 'cittadinanza'],
+    steps: [
+      { text: 'Click "Profile" in the left menu.' },
+      { text: 'Under "Personal Information", click the "Edit" link (pen icon at the bottom of the section).' },
+      { text: 'Update any of the following fields:', sub: 'First Name · Last Name · Phone · Language preference · Citizenship · Address · City · State/Province · ZIP · Country' },
+      { text: 'Email address is read-only and cannot be changed here.', sub: 'Contact our team via chat if you need to update your login email.' },
+      { text: 'Click "Save" when done. Your changes are saved immediately.' },
+    ],
+    link: { href: '/portal/profile', label: 'Go to Profile' },
+  },
+  {
+    id: 'logo',
+    section: 'Step 1 — Set Up Your Account',
+    icon: ImageIcon,
+    iconBg: 'bg-pink-50',
+    iconColor: 'text-pink-600',
+    title: '1.2 — Upload Your Company Logo',
+    desc: 'Add a logo that appears on all your invoices',
+    keywords: ['logo', 'image', 'brand', 'invoice logo', 'upload logo', 'immagine', 'carica logo', 'logo fattura', 'company logo'],
+    steps: [
+      { text: 'Click "Profile" in the left menu and scroll down to the "Invoice Logo" section.' },
+      { text: 'Click the dashed upload area or the "Upload" button to open your file picker.' },
+      { text: 'Select your logo file. Accepted formats: JPEG, PNG, WEBP, SVG. Maximum size: 2 MB.', sub: 'For best results, use a transparent PNG (no white background) at least 300×300 px.' },
+      { text: 'A preview appears immediately after uploading. Your logo is saved automatically.' },
+      { text: 'Your logo will now appear in the top-left corner of every invoice you create.' },
+      { text: 'To change it: click "Change" next to the current logo and upload a new file.' },
+    ],
+    link: { href: '/portal/profile', label: 'Go to Profile' },
+    tip: 'Do this before creating your first invoice — your logo will appear automatically on every invoice once uploaded.',
+  },
+  {
+    id: 'bank-accounts',
+    section: 'Step 1 — Set Up Your Account',
+    icon: Landmark,
     iconBg: 'bg-green-50',
     iconColor: 'text-green-600',
-    title: 'Chat',
-    desc: 'Send messages and files to our team',
-    keywords: ['chat', 'message', 'contact', 'support', 'talk', 'team', 'help', 'file', 'upload', 'voice', 'attachment', 'topic', 'thread', 'reply', 'messaggio', 'comunicazione', 'parlare'],
+    title: '1.3 — Bank Accounts',
+    desc: 'Add your bank details so clients know where to send payment',
+    keywords: ['bank account', 'conto bancario', 'iban', 'routing number', 'account number', 'swift', 'bic', 'relay', 'usd', 'eur', 'add bank', 'invoice bank', 'payment details', 'conto', 'banca', 'bonifico', 'coordinate bancarie'],
     steps: [
-      { text: 'Click "Chat" in the left menu to open your conversation with our team.' },
-      { text: 'Type your message in the input box at the bottom and press Enter to send.', sub: 'Use Shift+Enter to add a new line without sending.' },
-      { text: 'Attach files by clicking the paperclip icon or dragging and dropping files.', sub: 'Accepted: PDF, JPG, PNG, Word, Excel, TXT. Max 10 MB per file, up to 5 files at once.' },
-      { text: 'Use the microphone icon to record a voice note.', sub: 'The browser will ask for permission the first time.' },
-      { text: 'Create a new topic using the "+" button next to the topic list.', sub: 'Topics help organise conversations (e.g. "Banking", "Tax Return").' },
-      { text: 'Reply to a specific message by hovering over it and clicking the reply icon.', sub: 'This creates a thread so the context stays clear.' },
-      { text: 'Blue double-checkmarks (✓✓) mean your message has been read by our team.' },
+      { text: 'Click "Profile" in the left menu and scroll down to "Bank Accounts".' },
+      { text: 'Click "Add Account". Choose the currency: USD or EUR.', sub: 'You can add multiple accounts — for example, a Relay USD account and a Wise EUR account.' },
+      { text: 'For USD accounts, fill in:', sub: 'Label (e.g. "Relay USD") · Account Holder Name · Bank Name · Account Number · Routing Number · SWIFT/BIC (optional) · Notes' },
+      { text: 'For EUR accounts, fill in:', sub: 'Label (e.g. "Wise EUR") · Account Holder Name · Bank Name · IBAN · SWIFT/BIC · Notes' },
+      { text: 'Toggle "Show on invoice" to make this account\'s details appear at the bottom of your invoices.', sub: 'Only one account can be active for invoices at a time. Switching to a new one deactivates the previous.' },
+      { text: 'Click "Save". The account is now visible in your profile and auto-selected when you create invoices.' },
+      { text: 'To delete an account: click the trash icon on the account card.' },
     ],
-    link: { href: '/portal/chat', label: 'Go to Chat' },
+    link: { href: '/portal/profile', label: 'Go to Profile' },
+    tip: 'You can add both a USD and a EUR account. Toggle "Show on invoice" to choose which one appears on each invoice — only one can be active at a time.',
   },
   {
-    id: 'request-service',
-    section: 'Communication',
-    icon: Package,
-    iconBg: 'bg-orange-50',
-    iconColor: 'text-orange-600',
-    title: 'Request a New Service',
-    desc: 'Order a new service from our team',
-    keywords: ['service', 'request', 'order', 'new', 'llc', 'tax', 'itin', 'banking', 'relay', 'ein', 'shipping', 'notary', 'consulting', 'formation', 'servizio', 'richiesta', 'ordine', 'conto', 'banca'],
+    id: 'payment-links',
+    section: 'Step 1 — Set Up Your Account',
+    icon: Link2,
+    iconBg: 'bg-amber-50',
+    iconColor: 'text-amber-600',
+    title: '1.4 — Payment Links',
+    desc: 'Add Stripe, PayPal, or Whop links so clients can pay your invoices online',
+    keywords: ['payment link', 'stripe', 'paypal', 'whop', 'pay now', 'pay button', 'link pagamento', 'pagamento online', 'checkout', 'card payment', 'pagamento carta'],
     steps: [
-      { text: 'Click "Request Service" in the left menu.' },
-      { text: 'Choose the service category that fits your need:', sub: 'LLC Formation · Tax Return · ITIN · Banking (Relay USD or Payset EUR) · EIN · Shipping · Notary/Apostille · Company Closure · Consulting' },
-      { text: 'Describe what you need in the text box. Be as specific as possible.', sub: 'Example: "I need to open a Relay USD account for my Wyoming LLC".' },
-      { text: 'Select urgency: Normal or Urgent.' },
-      { text: 'Click Submit. Our team receives the request as a task and will respond in chat with a quote or next steps.' },
+      { text: 'Click "Profile" in the left menu and scroll down to "Payment Links".' },
+      { text: 'Click "Add Payment Link".' },
+      { text: 'Fill in the fields:', sub: 'Label* (e.g. "Pay with Stripe") · URL* (your payment page link) · Gateway (Stripe / PayPal / Whop / Other) · Amount (optional) · Currency (USD or EUR)' },
+      { text: 'Click Save. The link now appears on your invoices as a "Pay Now" button for your clients.' },
+      { text: 'The star icon sets a link as default. Click it to choose which link appears first.' },
+      { text: 'Use the external link icon (↗) to test the payment URL in a new tab before sending invoices.' },
     ],
-    link: { href: '/portal/services/request', label: 'Request a Service' },
+    link: { href: '/portal/profile', label: 'Go to Profile' },
+    tip: 'We recommend Whop for seamless checkout. If you don\'t have a Whop page yet, ask us via chat and we can help you set one up.',
+  },
+  {
+    id: 'settings',
+    section: 'Step 1 — Set Up Your Account',
+    icon: Lock,
+    iconBg: 'bg-zinc-100',
+    iconColor: 'text-zinc-500',
+    title: '1.5 — Settings: Password, Language & Notifications',
+    desc: 'Change your password, switch language, or enable push notifications',
+    keywords: ['settings', 'password', 'language', 'english', 'italian', 'italiano', 'notification', 'push', 'impostazioni', 'password', 'lingua', 'notifiche', 'change password', 'cambia password', 'lingua portale'],
+    steps: [
+      { text: 'Click "Profile" in the left menu, then click "Settings" (or click the gear icon at the top right of the Profile page).' },
+      { text: 'Language: click "English" or "Italiano" to switch the portal language. The change takes effect immediately.', sub: 'Your language preference is saved so it applies every time you log in.' },
+      { text: 'Password: enter your new password (minimum 8 characters), confirm it, then click "Update Password".' },
+      { text: 'Push Notifications: click the toggle to enable browser notifications for new chat messages, deadlines, and documents.', sub: 'Your browser will ask for permission the first time.' },
+    ],
+    link: { href: '/portal/settings', label: 'Go to Settings' },
   },
 
-  // ── Your Company ──
+  // ── Step 2 — Know Your Portal ──
   {
     id: 'dashboard',
-    section: 'Your Company',
+    section: 'Step 2 — Know Your Portal',
     icon: LayoutDashboard,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-600',
-    title: 'Dashboard (Home)',
-    desc: 'Your portal home page',
-    keywords: ['dashboard', 'home', 'overview', 'start', 'main', 'status', 'progress', 'panoramica', 'inizio', 'home'],
+    title: '2.1 — Dashboard (Home)',
+    desc: 'Your portal home page — what it shows and why',
+    keywords: ['dashboard', 'home', 'overview', 'start', 'main', 'status', 'progress', 'panoramica', 'inizio'],
     steps: [
       { text: 'The dashboard is the first page you see when you log in. What it shows depends on where you are in the process:' },
-      { text: 'If your services are not yet confirmed: you will see your proposal card to review and sign.' },
-      { text: 'If payment is confirmed but setup is in progress: you will see the data collection wizard showing your completion percentage.' },
-      { text: 'If your company is active: you will see a summary of your active services, recent activity, and upcoming deadlines.' },
+      { text: 'Proposal stage: you will see your offer card to review, sign, and pay.' },
+      { text: 'Setup in progress: you will see the data collection wizard showing your completion percentage. Fill it in completely — it helps us prepare your documents.' },
+      { text: 'Company active: you will see a summary of your active services, recent activity, and upcoming deadlines.' },
       { text: 'Use the left sidebar to navigate between all portal sections at any time.' },
     ],
   },
   {
     id: 'my-company',
-    section: 'Your Company',
+    section: 'Step 2 — Know Your Portal',
     icon: Building2,
     iconBg: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
-    title: 'My Company',
-    desc: 'Company information, services, and deadlines at a glance',
-    keywords: ['company', 'azienda', 'llc', 'ein', 'state', 'formation', 'registered agent', 'entity', 'info', 'details', 'stato', 'costituzione', 'informazioni', 'agenzia'],
+    title: '2.2 — My Company',
+    desc: 'Company info, services, and deadlines at a glance',
+    keywords: ['company', 'azienda', 'llc', 'ein', 'state', 'formation', 'registered agent', 'entity', 'info', 'details', 'stato', 'costituzione', 'informazioni'],
     steps: [
       { text: 'Click "My Company" in the left menu to see your company snapshot.' },
       { text: 'The Company Info card shows: legal name, entity type (LLC/C-Corp), EIN, state of formation, formation date, and registered agent.' },
@@ -350,11 +451,11 @@ const ARTICLES_EN: Article[] = [
   },
   {
     id: 'deadlines',
-    section: 'Your Company',
+    section: 'Step 2 — Know Your Portal',
     icon: CalendarDays,
     iconBg: 'bg-teal-50',
     iconColor: 'text-teal-600',
-    title: 'Deadlines',
+    title: '2.3 — Deadlines',
     desc: 'Calendar of compliance and filing deadlines',
     keywords: ['deadline', 'calendar', 'due date', 'annual report', 'tax', 'scadenza', 'calendario', 'filing', 'compliance', 'report', 'rinnovo', 'annual', 'overdue', 'pending'],
     steps: [
@@ -368,34 +469,15 @@ const ARTICLES_EN: Article[] = [
     link: { href: '/portal/deadlines', label: 'Go to Deadlines' },
   },
 
-  // ── Documents ──
-  {
-    id: 'documents',
-    section: 'Documents',
-    icon: FileText,
-    iconBg: 'bg-purple-50',
-    iconColor: 'text-purple-600',
-    title: 'Documents',
-    desc: 'Browse, preview, and download your company documents',
-    keywords: ['document', 'file', 'download', 'pdf', 'contract', 'certificate', 'operating agreement', 'oa', 'lease', 'passport', 'upload', 'documenti', 'scarica', 'contratto', 'certificato', 'carica', 'file'],
-    steps: [
-      { text: 'Click "Documents" in the left menu to see all documents associated with your account.' },
-      { text: 'Use the search bar at the top to find a document by file name or type (e.g. "Operating Agreement", "EIN Letter").' },
-      { text: 'Use the category filter buttons to narrow results by type (Contracts, Formation, Tax, Other).' },
-      { text: 'Click the eye icon (👁) to preview a document directly in the browser — works for PDF and image files.' },
-      { text: 'Click the download icon (⬇) to save the file to your device.' },
-      { text: 'To upload a document: click the "Upload Document" button at the top right, select a file, and choose the document type.', sub: 'Use this to share passports, utility bills, or any document our team has requested.' },
-    ],
-    link: { href: '/portal/documents', label: 'Go to Documents' },
-  },
+  // ── Step 3 — Your Documents ──
   {
     id: 'sign-documents',
-    section: 'Documents',
+    section: 'Step 3 — Your Documents',
     icon: PenLine,
     iconBg: 'bg-amber-50',
     iconColor: 'text-amber-600',
-    title: 'Sign Documents',
-    desc: 'Sign your LLC contracts and agreements',
+    title: '3.1 — Sign Documents',
+    desc: 'Sign your LLC contracts and agreements — do this first',
     keywords: ['sign', 'signature', 'operating agreement', 'oa', 'lease', 'ss4', 'msa', 'form 8832', 'contract', 'firmare', 'firma', 'contratto', 'accordo', 'documenti da firmare'],
     steps: [
       { text: 'Click "Sign Documents" in the left menu. This section only appears when you have documents waiting for your signature.' },
@@ -407,14 +489,34 @@ const ARTICLES_EN: Article[] = [
       { text: 'Once all cards are green, a party icon confirms all documents have been signed.' },
     ],
     link: { href: '/portal/sign', label: 'Go to Sign Documents' },
+    tip: 'Sign all pending documents as soon as they appear — your services cannot be processed until all signatures are in.',
+  },
+  {
+    id: 'documents',
+    section: 'Step 3 — Your Documents',
+    icon: FileText,
+    iconBg: 'bg-purple-50',
+    iconColor: 'text-purple-600',
+    title: '3.2 — Documents',
+    desc: 'Browse, preview, and download your company documents',
+    keywords: ['document', 'file', 'download', 'pdf', 'contract', 'certificate', 'operating agreement', 'oa', 'lease', 'passport', 'upload', 'documenti', 'scarica', 'contratto', 'certificato', 'carica'],
+    steps: [
+      { text: 'Click "Documents" in the left menu to see all documents associated with your account.' },
+      { text: 'Use the search bar at the top to find a document by file name or type (e.g. "Operating Agreement", "EIN Letter").' },
+      { text: 'Use the category filter buttons to narrow results by type (Contracts, Formation, Tax, Other).' },
+      { text: 'Click the eye icon (👁) to preview a document directly in the browser — works for PDF and image files.' },
+      { text: 'Click the download icon (⬇) to save the file to your device.' },
+      { text: 'To upload a document: click the "Upload Document" button at the top right, select a file, and choose the document type.', sub: 'Use this to share passports, utility bills, or any document our team has requested.' },
+    ],
+    link: { href: '/portal/documents', label: 'Go to Documents' },
   },
   {
     id: 'generate-documents',
-    section: 'Documents',
+    section: 'Step 3 — Your Documents',
     icon: ScrollText,
     iconBg: 'bg-violet-50',
     iconColor: 'text-violet-600',
-    title: 'Generate Documents',
+    title: '3.3 — Generate Documents',
     desc: 'Create distribution resolutions, tax statements, and operating agreements',
     keywords: ['generate', 'create', 'distribution', 'resolution', 'verbale', 'tax statement', 'certificato fiscale', 'operating agreement', 'atto', 'profit', 'utili', 'distribuzione', 'documento', 'genera'],
     steps: [
@@ -429,14 +531,34 @@ const ARTICLES_EN: Article[] = [
     link: { href: '/portal/documents/generate', label: 'Go to Generate Documents' },
   },
 
-  // ── Finance & Invoicing ──
+  // ── Step 4 — Invoice Your Clients ──
+  {
+    id: 'customers',
+    section: 'Step 4 — Invoice Your Clients',
+    icon: Users,
+    iconBg: 'bg-blue-50',
+    iconColor: 'text-blue-600',
+    title: '4.1 — Add Your Clients First',
+    desc: 'Build your client list — required before creating invoices',
+    keywords: ['customer', 'client', 'clienti', 'directory', 'contacts', 'new customer', 'add client', 'vat', 'p.iva', 'nome cliente', 'aggiungi cliente', 'rubrica clienti'],
+    steps: [
+      { text: 'Click "My Clients" in the left menu.' },
+      { text: 'To add a new client: click "New Customer" at the top right.' },
+      { text: 'Fill in the customer details:', sub: 'First Name, Last Name, Company Name · Email · Phone · Address (street, city, state/region, country) · VAT / Tax ID · Notes' },
+      { text: 'Click "Create Customer". The client now appears in the list and is available in the customer dropdown when creating invoices.' },
+      { text: 'Click any customer in the list to see their invoices and payment history.' },
+      { text: 'You can also add a new customer inline when creating an invoice — click "New Customer" in the customer field without leaving the invoice form.' },
+    ],
+    link: { href: '/portal/customers', label: 'Go to My Clients' },
+    tip: 'Add your regular clients once and reuse them for every invoice. You only need a name and email to get started.',
+  },
   {
     id: 'create-invoice',
-    section: 'Finance & Invoicing',
+    section: 'Step 4 — Invoice Your Clients',
     icon: Receipt,
     iconBg: 'bg-emerald-50',
     iconColor: 'text-emerald-600',
-    title: 'Creating a Sales Invoice',
+    title: '4.2 — Create a Sales Invoice',
     desc: 'Issue an invoice to one of your clients',
     keywords: ['invoice', 'fattura', 'create', 'new invoice', 'sales', 'bill', 'client', 'customer', 'line item', 'amount', 'total', 'due date', 'currency', 'usd', 'eur', 'discount', 'emettere fattura', 'nuova fattura'],
     steps: [
@@ -451,14 +573,15 @@ const ARTICLES_EN: Article[] = [
       { text: 'Click "Create Invoice". You will be redirected to the invoice detail page where you can view and send it.' },
     ],
     link: { href: '/portal/invoices/new', label: 'Create an Invoice' },
+    tip: 'Before your first invoice, make sure you have completed Steps 1.2 (logo), 1.3 (bank account), and 1.4 (payment link) — they all appear automatically on every invoice.',
   },
   {
     id: 'invoice-templates',
-    section: 'Finance & Invoicing',
+    section: 'Step 4 — Invoice Your Clients',
     icon: Bookmark,
     iconBg: 'bg-sky-50',
     iconColor: 'text-sky-600',
-    title: 'Invoice Templates',
+    title: '4.3 — Invoice Templates',
     desc: 'Save and reuse invoice formats for repeat clients',
     keywords: ['template', 'modello', 'save', 'reuse', 'recurring', 'preset', 'fattura predefinita', 'salva', 'riutilizza'],
     steps: [
@@ -469,31 +592,12 @@ const ARTICLES_EN: Article[] = [
     ],
   },
   {
-    id: 'customers',
-    section: 'Finance & Invoicing',
-    icon: Users,
-    iconBg: 'bg-blue-50',
-    iconColor: 'text-blue-600',
-    title: 'My Clients (Customer Directory)',
-    desc: 'Add and manage your client list for invoicing',
-    keywords: ['customer', 'client', 'clienti', 'directory', 'contacts', 'new customer', 'add client', 'vat', 'p.iva', 'nome cliente', 'aggiungi cliente', 'rubrica clienti'],
-    steps: [
-      { text: 'Click "My Clients" in the left menu.' },
-      { text: 'To add a new client: click "New Customer" at the top right.' },
-      { text: 'Fill in the customer details:', sub: 'First Name, Last Name, Company Name · Email · Phone · Address (street, city, state/region, country) · VAT / Tax ID · Notes' },
-      { text: 'Click "Create Customer". The client now appears in the list and is available in the customer dropdown when creating invoices.' },
-      { text: 'Click any customer in the list to see their invoices and payment history.' },
-      { text: 'You can also add a new customer inline when creating an invoice — click "New Customer" in the customer field without leaving the invoice form.' },
-    ],
-    link: { href: '/portal/customers', label: 'Go to My Clients' },
-  },
-  {
     id: 'vendors',
-    section: 'Finance & Invoicing',
+    section: 'Step 4 — Invoice Your Clients',
     icon: Building,
     iconBg: 'bg-slate-50',
     iconColor: 'text-slate-600',
-    title: 'Vendors (Supplier Directory)',
+    title: '4.4 — Vendors (Supplier Directory)',
     desc: 'Track your suppliers for expense management',
     keywords: ['vendor', 'supplier', 'fornitore', 'expense', 'spesa', 'vat', 'p.iva', 'company', 'contact', 'directory', 'rubrica fornitori', 'aggiungi fornitore'],
     steps: [
@@ -508,12 +612,12 @@ const ARTICLES_EN: Article[] = [
   },
   {
     id: 'td-billing',
-    section: 'Finance & Invoicing',
+    section: 'Step 4 — Invoice Your Clients',
     icon: CreditCard,
     iconBg: 'bg-rose-50',
     iconColor: 'text-rose-600',
-    title: 'TD Billing (Your Invoices from Us)',
-    desc: 'View and pay Tony Durante\'s invoices to you',
+    title: '4.5 — TD Billing (Invoices from Us)',
+    desc: "View and pay Tony Durante's invoices to you",
     keywords: ['billing', 'td invoice', 'fattura tony durante', 'pay', 'payment', 'expenses', 'spese', 'pagamento', 'fattura td', 'invoice from us', 'pagare', 'pay button', 'stripe'],
     steps: [
       { text: 'Click "TD Billing" in the left menu. This opens the Invoices page on the Expenses tab.' },
@@ -526,100 +630,44 @@ const ARTICLES_EN: Article[] = [
     link: { href: '/portal/billing', label: 'Go to TD Billing' },
   },
 
-  // ── Profile ──
+  // ── Step 5 — Communicate With Us ──
   {
-    id: 'edit-profile',
-    section: 'Profile',
-    icon: User,
-    iconBg: 'bg-zinc-100',
-    iconColor: 'text-zinc-600',
-    title: 'Edit Personal Information',
-    desc: 'Update your name, phone, address, and citizenship',
-    keywords: ['profile', 'personal info', 'name', 'phone', 'address', 'citizenship', 'language', 'edit', 'profilo', 'dati personali', 'modifica', 'nome', 'telefono', 'indirizzo', 'cittadinanza'],
-    steps: [
-      { text: 'Click "Profile" in the left menu.' },
-      { text: 'Under "Personal Information", click the "Edit" link (pen icon at the bottom of the section).' },
-      { text: 'Update any of the following fields:', sub: 'First Name · Last Name · Phone · Language preference · Citizenship · Address · City · State/Province · ZIP · Country' },
-      { text: 'Email address is read-only and cannot be changed here.', sub: 'Contact our team via chat if you need to update your login email.' },
-      { text: 'Click "Save" when done. Your changes are saved immediately.' },
-    ],
-    link: { href: '/portal/profile', label: 'Go to Profile' },
-  },
-  {
-    id: 'logo',
-    section: 'Profile',
-    icon: ImageIcon,
-    iconBg: 'bg-pink-50',
-    iconColor: 'text-pink-600',
-    title: 'Upload Your Company Logo',
-    desc: 'Add a logo that appears on your invoices',
-    keywords: ['logo', 'image', 'brand', 'invoice logo', 'upload logo', 'immagine', 'carica logo', 'logo fattura', 'brand', 'company logo'],
-    steps: [
-      { text: 'Click "Profile" in the left menu and scroll down to the "Invoice Logo" section.' },
-      { text: 'Click the dashed upload area or the "Upload" button to open your file picker.' },
-      { text: 'Select your logo file. Accepted formats: JPEG, PNG, WEBP, SVG. Maximum size: 2 MB.' },
-      { text: 'A preview appears immediately after uploading. Your logo is saved automatically.' },
-      { text: 'Your logo will now appear in the top-left corner of every invoice you create.' },
-      { text: 'To change it: click "Change" next to the current logo and upload a new file.' },
-    ],
-    link: { href: '/portal/profile', label: 'Go to Profile' },
-  },
-  {
-    id: 'bank-accounts',
-    section: 'Profile',
-    icon: Landmark,
+    id: 'chat',
+    section: 'Step 5 — Communicate With Us',
+    icon: MessageCircle,
     iconBg: 'bg-green-50',
     iconColor: 'text-green-600',
-    title: 'Bank Accounts',
-    desc: 'Add your bank details so clients know where to send payment',
-    keywords: ['bank account', 'conto bancario', 'iban', 'routing number', 'account number', 'swift', 'bic', 'relay', 'usd', 'eur', 'add bank', 'invoice bank', 'payment details', 'conto', 'banca', 'bonifico', 'coordinate bancarie'],
+    title: '5.1 — Chat',
+    desc: 'Send messages and files directly to our team',
+    keywords: ['chat', 'message', 'contact', 'support', 'talk', 'team', 'help', 'file', 'upload', 'voice', 'attachment', 'topic', 'thread', 'reply', 'messaggio', 'comunicazione', 'parlare'],
     steps: [
-      { text: 'Click "Profile" in the left menu and scroll down to "Bank Accounts".' },
-      { text: 'Click "Add Account". Choose the currency: USD or EUR.' },
-      { text: 'For USD accounts, fill in:', sub: 'Label (e.g. "Relay USD") · Account Holder Name · Bank Name · Account Number · Routing Number · SWIFT/BIC (optional) · Notes' },
-      { text: 'For EUR accounts, fill in:', sub: 'Label (e.g. "Wise EUR") · Account Holder Name · Bank Name · IBAN · SWIFT/BIC · Notes' },
-      { text: 'Toggle "Show on invoice" to make this account\'s details appear at the bottom of your invoices.', sub: 'Only one account can be active for invoices at a time. Switching to a new one deactivates the previous.' },
-      { text: 'Click "Save". The account is now visible in your profile and auto-selected when you create invoices.' },
-      { text: 'To delete an account: click the trash icon on the account card.' },
+      { text: 'Click "Chat" in the left menu to open your conversation with our team.' },
+      { text: 'Type your message in the input box at the bottom and press Enter to send.', sub: 'Use Shift+Enter to add a new line without sending.' },
+      { text: 'Attach files by clicking the paperclip icon or dragging and dropping files.', sub: 'Accepted: PDF, JPG, PNG, Word, Excel, TXT. Max 10 MB per file, up to 5 files at once.' },
+      { text: 'Use the microphone icon to record a voice note.', sub: 'The browser will ask for permission the first time.' },
+      { text: 'Create a new topic using the "+" button next to the topic list.', sub: 'Topics help organise conversations (e.g. "Banking", "Tax Return").' },
+      { text: 'Reply to a specific message by hovering over it and clicking the reply icon.', sub: 'This creates a thread so the context stays clear.' },
+      { text: 'Blue double-checkmarks (✓✓) mean your message has been read by our team.' },
     ],
-    link: { href: '/portal/profile', label: 'Go to Profile' },
+    link: { href: '/portal/chat', label: 'Go to Chat' },
   },
   {
-    id: 'payment-links',
-    section: 'Profile',
-    icon: Link2,
-    iconBg: 'bg-amber-50',
-    iconColor: 'text-amber-600',
-    title: 'Payment Links',
-    desc: 'Add Stripe, PayPal, or Whop links so clients can pay your invoices online',
-    keywords: ['payment link', 'stripe', 'paypal', 'whop', 'pay now', 'pay button', 'link pagamento', 'pagamento online', 'checkout', 'card payment', 'pagamento carta'],
+    id: 'request-service',
+    section: 'Step 5 — Communicate With Us',
+    icon: Package,
+    iconBg: 'bg-orange-50',
+    iconColor: 'text-orange-600',
+    title: '5.2 — Request a New Service',
+    desc: 'Order a new service directly from the portal',
+    keywords: ['service', 'request', 'order', 'new', 'llc', 'tax', 'itin', 'banking', 'relay', 'ein', 'shipping', 'notary', 'consulting', 'formation', 'servizio', 'richiesta', 'ordine', 'conto', 'banca'],
     steps: [
-      { text: 'Click "Profile" in the left menu and scroll down to "Payment Links".' },
-      { text: 'Click "Add Payment Link".' },
-      { text: 'Fill in the fields:', sub: 'Label* (e.g. "Pay with Stripe") · URL* (your payment page link) · Gateway (Stripe / PayPal / Whop / Other) · Amount (optional) · Currency (USD or EUR)' },
-      { text: 'Click Save. The link now appears on your invoices as a "Pay Now" button.' },
-      { text: 'The star icon sets a link as default. Click it to choose which link appears first.' },
-      { text: 'Use the external link icon (↗) to test the payment URL in a new tab.' },
-      { text: 'We recommend Whop for seamless checkout. If you don\'t have a Whop page yet, ask us via chat and we can help you set one up.' },
+      { text: 'Click "Request Service" in the left menu.' },
+      { text: 'Choose the service category that fits your need:', sub: 'LLC Formation · Tax Return · ITIN · Banking (Relay USD or Payset EUR) · EIN · Shipping · Notary/Apostille · Company Closure · Consulting' },
+      { text: 'Describe what you need in the text box. Be as specific as possible.', sub: 'Example: "I need to open a Relay USD account for my Wyoming LLC".' },
+      { text: 'Select urgency: Normal or Urgent.' },
+      { text: 'Click Submit. Our team receives the request as a task and will respond in chat with a quote or next steps.' },
     ],
-    link: { href: '/portal/profile', label: 'Go to Profile' },
-  },
-  {
-    id: 'settings',
-    section: 'Profile',
-    icon: Lock,
-    iconBg: 'bg-zinc-100',
-    iconColor: 'text-zinc-500',
-    title: 'Settings: Password, Language & Notifications',
-    desc: 'Change your password, switch language, or enable push notifications',
-    keywords: ['settings', 'password', 'language', 'english', 'italian', 'italiano', 'notification', 'push', 'impostazioni', 'password', 'lingua', 'notifiche', 'change password', 'cambia password', 'lingua portale'],
-    steps: [
-      { text: 'Click "Profile" in the left menu, then click "Settings" (or click the gear icon at the top right of the Profile page).' },
-      { text: 'Language: click "English" or "Italiano" to switch the portal language. The change takes effect immediately.', sub: 'Your language preference is also saved so it applies every time you log in.' },
-      { text: 'Password: enter your new password (minimum 8 characters), confirm it, then click "Update Password".' },
-      { text: 'Push Notifications: click the toggle to enable browser notifications for new chat messages, deadlines, and documents.', sub: 'Your browser will ask for permission the first time.' },
-    ],
-    link: { href: '/portal/settings', label: 'Go to Settings' },
+    link: { href: '/portal/services/request', label: 'Request a Service' },
   },
 
   // ── Referrals ──
@@ -646,99 +694,165 @@ const ARTICLES_EN: Article[] = [
 
 const EN: Content = {
   pageTitle: 'Portal Guide',
-  pageSubtitle: 'Search for any feature, or browse by section. Type "logo", "invoice", "Relay", "bank" — we\'ve got it covered.',
+  pageSubtitle: 'Follow the 5-step setup below, then use the guide to find any feature. You can also search by keyword.',
   searchPlaceholder: 'Search: logo, invoice, Relay, bank account, signature…',
   searchNoResults: 'No results found. Try different keywords, or contact us via chat.',
   searchResultCount: (n) => `${n} result${n === 1 ? '' : 's'} found`,
   sections: SECTIONS_EN,
   articles: ARTICLES_EN,
+  roadmapTitle: 'Getting started — follow this order',
+  roadmapItems: [
+    { number: 1, title: 'Set up your account', desc: 'Add your logo, bank accounts, and payment links before your first invoice.' },
+    { number: 2, title: 'Know your portal', desc: 'Explore the dashboard, company info, and deadline calendar.' },
+    { number: 3, title: 'Handle your documents', desc: 'Sign any pending contracts — services cannot proceed until signed.' },
+    { number: 4, title: 'Invoice your clients', desc: 'Add your clients first, then create and send invoices.' },
+    { number: 5, title: 'Communicate with us', desc: 'Use Chat for questions and "Request Service" for new orders.' },
+  ],
   helpTitle: 'Still have questions?',
-  helpDesc: 'Our team is available to help. Send us a message and we\'ll get back to you shortly.',
+  helpDesc: "Our team is available to help. Send us a message and we'll get back to you shortly.",
   chatBtn: 'Chat With Us',
 }
 
 // ─── ITALIAN CONTENT ──────────────────────────────────────────
 
 const SECTIONS_IT = [
-  'Comunicazione',
-  'La Tua Azienda',
-  'Documenti',
-  'Finanza e Fatturazione',
-  'Profilo',
+  'Passo 1 — Configura il tuo Account',
+  'Passo 2 — Conosci il tuo Portale',
+  'Passo 3 — I tuoi Documenti',
+  'Passo 4 — Fattura i tuoi Clienti',
+  'Passo 5 — Comunica con Noi',
   'Referral',
 ]
 
 const ARTICLES_IT: Article[] = [
-  // ── Comunicazione ──
+  // ── Passo 1 — Configura il tuo Account ──
   {
-    id: 'chat',
-    section: 'Comunicazione',
-    icon: MessageCircle,
+    id: 'edit-profile',
+    section: 'Passo 1 — Configura il tuo Account',
+    icon: User,
+    iconBg: 'bg-zinc-100',
+    iconColor: 'text-zinc-600',
+    title: '1.1 — Informazioni Personali',
+    desc: 'Aggiorna nome, telefono, indirizzo e cittadinanza',
+    keywords: ['profilo', 'dati personali', 'modifica', 'nome', 'telefono', 'indirizzo', 'cittadinanza', 'lingua', 'profile', 'personal', 'edit', 'name', 'phone', 'address'],
+    steps: [
+      { text: 'Clicca "Profilo" nel menu a sinistra.' },
+      { text: 'Sotto "Informazioni Personali", clicca il link "Modifica" (icona matita in fondo alla sezione).' },
+      { text: 'Aggiorna uno qualsiasi dei seguenti campi:', sub: 'Nome · Cognome · Telefono · Lingua preferita · Cittadinanza · Indirizzo · Città · Stato/Provincia · CAP · Paese' },
+      { text: "L'indirizzo email è in sola lettura e non può essere modificato qui.", sub: 'Contatta il nostro team via chat se hai bisogno di aggiornare l\'email di accesso.' },
+      { text: 'Clicca "Salva" quando hai finito. Le modifiche vengono salvate immediatamente.' },
+    ],
+    link: { href: '/portal/profile', label: 'Vai al Profilo' },
+  },
+  {
+    id: 'logo',
+    section: 'Passo 1 — Configura il tuo Account',
+    icon: ImageIcon,
+    iconBg: 'bg-pink-50',
+    iconColor: 'text-pink-600',
+    title: '1.2 — Carica il Logo Aziendale',
+    desc: 'Aggiungi un logo che appare su tutte le tue fatture',
+    keywords: ['logo', 'immagine', 'brand', 'logo fattura', 'carica logo', 'upload logo', 'image', 'company logo', 'fattura logo'],
+    steps: [
+      { text: 'Clicca "Profilo" nel menu a sinistra e scorri fino alla sezione "Logo Fattura".' },
+      { text: 'Clicca l\'area tratteggiata di upload o il pulsante "Carica" per aprire il selettore file.' },
+      { text: 'Seleziona il tuo file logo. Formati accettati: JPEG, PNG, WEBP, SVG. Dimensione massima: 2 MB.', sub: 'Per i migliori risultati, usa un PNG trasparente (senza sfondo bianco) di almeno 300×300 px.' },
+      { text: "Un'anteprima appare immediatamente dopo il caricamento. Il tuo logo viene salvato automaticamente." },
+      { text: 'Il tuo logo apparirà ora nell\'angolo in alto a sinistra di ogni fattura che crei.' },
+      { text: 'Per cambiarlo: clicca "Cambia" accanto al logo attuale e carica un nuovo file.' },
+    ],
+    link: { href: '/portal/profile', label: 'Vai al Profilo' },
+    tip: 'Fallo prima di creare la tua prima fattura — il logo apparirà automaticamente su ogni fattura una volta caricato.',
+  },
+  {
+    id: 'bank-accounts',
+    section: 'Passo 1 — Configura il tuo Account',
+    icon: Landmark,
     iconBg: 'bg-green-50',
     iconColor: 'text-green-600',
-    title: 'Chat',
-    desc: 'Invia messaggi e file al nostro team',
-    keywords: ['chat', 'messaggio', 'contatto', 'supporto', 'parlare', 'team', 'aiuto', 'file', 'carica', 'voce', 'allegato', 'argomento', 'risposta', 'topic', 'thread', 'reply', 'message', 'upload'],
+    title: '1.3 — Conti Bancari',
+    desc: 'Aggiungi le tue coordinate bancarie per ricevere pagamenti',
+    keywords: ['conto bancario', 'bank account', 'iban', 'routing number', 'numero conto', 'swift', 'bic', 'relay', 'usd', 'eur', 'aggiungi conto', 'coordinate bancarie', 'bonifico', 'banca'],
     steps: [
-      { text: 'Clicca "Chat" nel menu a sinistra per aprire la conversazione con il nostro team.' },
-      { text: 'Scrivi il messaggio nel box in basso e premi Invio per inviare.', sub: 'Usa Shift+Invio per andare a capo senza inviare.' },
-      { text: 'Allega file cliccando l\'icona graffetta o trascinandoli nella chat.', sub: 'Formati accettati: PDF, JPG, PNG, Word, Excel, TXT. Max 10 MB per file, fino a 5 file contemporaneamente.' },
-      { text: 'Usa l\'icona microfono per registrare una nota vocale.', sub: 'Il browser chiederà il permesso la prima volta.' },
-      { text: 'Crea un nuovo argomento cliccando il pulsante "+" accanto alla lista argomenti.', sub: 'Gli argomenti aiutano a organizzare le conversazioni (es. "Banking", "Dichiarazione dei Redditi").' },
-      { text: 'Rispondi a un messaggio specifico passandoci sopra con il mouse e cliccando l\'icona risposta.', sub: 'Questo crea un thread per mantenere il contesto chiaro.' },
-      { text: 'Il doppio segno di spunta blu (✓✓) significa che il tuo messaggio è stato letto dal nostro team.' },
+      { text: 'Clicca "Profilo" nel menu a sinistra e scorri fino a "Conti Bancari".' },
+      { text: 'Clicca "Aggiungi Conto". Scegli la valuta: USD o EUR.', sub: 'Puoi aggiungere più conti — per esempio, un conto Relay USD e un conto Wise EUR.' },
+      { text: 'Per conti USD, compila:', sub: 'Etichetta (es. "Relay USD") · Titolare del Conto · Nome Banca · Numero Conto · Routing Number · SWIFT/BIC (opzionale) · Note' },
+      { text: 'Per conti EUR, compila:', sub: 'Etichetta (es. "Wise EUR") · Titolare del Conto · Nome Banca · IBAN · SWIFT/BIC · Note' },
+      { text: 'Attiva "Mostra in fattura" per far apparire i dati di questo conto in fondo alle tue fatture.', sub: 'Solo un conto può essere attivo per le fatture alla volta. Passare a uno nuovo disattiva il precedente.' },
+      { text: 'Clicca "Salva". Il conto è ora visibile nel tuo profilo e viene preselezionato quando crei fatture.' },
+      { text: 'Per eliminare un conto: clicca l\'icona cestino sulla card del conto.' },
     ],
-    link: { href: '/portal/chat', label: 'Vai alla Chat' },
+    link: { href: '/portal/profile', label: 'Vai al Profilo' },
+    tip: 'Puoi aggiungere sia un conto USD che un conto EUR. Usa "Mostra in fattura" per scegliere quale appare su ogni fattura — solo uno può essere attivo alla volta.',
   },
   {
-    id: 'request-service',
-    section: 'Comunicazione',
-    icon: Package,
-    iconBg: 'bg-orange-50',
-    iconColor: 'text-orange-600',
-    title: 'Richiedi un Nuovo Servizio',
-    desc: 'Ordina un nuovo servizio dal nostro team',
-    keywords: ['servizio', 'richiesta', 'ordine', 'nuovo', 'llc', 'tasse', 'itin', 'banking', 'relay', 'ein', 'spedizione', 'notaio', 'consulenza', 'costituzione', 'conto', 'banca', 'service', 'request'],
+    id: 'payment-links',
+    section: 'Passo 1 — Configura il tuo Account',
+    icon: Link2,
+    iconBg: 'bg-amber-50',
+    iconColor: 'text-amber-600',
+    title: '1.4 — Link di Pagamento',
+    desc: 'Aggiungi link Stripe, PayPal o Whop per permettere ai clienti di pagare online',
+    keywords: ['link pagamento', 'stripe', 'paypal', 'whop', 'paga ora', 'pulsante paga', 'pagamento online', 'checkout', 'carta', 'payment link', 'pay now'],
     steps: [
-      { text: 'Clicca "Richiedi Servizio" nel menu a sinistra.' },
-      { text: 'Scegli la categoria di servizio che ti serve:', sub: 'Costituzione LLC · Dichiarazione dei Redditi · ITIN · Banking (Relay USD o Payset EUR) · EIN · Spedizioni · Notaio/Apostille · Chiusura Società · Consulenza' },
-      { text: 'Descrivi nel box di testo cosa hai bisogno. Sii il più specifico possibile.', sub: 'Esempio: "Ho bisogno di aprire un conto Relay USD per la mia LLC Wyoming".' },
-      { text: 'Seleziona l\'urgenza: Normale o Urgente.' },
-      { text: 'Clicca Invia. Il nostro team riceve la richiesta come task e risponderà in chat con un preventivo o i passi successivi.' },
+      { text: 'Clicca "Profilo" nel menu a sinistra e scorri fino a "Link di Pagamento".' },
+      { text: 'Clicca "Aggiungi Link di Pagamento".' },
+      { text: 'Compila i campi:', sub: 'Etichetta* (es. "Paga con Stripe") · URL* (il link alla tua pagina di pagamento) · Gateway (Stripe / PayPal / Whop / Altro) · Importo (opzionale) · Valuta (USD o EUR)' },
+      { text: 'Clicca Salva. Il link appare ora sulle tue fatture come pulsante "Paga Ora" per i tuoi clienti.' },
+      { text: "L'icona stella imposta un link come predefinito. Clicca per scegliere quale link appare per primo." },
+      { text: 'Usa l\'icona link esterno (↗) per testare l\'URL di pagamento in una nuova scheda prima di inviare fatture.' },
     ],
-    link: { href: '/portal/services/request', label: 'Richiedi un Servizio' },
+    link: { href: '/portal/profile', label: 'Vai al Profilo' },
+    tip: 'Consigliamo Whop per un checkout senza problemi. Se non hai ancora una pagina Whop, chiedicelo via chat e ti aiutiamo a configurarla.',
+  },
+  {
+    id: 'settings',
+    section: 'Passo 1 — Configura il tuo Account',
+    icon: Lock,
+    iconBg: 'bg-zinc-100',
+    iconColor: 'text-zinc-500',
+    title: '1.5 — Impostazioni: Password, Lingua e Notifiche',
+    desc: 'Cambia la password, cambia lingua o attiva le notifiche push',
+    keywords: ['impostazioni', 'password', 'lingua', 'italiano', 'english', 'notifiche', 'push', 'settings', 'cambia password', 'lingua portale', 'change language', 'notifications'],
+    steps: [
+      { text: 'Clicca "Profilo" nel menu a sinistra, poi clicca "Impostazioni" (o clicca l\'icona ingranaggio in alto a destra della pagina Profilo).' },
+      { text: 'Lingua: clicca "English" o "Italiano" per cambiare la lingua del portale. Il cambio ha effetto immediato.', sub: 'La tua preferenza viene salvata e si applica ogni volta che accedi.' },
+      { text: 'Password: inserisci la nuova password (minimo 8 caratteri), confermala, poi clicca "Aggiorna Password".' },
+      { text: 'Notifiche Push: clicca il toggle per abilitare le notifiche browser per nuovi messaggi in chat, scadenze e documenti.', sub: 'Il browser chiederà il permesso la prima volta.' },
+    ],
+    link: { href: '/portal/settings', label: 'Vai alle Impostazioni' },
   },
 
-  // ── La Tua Azienda ──
+  // ── Passo 2 — Conosci il tuo Portale ──
   {
     id: 'dashboard',
-    section: 'La Tua Azienda',
+    section: 'Passo 2 — Conosci il tuo Portale',
     icon: LayoutDashboard,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-600',
-    title: 'Dashboard (Home)',
-    desc: 'La tua pagina principale del portale',
+    title: '2.1 — Dashboard (Home)',
+    desc: 'La tua pagina principale del portale — cosa mostra e perché',
     keywords: ['dashboard', 'home', 'panoramica', 'inizio', 'principale', 'stato', 'progresso', 'overview', 'start'],
     steps: [
       { text: 'La dashboard è la prima pagina che vedi quando accedi. Cosa mostra dipende da dove sei nel processo:' },
-      { text: 'Se i tuoi servizi non sono ancora confermati: vedrai la card della proposta da rivedere e firmare.' },
-      { text: 'Se il pagamento è confermato ma la configurazione è in corso: vedrai il wizard di raccolta dati con la percentuale di completamento.' },
-      { text: 'Se la tua azienda è attiva: vedrai un riepilogo dei tuoi servizi attivi, attività recenti e scadenze prossime.' },
+      { text: 'Fase proposta: vedrai la card della proposta da rivedere, firmare e pagare.' },
+      { text: 'Configurazione in corso: vedrai il wizard di raccolta dati con la percentuale di completamento. Compilalo completamente — aiuta a preparare i tuoi documenti.' },
+      { text: "Azienda attiva: vedrai un riepilogo dei tuoi servizi attivi, attività recenti e scadenze prossime." },
       { text: 'Usa il menu laterale sinistro per navigare tra tutte le sezioni del portale in qualsiasi momento.' },
     ],
   },
   {
     id: 'my-company',
-    section: 'La Tua Azienda',
+    section: 'Passo 2 — Conosci il tuo Portale',
     icon: Building2,
     iconBg: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
-    title: 'La Mia Azienda',
-    desc: 'Info azienda, servizi e scadenze in un colpo d\'occhio',
+    title: '2.2 — La Mia Azienda',
+    desc: "Info azienda, servizi e scadenze in un colpo d'occhio",
     keywords: ['azienda', 'company', 'llc', 'ein', 'stato', 'costituzione', 'registered agent', 'entità', 'info', 'dettagli', 'state', 'formation', 'informazioni'],
     steps: [
       { text: 'Clicca "La Mia Azienda" nel menu a sinistra per vedere il riepilogo della tua azienda.' },
-      { text: 'La card Info Azienda mostra: ragione sociale, tipo di entità (LLC/C-Corp), EIN, stato di costituzione, data di costituzione e registered agent.' },
+      { text: "La card Info Azienda mostra: ragione sociale, tipo di entità (LLC/C-Corp), EIN, stato di costituzione, data di costituzione e registered agent." },
       { text: 'Sotto, Scadenze Prossime elenca le tue prossime 5 scadenze di compliance con stato e data.', sub: 'Clicca "Vedi Tutte" per aprire il calendario completo delle scadenze.' },
       { text: 'Servizi Attivi mostra ogni servizio attualmente in corso con la sua fase attuale (es. "Costituzione", "EIN in Attesa").' },
       { text: 'Servizi Completati mostra tutti i servizi che sono stati consegnati con successo.' },
@@ -747,11 +861,11 @@ const ARTICLES_IT: Article[] = [
   },
   {
     id: 'deadlines',
-    section: 'La Tua Azienda',
+    section: 'Passo 2 — Conosci il tuo Portale',
     icon: CalendarDays,
     iconBg: 'bg-teal-50',
     iconColor: 'text-teal-600',
-    title: 'Scadenze',
+    title: '2.3 — Scadenze',
     desc: 'Calendario di compliance e scadenze fiscali',
     keywords: ['scadenza', 'calendario', 'annual report', 'tasse', 'deadline', 'filing', 'compliance', 'rinnovo', 'in scadenza', 'scaduto', 'overdue', 'pending', 'calendar'],
     steps: [
@@ -765,16 +879,37 @@ const ARTICLES_IT: Article[] = [
     link: { href: '/portal/deadlines', label: 'Vai alle Scadenze' },
   },
 
-  // ── Documenti ──
+  // ── Passo 3 — I tuoi Documenti ──
+  {
+    id: 'sign-documents',
+    section: 'Passo 3 — I tuoi Documenti',
+    icon: PenLine,
+    iconBg: 'bg-amber-50',
+    iconColor: 'text-amber-600',
+    title: '3.1 — Firma Documenti',
+    desc: 'Firma i contratti e gli accordi della tua LLC — fallo subito',
+    keywords: ['firma', 'firmare', 'operating agreement', 'oa', 'lease', 'ss4', 'msa', 'form 8832', 'contratto', 'accordo', 'sign', 'signature', 'documenti da firmare'],
+    steps: [
+      { text: 'Clicca "Firma Documenti" nel menu a sinistra. Questa sezione appare solo quando hai documenti in attesa della tua firma.' },
+      { text: 'Vedrai una lista di documenti con una barra di avanzamento in alto che mostra quanti hai firmato vs quanti rimangono.' },
+      { text: 'I tipi di documenti che possono apparire qui includono:', sub: 'Operating Agreement (OA) · Contratto Ufficio (Lease) · SS-4 Richiesta EIN · Contratto di Servizio Annuale · Form 8832 (Elezione C-Corp)' },
+      { text: 'Clicca qualsiasi card con l\'icona "penna" blu per aprire la pagina di firma di quel documento.' },
+      { text: 'Leggi il documento, poi firma nel pad per la firma (disegna la tua firma con il mouse o il touchscreen).' },
+      { text: 'Clicca "Conferma Firma" per finalizzare. La card diventa verde e mostra la data in cui hai firmato.' },
+      { text: "Una volta che tutte le card sono verdi, un'icona festeggiamento conferma che tutti i documenti sono stati firmati." },
+    ],
+    link: { href: '/portal/sign', label: 'Vai a Firma Documenti' },
+    tip: 'Firma tutti i documenti in attesa appena appaiono — i tuoi servizi non possono essere elaborati finché tutte le firme non sono complete.',
+  },
   {
     id: 'documents',
-    section: 'Documenti',
+    section: 'Passo 3 — I tuoi Documenti',
     icon: FileText,
     iconBg: 'bg-purple-50',
     iconColor: 'text-purple-600',
-    title: 'Documenti',
+    title: '3.2 — Documenti',
     desc: 'Sfoglia, visualizza e scarica i tuoi documenti aziendali',
-    keywords: ['documento', 'file', 'scarica', 'pdf', 'contratto', 'certificato', 'operating agreement', 'oa', 'lease', 'passaporto', 'carica', 'download', 'upload', 'document', 'lettera ein'],
+    keywords: ['documento', 'file', 'scarica', 'pdf', 'contratto', 'certificato', 'operating agreement', 'oa', 'lease', 'passaporto', 'carica', 'download', 'upload', 'document'],
     steps: [
       { text: 'Clicca "Documenti" nel menu a sinistra per vedere tutti i documenti associati al tuo account.' },
       { text: 'Usa la barra di ricerca in alto per trovare un documento per nome o tipo (es. "Operating Agreement", "EIN Letter").' },
@@ -786,32 +921,12 @@ const ARTICLES_IT: Article[] = [
     link: { href: '/portal/documents', label: 'Vai ai Documenti' },
   },
   {
-    id: 'sign-documents',
-    section: 'Documenti',
-    icon: PenLine,
-    iconBg: 'bg-amber-50',
-    iconColor: 'text-amber-600',
-    title: 'Firma Documenti',
-    desc: 'Firma i contratti e gli accordi della tua LLC',
-    keywords: ['firma', 'firmare', 'operating agreement', 'oa', 'lease', 'ss4', 'msa', 'form 8832', 'contratto', 'accordo', 'sign', 'signature', 'documenti da firmare'],
-    steps: [
-      { text: 'Clicca "Firma Documenti" nel menu a sinistra. Questa sezione appare solo quando hai documenti in attesa della tua firma.' },
-      { text: 'Vedrai una lista di documenti con una barra di avanzamento in alto che mostra quanti hai firmato vs quanti rimangono.' },
-      { text: 'I tipi di documenti che possono apparire qui includono:', sub: 'Operating Agreement (OA) · Contratto Ufficio (Lease) · SS-4 Richiesta EIN · Contratto di Servizio Annuale · Form 8832 (Elezione C-Corp)' },
-      { text: 'Clicca qualsiasi card con l\'icona "penna" blu per aprire la pagina di firma di quel documento.' },
-      { text: 'Leggi il documento, poi firma nel pad per la firma (disegna la tua firma con il mouse o il touchscreen).' },
-      { text: 'Clicca "Conferma Firma" per finalizzare. La card diventa verde e mostra la data in cui hai firmato.' },
-      { text: 'Una volta che tutte le card sono verdi, un\'icona festeggiamento conferma che tutti i documenti sono stati firmati.' },
-    ],
-    link: { href: '/portal/sign', label: 'Vai a Firma Documenti' },
-  },
-  {
     id: 'generate-documents',
-    section: 'Documenti',
+    section: 'Passo 3 — I tuoi Documenti',
     icon: ScrollText,
     iconBg: 'bg-violet-50',
     iconColor: 'text-violet-600',
-    title: 'Genera Documenti',
+    title: '3.3 — Genera Documenti',
     desc: 'Crea verbali di distribuzione, certificati fiscali e atti costitutivi',
     keywords: ['genera', 'crea', 'distribuzione', 'verbale', 'certificato fiscale', 'tax statement', 'operating agreement', 'atto', 'utili', 'documento', 'generate', 'resolution', 'distribution'],
     steps: [
@@ -826,16 +941,36 @@ const ARTICLES_IT: Article[] = [
     link: { href: '/portal/documents/generate', label: 'Vai a Genera Documenti' },
   },
 
-  // ── Finanza e Fatturazione ──
+  // ── Passo 4 — Fattura i tuoi Clienti ──
+  {
+    id: 'customers',
+    section: 'Passo 4 — Fattura i tuoi Clienti',
+    icon: Users,
+    iconBg: 'bg-blue-50',
+    iconColor: 'text-blue-600',
+    title: '4.1 — Aggiungi Prima i tuoi Clienti',
+    desc: 'Crea la tua rubrica clienti — necessaria per emettere fatture',
+    keywords: ['clienti', 'customer', 'rubrica', 'contatti', 'nuovo cliente', 'aggiungi cliente', 'p.iva', 'vat', 'nome cliente', 'directory', 'contacts'],
+    steps: [
+      { text: 'Clicca "I Miei Clienti" nel menu a sinistra.' },
+      { text: 'Per aggiungere un nuovo cliente: clicca "Nuovo Cliente" in alto a destra.' },
+      { text: 'Compila i dettagli del cliente:', sub: 'Nome, Cognome, Ragione Sociale · Email · Telefono · Indirizzo (via, città, regione/stato, paese) · P.IVA / Tax ID · Note' },
+      { text: 'Clicca "Crea Cliente". Il cliente appare nella lista ed è disponibile nel menu a tendina clienti quando crei fatture.' },
+      { text: 'Clicca qualsiasi cliente nella lista per vedere le sue fatture e lo storico pagamenti.' },
+      { text: 'Puoi anche aggiungere un nuovo cliente direttamente quando crei una fattura — clicca "Nuovo Cliente" nel campo cliente senza lasciare il form fattura.' },
+    ],
+    link: { href: '/portal/customers', label: 'Vai a I Miei Clienti' },
+    tip: 'Aggiungi i tuoi clienti abituali una volta sola e riutilizzali per ogni fattura. Bastano nome e email per iniziare.',
+  },
   {
     id: 'create-invoice',
-    section: 'Finanza e Fatturazione',
+    section: 'Passo 4 — Fattura i tuoi Clienti',
     icon: Receipt,
     iconBg: 'bg-emerald-50',
     iconColor: 'text-emerald-600',
-    title: 'Creare una Fattura di Vendita',
+    title: '4.2 — Crea una Fattura di Vendita',
     desc: 'Emetti una fattura a uno dei tuoi clienti',
-    keywords: ['fattura', 'invoice', 'crea', 'nuova fattura', 'vendita', 'cliente', 'importo', 'totale', 'scadenza', 'valuta', 'usd', 'eur', 'sconto', 'emettere fattura', 'create invoice', 'line item'],
+    keywords: ['fattura', 'invoice', 'crea', 'nuova fattura', 'vendita', 'cliente', 'importo', 'totale', 'scadenza', 'valuta', 'usd', 'eur', 'sconto', 'emettere fattura', 'create invoice'],
     steps: [
       { text: 'Vai su Fatture → tab Vendite, poi clicca "Nuova Fattura" in alto a destra.' },
       { text: 'Seleziona un cliente dal menu a tendina, o clicca "Nuovo Cliente" per crearne uno direttamente (nome + email sono sufficienti).' },
@@ -848,14 +983,15 @@ const ARTICLES_IT: Article[] = [
       { text: 'Clicca "Crea Fattura". Verrai reindirizzato alla pagina di dettaglio della fattura dove puoi visualizzarla e inviarla.' },
     ],
     link: { href: '/portal/invoices/new', label: 'Crea una Fattura' },
+    tip: 'Prima della tua prima fattura, assicurati di aver completato i Passi 1.2 (logo), 1.3 (conto bancario) e 1.4 (link di pagamento) — appariranno automaticamente su ogni fattura.',
   },
   {
     id: 'invoice-templates',
-    section: 'Finanza e Fatturazione',
+    section: 'Passo 4 — Fattura i tuoi Clienti',
     icon: Bookmark,
     iconBg: 'bg-sky-50',
     iconColor: 'text-sky-600',
-    title: 'Modelli Fattura',
+    title: '4.3 — Modelli Fattura',
     desc: 'Salva e riutilizza formati fattura per clienti ricorrenti',
     keywords: ['modello', 'template', 'salva', 'riutilizza', 'ricorrente', 'preimpostato', 'fattura predefinita', 'save', 'reuse'],
     steps: [
@@ -866,31 +1002,12 @@ const ARTICLES_IT: Article[] = [
     ],
   },
   {
-    id: 'customers',
-    section: 'Finanza e Fatturazione',
-    icon: Users,
-    iconBg: 'bg-blue-50',
-    iconColor: 'text-blue-600',
-    title: 'I Miei Clienti',
-    desc: 'Aggiungi e gestisci la tua rubrica clienti per la fatturazione',
-    keywords: ['clienti', 'customer', 'rubrica', 'contatti', 'nuovo cliente', 'aggiungi cliente', 'p.iva', 'vat', 'nome cliente', 'directory', 'contacts'],
-    steps: [
-      { text: 'Clicca "I Miei Clienti" nel menu a sinistra.' },
-      { text: 'Per aggiungere un nuovo cliente: clicca "Nuovo Cliente" in alto a destra.' },
-      { text: 'Compila i dettagli del cliente:', sub: 'Nome, Cognome, Ragione Sociale · Email · Telefono · Indirizzo (via, città, regione/stato, paese) · P.IVA / Tax ID · Note' },
-      { text: 'Clicca "Crea Cliente". Il cliente appare nella lista ed è disponibile nel menu a tendina clienti quando crei fatture.' },
-      { text: 'Clicca qualsiasi cliente nella lista per vedere le sue fatture e lo storico pagamenti.' },
-      { text: 'Puoi anche aggiungere un nuovo cliente direttamente quando crei una fattura — clicca "Nuovo Cliente" nel campo cliente senza lasciare il form fattura.' },
-    ],
-    link: { href: '/portal/customers', label: 'Vai a I Miei Clienti' },
-  },
-  {
     id: 'vendors',
-    section: 'Finanza e Fatturazione',
+    section: 'Passo 4 — Fattura i tuoi Clienti',
     icon: Building,
     iconBg: 'bg-slate-50',
     iconColor: 'text-slate-600',
-    title: 'Fornitori',
+    title: '4.4 — Fornitori',
     desc: 'Traccia i tuoi fornitori per la gestione delle spese',
     keywords: ['fornitore', 'vendor', 'supplier', 'spesa', 'expense', 'p.iva', 'vat', 'azienda', 'contatto', 'rubrica fornitori', 'aggiungi fornitore'],
     steps: [
@@ -905,13 +1022,13 @@ const ARTICLES_IT: Article[] = [
   },
   {
     id: 'td-billing',
-    section: 'Finanza e Fatturazione',
+    section: 'Passo 4 — Fattura i tuoi Clienti',
     icon: CreditCard,
     iconBg: 'bg-rose-50',
     iconColor: 'text-rose-600',
-    title: 'Fatturazione TD',
+    title: '4.5 — Fatturazione TD',
     desc: 'Visualizza e paga le fatture di Tony Durante verso di te',
-    keywords: ['fatturazione', 'fattura tony durante', 'paga', 'pagamento', 'spese', 'td invoice', 'billing', 'pay', 'payment', 'expenses', 'pagare', 'pulsante paga', 'stripe'],
+    keywords: ['fatturazione', 'fattura tony durante', 'paga', 'pagamento', 'spese', 'td invoice', 'billing', 'pay', 'payment', 'expenses', 'pagare', 'pulsante paga'],
     steps: [
       { text: 'Clicca "TD Billing" nel menu a sinistra. Questo apre la pagina Fatture sul tab Spese.' },
       { text: 'Qui vedi tutte le fatture emesse da Tony Durante LLC verso di te, più le spese che hai caricato manualmente.' },
@@ -923,100 +1040,44 @@ const ARTICLES_IT: Article[] = [
     link: { href: '/portal/billing', label: 'Vai a TD Billing' },
   },
 
-  // ── Profilo ──
+  // ── Passo 5 — Comunica con Noi ──
   {
-    id: 'edit-profile',
-    section: 'Profilo',
-    icon: User,
-    iconBg: 'bg-zinc-100',
-    iconColor: 'text-zinc-600',
-    title: 'Modifica Informazioni Personali',
-    desc: 'Aggiorna nome, telefono, indirizzo e cittadinanza',
-    keywords: ['profilo', 'dati personali', 'modifica', 'nome', 'telefono', 'indirizzo', 'cittadinanza', 'lingua', 'profile', 'personal', 'edit', 'name', 'phone', 'address'],
-    steps: [
-      { text: 'Clicca "Profilo" nel menu a sinistra.' },
-      { text: 'Sotto "Informazioni Personali", clicca il link "Modifica" (icona matita in fondo alla sezione).' },
-      { text: 'Aggiorna uno qualsiasi dei seguenti campi:', sub: 'Nome · Cognome · Telefono · Lingua preferita · Cittadinanza · Indirizzo · Città · Stato/Provincia · CAP · Paese' },
-      { text: 'L\'indirizzo email è in sola lettura e non può essere modificato qui.', sub: 'Contatta il nostro team via chat se hai bisogno di aggiornare l\'email di accesso.' },
-      { text: 'Clicca "Salva" quando hai finito. Le modifiche vengono salvate immediatamente.' },
-    ],
-    link: { href: '/portal/profile', label: 'Vai al Profilo' },
-  },
-  {
-    id: 'logo',
-    section: 'Profilo',
-    icon: ImageIcon,
-    iconBg: 'bg-pink-50',
-    iconColor: 'text-pink-600',
-    title: 'Carica il Logo Aziendale',
-    desc: 'Aggiungi un logo che appare sulle tue fatture',
-    keywords: ['logo', 'immagine', 'brand', 'logo fattura', 'carica logo', 'upload logo', 'image', 'company logo', 'fattura logo'],
-    steps: [
-      { text: 'Clicca "Profilo" nel menu a sinistra e scorri fino alla sezione "Logo Fattura".' },
-      { text: 'Clicca l\'area tratteggiata di upload o il pulsante "Carica" per aprire il selettore file.' },
-      { text: 'Seleziona il tuo file logo. Formati accettati: JPEG, PNG, WEBP, SVG. Dimensione massima: 2 MB.' },
-      { text: 'Un\'anteprima appare immediatamente dopo il caricamento. Il tuo logo viene salvato automaticamente.' },
-      { text: 'Il tuo logo apparirà ora nell\'angolo in alto a sinistra di ogni fattura che crei.' },
-      { text: 'Per cambiarlo: clicca "Cambia" accanto al logo attuale e carica un nuovo file.' },
-    ],
-    link: { href: '/portal/profile', label: 'Vai al Profilo' },
-  },
-  {
-    id: 'bank-accounts',
-    section: 'Profilo',
-    icon: Landmark,
+    id: 'chat',
+    section: 'Passo 5 — Comunica con Noi',
+    icon: MessageCircle,
     iconBg: 'bg-green-50',
     iconColor: 'text-green-600',
-    title: 'Conti Bancari',
-    desc: 'Aggiungi le tue coordinate bancarie per ricevere pagamenti',
-    keywords: ['conto bancario', 'bank account', 'iban', 'routing number', 'numero conto', 'swift', 'bic', 'relay', 'usd', 'eur', 'aggiungi conto', 'coordinate bancarie', 'bonifico', 'banca', 'coordinate'],
+    title: '5.1 — Chat',
+    desc: 'Invia messaggi e file direttamente al nostro team',
+    keywords: ['chat', 'messaggio', 'contatto', 'supporto', 'parlare', 'team', 'aiuto', 'file', 'carica', 'voce', 'allegato', 'argomento', 'risposta', 'topic', 'thread', 'reply', 'message'],
     steps: [
-      { text: 'Clicca "Profilo" nel menu a sinistra e scorri fino a "Conti Bancari".' },
-      { text: 'Clicca "Aggiungi Conto". Scegli la valuta: USD o EUR.' },
-      { text: 'Per conti USD, compila:', sub: 'Etichetta (es. "Relay USD") · Titolare del Conto · Nome Banca · Numero Conto · Routing Number · SWIFT/BIC (opzionale) · Note' },
-      { text: 'Per conti EUR, compila:', sub: 'Etichetta (es. "Wise EUR") · Titolare del Conto · Nome Banca · IBAN · SWIFT/BIC · Note' },
-      { text: 'Attiva "Mostra in fattura" per far apparire i dati di questo conto in fondo alle tue fatture.', sub: 'Solo un conto può essere attivo per le fatture alla volta. Passare a uno nuovo disattiva il precedente.' },
-      { text: 'Clicca "Salva". Il conto è ora visibile nel tuo profilo e viene preselezionato quando crei fatture.' },
-      { text: 'Per eliminare un conto: clicca l\'icona cestino sulla card del conto.' },
+      { text: 'Clicca "Chat" nel menu a sinistra per aprire la conversazione con il nostro team.' },
+      { text: 'Scrivi il messaggio nel box in basso e premi Invio per inviare.', sub: 'Usa Shift+Invio per andare a capo senza inviare.' },
+      { text: 'Allega file cliccando l\'icona graffetta o trascinandoli nella chat.', sub: 'Formati accettati: PDF, JPG, PNG, Word, Excel, TXT. Max 10 MB per file, fino a 5 file contemporaneamente.' },
+      { text: 'Usa l\'icona microfono per registrare una nota vocale.', sub: 'Il browser chiederà il permesso la prima volta.' },
+      { text: 'Crea un nuovo argomento cliccando il pulsante "+" accanto alla lista argomenti.', sub: 'Gli argomenti aiutano a organizzare le conversazioni (es. "Banking", "Dichiarazione dei Redditi").' },
+      { text: 'Rispondi a un messaggio specifico passandoci sopra con il mouse e cliccando l\'icona risposta.', sub: 'Questo crea un thread per mantenere il contesto chiaro.' },
+      { text: 'Il doppio segno di spunta blu (✓✓) significa che il tuo messaggio è stato letto dal nostro team.' },
     ],
-    link: { href: '/portal/profile', label: 'Vai al Profilo' },
+    link: { href: '/portal/chat', label: 'Vai alla Chat' },
   },
   {
-    id: 'payment-links',
-    section: 'Profilo',
-    icon: Link2,
-    iconBg: 'bg-amber-50',
-    iconColor: 'text-amber-600',
-    title: 'Link di Pagamento',
-    desc: 'Aggiungi link Stripe, PayPal o Whop per permettere ai clienti di pagare online',
-    keywords: ['link pagamento', 'stripe', 'paypal', 'whop', 'paga ora', 'pulsante paga', 'pagamento online', 'checkout', 'carta', 'payment link', 'pay now', 'pay button'],
+    id: 'request-service',
+    section: 'Passo 5 — Comunica con Noi',
+    icon: Package,
+    iconBg: 'bg-orange-50',
+    iconColor: 'text-orange-600',
+    title: '5.2 — Richiedi un Nuovo Servizio',
+    desc: 'Ordina un nuovo servizio direttamente dal portale',
+    keywords: ['servizio', 'richiesta', 'ordine', 'nuovo', 'llc', 'tasse', 'itin', 'banking', 'relay', 'ein', 'spedizione', 'notaio', 'consulenza', 'costituzione', 'conto', 'banca', 'service', 'request'],
     steps: [
-      { text: 'Clicca "Profilo" nel menu a sinistra e scorri fino a "Link di Pagamento".' },
-      { text: 'Clicca "Aggiungi Link di Pagamento".' },
-      { text: 'Compila i campi:', sub: 'Etichetta* (es. "Paga con Stripe") · URL* (il link alla tua pagina di pagamento) · Gateway (Stripe / PayPal / Whop / Altro) · Importo (opzionale) · Valuta (USD o EUR)' },
-      { text: 'Clicca Salva. Il link appare ora sulle tue fatture come pulsante "Paga Ora".' },
-      { text: 'L\'icona stella imposta un link come predefinito. Clicca per scegliere quale link appare per primo.' },
-      { text: 'Usa l\'icona link esterno (↗) per testare l\'URL di pagamento in una nuova scheda.' },
-      { text: 'Consigliamo Whop per un checkout senza problemi. Se non hai ancora una pagina Whop, chiedicelo via chat.' },
+      { text: 'Clicca "Richiedi Servizio" nel menu a sinistra.' },
+      { text: 'Scegli la categoria di servizio che ti serve:', sub: 'Costituzione LLC · Dichiarazione dei Redditi · ITIN · Banking (Relay USD o Payset EUR) · EIN · Spedizioni · Notaio/Apostille · Chiusura Società · Consulenza' },
+      { text: 'Descrivi nel box di testo cosa hai bisogno. Sii il più specifico possibile.', sub: 'Esempio: "Ho bisogno di aprire un conto Relay USD per la mia LLC Wyoming".' },
+      { text: "Seleziona l'urgenza: Normale o Urgente." },
+      { text: 'Clicca Invia. Il nostro team riceve la richiesta come task e risponderà in chat con un preventivo o i passi successivi.' },
     ],
-    link: { href: '/portal/profile', label: 'Vai al Profilo' },
-  },
-  {
-    id: 'settings',
-    section: 'Profilo',
-    icon: Lock,
-    iconBg: 'bg-zinc-100',
-    iconColor: 'text-zinc-500',
-    title: 'Impostazioni: Password, Lingua e Notifiche',
-    desc: 'Cambia la password, cambia lingua o attiva le notifiche push',
-    keywords: ['impostazioni', 'password', 'lingua', 'italiano', 'english', 'notifiche', 'push', 'settings', 'cambia password', 'lingua portale', 'change language', 'notifications'],
-    steps: [
-      { text: 'Clicca "Profilo" nel menu a sinistra, poi clicca "Impostazioni" (o clicca l\'icona ingranaggio in alto a destra della pagina Profilo).' },
-      { text: 'Lingua: clicca "English" o "Italiano" per cambiare la lingua del portale. Il cambio ha effetto immediato.', sub: 'La tua preferenza viene salvata e si applica ogni volta che accedi.' },
-      { text: 'Password: inserisci la nuova password (minimo 8 caratteri), confermala, poi clicca "Aggiorna Password".' },
-      { text: 'Notifiche Push: clicca il toggle per abilitare le notifiche browser per nuovi messaggi in chat, scadenze e documenti.', sub: 'Il browser chiederà il permesso la prima volta.' },
-    ],
-    link: { href: '/portal/settings', label: 'Vai alle Impostazioni' },
+    link: { href: '/portal/services/request', label: 'Richiedi un Servizio' },
   },
 
   // ── Referral ──
@@ -1043,12 +1104,20 @@ const ARTICLES_IT: Article[] = [
 
 const IT: Content = {
   pageTitle: 'Guida al Portale',
-  pageSubtitle: 'Cerca qualsiasi funzionalità, o sfoglia per sezione. Scrivi "logo", "fattura", "Relay", "conto" — troverai tutto.',
+  pageSubtitle: 'Segui i 5 passi di configurazione qui sotto, poi usa la guida per trovare qualsiasi funzionalità. Puoi anche cercare per parola chiave.',
   searchPlaceholder: 'Cerca: logo, fattura, Relay, conto bancario, firma…',
   searchNoResults: 'Nessun risultato trovato. Prova parole chiave diverse, o contattaci via chat.',
   searchResultCount: (n) => `${n} risultat${n === 1 ? 'o' : 'i'} trovati`,
   sections: SECTIONS_IT,
   articles: ARTICLES_IT,
+  roadmapTitle: 'Per iniziare — segui questo ordine',
+  roadmapItems: [
+    { number: 1, title: 'Configura il tuo account', desc: 'Aggiungi logo, conti bancari e link di pagamento prima della prima fattura.' },
+    { number: 2, title: 'Conosci il tuo portale', desc: 'Esplora la dashboard, le info azienda e il calendario scadenze.' },
+    { number: 3, title: 'Gestisci i tuoi documenti', desc: 'Firma i contratti in attesa — i servizi non procedono finché non sono firmati.' },
+    { number: 4, title: 'Fattura i tuoi clienti', desc: 'Aggiungi prima i clienti, poi crea e invia fatture.' },
+    { number: 5, title: 'Comunica con noi', desc: 'Usa la Chat per domande e "Richiedi Servizio" per nuovi ordini.' },
+  ],
   helpTitle: 'Hai ancora domande?',
   helpDesc: 'Il nostro team è disponibile ad aiutarti. Inviaci un messaggio e ti risponderemo a breve.',
   chatBtn: 'Chatta Con Noi',
