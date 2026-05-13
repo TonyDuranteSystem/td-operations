@@ -12,7 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
-import { INTERNAL_BASE_URL } from "@/lib/config"
+import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
 
 let _supabase: SupabaseClient | null = null
@@ -420,17 +420,9 @@ async function handlePaymentSucceeded(payment: Record<string, unknown>) {
         }
       }
 
-      // Trigger Stage 0 activation via internal endpoint
+      // Trigger Stage 0 activation directly (no HTTP hop)
       try {
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
-        await fetch(`${baseUrl}/api/workflows/activate-service`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.API_SECRET_TOKEN}`
-          },
-          body: JSON.stringify({ pending_activation_id: pending.id }),
-        })
+        await runActivation(pending.id)
       } catch (e) {
         console.error("[whop-webhook] Failed to trigger activate-service:", e)
       }

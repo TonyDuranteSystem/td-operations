@@ -7,8 +7,8 @@
  * chain. These tests verify the resolution branches and the rejection paths.
  *
  * Strategy: mock supabaseAdmin per-table with a helper that lets each test
- * configure what each query returns. Mock createTDInvoice + fetch (for the
- * activate-service call) so the route runs end-to-end without side effects.
+ * configure what each query returns. Mock createTDInvoice + runActivation
+ * so the route runs end-to-end without side effects.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -120,25 +120,20 @@ vi.mock("@/lib/portal/td-invoice", () => ({
   }),
 }))
 
-// fetch — capture the activate-service call
-let lastFetchUrl: string | null = null
-let lastFetchBody: Record<string, unknown> | null = null
-let fetchResponse = { ok: true, status: 200, json: async () => ({ ok: true, contract_type: "onboarding" }) }
+// runActivation — capture the pending_activation_id passed to it
+let lastActivationId: string | null = null
+
+vi.mock("@/lib/operations/activate-service", () => ({
+  runActivation: vi.fn(async (id: string) => {
+    lastActivationId = id
+    return { ok: true, contract_type: "onboarding" }
+  }),
+}))
 
 beforeEach(() => {
   resetTables()
   _lastTDInvoice = null
-  lastFetchUrl = null
-  lastFetchBody = null
-  fetchResponse = { ok: true, status: 200, json: async () => ({ ok: true, contract_type: "onboarding" }) }
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: { body?: string }) => {
-      lastFetchUrl = url
-      lastFetchBody = init?.body ? JSON.parse(init.body) : null
-      return fetchResponse as unknown as Response
-    }),
-  )
+  lastActivationId = null
   process.env.API_SECRET_TOKEN = "test-secret"
   process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com"
 })
@@ -223,9 +218,8 @@ describe("confirm-payment — account_id path", () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.ok).toBe(true)
-    // activate-service was called
-    expect(lastFetchUrl).toMatch(/\/api\/workflows\/activate-service$/)
-    expect(lastFetchBody?.pending_activation_id).toBe("pa-1")
+    // runActivation was called with the new activation id
+    expect(lastActivationId).toBe("pa-1")
     // The new pending_activation referenced the offer's token
     expect((tables.pending_activations.lastInsert as Record<string, unknown>).offer_token).toBe("offer-mojo-2026")
     // No lead → no lead_id on the activation row
@@ -330,7 +324,7 @@ describe("confirm-payment — contact_id path", () => {
       makeRequest({ ...baseBody, contact_id: "contact-1" }) as Parameters<typeof POST>[0],
     )
     expect(res.status).toBe(200)
-    expect(lastFetchBody?.pending_activation_id).toBe("pa-direct")
+    expect(lastActivationId).toBe("pa-direct")
   })
 
   it("returns 404 when contact has no email", async () => {
@@ -390,7 +384,7 @@ describe("confirm-payment — offer_token path", () => {
       makeRequest({ ...baseBody, offer_token: "explicit-token" }) as Parameters<typeof POST>[0],
     )
     expect(res.status).toBe(200)
-    expect(lastFetchBody?.pending_activation_id).toBe("pa-tok")
+    expect(lastActivationId).toBe("pa-tok")
   })
 
   it("returns 404 when offer_token doesn't exist", async () => {
@@ -450,7 +444,7 @@ describe("confirm-payment — lead_id path (existing behavior)", () => {
       makeRequest({ ...baseBody, lead_id: "lead-1" }) as Parameters<typeof POST>[0],
     )
     expect(res.status).toBe(200)
-    expect(lastFetchBody?.pending_activation_id).toBe("pa-lead")
+    expect(lastActivationId).toBe("pa-lead")
     // Lead status update fired (captured on the leads table)
     expect((tables.leads.lastUpdate as Record<string, unknown> | undefined)?.status).toBe("Converted")
   })
