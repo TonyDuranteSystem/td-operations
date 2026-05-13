@@ -1,17 +1,21 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import {
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Link2,
   X,
   Loader2,
   ArrowRight,
   Ban,
+  Check,
+  RotateCw,
 } from 'lucide-react'
 import { matchFeedToInvoice, ignoreFeed } from '@/app/(dashboard)/reconciliation/actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -30,7 +34,8 @@ interface BankFeed {
   match_confidence: string | null
   status: string
   created_at: string
-  // Joined payment data (for matched)
+  review_metadata?: unknown
+  // Joined payment data (for matched / needs_review / activation_crashed)
   payments?: {
     invoice_number: string | null
     description: string | null
@@ -55,6 +60,7 @@ interface Props {
   unmatched: BankFeed[]
   matched: BankFeed[]
   openInvoices: OpenInvoice[]
+  needsReview?: BankFeed[]
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -93,14 +99,20 @@ function getCompanyName(accounts: any): string {
   return accounts.company_name ?? '—'
 }
 
-export function ReconciliationBoard({ unmatched, matched, openInvoices }: Props) {
-  const [tab, setTab] = useState<'unmatched' | 'matched'>('unmatched')
+export function ReconciliationBoard({ unmatched, matched, openInvoices, needsReview = [] }: Props) {
+  const [tab, setTab] = useState<'needs_review' | 'unmatched' | 'matched'>(
+    needsReview.length > 0 ? 'needs_review' : 'unmatched',
+  )
   const [matchingFeed, setMatchingFeed] = useState<string | null>(null)
 
   return (
     <div className="space-y-4">
       {/* Stats */}
       <div className="flex gap-3">
+        <div className="bg-white rounded-lg border p-4 flex-1">
+          <p className="text-2xl font-semibold text-red-600">{needsReview.length}</p>
+          <p className="text-xs text-muted-foreground mt-1">Needs review</p>
+        </div>
         <div className="bg-white rounded-lg border p-4 flex-1">
           <p className="text-2xl font-semibold text-amber-600">{unmatched.length}</p>
           <p className="text-xs text-muted-foreground mt-1">Unmatched transactions</p>
@@ -117,6 +129,15 @@ export function ReconciliationBoard({ unmatched, matched, openInvoices }: Props)
 
       {/* Tabs */}
       <div className="border-b flex gap-1 -mb-px">
+        <button
+          onClick={() => setTab('needs_review')}
+          className={cn(
+            'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
+            tab === 'needs_review' ? 'border-red-500 text-red-600' : 'border-transparent text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <AlertTriangle className="h-4 w-4" /> Needs review ({needsReview.length})
+        </button>
         <button
           onClick={() => setTab('unmatched')}
           className={cn(
@@ -139,7 +160,17 @@ export function ReconciliationBoard({ unmatched, matched, openInvoices }: Props)
 
       {/* Feed list */}
       <div className="bg-white rounded-lg border overflow-hidden">
-        {tab === 'unmatched' ? (
+        {tab === 'needs_review' ? (
+          needsReview.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+              Nothing to review
+            </div>
+          ) : (
+            needsReview.map(feed => (
+              <NeedsReviewRow key={feed.id} feed={feed} />
+            ))
+          )
+        ) : tab === 'unmatched' ? (
           unmatched.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
               No unmatched transactions
@@ -168,6 +199,170 @@ export function ReconciliationBoard({ unmatched, matched, openInvoices }: Props)
           )
         )}
       </div>
+    </div>
+  )
+}
+
+function NeedsReviewRow({ feed }: { feed: BankFeed }) {
+  const router = useRouter()
+  const [busy, setBusy] = useState<null | 'confirm' | 'reject' | 'retry'>(null)
+  const payment = feed.payments
+  const amount = Number(feed.amount)
+  const meta = (feed.review_metadata ?? {}) as Record<string, unknown>
+  const activationError = typeof meta.activation_error === 'string' ? meta.activation_error : null
+  const isCrashed = feed.status === 'activation_crashed'
+
+  async function callEndpoint(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.ok === false) {
+        return { ok: false, error: data.error || `Request failed (${res.status})` }
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Network error' }
+    }
+  }
+
+  const handleConfirm = async () => {
+    if (!feed.matched_payment_id) {
+      toast.error('No candidate payment to confirm')
+      return
+    }
+    setBusy('confirm')
+    const r = await callEndpoint('/api/crm/admin-actions/bank-feed-confirm-match', {
+      feed_id: feed.id,
+      payment_id: feed.matched_payment_id,
+    })
+    setBusy(null)
+    if (!r.ok) {
+      toast.error(r.error ?? 'Confirm failed')
+      return
+    }
+    toast.success('Match confirmed — invoice marked paid')
+    router.refresh()
+  }
+
+  const handleReject = async () => {
+    setBusy('reject')
+    const r = await callEndpoint('/api/crm/admin-actions/bank-feed-reject-match', {
+      feed_id: feed.id,
+    })
+    setBusy(null)
+    if (!r.ok) {
+      toast.error(r.error ?? 'Reject failed')
+      return
+    }
+    toast.success('Candidate rejected')
+    router.refresh()
+  }
+
+  const handleRetry = async () => {
+    setBusy('retry')
+    const r = await callEndpoint('/api/crm/admin-actions/bank-feed-retry-activation', {
+      feed_id: feed.id,
+    })
+    setBusy(null)
+    if (!r.ok) {
+      toast.error(r.error ?? 'Retry failed')
+      return
+    }
+    toast.success('Activation succeeded')
+    router.refresh()
+  }
+
+  return (
+    <div className="border-b last:border-b-0 px-4 py-3 text-sm space-y-2">
+      <div className="flex items-center gap-3">
+        <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
+          {SOURCE_LABELS[feed.source] ?? feed.source}
+        </span>
+        <span className="text-xs text-muted-foreground w-20 shrink-0">{formatDate(feed.transaction_date)}</span>
+        <span className="font-semibold w-24 shrink-0">{formatCurrency(amount, feed.currency)}</span>
+        <span className="text-xs text-muted-foreground truncate flex-1">{feed.sender_name || feed.memo || '—'}</span>
+
+        {/* Candidate */}
+        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
+        <span className="text-xs truncate max-w-[160px]">{getCompanyName(payment?.accounts)}</span>
+        {feed.match_confidence && (
+          <span className={cn(
+            'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
+            feed.match_confidence === 'high' ? 'bg-blue-100 text-blue-700' :
+            feed.match_confidence === 'medium' ? 'bg-amber-100 text-amber-700' :
+            'bg-zinc-100 text-zinc-700'
+          )}>
+            {feed.match_confidence}
+          </span>
+        )}
+        {isCrashed && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 bg-red-100 text-red-700">
+            activation crashed
+          </span>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center gap-1 shrink-0 ml-2">
+          {isCrashed ? (
+            <button
+              onClick={handleRetry}
+              disabled={busy !== null}
+              className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-50 hover:bg-red-100 text-red-700 disabled:opacity-50"
+              title="Retry activation"
+            >
+              {busy === 'retry' ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />}
+              Retry
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleConfirm}
+                disabled={busy !== null}
+                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 disabled:opacity-50"
+                title="Confirm match"
+              >
+                {busy === 'confirm' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Confirm
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={busy !== null}
+                className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-600 disabled:opacity-50"
+                title="Reject candidate"
+              >
+                {busy === 'reject' ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                Reject
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Secondary row: sender_reference, memo, activation error */}
+      {(feed.sender_reference || feed.memo || activationError) && (
+        <div className="pl-1 text-xs text-muted-foreground space-y-0.5">
+          {feed.sender_reference && (
+            <div className="truncate">
+              <span className="font-medium text-zinc-500">Ref:</span> {feed.sender_reference}
+            </div>
+          )}
+          {feed.memo && (
+            <div className="truncate">
+              <span className="font-medium text-zinc-500">Memo:</span> {feed.memo}
+            </div>
+          )}
+          {activationError && (
+            <div className="text-red-600">
+              <span className="font-medium">Activation error:</span> {activationError}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

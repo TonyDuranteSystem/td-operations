@@ -10133,6 +10133,7 @@ export type Database = {
           matched_payment_id: string | null
           memo: string | null
           raw_data: Json | null
+          review_metadata: Json
           sender_name: string | null
           sender_reference: string | null
           source: string
@@ -10152,6 +10153,7 @@ export type Database = {
           matched_payment_id?: string | null
           memo?: string | null
           raw_data?: Json | null
+          review_metadata?: Json
           sender_name?: string | null
           sender_reference?: string | null
           source: string
@@ -10171,6 +10173,7 @@ export type Database = {
           matched_payment_id?: string | null
           memo?: string | null
           raw_data?: Json | null
+          review_metadata?: Json
           sender_name?: string | null
           sender_reference?: string | null
           source?: string

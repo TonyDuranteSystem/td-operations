@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { runActivation } from "@/lib/operations/activate-service"
+import { getAppSetting } from "@/lib/settings"
 
 // Common business words excluded from name matching to prevent false positives
 const STOP_WORDS = new Set([
@@ -310,15 +311,31 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     candidates.sort((a, b) => b.score - a.score)
     const best = candidates[0]
 
-    // Only auto-match if confidence is exact or high
-    if (best.confidence === "medium") {
-      // Store as potential match but don't auto-reconcile
+    // Threshold-gated auto-activation. Antonio's decision (2026-05-13):
+    //   * 'exact' (default) — only `exact` confidence auto-marks the invoice
+    //     Paid + triggers downstream activation. `high` lands in the review
+    //     queue alongside `medium`.
+    //   * 'exact_or_high'   — both `exact` and `high` auto-match. Only
+    //     `medium` goes to review.
+    // Anything pushed to review keeps the candidate (matched_payment_id +
+    // match_confidence) for the reviewer; status='needs_review' surfaces it
+    // in the sidebar badge and the /reconciliation review tab.
+    const autoActivateThreshold = await getAppSetting<string>(
+      "auto_activate_confidence_threshold",
+      "exact",
+    )
+    const needsReview =
+      best.confidence === "medium" ||
+      (best.confidence === "high" && autoActivateThreshold === "exact")
+
+    if (needsReview) {
+      // Store as potential match but don't auto-reconcile.
       await supabaseAdmin
         .from("td_bank_feeds")
         .update({
           matched_payment_id: best.id,
           match_confidence: best.confidence,
-          status: "unmatched", // Still needs manual review
+          status: "needs_review",
           updated_at: new Date().toISOString(),
         })
         .eq("id", feedId)

@@ -216,7 +216,7 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
     const { readFileSync } = await import("node:fs")
     const { resolve } = await import("node:path")
     const source = readFileSync(
-      resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
+      resolve(process.cwd(), "lib/operations/activate-service.ts"),
       "utf-8",
     )
     // The ensureMinimalAccount guard (auto-account creation) must be
@@ -241,7 +241,7 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
     const { readFileSync } = await import("node:fs")
     const { resolve } = await import("node:path")
     const source = readFileSync(
-      resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
+      resolve(process.cwd(), "lib/operations/activate-service.ts"),
       "utf-8",
     )
     expect(source).toMatch(
@@ -263,7 +263,7 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
     const { readFileSync } = await import("node:fs")
     const { resolve } = await import("node:path")
     const source = readFileSync(
-      resolve(process.cwd(), "app/api/workflows/activate-service/route.ts"),
+      resolve(process.cwd(), "lib/operations/activate-service.ts"),
       "utf-8",
     )
     // The SD block must check for formation/onboarding BEFORE the pipelines.length

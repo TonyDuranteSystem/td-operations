@@ -22,7 +22,7 @@ function getDb() {
 export async function GET() {
   try {
     // Run all queries in parallel
-    const [portalResult, internalResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult] = await Promise.allSettled([
+    const [portalResult, internalResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult, reconReviewResult] = await Promise.allSettled([
       // Portal chats: count unread client messages using select('id') instead of head:true
       getDb()
         .from('portal_messages')
@@ -51,6 +51,11 @@ export async function GET() {
         .from('client_invoices')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'Overdue'),
+      // Reconciliation review queue — needs_review + activation_crashed feeds
+      getDb()
+        .from('td_bank_feeds')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['needs_review', 'activation_crashed']),
     ])
 
     // Portal chats count (client messages only — internal team chat has its own badge)
@@ -94,9 +99,15 @@ export async function GET() {
       overdueInvoices = overdueResult.value.count ?? 0
     }
 
-    return NextResponse.json({ portalChats, teamChat, inbox, tasks, overdueInvoices, _debug: { supportUnread, antonioUnread } })
+    // Reconciliation review queue (needs_review + activation_crashed)
+    let reconciliationReview = 0
+    if (reconReviewResult.status === 'fulfilled' && !reconReviewResult.value.error) {
+      reconciliationReview = reconReviewResult.value.count ?? 0
+    }
+
+    return NextResponse.json({ portalChats, teamChat, inbox, tasks, overdueInvoices, reconciliationReview, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
-    return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0 })
+    return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })
   }
 }
