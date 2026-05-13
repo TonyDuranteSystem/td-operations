@@ -16,7 +16,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
-import { INTERNAL_BASE_URL } from "@/lib/config"
+import { runActivation } from "@/lib/operations/activate-service"
 
 // Common business words excluded from name matching to prevent false positives
 const STOP_WORDS = new Set([
@@ -557,16 +557,19 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         })
         .eq("id", pendingAct.id)
 
-      // Trigger activate-service (non-blocking)
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
-      fetch(`${baseUrl}/api/workflows/activate-service`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
-        },
-        body: JSON.stringify({ pending_activation_id: pendingAct.id }),
-      }).catch(() => {})
+      // Trigger activate-service directly (no HTTP hop). Awaited so failures
+      // are logged; the manualMatch caller still gets `matched: true` because
+      // the match itself succeeded — activation is a downstream effect that
+      // PR B will surface to the CRM via a 'needs_review' / 'activation_crashed'
+      // state on td_bank_feeds.
+      try {
+        const activateResult = await runActivation(pendingAct.id)
+        if (!activateResult.ok) {
+          console.error(`[manualMatch] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
+        }
+      } catch (err) {
+        console.error(`[manualMatch] runActivation threw for pending ${pendingAct.id}:`, err)
+      }
     }
 
     return {

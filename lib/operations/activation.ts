@@ -25,7 +25,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { INTERNAL_BASE_URL } from "@/lib/config"
+import { runActivation } from "@/lib/operations/activate-service"
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -152,64 +152,30 @@ export async function activateService(
     }
   }
 
-  // ─── Call the endpoint ───────────────────────────────
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
-  const secret = process.env.API_SECRET_TOKEN
-
-  if (!secret) {
-    return {
-      success: false,
-      pending_activation_id: paId,
-      outcome: "error",
-      error: "API_SECRET_TOKEN not configured",
-    }
-  }
-
-  let res: Response
+  // ─── Call runActivation directly (no HTTP hop) ───────
+  let result
   try {
-    res = await fetch(`${baseUrl}/api/workflows/activate-service`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify({ pending_activation_id: paId }),
-    })
+    result = await runActivation(paId)
   } catch (err) {
     return {
       success: false,
       pending_activation_id: paId,
       outcome: "error",
-      error: err instanceof Error ? err.message : "Fetch failed",
+      error: err instanceof Error ? err.message : "runActivation threw",
     }
   }
 
-  let body: Record<string, unknown>
-  try {
-    body = await res.json()
-  } catch {
+  if (!result.ok) {
     return {
       success: false,
       pending_activation_id: paId,
       outcome: "error",
-      error: `Non-JSON response (status ${res.status})`,
+      error: result.error || `Activation failed${result.status ? ` (${result.status})` : ""}`,
     }
   }
 
-  if (!res.ok) {
-    return {
-      success: false,
-      pending_activation_id: paId,
-      outcome: "error",
-      error:
-        typeof body.error === "string"
-          ? body.error
-          : `Activation failed (${res.status})`,
-    }
-  }
-
-  // 200 OK with "Already activated" message (route line 164).
-  if (body.message === "Already activated") {
+  // ok:true with "Already activated" message (lib/operations/activate-service.ts).
+  if (result.message === "Already activated") {
     return {
       success: true,
       pending_activation_id: paId,
@@ -217,19 +183,19 @@ export async function activateService(
     }
   }
 
-  // Normal success (route line 1111): {ok, contract_type, mode, steps, ...}
+  // Normal success: {ok, contract_type, mode, steps, service_deliveries, prepared_steps}
   return {
     success: true,
     pending_activation_id: paId,
     outcome: "activated",
     data: {
-      contract_type: body.contract_type as string | undefined,
-      mode: body.mode as "auto" | "supervised" | undefined,
-      steps: body.steps,
-      service_deliveries: body.service_deliveries,
+      contract_type: result.contract_type,
+      mode: result.mode as "auto" | "supervised" | undefined,
+      steps: result.steps,
+      service_deliveries: result.service_deliveries,
       prepared_steps:
-        typeof body.prepared_steps === "number"
-          ? body.prepared_steps
+        typeof result.prepared_steps === "number"
+          ? result.prepared_steps
           : undefined,
     },
   }

@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { INTERNAL_BASE_URL } from '@/lib/config'
+import { runActivation } from '@/lib/operations/activate-service'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 import {
@@ -224,16 +224,16 @@ export async function markInvoicePaid(
         })
         .eq('id', pendingAct.id)
 
-      // Trigger activate-service (non-blocking)
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
-      fetch(`${baseUrl}/api/workflows/activate-service`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
-        },
-        body: JSON.stringify({ pending_activation_id: pendingAct.id }),
-      }).catch(() => {})
+      // Trigger activate-service directly (no HTTP hop). Awaited so failures
+      // are logged; PR B will route failures to the CRM bank-feed review queue.
+      try {
+        const activateResult = await runActivation(pendingAct.id)
+        if (!activateResult.ok) {
+          console.error(`[invoice-mark-paid] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
+        }
+      } catch (err) {
+        console.error(`[invoice-mark-paid] runActivation threw for pending ${pendingAct.id}:`, err)
+      }
     }
 
     revalidatePath('/payments')
