@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 
 async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
   try {
-    const [tasksResult, portalChatsResult, internalResult] = await Promise.allSettled([
+    const [tasksResult, portalChatsResult, internalResult, reconReviewResult] = await Promise.allSettled([
       supabase
         .from('tasks')
         .select('id', { count: 'exact', head: true })
@@ -33,6 +33,10 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
         .from('internal_messages')
         .select('id', { count: 'exact', head: true })
         .is('read_at', null),
+      supabaseAdmin
+        .from('td_bank_feeds')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['needs_review', 'activation_crashed']),
     ])
 
     const taskCount = tasksResult.status === 'fulfilled' ? (tasksResult.value.count ?? 0) : 0
@@ -74,9 +78,15 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>) {
       overdueInvoices = count ?? 0
     } catch { /* ignore */ }
 
-    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, overdueInvoices }
+    // Reconciliation review queue — needs_review + activation_crashed.
+    let reconciliationReview = 0
+    if (reconReviewResult.status === 'fulfilled' && !reconReviewResult.value.error) {
+      reconciliationReview = reconReviewResult.value.count ?? 0
+    }
+
+    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, overdueInvoices, reconciliationReview }
   } catch {
-    return { inbox: 0, tasks: 0, portalChats: 0 }
+    return { inbox: 0, tasks: 0, portalChats: 0, reconciliationReview: 0 }
   }
 }
 

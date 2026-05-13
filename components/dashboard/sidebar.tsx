@@ -40,6 +40,7 @@ import {
   AlertTriangle,
   ClipboardCheck,
   MapPin,
+  GitMerge,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -78,7 +79,7 @@ interface NavItem {
 interface SidebarProps {
   user: { email?: string }
   isAdmin?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number }
   enabledFeatures?: string[]
 }
 
@@ -99,6 +100,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, and financial overview. Create and manage client billing.' },
+  { id: 'reconciliation', name: 'Reconciliation', href: '/reconciliation', icon: GitMerge, tooltip: 'Bank wire reconciliation — match incoming bank feeds to invoices, review uncertain matches, retry crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
@@ -200,6 +202,7 @@ export function Sidebar({
   const [liveTeamChat, setLiveTeamChat] = useState(badgeCounts?.teamChat ?? 0)
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
+  const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const pathnameRef = useRef(pathname)
 
   // Keep pathname ref in sync for use inside realtime callback
@@ -228,6 +231,9 @@ export function Sidebar({
           }
           if (typeof data.overdueInvoices === 'number') {
             setLiveOverdue(data.overdueInvoices)
+          }
+          if (typeof data.reconciliationReview === 'number') {
+            setLiveReconReview(data.reconciliationReview)
           }
         })
         .catch(() => {})
@@ -366,6 +372,7 @@ export function Sidebar({
       if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
       if (item.id === 'finance' && liveOverdue > 0) return { ...item, badge: liveOverdue }
+      if (item.id === 'reconciliation' && liveReconReview > 0) return { ...item, badge: liveReconReview }
       return item
     })
     .filter((item): item is NavItem => {

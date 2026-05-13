@@ -18,6 +18,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 export type AppSettingKey =
   | "tax_season_paused" // boolean — when true, Tax Return banner + wizard + intake are gated.
   | "renewal_banner_min_year" // number — minimum agreement_year for the portal renewal-MSA banner to show. Default 2027 (hides 2026 in purgatory). Bump higher to hide future years too.
+  | "auto_activate_confidence_threshold" // 'exact' (default) | 'exact_or_high' — which match confidence levels trigger auto-activation. Anything below threshold goes to the bank-feed review queue.
 
 export async function getAppSetting<T = unknown>(
   key: AppSettingKey,

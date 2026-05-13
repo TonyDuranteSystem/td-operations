@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncPaymentToQB } from "@/lib/qb-sync"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { runActivation } from "@/lib/operations/activate-service"
+import { getAppSetting } from "@/lib/settings"
 
 // Common business words excluded from name matching to prevent false positives
 const STOP_WORDS = new Set([
@@ -310,15 +311,31 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     candidates.sort((a, b) => b.score - a.score)
     const best = candidates[0]
 
-    // Only auto-match if confidence is exact or high
-    if (best.confidence === "medium") {
-      // Store as potential match but don't auto-reconcile
+    // Threshold-gated auto-activation. Antonio's decision (2026-05-13):
+    //   * 'exact' (default) — only `exact` confidence auto-marks the invoice
+    //     Paid + triggers downstream activation. `high` lands in the review
+    //     queue alongside `medium`.
+    //   * 'exact_or_high'   — both `exact` and `high` auto-match. Only
+    //     `medium` goes to review.
+    // Anything pushed to review keeps the candidate (matched_payment_id +
+    // match_confidence) for the reviewer; status='needs_review' surfaces it
+    // in the sidebar badge and the /reconciliation review tab.
+    const autoActivateThreshold = await getAppSetting<string>(
+      "auto_activate_confidence_threshold",
+      "exact",
+    )
+    const needsReview =
+      best.confidence === "medium" ||
+      (best.confidence === "high" && autoActivateThreshold === "exact")
+
+    if (needsReview) {
+      // Store as potential match but don't auto-reconcile.
       await supabaseAdmin
         .from("td_bank_feeds")
         .update({
           matched_payment_id: best.id,
           match_confidence: best.confidence,
-          status: "unmatched", // Still needs manual review
+          status: "needs_review",
           updated_at: new Date().toISOString(),
         })
         .eq("id", feedId)
@@ -540,6 +557,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     }
 
     // Check if this invoice is linked to a pending_activation → trigger activation chain
+    // Path A: direct link via portal_invoice_id (Stripe/Whop payment flow)
     const { data: pendingAct } = await supabaseAdmin
       .from("pending_activations")
       .select("id, status")
@@ -559,9 +577,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
 
       // Trigger activate-service directly (no HTTP hop). Awaited so failures
       // are logged; the manualMatch caller still gets `matched: true` because
-      // the match itself succeeded — activation is a downstream effect that
-      // PR B will surface to the CRM via a 'needs_review' / 'activation_crashed'
-      // state on td_bank_feeds.
+      // the match itself succeeded.
       try {
         const activateResult = await runActivation(pendingAct.id)
         if (!activateResult.ok) {
@@ -569,6 +585,53 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         }
       } catch (err) {
         console.error(`[manualMatch] runActivation threw for pending ${pendingAct.id}:`, err)
+      }
+    } else {
+      // Path B: bank-feed-created invoices have no portal_invoice_id.
+      // Look up by account_id → offer token → pending_activation.
+      // Only backfills payment_confirmed_at — does NOT re-trigger activation.
+      const { data: paymentFull } = await supabaseAdmin
+        .from("payments")
+        .select("account_id")
+        .eq("id", paymentId)
+        .single()
+
+      if (paymentFull?.account_id) {
+        const { data: offer } = await supabaseAdmin
+          .from("offers")
+          .select("token")
+          .eq("account_id", paymentFull.account_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (offer?.token) {
+          const { data: pendingActByAccount } = await supabaseAdmin
+            .from("pending_activations")
+            .select("id, status")
+            .eq("offer_token", offer.token)
+            .is("payment_confirmed_at", null)
+            .in("status", ["awaiting_payment", "payment_confirmed", "activated"])
+            .maybeSingle()
+
+          if (pendingActByAccount) {
+            // Use the bank feed's transaction_date as the payment timestamp
+            const { data: feedRow } = await supabaseAdmin
+              .from("td_bank_feeds")
+              .select("transaction_date")
+              .eq("id", feedId)
+              .single()
+
+            const txTimestamp = feedRow?.transaction_date
+              ? new Date(feedRow.transaction_date).toISOString()
+              : now
+
+            await supabaseAdmin
+              .from("pending_activations")
+              .update({ payment_confirmed_at: txTimestamp, updated_at: now })
+              .eq("id", pendingActByAccount.id)
+          }
+        }
       }
     }
 

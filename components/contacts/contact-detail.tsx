@@ -447,7 +447,7 @@ export function ContactDetail({
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
       )}
       {activeTab === 'portal' && (
-        <PortalTab contact={contact} portalAuth={portalAuth} />
+        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} />
       )}
       {activeTab === 'health' && (
         <ContactHealthPanel contactId={contact.id} contactName={contact.full_name} />
@@ -2060,13 +2060,18 @@ function ServicesTab({
 function PortalTab({
   contact,
   portalAuth,
+  accounts,
 }: {
   contact: ContactRecord
   portalAuth: PortalAuth
+  accounts: LinkedAccount[]
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [tier, setTier] = useState(contact.portal_tier ?? '')
   const [portalExists, setPortalExists] = useState(portalAuth.exists)
+  const [revokedAccountIds, setRevokedAccountIds] = useState<Set<string>>(new Set())
+
+  const memberAccounts = accounts.filter(a => a.role === 'Member')
 
   const handleAction = async (action: string, extra?: Record<string, string>) => {
     setLoading(action)
@@ -2080,6 +2085,12 @@ function PortalTab({
       if (res.ok) {
         toast.success(data.message)
         if (action === 'create_portal') setPortalExists(true)
+        if (action === 'revoke_access' && extra?.account_id) {
+          setRevokedAccountIds(prev => { const s = new Set(Array.from(prev)); s.add(extra.account_id); return s })
+        }
+        if (action === 'restore_access' && extra?.account_id) {
+          setRevokedAccountIds(prev => { const s = new Set(Array.from(prev)); s.delete(extra.account_id); return s })
+        }
       } else {
         toast.error(data.error ?? 'Failed')
       }
@@ -2241,6 +2252,52 @@ function PortalTab({
             Reconcile Portal Tier
           </button>
         </div>
+
+      {/* Member Access — per-account revoke/restore for contacts with Member role */}
+      {memberAccounts.length > 0 && (
+        <div className="bg-white rounded-lg border p-5 space-y-4">
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Member Access</h3>
+          <div className="space-y-3">
+            {memberAccounts.map(acct => {
+              const isRevoked = revokedAccountIds.has(acct.id)
+              const actionKey = `${isRevoked ? 'restore' : 'revoke'}_access_${acct.id}`
+              return (
+                <div key={acct.id} className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{acct.company_name}</p>
+                    {isRevoked && <p className="text-xs text-red-500">Access revoked</p>}
+                  </div>
+                  {isRevoked ? (
+                    <button
+                      onClick={() => {
+                        if (!confirm(`Restore access for ${contact.full_name} to ${acct.company_name}?`)) return
+                        handleAction('restore_access', { account_id: acct.id })
+                      }}
+                      disabled={loading === actionKey}
+                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+                    >
+                      {loading === actionKey ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      Restore Access
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (!confirm(`Revoke ${contact.full_name}&apos;s portal access to ${acct.company_name}?`)) return
+                        handleAction('revoke_access', { account_id: acct.id })
+                      }}
+                      disabled={loading === actionKey}
+                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 text-xs font-medium hover:bg-red-100 disabled:opacity-50 transition-colors"
+                    >
+                      {loading === actionKey ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      Revoke Access
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -61,6 +61,8 @@ export interface AccountJourneyProps {
   accountCreatedAt?: string | null
   /** Whether setup payment has been made (derived from payments) */
   hasSetupPayment?: boolean
+  /** Whether any payment on this account has been confirmed paid (derived from payments table) */
+  hasPaidPayment?: boolean
   /** Partner-bank referrals (enabled banks + this account's click status) */
   bankReferrals?: BankReferralEntry[]
 }
@@ -96,7 +98,7 @@ function formatDateTime(dateStr: string): string {
 // --- Derivation logic ---
 
 function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
-  const { offer, pendingActivation, wizardProgress, serviceDeliveries, accountType, portalTier, accountStatus, accountCreatedAt, hasSetupPayment } = props
+  const { offer, pendingActivation, wizardProgress, serviceDeliveries, accountType, portalTier, accountStatus, accountCreatedAt, hasSetupPayment, hasPaidPayment } = props
   const steps: JourneyStep[] = []
 
   // Detect if this is an existing client without an offer (pre-offer-system)
@@ -182,6 +184,10 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
       `Method: ${pendingActivation.payment_method ?? 'N/A'}`,
     ]
     steps.push({ label: 'Paid', status: 'done', detail: pendingActivation.payment_method ?? undefined, tooltip })
+  } else if (hasPaidPayment) {
+    // Payment exists in the payments table (e.g. via bank feed match) but
+    // payment_confirmed_at was not set on pending_activations — treat as paid.
+    steps.push({ label: 'Paid', status: 'done', detail: 'Bank transfer', tooltip: ['Payment confirmed via bank feed'] })
   } else if (isSigned && pendingActivation?.signed_at) {
     const daysSinceSigning = daysBetween(pendingActivation.signed_at)
     const tooltip = [`Signed ${daysSinceSigning}d ago`, 'Waiting for payment confirmation']

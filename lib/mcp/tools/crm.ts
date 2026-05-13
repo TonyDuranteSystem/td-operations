@@ -487,8 +487,7 @@ export function registerCrmTools(server: McpServer) {
         const paymentData = payments.data || []
         const totalInvoiced = paymentData.reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
         const totalPaid = paymentData
-          .filter((p: Record<string, unknown>) => p.status === 'paid')
-          .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
+          .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount_paid as number) || 0), 0)
 
         const { data: referralsMade } = await supabaseAdmin
           .from('referrals')
@@ -592,9 +591,8 @@ export function registerCrmTools(server: McpServer) {
       const paymentData = payments.data || []
       const totalInvoiced = paymentData.reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
       const totalPaid = paymentData
-        .filter((p: Record<string, unknown>) => p.status === 'paid')
-        .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount as number) || 0), 0)
-      const overduePayments = paymentData.filter((p: Record<string, unknown>) => p.status === 'overdue')
+        .reduce((sum: number, p: Record<string, unknown>) => sum + ((p.amount_paid as number) || 0), 0)
+      const overduePayments = paymentData.filter((p: Record<string, unknown>) => (p.status as string)?.toLowerCase() === 'overdue')
 
       // Referral data: was this account referred? do any of its contacts refer others?
       const contactIds = (contacts.data || []).map((ac: Record<string, unknown>) => {
