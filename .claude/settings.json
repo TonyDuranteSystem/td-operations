@@ -30,6 +30,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "mcp__af7d85f2.*__execute_sql",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/production-write-guard.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
