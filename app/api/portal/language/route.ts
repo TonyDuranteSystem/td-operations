@@ -1,11 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
+import { SUPPORTED_LOCALES } from '@/lib/portal/i18n'
 
-/**
- * POST /api/portal/language — Update portal language preference
- * Body: { language: 'en' | 'it' }
- */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -14,8 +11,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json()
   const { language } = body
 
-  if (!language || !['en', 'it'].includes(language)) {
-    return NextResponse.json({ error: 'Language must be en or it' }, { status: 400 })
+  if (!language || !(SUPPORTED_LOCALES as readonly string[]).includes(language)) {
+    return NextResponse.json({ error: `Language must be one of: ${SUPPORTED_LOCALES.join(', ')}` }, { status: 400 })
   }
 
   const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {

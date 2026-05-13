@@ -5,13 +5,14 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useRouter } from 'next/navigation'
+import { SUPPORTED_LOCALES, LOCALE_LABELS, type Locale } from '@/lib/portal/i18n'
 
 export function LanguageSwitcher() {
   const { locale } = useLocale()
   const router = useRouter()
   const [loading, setLoading] = useState(false)
 
-  const handleChange = async (lang: 'en' | 'it') => {
+  const handleChange = async (lang: Locale) => {
     if (lang === locale) return
     setLoading(true)
     try {
@@ -35,24 +36,18 @@ export function LanguageSwitcher() {
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        onClick={() => handleChange('en')}
-        disabled={loading}
-        className={`px-4 py-2.5 text-sm rounded-lg font-medium transition-colors ${
-          locale === 'en' ? 'bg-blue-600 text-white' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50'
-        }`}
-      >
-        English
-      </button>
-      <button
-        onClick={() => handleChange('it')}
-        disabled={loading}
-        className={`px-4 py-2.5 text-sm rounded-lg font-medium transition-colors ${
-          locale === 'it' ? 'bg-blue-600 text-white' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50'
-        }`}
-      >
-        Italiano
-      </button>
+      {SUPPORTED_LOCALES.map((lang) => (
+        <button
+          key={lang}
+          onClick={() => handleChange(lang)}
+          disabled={loading}
+          className={`px-4 py-2.5 text-sm rounded-lg font-medium transition-colors ${
+            locale === lang ? 'bg-blue-600 text-white' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+          }`}
+        >
+          {LOCALE_LABELS[lang]}
+        </button>
+      ))}
       {loading && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
     </div>
   )

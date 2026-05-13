@@ -1,4 +1,10 @@
-export type Locale = 'en' | 'it'
+export const SUPPORTED_LOCALES = ['en', 'it'] as const
+export type Locale = typeof SUPPORTED_LOCALES[number]
+
+export const LOCALE_LABELS: Record<Locale, string> = {
+  en: 'English',
+  it: 'Italiano',
+}
 
 const translations: Record<Locale, Record<string, string>> = {
   en: {
@@ -1080,6 +1086,8 @@ export function t(key: string, locale: Locale = 'en'): string {
  */
 export function getLocale(user: { user_metadata?: Record<string, unknown> } | null): Locale {
   const lang = user?.user_metadata?.portal_language
-  if (lang === 'it') return 'it'
+  if (typeof lang === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(lang)) {
+    return lang as Locale
+  }
   return 'en'
 }
