@@ -22,7 +22,7 @@ export function registerTaxTools(server: McpServer) {
     "Search tax returns by year, status, return type, account, or special case flag. Returns company name, return type (1065/1120-S/1040NR), status, deadline, and workflow progress (paid/link_sent/data_received/sent_to_india/extension/india_status). Use tax_tracker for the visual dashboard overview.",
     {
       tax_year: z.number().optional().describe("Tax year (e.g., 2025)"),
-      status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
+      status: z.string().optional().describe("Status: Payment Pending, Wizard Available (canonical post-2026-05-13 'client can fill data wizard'), Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced. Legacy: Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data."),
       return_type: z.string().optional().describe("Return type: 1065, 1120-S, 1040NR"),
       account_id: z.string().uuid().optional().describe("Filter by account UUID"),
       contact_id: z.string().uuid().optional().describe("Filter by contact UUID (for individual tax returns without account)"),
@@ -65,10 +65,12 @@ export function registerTaxTools(server: McpServer) {
           "Not Invoiced": "🔴",
           "Paid - Not Started": "🟠",
           "Activated - Need Link": "🟠",
+          "Wizard Available": "🟡",
           "Link Sent - Awaiting Data": "🟡",
           "Data Received": "🟡",
           "Sent to India": "🔵",
           "Extension Filed": "🔵",
+          "Extension Requested": "🔵",
           "TR Completed - Awaiting Signature": "🟣",
           "TR Filed": "🟢",
         }
@@ -148,11 +150,14 @@ export function registerTaxTools(server: McpServer) {
           byType[rt].push(tr)
         }
 
-        // Status categories
+        // Status categories — "Wizard Available" is the canonical post-redesign
+        // (2026-05-13) value for "client should now fill the data-collection
+        // wizard"; "Link Sent - Awaiting Data" is the legacy equivalent kept
+        // for historical rows.
         const isActionNeeded = (s: string) => ["Payment Pending", "Not Invoiced", "Paid - Not Started", "Activated - Need Link"].includes(s)
-        const isWaiting = (s: string) => ["Link Sent - Awaiting Data"].includes(s)
+        const isWaiting = (s: string) => ["Wizard Available", "Link Sent - Awaiting Data"].includes(s)
         const isInProgress = (s: string) => ["Data Received", "Sent to India"].includes(s)
-        const isExtended = (s: string) => ["Extension Filed"].includes(s)
+        const isExtended = (s: string) => ["Extension Filed", "Extension Requested"].includes(s)
         const isNearDone = (s: string) => ["TR Completed - Awaiting Signature"].includes(s)
         const isDone = (s: string) => ["TR Filed"].includes(s)
 

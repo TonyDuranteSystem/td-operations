@@ -29,18 +29,24 @@ import {
 } from '@/app/(dashboard)/tax-returns/actions'
 import type { TaxReturn } from '@/lib/types'
 
+// Order: live statuses first (post-redesign 2026-05-13). 'Wizard Available'
+// is the canonical "client should fill the data wizard" status, replacing
+// 'Link Sent - Awaiting Data'. Legacy values are kept at the end of the
+// menu so historical rows can still be set/transitioned.
 const TAX_STATUSES = [
   'Payment Pending',
   'Not Invoiced',
-  'Paid - Not Started',
-  'Activated - Need Link',
-  'Link Sent - Awaiting Data',
+  'Wizard Available',
   'Data Received',
   'Sent to India',
   'Extension Requested',
   'Extension Filed',
   'TR Completed - Awaiting Signature',
   'TR Filed',
+  // Legacy (kept for historical rows)
+  'Paid - Not Started',
+  'Activated - Need Link',
+  'Link Sent - Awaiting Data',
 ] as const
 
 const STATUS_DOT: Record<string, string> = {
@@ -48,6 +54,7 @@ const STATUS_DOT: Record<string, string> = {
   'Not Invoiced': 'text-zinc-400',
   'Paid - Not Started': 'text-zinc-500',
   'Activated - Need Link': 'text-blue-400',
+  'Wizard Available': 'text-blue-600',
   'Link Sent - Awaiting Data': 'text-blue-500',
   'Data Received': 'text-indigo-500',
   'Sent to India': 'text-violet-500',

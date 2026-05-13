@@ -547,7 +547,18 @@ export default async function PortalDashboardPage() {
         // is at a pre-data-receipt status. Clients past "Data Received"
         // already submitted their data and are naturally gated by the 2nd
         // installment — pausing them is stale/misleading.
-        const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Extension Filed'])
+        // Post-redesign 2026-05-13: 'Wizard Available' is the canonical
+        // pre-data-received status. Legacy values are retained for historical
+        // rows that haven't been re-written by the new SD bridge.
+        const PAUSE_ELIGIBLE_TR_STATUS = new Set([
+          'Payment Pending',
+          'Paid - Not Started',
+          'Activated - Need Link',
+          'Wizard Available',
+          'Link Sent - Awaiting Data',
+          'Extension Requested',
+          'Extension Filed',
+        ])
         const isPaused = tr.sd_status === 'on_hold' && PAUSE_ELIGIBLE_TR_STATUS.has(tr.status ?? '')
         if (isPaused) {
           const firstName =

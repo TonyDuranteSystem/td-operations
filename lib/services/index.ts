@@ -24,11 +24,12 @@ export const SERVICES_CATALOG_ID = "services" as const
 
 // ── Slug unions (hand-maintained, validated by unit test) ─────────────────
 
-/** Slugs of sellable Services (rows tagged `service`). 11 entries. */
+/** Slugs of sellable Services (rows tagged `service`). 12 entries. */
 export type ServiceSlug =
   | "llc_formation"
   | "onboarding"
   | "tax_return"
+  | "tax_return_one_time"
   | "itin"
   | "ein"
   | "banking"
@@ -49,6 +50,7 @@ export type SDTypeSlug =
   | "company_formation"
   | "client_onboarding"
   | "tax_return"
+  | "tax_return_one_time"
   | "itin"
   | "ein"
   | "banking"
@@ -183,6 +185,7 @@ const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
   "CMRA Mailing Address": "cmra",
   "State RA Renewal": "state_ra_renewal",
   "Tax Return": "tax_return",
+  "Tax Return One-Time": "tax_return_one_time",
   "Company Formation": "company_formation",
   "Annual Renewal": "annual_renewal_sd",
   EIN: "ein",
@@ -280,6 +283,13 @@ export const SERVICES_STATIC: readonly StaticServiceEntry[] = [
     display_name_translations: { it: "Dichiarazione Fiscale" },
     status: "active",
     tags: ["service", "sd", "sellable", "auto_bundled_with_management"],
+  },
+  {
+    slug: "tax_return_one_time",
+    display_name: "Tax Return One-Time",
+    display_name_translations: { it: "Dichiarazione Fiscale (Una Tantum)" },
+    status: "active",
+    tags: ["service", "sd", "sellable"],
   },
   {
     slug: "itin",
