@@ -8,6 +8,7 @@ import { createAccountSchema, type CreateAccountInput } from '@/lib/schemas/acco
 import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
+import { createSD } from '@/lib/operations/service-delivery'
 import type { Json } from '@/lib/database.types'
 
 export async function updateAccountField(
@@ -19,7 +20,7 @@ export async function updateAccountField(
   const allowedFields = [
     'company_name', 'entity_type', 'member_structure', 'account_type', 'status', 'ein_number', 'filing_id',
     'state_of_formation', 'formation_date', 'physical_address',
-    'registered_agent_provider', 'ra_renewal_date', 'notes',
+    'registered_agent_provider', 'ra_renewal_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
     'communication_email',
@@ -106,6 +107,35 @@ export async function updateAccountField(
   }
 
   return result
+}
+
+// Dedicated bulk-update helper for the lifecycle date pair (client_since +
+// ra_switch_date). Single round-trip when both are edited together (e.g. from
+// a future form). Inline edits continue to go through updateAccountField.
+export async function updateAccountDates(
+  accountId: string,
+  dates: { client_since?: string | null; ra_switch_date?: string | null },
+  updatedAt: string,
+): Promise<ActionResult> {
+  const patch: Record<string, string | null> = {}
+  if (Object.prototype.hasOwnProperty.call(dates, 'client_since')) {
+    patch.client_since = dates.client_since || null
+  }
+  if (Object.prototype.hasOwnProperty.call(dates, 'ra_switch_date')) {
+    patch.ra_switch_date = dates.ra_switch_date || null
+  }
+  if (Object.keys(patch).length === 0) {
+    return { success: false, error: 'No date fields supplied' }
+  }
+
+  return safeAction(async () => {
+    const writeResult = await updateWithLock('accounts', accountId, patch, updatedAt)
+    if (!writeResult.success) throw new Error(writeResult.error)
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'update', table_name: 'accounts', record_id: accountId,
+    summary: 'Account lifecycle dates updated', details: patch,
+  })
 }
 
 export async function updateContactField(
@@ -801,4 +831,225 @@ export async function changeAccountStatus(
     cascadesApplied,
     cascadesFailed,
   }
+}
+
+// ── DBA Creation ───────────────────────────────────────────────────
+// Creates a DBA service delivery + dba_details row from the account detail
+// page. The SD is the parent (pipeline lives there: Data Collection → ... →
+// Registered → Renewal Due); dba_details carries the registration-specific
+// fields (name, jurisdiction, registration_number, etc.) keyed by delivery_id.
+// Service name on the SD is set to the DBA name so it surfaces in the
+// stepper and account-wide service lists without an extra join.
+
+export interface CreateDBAInput {
+  dba_name: string
+  jurisdiction: string
+  filed_date?: string | null
+  registration_number?: string | null
+  renewal_date?: string | null
+  renewal_period?: string | null
+  filing_fee?: number | null
+  notes?: string | null
+}
+
+export async function createDBA(
+  accountId: string,
+  input: CreateDBAInput,
+): Promise<ActionResult<{ id: string }>> {
+  const dba_name = input.dba_name?.trim()
+  const jurisdiction = input.jurisdiction?.trim()
+  const notes = input.notes?.trim() || null
+  const filed_date = input.filed_date?.trim() || null
+  const registration_number = input.registration_number?.trim() || null
+  const renewal_date = input.renewal_date?.trim() || null
+  const renewal_period = input.renewal_period?.trim() || null
+  const filing_fee =
+    input.filing_fee == null || Number.isNaN(input.filing_fee) ? null : Number(input.filing_fee)
+
+  if (!dba_name) return { success: false, error: 'DBA name is required' }
+  if (!jurisdiction) return { success: false, error: 'Jurisdiction is required' }
+
+  return safeAction(async () => {
+    const sd = await createSD({
+      service_type: 'DBA',
+      service_name: dba_name,
+      account_id: accountId,
+      notes,
+    })
+
+    // dba_details is not yet in the generated DB types — cast once here so the
+    // insert call typechecks. Drop the cast when types are regenerated.
+    const untyped = supabaseAdmin as unknown as {
+      from: (table: string) => {
+        insert: (row: Record<string, unknown>) => Promise<{ error: { message: string } | null }>
+      }
+    }
+    const { error: detailsErr } = await untyped
+      .from('dba_details')
+      .insert({
+        delivery_id: sd.id,
+        dba_name,
+        jurisdiction,
+        filed_date,
+        registration_number,
+        renewal_date,
+        renewal_period,
+        filing_fee,
+        notes,
+      })
+
+    if (detailsErr) {
+      throw new Error(`SD created (${sd.id}) but dba_details insert failed: ${detailsErr.message}`)
+    }
+
+    revalidatePath(`/accounts/${accountId}`)
+    return { id: sd.id }
+  }, {
+    action_type: 'create',
+    table_name: 'service_deliveries',
+    account_id: accountId,
+    summary: `Created DBA: ${dba_name} (${jurisdiction})`,
+    details: { dba_name, jurisdiction, filed_date, registration_number, renewal_date, renewal_period, filing_fee, notes },
+  })
+}
+
+// ── DBA Update ─────────────────────────────────────────────────────
+// Inline-edit support for dba_details rows on the account detail page.
+// Each call updates a single row identified by its primary key (id). The
+// caller passes the row's last-known updated_at for optimistic locking;
+// if the row was modified since (e.g. by another machine), we retry once
+// with supabaseAdmin so the user-visible flow still succeeds — mirrors
+// updateWithLock semantics for typed tables.
+
+export type UpdateDBADetailsInput = Partial<{
+  dba_name: string | null
+  jurisdiction: string | null
+  filed_date: string | null
+  registration_number: string | null
+  renewal_date: string | null
+  renewal_period: string | null
+  filing_fee: number | null
+  notes: string | null
+}>
+
+const DBA_ALLOWED_FIELDS = new Set<keyof UpdateDBADetailsInput>([
+  'dba_name', 'jurisdiction', 'filed_date', 'registration_number',
+  'renewal_date', 'renewal_period', 'filing_fee', 'notes',
+])
+
+export async function updateDBADetails(
+  dbaId: string,
+  updates: UpdateDBADetailsInput,
+  updatedAt: string,
+): Promise<ActionResult<{ updated_at: string }>> {
+  // Whitelist: never trust client-supplied keys directly.
+  const sanitized: Record<string, unknown> = {}
+  for (const key of Object.keys(updates) as Array<keyof UpdateDBADetailsInput>) {
+    if (!DBA_ALLOWED_FIELDS.has(key)) continue
+    const raw = updates[key]
+    if (raw == null) {
+      sanitized[key] = null
+      continue
+    }
+    if (key === 'filing_fee') {
+      const n = Number(raw)
+      sanitized[key] = Number.isFinite(n) ? n : null
+    } else if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      sanitized[key] = trimmed === '' ? null : trimmed
+    } else {
+      sanitized[key] = raw
+    }
+  }
+
+  if (Object.keys(sanitized).length === 0) {
+    return { success: false, error: 'No editable fields supplied' }
+  }
+
+  // Required fields must remain non-empty if explicitly cleared.
+  if (sanitized.dba_name === null) {
+    return { success: false, error: 'DBA name is required' }
+  }
+  if (sanitized.jurisdiction === null) {
+    return { success: false, error: 'Jurisdiction is required' }
+  }
+
+  return safeAction(async () => {
+    const now = new Date().toISOString()
+    const patch = { ...sanitized, updated_at: now }
+
+    // dba_details is not yet in the generated DB types — cast for both the
+    // optimistic-locked attempt and the admin retry.
+    const untyped = supabaseAdmin as unknown as {
+      from: (table: string) => {
+        update: (row: Record<string, unknown>) => {
+          eq: (col: string, val: string) => {
+            eq: (col: string, val: string) => {
+              select: (sel: string) => Promise<{ data: Array<{ id: string; updated_at: string }> | null; error: { message: string } | null }>
+            }
+            select: (sel: string) => Promise<{ data: Array<{ id: string; updated_at: string }> | null; error: { message: string } | null }>
+          }
+        }
+      }
+    }
+
+    const { data, error } = await untyped
+      .from('dba_details')
+      .update(patch)
+      .eq('id', dbaId)
+      .eq('updated_at', updatedAt)
+      .select('id, updated_at')
+
+    if (error) throw new Error(error.message)
+
+    let resolvedUpdatedAt = data?.[0]?.updated_at ?? null
+    if (!resolvedUpdatedAt) {
+      // Stale updated_at — retry once with admin (bypasses cache).
+      const retryNow = new Date().toISOString()
+      const retryPatch = { ...sanitized, updated_at: retryNow }
+      const retryRes = await untyped
+        .from('dba_details')
+        .update(retryPatch)
+        .eq('id', dbaId)
+        .select('id, updated_at')
+      if (retryRes.error) throw new Error(retryRes.error.message)
+      if (!retryRes.data || retryRes.data.length === 0) {
+        throw new Error('DBA row not found')
+      }
+      resolvedUpdatedAt = retryRes.data[0].updated_at
+    }
+
+    // Find the parent account_id so revalidatePath fires on the right route.
+    const adminClient = supabaseAdmin as unknown as {
+      from: (table: string) => {
+        select: (sel: string) => {
+          eq: (col: string, val: string) => {
+            single: () => Promise<{ data: { delivery_id: string } | null }>
+          }
+        }
+      }
+    }
+    const { data: ddRow } = await adminClient
+      .from('dba_details')
+      .select('delivery_id')
+      .eq('id', dbaId)
+      .single()
+
+    if (ddRow?.delivery_id) {
+      const { data: sd } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('account_id')
+        .eq('id', ddRow.delivery_id)
+        .single()
+      if (sd?.account_id) revalidatePath(`/accounts/${sd.account_id}`)
+    }
+
+    return { updated_at: resolvedUpdatedAt }
+  }, {
+    action_type: 'update',
+    table_name: 'dba_details',
+    record_id: dbaId,
+    summary: `DBA detail fields updated: ${Object.keys(sanitized).join(', ')}`,
+    details: sanitized,
+  })
 }

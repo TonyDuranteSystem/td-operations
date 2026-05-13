@@ -96,6 +96,7 @@ export type Database = {
           cancellation_date: string | null
           cancellation_requested: boolean | null
           client_health: string | null
+          client_since: string | null
           cmra_amount: number | null
           cmra_renewal_date: string | null
           communication_email: string | null
@@ -138,6 +139,7 @@ export type Database = {
           qb_customer_id: string | null
           ra_link_verified: boolean
           ra_renewal_date: string | null
+          ra_switch_date: string | null
           referral_commission_pct: number | null
           referral_status: string | null
           referred_by: string | null
@@ -172,6 +174,7 @@ export type Database = {
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
           client_health?: string | null
+          client_since?: string | null
           cmra_amount?: number | null
           cmra_renewal_date?: string | null
           communication_email?: string | null
@@ -218,6 +221,7 @@ export type Database = {
           qb_customer_id?: string | null
           ra_link_verified?: boolean
           ra_renewal_date?: string | null
+          ra_switch_date?: string | null
           referral_commission_pct?: number | null
           referral_status?: string | null
           referred_by?: string | null
@@ -252,6 +256,7 @@ export type Database = {
           cancellation_date?: string | null
           cancellation_requested?: boolean | null
           client_health?: string | null
+          client_since?: string | null
           cmra_amount?: number | null
           cmra_renewal_date?: string | null
           communication_email?: string | null
@@ -298,6 +303,7 @@ export type Database = {
           qb_customer_id?: string | null
           ra_link_verified?: boolean
           ra_renewal_date?: string | null
+          ra_switch_date?: string | null
           referral_commission_pct?: number | null
           referral_status?: string | null
           referred_by?: string | null
@@ -3860,6 +3866,66 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: []
+      }
+      dba_details: {
+        Row: {
+          created_at: string | null
+          dba_name: string
+          delivery_id: string
+          filed_date: string | null
+          filing_fee: number | null
+          id: string
+          jurisdiction: string
+          notes: string | null
+          registration_number: string | null
+          renewal_date: string | null
+          renewal_period: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          dba_name: string
+          delivery_id: string
+          filed_date?: string | null
+          filing_fee?: number | null
+          id?: string
+          jurisdiction: string
+          notes?: string | null
+          registration_number?: string | null
+          renewal_date?: string | null
+          renewal_period?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          dba_name?: string
+          delivery_id?: string
+          filed_date?: string | null
+          filing_fee?: number | null
+          id?: string
+          jurisdiction?: string
+          notes?: string | null
+          registration_number?: string | null
+          renewal_date?: string | null
+          renewal_period?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dba_details_delivery_id_fkey"
+            columns: ["delivery_id"]
+            isOneToOne: false
+            referencedRelation: "service_deliveries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dba_details_delivery_id_fkey"
+            columns: ["delivery_id"]
+            isOneToOne: false
+            referencedRelation: "v_active_service_deliveries"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       deadlines: {
         Row: {
@@ -8851,6 +8917,7 @@ export type Database = {
           created_at: string | null
           default_currency: string | null
           default_price: number | null
+          default_service_context: string | null
           description: string | null
           has_annual: boolean
           id: string
@@ -8868,6 +8935,7 @@ export type Database = {
           created_at?: string | null
           default_currency?: string | null
           default_price?: number | null
+          default_service_context?: string | null
           description?: string | null
           has_annual?: boolean
           id?: string
@@ -8885,6 +8953,7 @@ export type Database = {
           created_at?: string | null
           default_currency?: string | null
           default_price?: number | null
+          default_service_context?: string | null
           description?: string | null
           has_annual?: boolean
           id?: string
@@ -11447,6 +11516,8 @@ export type Database = {
         | "Activated - Need Link"
         | "Not Invoiced"
         | "Extension Requested"
+        | "Wizard Available"
+        | "1st Installment Paid"
       tax_return_type: "SMLLC" | "MMLLC" | "Corp" | "LSE"
     }
     CompositeTypes: {
@@ -11738,6 +11809,8 @@ export const Constants = {
         "Activated - Need Link",
         "Not Invoiced",
         "Extension Requested",
+        "Wizard Available",
+        "1st Installment Paid",
       ],
       tax_return_type: ["SMLLC", "MMLLC", "Corp", "LSE"],
     },

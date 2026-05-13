@@ -19,6 +19,7 @@ const TYPE_COLORS: Record<string, string> = {
 const STATUS_SHORT: Record<string, string> = {
   'Payment Pending': 'Payment',
   'Link Sent - Awaiting Data': 'Awaiting Data',
+  'Wizard Available': 'Wizard Ready',
   'Data Received': 'Data OK',
   'Sent to India': 'India',
   'Extension Filed': 'Extension',

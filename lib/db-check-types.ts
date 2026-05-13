@@ -54,3 +54,6 @@ export type PortalAnnouncementsType = "info" | "warning" | "success"
 
 /** portal_messages.sender_context — CHECK constraint */
 export type PortalMessagesSenderContext = "person" | "company"
+
+/** service_catalog.default_service_context — CHECK constraint */
+export type ServiceCatalogDefaultServiceContext = "individual" | "business" | "ask"

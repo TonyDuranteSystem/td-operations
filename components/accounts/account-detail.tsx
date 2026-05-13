@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -8,7 +8,7 @@ import {
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
   Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
-  Rocket,
+  Rocket, Upload, Hash, DollarSign,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -21,7 +21,7 @@ import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from './service-deliveries-section'
-import type { PipelineStage } from './sd-pipeline-stepper'
+import { SdPipelineStepper, type PipelineStage } from './sd-pipeline-stepper'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { ClientDiagnosticDialog } from '@/app/(dashboard)/accounts/[id]/components/client-diagnostic-dialog'
 import { FileManager } from './file-manager'
@@ -30,7 +30,7 @@ import { AccountOfferPanel } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
@@ -190,6 +190,34 @@ interface AccountDetailProps {
   }>
   stepperDeliveries?: ServiceDeliveryForStepper[]
   stagesByServiceType?: Record<string, PipelineStage[]>
+  // DBA service deliveries for this account. Joined with dba_details so the
+  // registration-specific fields (dba_name, jurisdiction) render alongside
+  // the pipeline stage. stage_order + updated_at carry the optimistic-lock
+  // payload that the SdPipelineStepper needs to advance the stage.
+  dbaServiceDeliveries?: Array<{
+    id: string
+    service_name: string | null
+    stage: string | null
+    stage_order: number | null
+    status: string | null
+    start_date: string | null
+    end_date: string | null
+    notes: string | null
+    updated_at: string
+    // dba_details row fields. detail_id / detail_updated_at are nullable
+    // because a DBA SD can exist before its details row is inserted (legacy
+    // data path); the UI shows "—" and disables editing in that case.
+    detail_id: string | null
+    detail_updated_at: string | null
+    dba_name: string | null
+    jurisdiction: string | null
+    filed_date: string | null
+    registration_number: string | null
+    renewal_date: string | null
+    renewal_period: string | null
+    filing_fee: number | null
+    detail_notes: string | null
+  }>
 }
 
 // ─── Contacts Section with Link/Unlink ────────────────────
@@ -473,7 +501,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {} }: AccountDetailProps) {
+export function AccountDetail({ account, contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [] }: AccountDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
   const [showOADialog, setShowOADialog] = useState(false)
@@ -757,7 +785,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
 
       {/* Tab content */}
       {activeTab === 'overview' && (
-        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} />
+        <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
       )}
       {activeTab === 'services' && (
         <ServiziTab services={services} today={today} accountId={account.id} />
@@ -956,6 +984,420 @@ type CrmMember = {
   representative_address_state: string | null
   representative_address_zip: string | null
   representative_address_country: string | null
+}
+
+type UpdateDBADetailsArg = Partial<{
+  dba_name: string | null
+  jurisdiction: string | null
+  filed_date: string | null
+  registration_number: string | null
+  renewal_date: string | null
+  renewal_period: string | null
+  filing_fee: number | null
+  notes: string | null
+}>
+
+const RENEWAL_PERIOD_OPTIONS = [
+  { label: '—', value: '' },
+  { label: 'None', value: 'none' },
+  { label: '1-year', value: '1-year' },
+  { label: '2-year', value: '2-year' },
+  { label: '5-year', value: '5-year' },
+  { label: '10-year', value: '10-year' },
+]
+
+function DBARow({
+  accountId,
+  d,
+}: {
+  accountId: string
+  d: NonNullable<AccountDetailProps['dbaServiceDeliveries']>[number]
+}) {
+  const router = useRouter()
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement | null>(null)
+
+  // updated_at for optimistic locking — only the detail row has it; if a DBA
+  // SD pre-dates the dba_details row (legacy), edits are disabled until the
+  // row is backfilled via a save through the Add form.
+  const detailId = d.detail_id
+  const detailUpdatedAt = d.detail_updated_at
+  const canEdit = Boolean(detailId && detailUpdatedAt)
+
+  const makeSaver = (field: 'dba_name' | 'jurisdiction' | 'filed_date' | 'registration_number' | 'renewal_date' | 'renewal_period' | 'filing_fee' | 'notes') => {
+    return async (value: string) => {
+      if (!detailId || !detailUpdatedAt) {
+        return { success: false, error: 'No DBA detail row to update' }
+      }
+      const updates: UpdateDBADetailsArg = {}
+      if (field === 'filing_fee') {
+        const n = value.trim() === '' ? null : Number(value)
+        updates.filing_fee = n == null || Number.isNaN(n) ? null : n
+      } else {
+        updates[field] = value
+      }
+      const r = await updateDBADetails(detailId, updates, detailUpdatedAt)
+      if (r.success) {
+        toast.success('Saved')
+        router.refresh()
+      } else {
+        toast.error(r.error ?? 'Failed to save')
+      }
+      return { success: r.success, error: r.error }
+    }
+  }
+
+  const handleUploadClick = () => {
+    fileRef.current?.click()
+  }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!detailId) {
+      toast.error('Save the DBA before uploading documents')
+      e.target.value = ''
+      return
+    }
+    setUploading(true)
+    try {
+      const storagePath = `crm-dba-uploads/${accountId}/${detailId}/${Date.now()}_${file.name}`
+      // 1. Signed URL for Supabase Storage (bypass Vercel 4.5MB body limit).
+      const sigRes = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'onboarding-uploads',
+          path: storagePath,
+          contentType: file.type || 'application/pdf',
+        }),
+      })
+      if (!sigRes.ok) {
+        const errBody = await sigRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to get upload URL')
+      }
+      const { signedUrl } = await sigRes.json()
+      if (!signedUrl) throw new Error('No signed URL returned')
+
+      // 2. PUT the file directly to Supabase Storage.
+      const putRes = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/pdf' },
+        body: file,
+      })
+      if (!putRes.ok) throw new Error('File upload to storage failed')
+
+      // 3. Register in CRM — uploads to Drive, runs OCR, auto-fills empty fields.
+      const apiRes = await fetch(`/api/accounts/${accountId}/dba/${detailId}/upload-document`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storage_path: storagePath,
+          file_name: file.name,
+          mime_type: file.type || 'application/pdf',
+        }),
+      })
+      const data = await apiRes.json()
+      if (!apiRes.ok || !data.success) {
+        throw new Error(data.detail || data.error || 'Upload failed')
+      }
+      toast.success(data.detail || 'DBA document uploaded')
+      if (data.side_effects?.length) {
+        toast.info(data.side_effects.join(' | '))
+      }
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Upload failed — try again')
+    } finally {
+      setUploading(false)
+      if (e.target) e.target.value = ''
+    }
+  }
+
+  const displayName = d.dba_name ?? d.service_name ?? 'DBA'
+
+  return (
+    <div className="border border-zinc-100 rounded-md p-3 bg-zinc-50/40 space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-medium text-sm truncate">{displayName}</p>
+        </div>
+        <div className="text-right text-xs text-muted-foreground shrink-0">
+          {d.start_date && <p>Start {formatDate(d.start_date)}</p>}
+          {d.end_date && <p>End {formatDate(d.end_date)}</p>}
+        </div>
+      </div>
+
+      <div className="grid gap-1 sm:grid-cols-2">
+        <EditableField icon={Briefcase} label="DBA Name" value={d.dba_name ?? ''} onSave={makeSaver('dba_name')} readOnly={!canEdit} />
+        <EditableField icon={MapPin} label="Jurisdiction" value={d.jurisdiction ?? ''} onSave={makeSaver('jurisdiction')} readOnly={!canEdit} />
+        <EditableField icon={Calendar} label="Filed Date" type="date" value={d.filed_date ?? ''} onSave={makeSaver('filed_date')} readOnly={!canEdit} />
+        <EditableField icon={Hash} label="Reg. Number" value={d.registration_number ?? ''} onSave={makeSaver('registration_number')} readOnly={!canEdit} />
+        <EditableField icon={Calendar} label="Renewal Date" type="date" value={d.renewal_date ?? ''} onSave={makeSaver('renewal_date')} readOnly={!canEdit} />
+        <EditableField icon={Clock} label="Renewal Period" type="select" options={RENEWAL_PERIOD_OPTIONS} value={d.renewal_period ?? ''} onSave={makeSaver('renewal_period')} readOnly={!canEdit} />
+        <EditableField icon={DollarSign} label="Filing Fee" value={d.filing_fee != null ? String(d.filing_fee) : ''} onSave={makeSaver('filing_fee')} readOnly={!canEdit} />
+        <EditableField icon={FileText} label="Notes" type="textarea" value={d.detail_notes ?? ''} onSave={makeSaver('notes')} readOnly={!canEdit} />
+      </div>
+
+      <div className="flex items-center gap-2 pt-2 border-t border-zinc-100">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/pdf,image/png,image/jpeg,image/tiff,image/webp"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+        <button
+          type="button"
+          onClick={handleUploadClick}
+          disabled={uploading || !detailId}
+          title={!detailId ? 'Save the DBA before uploading documents' : 'Upload a document for this DBA. OCR will try to auto-fill missing fields.'}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          {uploading ? 'Uploading…' : 'Upload Document'}
+        </button>
+        {!detailId && (
+          <span className="text-xs text-muted-foreground">Save the DBA first to enable upload</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DBASection({
+  accountId,
+  dbaServiceDeliveries,
+  dbaStages,
+}: {
+  accountId: string
+  dbaServiceDeliveries: NonNullable<AccountDetailProps['dbaServiceDeliveries']>
+  dbaStages: PipelineStage[]
+}) {
+  const router = useRouter()
+  const [showForm, setShowForm] = useState(false)
+  const [dbaName, setDbaName] = useState('')
+  const [jurisdiction, setJurisdiction] = useState('')
+  const [filedDate, setFiledDate] = useState('')
+  const [registrationNumber, setRegistrationNumber] = useState('')
+  const [renewalDate, setRenewalDate] = useState('')
+  const [renewalPeriod, setRenewalPeriod] = useState('')
+  const [filingFee, setFilingFee] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const resetForm = () => {
+    setDbaName('')
+    setJurisdiction('')
+    setFiledDate('')
+    setRegistrationNumber('')
+    setRenewalDate('')
+    setRenewalPeriod('')
+    setFilingFee('')
+    setNotes('')
+  }
+
+  const handleAdd = async () => {
+    const name = dbaName.trim()
+    const juris = jurisdiction.trim()
+    if (!name || !juris) {
+      toast.error('DBA name and jurisdiction are required')
+      return
+    }
+    const feeNum = filingFee.trim() === '' ? null : Number(filingFee)
+    if (feeNum != null && Number.isNaN(feeNum)) {
+      toast.error('Filing fee must be a number')
+      return
+    }
+    setSaving(true)
+    const result = await createDBA(accountId, {
+      dba_name: name,
+      jurisdiction: juris,
+      filed_date: filedDate.trim() || null,
+      registration_number: registrationNumber.trim() || null,
+      renewal_date: renewalDate.trim() || null,
+      renewal_period: renewalPeriod.trim() || null,
+      filing_fee: feeNum,
+      notes: notes.trim() || null,
+    })
+    setSaving(false)
+    if (result.success) {
+      toast.success('DBA created')
+      resetForm()
+      setShowForm(false)
+      router.refresh()
+    } else {
+      toast.error(result.error ?? 'Failed to create DBA')
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
+          DBA / Trade Names{dbaServiceDeliveries.length > 0 ? ` (${dbaServiceDeliveries.length})` : ''}
+        </h3>
+        {!showForm && (
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-zinc-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add DBA
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div className="border border-zinc-200 rounded-md p-3 space-y-2 bg-zinc-50/40">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">DBA Name *</label>
+              <input
+                type="text"
+                value={dbaName}
+                onChange={e => setDbaName(e.target.value)}
+                placeholder="e.g. Acme Trading Co."
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">State / Jurisdiction *</label>
+              <input
+                type="text"
+                value={jurisdiction}
+                onChange={e => setJurisdiction(e.target.value)}
+                placeholder="e.g. New York"
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Filed Date</label>
+              <input
+                type="date"
+                value={filedDate}
+                onChange={e => setFiledDate(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Registration Number</label>
+              <input
+                type="text"
+                value={registrationNumber}
+                onChange={e => setRegistrationNumber(e.target.value)}
+                placeholder="Optional"
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Renewal Date</label>
+              <input
+                type="date"
+                value={renewalDate}
+                onChange={e => setRenewalDate(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Renewal Period</label>
+              <select
+                value={renewalPeriod}
+                onChange={e => setRenewalPeriod(e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              >
+                {RENEWAL_PERIOD_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Filing Fee</label>
+              <input
+                type="number"
+                step="0.01"
+                value={filingFee}
+                onChange={e => setFilingFee(e.target.value)}
+                placeholder="0.00"
+                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={saving}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Notes</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Optional"
+              className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={saving}
+            />
+          </div>
+          <div className="flex gap-2 justify-end pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setShowForm(false)
+                resetForm()
+              }}
+              disabled={saving}
+              className="px-3 py-1.5 text-sm rounded-md border hover:bg-zinc-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleAdd}
+              disabled={saving || !dbaName.trim() || !jurisdiction.trim()}
+              className="px-3 py-1.5 text-sm rounded-md bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {saving ? 'Creating…' : 'Create DBA'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {dbaServiceDeliveries.length === 0 ? (
+        !showForm && <p className="text-sm text-muted-foreground">No DBA registrations</p>
+      ) : (
+        <div className="space-y-3">
+          {dbaServiceDeliveries.map(d => {
+            const displayName = d.dba_name ?? d.service_name ?? 'DBA'
+            const isActive = d.status !== 'completed' && d.status !== 'cancelled'
+            return (
+              <div key={d.id} className="space-y-2">
+                <DBARow accountId={accountId} d={d} />
+                {isActive && dbaStages.length > 0 ? (
+                  <SdPipelineStepper
+                    deliveryId={d.id}
+                    serviceType="DBA"
+                    serviceName={displayName}
+                    currentStage={d.stage}
+                    status={d.status ?? 'active'}
+                    updatedAt={d.updated_at}
+                    stages={dbaStages}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground pl-3">
+                    {[d.stage, d.status].filter(Boolean).join(' · ') || '—'}
+                  </p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function MembersSection({ accountId, accountCompanyName }: { accountId: string; accountCompanyName: string }) {
@@ -1358,7 +1800,7 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {} }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -1428,6 +1870,8 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Users} label="Member Structure" value={account.member_structure ?? ''} type="select" options={[{ label: 'Single Member', value: 'single_member' }, { label: 'Multi Member', value: 'multi_member' }]} onSave={makeAccountSaver('member_structure')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
+          <EditableField icon={Calendar} label="Client Since" value={account.client_since ?? ''} type="date" onSave={makeAccountSaver('client_since')} />
+          <EditableField icon={Calendar} label="RA Switch Date" value={account.ra_switch_date ?? ''} type="date" onSave={makeAccountSaver('ra_switch_date')} />
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
           <EditableField icon={Mail} label="Business Email" value={account.communication_email ?? ''} onSave={makeAccountSaver('communication_email')} />
           <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
@@ -1546,6 +1990,15 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <p className="text-sm text-muted-foreground">No notes</p>
         )}
       </div>
+
+      {/* DBA / Trade Names — always visible. Shows existing DBA service
+          deliveries when present, with the pipeline stepper inline so the
+          stage can be advanced from the Overview tab. */}
+      <DBASection
+        accountId={account.id}
+        dbaServiceDeliveries={dbaServiceDeliveries}
+        dbaStages={stagesByServiceType['DBA'] ?? []}
+      />
 
       {/* Deals */}
       {deals.length > 0 && (

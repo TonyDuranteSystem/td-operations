@@ -19,6 +19,7 @@ export const VALID_SERVICE_TYPES = [
   "CMRA Mailing Address",
   "State RA Renewal",
   "Tax Return",
+  "Tax Return One-Time",
   "Company Formation",
   "Annual Renewal",
   "EIN",
@@ -33,6 +34,7 @@ export const VALID_SERVICE_TYPES = [
   "Public Notary",
   "Shipping",
   "Support",
+  "DBA",
 ] as const
 
 export type ValidServiceType = (typeof VALID_SERVICE_TYPES)[number]

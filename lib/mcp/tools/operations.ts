@@ -944,7 +944,7 @@ export function registerOperationsTools(server: McpServer) {
     "sd_create",
     "Create a new service delivery and initialize it at the first pipeline stage. Auto-creates tasks for the first stage. Use this when starting a new service for a client (LLC Formation, Tax Return, etc.). Returns the created delivery with ID.",
     {
-      service_type: z.string().describe("Service type: 'Company Formation', 'Tax Return', 'EIN', 'ITIN', 'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address'"),
+      service_type: z.string().describe("Service type: 'Company Formation', 'Tax Return', 'EIN', 'ITIN', 'Banking Fintech', 'Annual Renewal', 'CMRA Mailing Address', 'DBA'"),
       account_id: z.string().uuid().optional().describe("CRM account UUID. Required for LLC services. Omit for individual clients (ITIN, Banking Physical) — use contact_id instead."),
       contact_id: z.string().uuid().optional().describe("Primary contact UUID. Required for individual clients when account_id is omitted."),
       deal_id: z.string().uuid().optional().describe("Linked deal UUID"),

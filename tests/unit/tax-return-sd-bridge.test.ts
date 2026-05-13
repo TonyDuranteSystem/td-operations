@@ -2,7 +2,8 @@
  * Unit tests for lib/operations/tax-return-sd-bridge.ts.
  *
  * Covers:
- *   - mapTaxReturnStatusToSDStage: all 11 real tax_return_status enum values,
+ *   - mapTaxReturnStatusToSDStage: every mapped tax_return_status enum
+ *     value (including the pre-payment "Company Data Pending" entries),
  *     unknown values, and null/undefined input.
  *   - syncTaxReturnToSD: TR not found, no mapping, no account_id, SD not
  *     present (createSD path), SD already at target (noop), SD at different
@@ -96,15 +97,17 @@ describe("mapTaxReturnStatusToSDStage", () => {
   it.each([
     ["Payment Pending", "Company Data Pending", -1],
     ["Not Invoiced", "Company Data Pending", -1],
-    ["Paid - Not Started", "Paid - Awaiting Data", 0],
-    ["Activated - Need Link", "Paid - Awaiting Data", 0],
-    ["Link Sent - Awaiting Data", "Paid - Awaiting Data", 0],
+    ["Paid - Not Started", "1st Installment Paid", 1],
+    ["1st Installment Paid", "1st Installment Paid", 1],
+    ["Activated - Need Link", "1st Installment Paid", 1],
     ["Extension Requested", "Extension Filed", 2],
     ["Extension Filed", "Extension Filed", 2],
-    ["Data Received", "Data Received", 3],
-    ["Sent to India", "Preparation", 5],
-    ["TR Completed - Awaiting Signature", "TR Completed", 6],
-    ["TR Filed", "TR Filed", 7],
+    ["Wizard Available", "Wizard Available", 4],
+    ["Link Sent - Awaiting Data", "Wizard Available", 4],
+    ["Data Received", "Data Received", 5],
+    ["Sent to India", "Preparation", 6],
+    ["TR Completed - Awaiting Signature", "TR Completed", 7],
+    ["TR Filed", "TR Filed", 8],
   ])("maps %s to %s (order %d)", (status, stageName, stageOrder) => {
     expect(mapTaxReturnStatusToSDStage(status)).toEqual({
       stage_name: stageName,
@@ -162,7 +165,7 @@ describe("syncTaxReturnToSD", () => {
       service_type: "Tax Return",
       service_name: "Tax Return 2024 - Acme LLC",
       stage: "Data Received",
-      stage_order: 3,
+      stage_order: 5,
       account_id: "acct-1",
       contact_id: "contact-1",
     })
@@ -179,7 +182,7 @@ describe("syncTaxReturnToSD", () => {
       account_id: "acct-1",
       contact_id: "contact-1",
       target_stage: "Data Received",
-      target_stage_order: 3,
+      target_stage_order: 5,
       notes: expect.stringContaining("Auto-created from tax-return tab"),
     })
   })
@@ -188,7 +191,7 @@ describe("syncTaxReturnToSD", () => {
     sdFixture = {
       id: "sd-1",
       stage: "Data Received",
-      stage_order: 3,
+      stage_order: 5,
       status: "active",
     }
 
@@ -204,16 +207,16 @@ describe("syncTaxReturnToSD", () => {
   it("advances the SD with actor='tax-return-tab' when current stage differs", async () => {
     sdFixture = {
       id: "sd-1",
-      stage: "Paid - Awaiting Data",
-      stage_order: 0,
+      stage: "Wizard Available",
+      stage_order: 4,
       status: "active",
     }
     advanceStageMock.mockResolvedValueOnce({
       success: true,
-      from_stage: "Paid - Awaiting Data",
+      from_stage: "Wizard Available",
       to_stage: "Data Received",
-      to_order: 3,
-      total_stages: 12,
+      to_order: 5,
+      total_stages: 9,
       is_completed: false,
       created_tasks: [],
       failed_tasks: [],
@@ -224,7 +227,7 @@ describe("syncTaxReturnToSD", () => {
 
     expect(result.action).toBe("advanced")
     expect(result.delivery_id).toBe("sd-1")
-    expect(result.from_stage).toBe("Paid - Awaiting Data")
+    expect(result.from_stage).toBe("Wizard Available")
     expect(result.to_stage).toBe("Data Received")
     expect(advanceStageMock).toHaveBeenCalledWith({
       delivery_id: "sd-1",
@@ -248,17 +251,17 @@ describe("syncTaxReturnToSD", () => {
   it("returns skipped when advanceStage returns success=false (e.g. approval gate)", async () => {
     sdFixture = {
       id: "sd-1",
-      stage: "Paid - Awaiting Data",
-      stage_order: 0,
+      stage: "Wizard Available",
+      stage_order: 4,
       status: "active",
     }
     advanceStageMock.mockResolvedValueOnce({
       success: false,
       error: "Requires approval",
-      from_stage: "Paid - Awaiting Data",
+      from_stage: "Wizard Available",
       to_stage: "Data Received",
-      to_order: 3,
-      total_stages: 12,
+      to_order: 5,
+      total_stages: 9,
       is_completed: false,
       created_tasks: [],
       failed_tasks: [],
@@ -276,8 +279,8 @@ describe("syncTaxReturnToSD", () => {
   it("returns skipped when advanceStage throws", async () => {
     sdFixture = {
       id: "sd-1",
-      stage: "Paid - Awaiting Data",
-      stage_order: 0,
+      stage: "Wizard Available",
+      stage_order: 4,
       status: "active",
     }
     advanceStageMock.mockRejectedValueOnce(new Error("DB timeout"))
@@ -297,7 +300,7 @@ describe("syncTaxReturnToSD", () => {
       service_type: "Tax Return",
       service_name: "x",
       stage: "Data Received",
-      stage_order: 3,
+      stage_order: 5,
       account_id: "acct-1",
       contact_id: "contact-1",
     })

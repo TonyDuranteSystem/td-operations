@@ -22,7 +22,7 @@ import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
-import { CreateOfferDialog } from '@/components/offers/create-offer-dialog'
+import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
@@ -199,6 +199,8 @@ interface OfferRecord {
   bundled_pipelines: string[] | null
   selected_services: unknown
   cost_summary: unknown
+  view_count: number
+  required_documents: unknown
   created_at: string
   viewed_at: string | null
   expires_at: string | null
@@ -687,10 +689,11 @@ function OverviewTab({
       {/* Offer Status Card */}
       <OfferStatusCard
         offers={offers}
-        pendingActivations={pendingActivations}
         accounts={accounts}
+        contactId={contact.id}
         contactName={contact.full_name ?? ''}
         contactEmail={contact.email ?? ''}
+        contactLanguage={contact.language}
       />
 
       {/* Wizard Progress Card */}
@@ -1233,197 +1236,61 @@ function JourneyTracker({
 
 function OfferStatusCard({
   offers,
-  pendingActivations,
   accounts,
+  contactId,
   contactName,
   contactEmail,
+  contactLanguage,
 }: {
   offers: OfferRecord[]
-  pendingActivations: PendingActivationRecord[]
   accounts: LinkedAccount[]
+  contactId: string
   contactName: string
   contactEmail: string
+  contactLanguage?: string | null
 }) {
-  const [showCreateOffer, setShowCreateOffer] = useState(false)
   const [selectedAccountId, setSelectedAccountId] = useState<string>(accounts[0]?.id ?? '')
 
   const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
-  const primaryActivation = pendingActivations[0] ?? null
-  const isOfferClosed = primaryOffer && (primaryOffer.status === 'expired' || primaryOffer.status === 'completed' || primaryOffer.contract_type === 'renewal')
-  const canCreateOffer = !primaryOffer || !!isOfferClosed
 
-  const handleCreateOffer = () => {
-    if (!contactEmail) {
-      toast.error('Contact needs an email before creating an offer')
-      return
-    }
-    if (!selectedAccountId) {
-      toast.error('Contact must be linked to an account before creating an offer')
-      return
-    }
-    setShowCreateOffer(true)
-  }
+  const offerData: OfferData | null = primaryOffer ? {
+    token: primaryOffer.token,
+    status: primaryOffer.status,
+    contract_type: primaryOffer.contract_type,
+    cost_summary: primaryOffer.cost_summary as OfferData['cost_summary'],
+    bundled_pipelines: primaryOffer.bundled_pipelines,
+    view_count: primaryOffer.view_count ?? 0,
+    viewed_at: primaryOffer.viewed_at,
+    created_at: primaryOffer.created_at,
+    required_documents: primaryOffer.required_documents as OfferData['required_documents'],
+  } : null
 
-  if (!primaryOffer) {
-    return (
-      <>
-        <div className="bg-white rounded-lg border p-5 space-y-3">
-          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Offer</h3>
-          {accounts.length > 1 && (
-            <select
-              value={selectedAccountId}
-              onChange={e => setSelectedAccountId(e.target.value)}
-              className="text-sm border rounded-md px-2 py-1.5 w-full"
-            >
-              {accounts.map(a => (
-                <option key={a.id} value={a.id}>{a.company_name}</option>
-              ))}
-            </select>
-          )}
-          <div className="text-center py-2">
-            <p className="text-sm text-muted-foreground mb-3">No offer found</p>
-            {accounts.length > 0 && (
-              <button
-                onClick={handleCreateOffer}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-              >
-                <FileText className="h-4 w-4" />
-                Create Offer
-              </button>
-            )}
-          </div>
-        </div>
-        <CreateOfferDialog
-          open={showCreateOffer}
-          onClose={() => setShowCreateOffer(false)}
-          accountId={selectedAccountId}
-          clientName={accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName}
-          clientEmail={contactEmail}
-        />
-      </>
-    )
-  }
-
-  const OFFER_STATUS_COLORS: Record<string, string> = {
-    draft: 'bg-zinc-100 text-zinc-600',
-    sent: 'bg-blue-100 text-blue-700',
-    viewed: 'bg-purple-100 text-purple-700',
-    signed: 'bg-emerald-100 text-emerald-700',
-    completed: 'bg-emerald-100 text-emerald-700',
-  }
-
-  // Parse services from offer
-  const services = Array.isArray(primaryOffer.services)
-    ? (primaryOffer.services as Array<{ name?: string; description?: string; price?: string }>)
-    : []
+  // Always pre-populate with the person's name — staff can edit it in the dialog
+  // before creating. The company name is irrelevant for individual services (ITIN etc.)
+  const companyName = contactName
+  const accountId = selectedAccountId || null
 
   return (
-    <div className="bg-white rounded-lg border p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Offer</h3>
-        <div className="flex items-center gap-2">
-          {primaryOffer.contract_type && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded bg-zinc-100 text-zinc-600">
-              {primaryOffer.contract_type}
-            </span>
-          )}
-          <span className={cn('text-xs font-medium px-2 py-0.5 rounded', OFFER_STATUS_COLORS[primaryOffer.status] ?? 'bg-zinc-100')}>
-            {primaryOffer.status}
-          </span>
-        </div>
-      </div>
-
-      {/* Services list */}
-      {services.length > 0 && (
-        <div className="space-y-1">
-          {services.map((svc, i) => (
-            <div key={i} className="flex items-center justify-between text-sm">
-              <span className="text-zinc-700 truncate">{svc.name ?? svc.description ?? '—'}</span>
-              {svc.price && <span className="text-muted-foreground shrink-0 ml-2">{svc.price}</span>}
-            </div>
+    <div className="space-y-2">
+      {accounts.length > 1 && (
+        <select
+          value={selectedAccountId}
+          onChange={e => setSelectedAccountId(e.target.value)}
+          className="text-sm border rounded-md px-2 py-1.5 w-full"
+        >
+          {accounts.map(a => (
+            <option key={a.id} value={a.id}>{a.company_name}</option>
           ))}
-        </div>
+        </select>
       )}
-
-      {/* Bundled pipelines */}
-      {primaryOffer.bundled_pipelines && primaryOffer.bundled_pipelines.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {primaryOffer.bundled_pipelines.map(p => (
-            <span key={p} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-50 border text-zinc-500">
-              {p}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Payment info from pending_activation */}
-      {primaryActivation && (
-        <div className="border-t pt-2 mt-2 space-y-1 text-sm">
-          {primaryActivation.signed_at && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Signed</span>
-              <span>{formatDate(primaryActivation.signed_at.split('T')[0])}</span>
-            </div>
-          )}
-          {primaryActivation.payment_confirmed_at && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Payment confirmed</span>
-              <span>{formatDate(primaryActivation.payment_confirmed_at.split('T')[0])}</span>
-            </div>
-          )}
-          {primaryActivation.payment_method && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Method</span>
-              <span className="capitalize">{primaryActivation.payment_method}</span>
-            </div>
-          )}
-          {primaryActivation.amount != null && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Amount</span>
-              <span>
-                {primaryActivation.currency === 'EUR' ? '\u20AC' : '$'}
-                {Number(primaryActivation.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="text-xs text-muted-foreground pt-1">
-        Created {formatDate(primaryOffer.created_at.split('T')[0])}
-        {primaryOffer.viewed_at && ` · Viewed ${formatDate(primaryOffer.viewed_at.split('T')[0])}`}
-      </div>
-
-      {/* Create new offer when current one is closed */}
-      {canCreateOffer && accounts.length > 0 && (
-        <div className="border-t pt-3 space-y-2">
-          {accounts.length > 1 && (
-            <select
-              value={selectedAccountId}
-              onChange={e => setSelectedAccountId(e.target.value)}
-              className="text-sm border rounded-md px-2 py-1.5 w-full"
-            >
-              {accounts.map(a => (
-                <option key={a.id} value={a.id}>{a.company_name}</option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={handleCreateOffer}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-          >
-            <FileText className="h-4 w-4" />
-            Create New Offer
-          </button>
-        </div>
-      )}
-
-      <CreateOfferDialog
-        open={showCreateOffer}
-        onClose={() => setShowCreateOffer(false)}
-        accountId={selectedAccountId}
-        clientName={accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName}
+      <AccountOfferPanel
+        accountId={accountId}
+        companyName={companyName}
         clientEmail={contactEmail}
+        clientLanguage={contactLanguage}
+        contactId={contactId}
+        offer={offerData}
+        isAdmin={true}
       />
     </div>
   )

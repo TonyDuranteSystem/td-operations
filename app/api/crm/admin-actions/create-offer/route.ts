@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       language: (body.language as "en" | "it") || "en",
       lead_id: body.lead_id ?? null,
       account_id: body.account_id ?? null,
+      contact_id: body.contact_id ?? null,
       contract_type: body.contract_type,
       entity_type: body.entity_type ?? null,
       payment_type: body.payment_type || "bank_transfer",

@@ -562,6 +562,10 @@ const ACCOUNT_UPLOAD_BASE_TYPES = [
   'IRS Notice',
   'Invoice',
   'Contract',
+  'DBA Application',
+  'DBA Pre-Application',
+  'DBA Approval Certificate',
+  'DBA Renewal Receipt',
 ] as const
 
 const ACCOUNT_UPLOAD_CATEGORIES = ['Company', 'Tax', 'Banking', 'Correspondence'] as const

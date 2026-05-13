@@ -22,7 +22,7 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { matchAndReconcile, markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
-import { INTERNAL_BASE_URL } from "@/lib/config"
+import { runActivation } from "@/lib/operations/activate-service"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -218,28 +218,20 @@ export async function GET(req: NextRequest) {
                 } catch { /* non-blocking */ }
               }
 
-              // Trigger activate-service
-              const baseUrl2 = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
+              // Trigger activate-service directly (no HTTP hop)
               try {
-                const activateRes = await fetch(`${baseUrl2}/api/workflows/activate-service`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${process.env.API_SECRET_TOKEN}`,
-                  },
-                  body: JSON.stringify({ pending_activation_id: pending.id }),
-                })
+                const activateResult = await runActivation(pending.id)
 
-                if (!activateRes.ok) {
-                  const errBody = await activateRes.text().catch(() => "unknown")
-                  console.error(`[check-wire] activate-service returned ${activateRes.status} for ${pending.client_name}: ${errBody}`)
+                if (!activateResult.ok) {
+                  const errMsg = activateResult.error || "unknown"
+                  console.error(`[check-wire] runActivation returned error for ${pending.client_name}: ${errMsg}`)
 
                   // Mark activation as failed so it's visible in CRM
                   await supabase
                     .from("pending_activations")
                     .update({
                       status: "activation_failed",
-                      notes: `${pending.notes || ""}\nActivation failed (HTTP ${activateRes.status}): ${errBody.slice(0, 200)}`,
+                      notes: `${pending.notes || ""}\nActivation failed: ${errMsg.slice(0, 200)}`,
                       updated_at: new Date().toISOString(),
                     })
                     .eq("id", pending.id)
@@ -252,18 +244,18 @@ export async function GET(req: NextRequest) {
                     category: "Internal",
                     priority: "Urgent",
                     status: "To Do",
-                    description: `Pending activation ${pending.id} matched bank feed but activate-service returned HTTP ${activateRes.status}. Offer: ${pending.offer_token}. Check Vercel logs and retry manually.`,
+                    description: `Pending activation ${pending.id} matched bank feed but runActivation returned: ${errMsg}. Offer: ${pending.offer_token}. Check Vercel logs and retry via CRM.`,
                   })
                 }
               } catch (e) {
-                console.error("[check-wire] Failed to trigger activation from bank feed:", e)
+                console.error("[check-wire] runActivation threw from bank feed:", e)
 
                 // Mark activation as failed
                 await supabase
                   .from("pending_activations")
                   .update({
                     status: "activation_failed",
-                    notes: `${pending.notes || ""}\nActivation fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+                    notes: `${pending.notes || ""}\nActivation threw: ${e instanceof Error ? e.message : String(e)}`,
                     updated_at: new Date().toISOString(),
                   })
                   .eq("id", pending.id)
@@ -271,12 +263,12 @@ export async function GET(req: NextRequest) {
                 // Create CRM task for manual review
                 // eslint-disable-next-line no-restricted-syntax
                 await supabase.from("tasks").insert({
-                  task_title: `[ACTIVATION FAILED] ${pending.client_name} — wire payment matched but activation call failed`,
+                  task_title: `[ACTIVATION FAILED] ${pending.client_name} — wire payment matched but activation call threw`,
                   assigned_to: "Luca",
                   category: "Internal",
                   priority: "Urgent",
                   status: "To Do",
-                  description: `Pending activation ${pending.id} matched bank feed but fetch to activate-service failed. Offer: ${pending.offer_token}. Error: ${e instanceof Error ? e.message : String(e)}`,
+                  description: `Pending activation ${pending.id} matched bank feed but runActivation threw. Offer: ${pending.offer_token}. Error: ${e instanceof Error ? e.message : String(e)}`,
                 })
               }
 

@@ -22,7 +22,7 @@ export function registerTaxTools(server: McpServer) {
     "Search tax returns by year, status, return type, account, or special case flag. Returns company name, return type (1065/1120-S/1040NR), status, deadline, and workflow progress (paid/link_sent/data_received/sent_to_india/extension/india_status). Use tax_tracker for the visual dashboard overview.",
     {
       tax_year: z.number().optional().describe("Tax year (e.g., 2025)"),
-      status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
+      status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Wizard Available, Data Received, Sent to India, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
       return_type: z.string().optional().describe("Return type: 1065, 1120-S, 1040NR"),
       account_id: z.string().uuid().optional().describe("Filter by account UUID"),
       contact_id: z.string().uuid().optional().describe("Filter by contact UUID (for individual tax returns without account)"),
@@ -66,6 +66,7 @@ export function registerTaxTools(server: McpServer) {
           "Paid - Not Started": "🟠",
           "Activated - Need Link": "🟠",
           "Link Sent - Awaiting Data": "🟡",
+          "Wizard Available": "🟡",
           "Data Received": "🟡",
           "Sent to India": "🔵",
           "Extension Filed": "🔵",
@@ -150,7 +151,7 @@ export function registerTaxTools(server: McpServer) {
 
         // Status categories
         const isActionNeeded = (s: string) => ["Payment Pending", "Not Invoiced", "Paid - Not Started", "Activated - Need Link"].includes(s)
-        const isWaiting = (s: string) => ["Link Sent - Awaiting Data"].includes(s)
+        const isWaiting = (s: string) => ["Link Sent - Awaiting Data", "Wizard Available"].includes(s)
         const isInProgress = (s: string) => ["Data Received", "Sent to India"].includes(s)
         const isExtended = (s: string) => ["Extension Filed"].includes(s)
         const isNearDone = (s: string) => ["TR Completed - Awaiting Signature"].includes(s)

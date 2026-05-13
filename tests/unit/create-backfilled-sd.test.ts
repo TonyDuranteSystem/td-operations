@@ -276,10 +276,11 @@ describe('createBackfilledSD — service_type strict validation', () => {
     }
   })
 
-  it('VALID_SERVICE_TYPES has exactly 18 values matching the DB constraint', () => {
-    expect(VALID_SERVICE_TYPES).toHaveLength(18)
+  it('VALID_SERVICE_TYPES has exactly 20 values', () => {
+    expect(VALID_SERVICE_TYPES).toHaveLength(20)
     // Spot-check: must include at least these canonical members
     expect(VALID_SERVICE_TYPES).toContain('Tax Return')
+    expect(VALID_SERVICE_TYPES).toContain('Tax Return One-Time')
     expect(VALID_SERVICE_TYPES).toContain('Company Formation')
     expect(VALID_SERVICE_TYPES).toContain('CMRA Mailing Address')
     expect(VALID_SERVICE_TYPES).toContain('State Annual Report')
@@ -289,5 +290,6 @@ describe('createBackfilledSD — service_type strict validation', () => {
     expect(VALID_SERVICE_TYPES).toContain('Support')
     expect(VALID_SERVICE_TYPES).toContain('EIN Application')
     expect(VALID_SERVICE_TYPES).toContain('Client Offboarding')
+    expect(VALID_SERVICE_TYPES).toContain('DBA')
   })
 })

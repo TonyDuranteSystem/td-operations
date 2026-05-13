@@ -33,7 +33,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
-import { INTERNAL_BASE_URL } from "@/lib/config"
+import { runActivation } from "@/lib/operations/activate-service"
 
 interface ConfirmPaymentBody {
   // Identifier — exactly one required
@@ -510,24 +510,9 @@ export async function POST(request: Request) {
     // 7. Call activate-service (SAME chain as Whop webhook)
     let activationResult = null
     try {
-      // Use VERCEL_URL (auto-injected by Vercel) so internal calls always
-      // hit the same deployment. Falls back to NEXT_PUBLIC_APP_URL or the
-      // hardcoded INTERNAL_BASE_URL for local dev.
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-        || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : INTERNAL_BASE_URL)
-
-      const res = await fetch(`${baseUrl}/api/workflows/activate-service`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
-        },
-        body: JSON.stringify({ pending_activation_id: activationId }),
-      })
-
-      activationResult = await res.json()
+      activationResult = await runActivation(activationId)
     } catch (err) {
-      console.error("[confirm-payment] activate-service call failed:", err)
+      console.error("[confirm-payment] runActivation failed:", err)
       activationResult = { error: err instanceof Error ? err.message : String(err) }
     }
 

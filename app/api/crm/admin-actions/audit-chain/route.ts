@@ -25,6 +25,7 @@ import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { INTERNAL_BASE_URL } from "@/lib/config"
 import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
+import { runActivation } from "@/lib/operations/activate-service"
 import type { Json } from "@/lib/database.types"
 
 // ─── Types ───
@@ -1308,17 +1309,14 @@ export async function POST(req: NextRequest) {
 
       case "run_activation": {
         const { pending_activation_id } = params as { pending_activation_id: string; contact_id: string }
-        const apiUrl = `${INTERNAL_BASE_URL}/api/workflows/activate-service`
-        const resp = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env.API_SECRET_TOKEN}`,
-          },
-          body: JSON.stringify({ pending_activation_id }),
-        })
-        const result = await resp.json()
-        if (!resp.ok) return NextResponse.json({ error: result.error || "Activation failed" }, { status: resp.status })
+        // Direct lib call — no HTTP hop, no risk of HTML response on Vercel cold start.
+        const result = await runActivation(pending_activation_id)
+        if (!result.ok) {
+          return NextResponse.json(
+            { error: result.error || "Activation failed" },
+            { status: result.status || 500 },
+          )
+        }
         return NextResponse.json({
           success: true,
           detail: "activate-service executed",

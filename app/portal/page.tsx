@@ -547,7 +547,7 @@ export default async function PortalDashboardPage() {
         // is at a pre-data-receipt status. Clients past "Data Received"
         // already submitted their data and are naturally gated by the 2nd
         // installment — pausing them is stale/misleading.
-        const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Extension Filed'])
+        const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Wizard Available', 'Extension Filed'])
         const isPaused = tr.sd_status === 'on_hold' && PAUSE_ELIGIBLE_TR_STATUS.has(tr.status ?? '')
         if (isPaused) {
           const firstName =

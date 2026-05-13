@@ -12,7 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient, SupabaseClient } from "@supabase/supabase-js"
-import { INTERNAL_BASE_URL } from "@/lib/config"
+import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
 
 // Lightweight types for Stripe objects (v22 has different namespace pattern)
@@ -354,27 +354,17 @@ async function handleCheckoutCompleted(session: StripeSession) {
         }
       }
 
-      // Trigger activate-service workflow
+      // Trigger activate-service workflow directly (no HTTP hop)
       try {
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || INTERNAL_BASE_URL
-        const activateRes = await fetch(`${baseUrl}/api/workflows/activate-service`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.API_SECRET_TOKEN}`,
-          },
-          body: JSON.stringify({ pending_activation_id: pending.id }),
-        })
-
-        if (!activateRes.ok) {
-          const errText = await activateRes.text()
-          console.error(`[stripe-webhook] activate-service returned ${activateRes.status}: ${errText}`)
+        const activateResult = await runActivation(pending.id)
+        if (!activateResult.ok) {
+          console.error(`[stripe-webhook] activate-service returned error: ${activateResult.error}`)
 
           // Create task so it doesn't get lost
           // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
           await getSupabase().from("tasks").insert({
             task_title: `Stripe payment: activate-service FAILED for ${clientName || email}`,
-            description: `Payment ${paymentIntentId} confirmed but activate-service returned ${activateRes.status}.\nError: ${errText}\nPending activation: ${pending.id}\n\nManual activation needed.`,
+            description: `Payment ${paymentIntentId} confirmed but activate-service failed.\nError: ${activateResult.error}\nPending activation: ${pending.id}\n\nManual activation needed.`,
             assigned_to: "Antonio",
             priority: "Urgent",
             category: "Payment",
@@ -388,7 +378,7 @@ async function handleCheckoutCompleted(session: StripeSession) {
         // eslint-disable-next-line no-restricted-syntax -- legacy tasks insert; tracked by dev_task 7ebb1e0c
         await getSupabase().from("tasks").insert({
           task_title: `Stripe payment: activate-service UNREACHABLE for ${clientName || email}`,
-          description: `Payment ${paymentIntentId} confirmed but could not reach activate-service.\nError: ${e instanceof Error ? e.message : String(e)}\nPending activation: ${pending.id}\n\nManual activation needed.`,
+          description: `Payment ${paymentIntentId} confirmed but activate-service threw an exception.\nError: ${e instanceof Error ? e.message : String(e)}\nPending activation: ${pending.id}\n\nManual activation needed.`,
           assigned_to: "Antonio",
           priority: "Urgent",
           category: "Payment",
