@@ -1078,7 +1078,8 @@ export function t(key: string, locale: Locale = 'en'): string {
 /**
  * Get locale from Supabase user metadata.
  */
-export function getLocale(_user: { user_metadata?: Record<string, unknown> } | null): Locale {
-  // Portal is English-only. Italian translations kept for reference but not served.
+export function getLocale(user: { user_metadata?: Record<string, unknown> } | null): Locale {
+  const lang = user?.user_metadata?.portal_language
+  if (lang === 'it') return 'it'
   return 'en'
 }
