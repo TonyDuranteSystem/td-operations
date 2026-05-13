@@ -440,5 +440,79 @@ export async function POST(request: NextRequest) {
     })
   }
 
+  if (action === 'revoke_access') {
+    const { account_id } = body
+    if (!account_id) {
+      return NextResponse.json({ error: 'account_id required for revoke_access' }, { status: 400 })
+    }
+
+    await supabaseAdmin
+      .from('account_contacts')
+      .delete()
+      .eq('contact_id', contact_id)
+      .eq('account_id', account_id)
+
+    const { data: remaining } = await supabaseAdmin
+      .from('account_contacts')
+      .select('account_id')
+      .eq('contact_id', contact_id)
+
+    if (!remaining || remaining.length === 0) {
+      const authUser = await findAuthUser()
+      if (authUser) {
+        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+          ban_duration: '876600h',
+        })
+      }
+    }
+
+    await supabaseAdmin.from('action_log').insert({
+      actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
+      action_type: 'update',
+      table_name: 'account_contacts',
+      record_id: contact_id,
+      account_id,
+      summary: `Portal access revoked for ${contact.full_name} on account ${account_id}`,
+      details: { remaining_accounts: remaining?.length ?? 0, globally_banned: !remaining || remaining.length === 0 },
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: `Access revoked${!remaining || remaining.length === 0 ? ' (user banned — no remaining accounts)' : ''}`,
+    })
+  }
+
+  if (action === 'restore_access') {
+    const { account_id } = body
+    if (!account_id) {
+      return NextResponse.json({ error: 'account_id required for restore_access' }, { status: 400 })
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabaseAdmin.from('account_contacts').upsert(
+      { account_id, contact_id, role: 'Member' } as any,
+      { onConflict: 'account_id,contact_id' },
+    )
+
+    const authUser = await findAuthUser()
+    if (authUser) {
+      await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+        ban_duration: 'none',
+      })
+    }
+
+    await supabaseAdmin.from('action_log').insert({
+      actor: `dashboard:${user.email?.split('@')[0] ?? 'unknown'}`,
+      action_type: 'update',
+      table_name: 'account_contacts',
+      record_id: contact_id,
+      account_id,
+      summary: `Portal access restored for ${contact.full_name} on account ${account_id}`,
+      details: { auth_user_found: !!authUser },
+    })
+
+    return NextResponse.json({ success: true, message: 'Access restored' })
+  }
+
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })
 }

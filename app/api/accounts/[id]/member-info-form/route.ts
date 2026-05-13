@@ -8,7 +8,11 @@ export const dynamic = "force-dynamic"
 /**
  * GET /api/accounts/[id]/member-info-form
  * Returns the latest member info request for this account (if any),
- * plus whether a primary contact is set (so the UI can disable the button proactively).
+ * plus whether a primary member with a linked contact exists (so the UI can
+ * disable the Send button proactively when no primary member is set).
+ *
+ * NOTE: is_primary lives in the `members` table (set by the Primary checkbox
+ * in the Members section), NOT in account_contacts.
  */
 export async function GET(
   _req: NextRequest,
@@ -23,7 +27,7 @@ export async function GET(
       .limit(1)
       .maybeSingle(),
     supabaseAdmin
-      .from("account_contacts")
+      .from("members")
       .select("contact_id")
       .eq("account_id", params.id)
       .eq("is_primary", true)
@@ -37,9 +41,12 @@ export async function GET(
  * POST /api/accounts/[id]/member-info-form
  *
  * Creates (or retrieves existing) member info request form for an MMLLC account,
- * then sends the link via portal chat to the primary contact.
+ * then sends the link via portal chat to the primary member's contact.
  *
- * Idempotent: if a pending request already exists, reuses it and sends a new chat message.
+ * Requires: a member with is_primary=true AND contact_id set in the members table.
+ * Returns 400 if primary member has no contact_id.
+ *
+ * Idempotent: if a pending request already exists, reuses it and sends a new message.
  *
  * Returns: { form_url, admin_preview_url, is_existing }
  */
@@ -58,6 +65,34 @@ export async function POST(
   if (accErr || !account) {
     return NextResponse.json({ error: "Account not found" }, { status: 404 })
   }
+
+  // Resolve primary member — required before creating or sending.
+  // is_primary is set via the Primary checkbox in the Members section (members table).
+  const { data: primaryMember } = await supabaseAdmin
+    .from("members")
+    .select("contact_id")
+    .eq("account_id", accountId)
+    .eq("is_primary", true)
+    .maybeSingle()
+
+  if (!primaryMember?.contact_id) {
+    return NextResponse.json(
+      { error: "No primary member set. Check the 'Primary' checkbox on the member you want to receive the form." },
+      { status: 400 }
+    )
+  }
+
+  const contactId = primaryMember.contact_id
+
+  // Fetch contact language for bilingual message
+  const { data: contactData } = await supabaseAdmin
+    .from("contacts")
+    .select("language")
+    .eq("id", contactId)
+    .maybeSingle()
+
+  const lang = contactData?.language ?? "en"
+  const isItalian = lang === "it" || lang === "Italian"
 
   // Check for existing pending request (idempotent)
   const { data: existing } = await supabaseAdmin
@@ -94,18 +129,11 @@ export async function POST(
       ? { members: (members as any[]).map(m => ({ ...m, ownership_pct: m.ownership_pct ? String(m.ownership_pct) : "" })) }
       : null
 
-    const { data: primaryMember } = await supabaseAdmin
-      .from("members")
-      .select("contact_id")
-      .eq("account_id", accountId)
-      .eq("is_primary", true)
-      .maybeSingle()
-
     const { data: created, error: createErr } = await supabaseAdmin
       .from("member_info_requests")
       .insert({
         account_id: accountId,
-        contact_id: primaryMember?.contact_id ?? null,
+        contact_id: contactId,
         status: "pending",
         company_name: account.company_name,
         entity_type: account.entity_type ?? "Multi Member LLC",
@@ -128,27 +156,6 @@ export async function POST(
   const formUrl = `${APP_BASE_URL}/member-info/${token}/${accessCode}`
   const adminPreviewUrl = `${formUrl}?preview=td`
 
-  // Resolve primary contact — required. If none is set, return a clear error
-  // so the admin knows to mark a primary contact before sending the form.
-  const { data: primaryContact } = await supabaseAdmin
-    .from("account_contacts")
-    .select("contact_id, contacts(language)")
-    .eq("account_id", accountId)
-    .eq("is_primary", true)
-    .maybeSingle()
-
-  if (!primaryContact?.contact_id) {
-    return NextResponse.json(
-      { error: "No primary contact set for this account. Please mark a contact as primary before sending the form." },
-      { status: 400 }
-    )
-  }
-
-  const contactId = primaryContact.contact_id
-  const contactRow = primaryContact.contacts as { language?: string | null } | null
-  const lang = contactRow?.language ?? "en"
-  const isItalian = lang === "it" || lang === "Italian"
-
   const chatMessage = isItalian
     ? `Ciao! Abbiamo bisogno di aggiornare le informazioni dei soci di **${account.company_name}**.\n\nPer favore compila questo breve modulo con i dati aggiornati di tutti i soci:\n\n${formUrl}`
     : `Hi! We need to update the member information for **${account.company_name}**.\n\nPlease fill out this short form with the updated details for all members:\n\n${formUrl}`
@@ -169,7 +176,7 @@ export async function POST(
     console.error("[member-info-form] portal chat insert failed:", chatErr.message)
   }
 
-  if (!chatErr && contactId) {
+  if (!chatErr) {
     notifyClientOfAdminMessage({
       account_id: accountId,
       contact_id: contactId,
