@@ -557,6 +557,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
     }
 
     // Check if this invoice is linked to a pending_activation → trigger activation chain
+    // Path A: direct link via portal_invoice_id (Stripe/Whop payment flow)
     const { data: pendingAct } = await supabaseAdmin
       .from("pending_activations")
       .select("id, status")
@@ -576,9 +577,7 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
 
       // Trigger activate-service directly (no HTTP hop). Awaited so failures
       // are logged; the manualMatch caller still gets `matched: true` because
-      // the match itself succeeded — activation is a downstream effect that
-      // PR B will surface to the CRM via a 'needs_review' / 'activation_crashed'
-      // state on td_bank_feeds.
+      // the match itself succeeded.
       try {
         const activateResult = await runActivation(pendingAct.id)
         if (!activateResult.ok) {
@@ -586,6 +585,53 @@ export async function manualMatch(feedId: string, paymentId: string): Promise<Ma
         }
       } catch (err) {
         console.error(`[manualMatch] runActivation threw for pending ${pendingAct.id}:`, err)
+      }
+    } else {
+      // Path B: bank-feed-created invoices have no portal_invoice_id.
+      // Look up by account_id → offer token → pending_activation.
+      // Only backfills payment_confirmed_at — does NOT re-trigger activation.
+      const { data: paymentFull } = await supabaseAdmin
+        .from("payments")
+        .select("account_id")
+        .eq("id", paymentId)
+        .single()
+
+      if (paymentFull?.account_id) {
+        const { data: offer } = await supabaseAdmin
+          .from("offers")
+          .select("token")
+          .eq("account_id", paymentFull.account_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (offer?.token) {
+          const { data: pendingActByAccount } = await supabaseAdmin
+            .from("pending_activations")
+            .select("id, status")
+            .eq("offer_token", offer.token)
+            .is("payment_confirmed_at", null)
+            .in("status", ["awaiting_payment", "payment_confirmed", "activated"])
+            .maybeSingle()
+
+          if (pendingActByAccount) {
+            // Use the bank feed's transaction_date as the payment timestamp
+            const { data: feedRow } = await supabaseAdmin
+              .from("td_bank_feeds")
+              .select("transaction_date")
+              .eq("id", feedId)
+              .single()
+
+            const txTimestamp = feedRow?.transaction_date
+              ? new Date(feedRow.transaction_date).toISOString()
+              : now
+
+            await supabaseAdmin
+              .from("pending_activations")
+              .update({ payment_confirmed_at: txTimestamp, updated_at: now })
+              .eq("id", pendingActByAccount.id)
+          }
+        }
       }
     }
 
