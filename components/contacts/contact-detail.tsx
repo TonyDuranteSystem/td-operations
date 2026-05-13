@@ -1265,7 +1265,9 @@ function OfferStatusCard({
     required_documents: primaryOffer.required_documents as OfferData['required_documents'],
   } : null
 
-  const companyName = accounts.find(a => a.id === selectedAccountId)?.company_name ?? contactName
+  // Always pre-populate with the person's name — staff can edit it in the dialog
+  // before creating. The company name is irrelevant for individual services (ITIN etc.)
+  const companyName = contactName
   const accountId = selectedAccountId || null
 
   return (

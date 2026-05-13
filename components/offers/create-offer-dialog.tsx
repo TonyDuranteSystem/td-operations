@@ -125,6 +125,13 @@ export function CreateOfferDialog({
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [createdOfferUrl, setCreatedOfferUrl] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
+  // clientNameValue is editable so staff can correct the name shown on the offer
+  const [clientNameValue, setClientNameValue] = useState(clientName)
+
+  // Reset editable name whenever the dialog opens (e.g. switching context)
+  useEffect(() => {
+    if (open) setClientNameValue(clientName)
+  }, [open, clientName])
 
   // Fetch service catalog from DB when dialog opens
   useEffect(() => {
@@ -286,7 +293,7 @@ export function CreateOfferDialog({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_name: clientName,
+          client_name: clientNameValue,
           language,
           services: serviceNames,
           notes_context: noteParts.join('\n\n'),
@@ -557,7 +564,7 @@ export function CreateOfferDialog({
             lead_id: leadId || null,
             account_id: accountId || null,
             contact_id: contactId || null,
-            client_name: clientName,
+            client_name: clientNameValue,
             client_email: clientEmail,
             language,
             contract_type: derivedContractType,
@@ -609,7 +616,7 @@ export function CreateOfferDialog({
   const primaryServices = catalog.filter(s => s.category === 'primary')
   const standaloneServices = catalog.filter(s => s.category === 'standalone')
   const addonServices = catalog.filter(s => s.category === 'addon')
-  const sourceLabel = accountId ? 'account' : 'lead'
+  const _sourceLabel = accountId ? 'account' : 'lead'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -626,13 +633,23 @@ export function CreateOfferDialog({
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Client info (locked) */}
-          <div className="bg-zinc-50 rounded-lg p-3">
-            <p className="text-xs text-muted-foreground mb-1">Client (from {sourceLabel} -- not editable)</p>
-            <p className="text-sm font-medium">{clientName}</p>
+          {/* Client info — name is editable so staff can correct it before creating */}
+          <div className="bg-zinc-50 rounded-lg p-3 space-y-1.5">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-0.5">
+                Client name <span className="text-zinc-400">(shown on offer page — editable)</span>
+              </label>
+              <input
+                type="text"
+                value={clientNameValue}
+                onChange={e => setClientNameValue(e.target.value)}
+                className="w-full text-sm font-medium bg-white border border-zinc-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="Client name"
+              />
+            </div>
             <p className="text-sm text-zinc-600">{clientEmail}</p>
             {referrerName && (
-              <p className="text-xs text-blue-600 mt-1">Referrer: {referrerName} ({referrerType || 'client'})</p>
+              <p className="text-xs text-blue-600">Referrer: {referrerName} ({referrerType || 'client'})</p>
             )}
           </div>
 
@@ -1268,7 +1285,7 @@ export function CreateOfferDialog({
               <dl className="space-y-2">
                 <div className="flex justify-between gap-3">
                   <dt className="text-zinc-500">Client</dt>
-                  <dd className="font-medium text-right truncate">{clientName}</dd>
+                  <dd className="font-medium text-right truncate">{clientNameValue}</dd>
                 </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-zinc-500">Language</dt>

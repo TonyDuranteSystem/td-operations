@@ -3,11 +3,12 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard,
+  FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard, Check, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { CreateOfferDialog } from './create-offer-dialog'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
+import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
 const OFFER_STATUS_COLORS: Record<string, string> = {
   draft: 'bg-zinc-100 text-zinc-700',
@@ -53,8 +54,9 @@ export function AccountOfferPanel({
   const [showCreateOffer, setShowCreateOffer] = useState(false)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
   const [sendingOffer, setSendingOffer] = useState(false)
-  const [deletingOffer, setDeletingOffer] = useState(false)
-  const [resettingOffer, setResettingOffer] = useState(false)
+  const [showSendConfirm, setShowSendConfirm] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   // Offer panel visible to all dashboard users (admin + team)
 
@@ -68,8 +70,6 @@ export function AccountOfferPanel({
 
   const doSendOffer = async () => {
     if (!offer?.token) return
-    if (!confirm(`Publish offer ${offer.token} to ${clientEmail}'s portal?\n\nThe client will be notified via email and must log into the portal to view the offer.`)) return
-
     setSendingOffer(true)
     try {
       const res = await fetch('/api/crm/admin-actions/send-offer', {
@@ -86,6 +86,7 @@ export function AccountOfferPanel({
       if (data.portal_created) {
         toast.success('Portal access created — client will receive login credentials')
       }
+      setShowSendConfirm(false)
       router.refresh()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'An error occurred')
@@ -94,11 +95,8 @@ export function AccountOfferPanel({
     }
   }
 
-  const doDeleteOffer = async () => {
-    if (!offer?.token) return
-    if (!confirm(`Delete offer ${offer.token}? This will also delete associated contracts and activations.`)) return
-
-    setDeletingOffer(true)
+  const doDeleteOffer = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
+    if (!offer?.token) return { success: false, error: 'No offer token' }
     try {
       const res = await fetch('/api/crm/admin-actions/delete-offer', {
         method: 'POST',
@@ -106,24 +104,15 @@ export function AccountOfferPanel({
         body: JSON.stringify({ offer_token: offer.token }),
       })
       const data = await res.json()
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to delete offer')
-        return
-      }
-      toast.success(data.message || 'Offer deleted')
-      router.refresh()
+      if (!res.ok) return { success: false, error: data.error || 'Failed to delete offer' }
+      return { success: true, message: data.message || 'Offer deleted' }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'An error occurred')
-    } finally {
-      setDeletingOffer(false)
+      return { success: false, error: err instanceof Error ? err.message : 'An error occurred' }
     }
   }
 
-  const doResetOffer = async () => {
-    if (!offer?.token) return
-    if (!confirm(`Reset offer ${offer.token} to draft? This will delete contracts and pending activations.`)) return
-
-    setResettingOffer(true)
+  const doResetOffer = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
+    if (!offer?.token) return { success: false, error: 'No offer token' }
     try {
       const res = await fetch('/api/crm/admin-actions/reset-offer', {
         method: 'POST',
@@ -131,16 +120,10 @@ export function AccountOfferPanel({
         body: JSON.stringify({ offer_token: offer.token }),
       })
       const data = await res.json()
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to reset offer')
-        return
-      }
-      toast.success(data.message || 'Offer reset to draft')
-      router.refresh()
+      if (!res.ok) return { success: false, error: data.error || 'Failed to reset offer' }
+      return { success: true, message: data.message || 'Offer reset to draft' }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'An error occurred')
-    } finally {
-      setResettingOffer(false)
+      return { success: false, error: err instanceof Error ? err.message : 'An error occurred' }
     }
   }
 
@@ -261,16 +244,37 @@ export function AccountOfferPanel({
                 View Offer
               </a>
 
-              {/* Publish Offer (draft only) */}
+              {/* Publish Offer (draft only) — inline confirm avoids browser dialog suppression */}
               {isOfferDraft && clientEmail && (
-                <button
-                  onClick={doSendOffer}
-                  disabled={sendingOffer}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
-                >
-                  {sendingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                  Publish Offer
-                </button>
+                showSendConfirm ? (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs text-zinc-600">Publish to {clientEmail}?</span>
+                    <button
+                      onClick={doSendOffer}
+                      disabled={sendingOffer}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
+                    >
+                      {sendingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      Yes, publish
+                    </button>
+                    <button
+                      onClick={() => setShowSendConfirm(false)}
+                      disabled={sendingOffer}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowSendConfirm(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    Publish Offer
+                  </button>
+                )
               )}
 
               {/* Confirm Payment (signed, awaiting wire/manual confirm).
@@ -290,22 +294,20 @@ export function AccountOfferPanel({
               {/* Reset Offer (not draft) */}
               {offer.status !== 'draft' && (
                 <button
-                  onClick={doResetOffer}
-                  disabled={resettingOffer}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50 transition-colors"
+                  onClick={() => setShowResetConfirm(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
                 >
-                  {resettingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                  <RotateCcw className="h-3.5 w-3.5" />
                   Reset to Draft
                 </button>
               )}
 
               {/* Delete Offer */}
               <button
-                onClick={doDeleteOffer}
-                disabled={deletingOffer}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50 transition-colors"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 transition-colors"
               >
-                {deletingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                <Trash2 className="h-3.5 w-3.5" />
                 Delete Offer
               </button>
             </div>
@@ -342,6 +344,30 @@ export function AccountOfferPanel({
           }}
         />
       )}
+
+      {/* Reset Offer dialog */}
+      <ConfirmDestructiveDialog
+        open={showResetConfirm}
+        onClose={() => setShowResetConfirm(false)}
+        title="Reset offer to draft?"
+        description={`This will delete any contracts and pending activations for offer ${offer?.token ?? ''}. The offer will return to draft status.`}
+        severity="amber"
+        confirmLabel="Yes, reset to draft"
+        onConfirm={doResetOffer}
+        onSuccess={() => router.refresh()}
+      />
+
+      {/* Delete Offer dialog */}
+      <ConfirmDestructiveDialog
+        open={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        title="Delete this offer?"
+        description={`This will permanently delete offer ${offer?.token ?? ''} along with any associated contracts and activations. This cannot be undone.`}
+        severity="red"
+        confirmLabel="Yes, delete offer"
+        onConfirm={doDeleteOffer}
+        onSuccess={() => router.refresh()}
+      />
     </>
   )
 }
