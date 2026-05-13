@@ -1141,15 +1141,24 @@ export function rule18_partnerServiceScope(ctx: HealthContext): Finding[] {
 //
 // Two checks for stale state imported from older systems or stuck records:
 //
-// 1. tax_returns.status carrying legacy Airtable-imported values
-//    ("Activated - Need Link", "Not Invoiced") that don't match the current
+// 1. tax_returns.status carrying legacy values that don't match the current
 //    workflow — flag as warning so staff can manually re-map.
+//    "Activated - Need Link" was migrated in the tax-return workflow redesign
+//    (zero rows remain on prod); if it reappears it's a bug, not a legacy
+//    artifact. "Link Sent - Awaiting Data" and "Paid - Not Started" are the
+//    deprecated post-payment / pre-data statuses superseded by the new
+//    pipeline ("Paid - Awaiting Data" / "Wizard Available" stages).
+//    "Not Invoiced" predates the SD pipeline entirely.
 // 2. Any payment in 'Pending' status for more than 30 days — usually means
 //    the payment was either fulfilled (and never marked Paid) or abandoned
 //    (and never marked Cancelled). Surfacing as info nudges cleanup without
 //    blocking on a single threshold.
 
-const LEGACY_TAX_RETURN_STATUSES = new Set(["Activated - Need Link", "Not Invoiced"])
+const LEGACY_TAX_RETURN_STATUSES = new Set([
+  "Not Invoiced",
+  "Link Sent - Awaiting Data",
+  "Paid - Not Started",
+])
 
 export function rule19_legacyStatuses(ctx: HealthContext, now: Date = new Date()): Finding[] {
   const findings: Finding[] = []
@@ -1396,39 +1405,79 @@ export function rule25_onboardingDetection(ctx: HealthContext): Finding[] {
 
 // ── Rule 26: TAX RETURN SD STAGE VS PAYMENT CONTEXT ────────────────────────
 //
-// The Tax Return SD pipeline starts at stage "1st Installment Paid" — the
-// stage name asserts a billing fact (an installment was received). When the
-// account's payments contain no row whose description matches "installment"
-// (case-insensitive), the SD's stage is lying: most likely the client paid
-// a setup/onboarding fee that bumped the SD to this stage by accident, or
-// the SD was advanced manually without a matching payment row. Either way,
-// downstream automations that key off the SD stage (renewal billing,
-// installment scheduling, year-end reconciliation) will misfire. Warning
-// severity — the data is internally inconsistent but the client experience
-// is not broken yet.
+// The Tax Return SD pipeline asserts billing facts at certain stages:
+//
+//   - "1st Installment Paid" → an installment payment was received.
+//   - "Wizard Available"     → at least the 2nd installment has been paid
+//                              (or, for One-Time clients, the full TR fee).
+//
+// When the payments table can't substantiate the stage's claim, downstream
+// automations (renewal billing, installment scheduling, year-end
+// reconciliation) will misfire. Warning severity — the data is internally
+// inconsistent but the client experience is not broken yet.
+
+const TR_PAYMENT_GATED_STAGES = new Set(["1st Installment Paid", "Wizard Available"])
 
 export function rule26_taxReturnStageVsPayments(ctx: HealthContext): Finding[] {
   const trSD = ctx.service_deliveries.find(
     sd =>
       sd.service_type === "Tax Return" &&
       (sd.status || "").toLowerCase() !== "cancelled" &&
-      (sd.stage || "").trim() === "1st Installment Paid",
+      TR_PAYMENT_GATED_STAGES.has((sd.stage || "").trim()),
   )
   if (!trSD) return []
+  const stage = (trSD.stage || "").trim()
 
   const hasInstallmentPayment = ctx.payments.some(p =>
     (p.description || "").toLowerCase().includes("installment"),
   )
-  if (hasInstallmentPayment) return []
+
+  if (stage === "1st Installment Paid") {
+    if (hasInstallmentPayment) return []
+    return [{
+      rule_id: "R26",
+      rule_title: "Tax Return SD stage vs payment context",
+      severity: "warning",
+      description:
+        "Tax Return SD at '1st Installment Paid' but no installment payment found — client may have paid a setup/onboarding fee instead. SD stage name doesn't match payment reality.",
+      current_value: `tax_return_sd=${trSD.id}, stage="1st Installment Paid", installment_payments=0`,
+      expected_value: ">= 1 payment with description matching /installment/i",
+    }]
+  }
+
+  // stage === "Wizard Available": expect 2nd-installment-or-later payment, or
+  // a One-Time client with at least one paid payment (the full TR fee).
+  const oneTime = isOneTime(ctx.account)
+  if (oneTime) {
+    const hasPaid = ctx.payments.some(p => (p.status || "").trim() === "Paid")
+    if (hasPaid) return []
+    return [{
+      rule_id: "R26",
+      rule_title: "Tax Return SD stage vs payment context",
+      severity: "warning",
+      description:
+        "Tax Return SD at 'Wizard Available' on a One-Time client but no Paid payment found — wizard should not be released before payment.",
+      current_value: `tax_return_sd=${trSD.id}, stage="Wizard Available", account_type=One-Time, paid_payments=0`,
+      expected_value: ">= 1 Paid payment",
+    }]
+  }
+
+  const hasSecondOrLaterInstallment = ctx.payments.some(p => {
+    const d = (p.description || "").toLowerCase()
+    if (!d.includes("installment")) return false
+    // Match "2nd", "3rd", "4th", "5th", or explicit numeric ordinals.
+    return /\b(2nd|3rd|4th|5th|second|third|fourth|fifth)\b/.test(d)
+  })
+  if (hasSecondOrLaterInstallment) return []
 
   return [{
     rule_id: "R26",
     rule_title: "Tax Return SD stage vs payment context",
     severity: "warning",
     description:
-      "Tax Return SD at '1st Installment Paid' but no installment payment found — client may have paid a setup/onboarding fee instead. SD stage name doesn't match payment reality.",
-    current_value: `tax_return_sd=${trSD.id}, stage="1st Installment Paid", installment_payments=0`,
-    expected_value: ">= 1 payment with description matching /installment/i",
+      "Tax Return SD at 'Wizard Available' but no 2nd-or-later installment payment found — wizard release expects at least the 2nd installment to be paid (or a One-Time client with full TR fee).",
+    current_value: `tax_return_sd=${trSD.id}, stage="Wizard Available", second_or_later_installment_payments=0, installment_payments=${hasInstallmentPayment ? ">=1 (1st only)" : "0"}`,
+    expected_value: ">= 1 payment matching /2nd|3rd|4th|5th installment/i (or One-Time with Paid payment)",
   }]
 }
 
@@ -1522,6 +1571,73 @@ export function rule28_duplicatePayments(ctx: HealthContext): Finding[] {
   return findings
 }
 
+// ── Rule 29: TAX_RETURNS ↔ SD STAGE ALIGNMENT (STRICT) ─────────────────────
+//
+// Stricter sibling of R10. When both a `tax_returns` row and an active Tax
+// Return SD exist, the SD stage must match the bridge mapping for the TR
+// status (see `lib/operations/tax-return-sd-bridge.ts`). R10 emits this as
+// INFO; R29 escalates the same condition to WARNING because the tax-return
+// workflow redesign makes the SD pipeline the canonical driver — a mismatch
+// means automated stage transitions (renewal billing, wizard release,
+// portal notifications) may misfire.
+//
+// Only fires for TR statuses that the bridge actively maps. Statuses with no
+// mapping are skipped (defensive — covered by R19 if legacy).
+
+export function rule29_taxReturnSDStageAlignment(ctx: HealthContext): Finding[] {
+  if (ctx.tax_returns.length === 0) return []
+  const trSD = ctx.service_deliveries.find(
+    sd => sd.service_type === "Tax Return" && (sd.status || "").toLowerCase() !== "cancelled",
+  )
+  if (!trSD) return []
+  const sdStage = (trSD.stage || "").trim()
+  if (!sdStage) return []
+
+  const findings: Finding[] = []
+  for (const tr of ctx.tax_returns) {
+    const mapped = mapTaxReturnStatusToSDStage(tr.status)
+    if (!mapped) continue
+    if (sdStage === mapped.stage_name) continue
+    findings.push({
+      rule_id: "R29",
+      rule_title: "Tax return ↔ SD stage alignment",
+      severity: "warning",
+      description: `Tax return status '${tr.status}' but SD stage is '${sdStage}' — these should be aligned per the bridge mapping.`,
+      current_value: `tax_returns.status=${tr.status}, sd.stage=${sdStage}`,
+      expected_value: `sd.stage=${mapped.stage_name}`,
+    })
+  }
+  return findings
+}
+
+// ── Rule 30: ONE-TIME TAX RETURN SERVICE TYPE ──────────────────────────────
+//
+// One-Time tax-return clients pay the full fee up front and skip the
+// installment / annual-renewal pipeline. The tax-return workflow redesign
+// introduced a dedicated `service_type='Tax Return One-Time'` for these
+// clients to keep them out of the annual pipeline's automations
+// (installment scheduling, wizard release, renewal billing). When a
+// One-Time account carries a `service_type='Tax Return'` SD, it's likely
+// using the annual pipeline by mistake — but may be intentional for legacy
+// rows, so INFO severity only.
+
+export function rule30_oneTimeTaxReturnServiceType(ctx: HealthContext): Finding[] {
+  if (!isOneTime(ctx.account)) return []
+  const trSD = ctx.service_deliveries.find(
+    sd => sd.service_type === "Tax Return" && (sd.status || "").toLowerCase() !== "cancelled",
+  )
+  if (!trSD) return []
+  return [{
+    rule_id: "R30",
+    rule_title: "One-Time tax return service type",
+    severity: "info",
+    description:
+      "One-Time client uses 'Tax Return' service type (annual pipeline). Consider 'Tax Return One-Time' to bypass installment / wizard / renewal automations — may be intentional for legacy rows.",
+    current_value: `account_type=One-Time, sd.service_type=Tax Return, sd.id=${trSD.id}`,
+    expected_value: "service_type=Tax Return One-Time",
+  }]
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -1553,6 +1669,8 @@ export const RULE_FUNCTIONS = [
   rule26_taxReturnStageVsPayments,
   rule27_taxReturnYearValidation,
   rule28_duplicatePayments,
+  rule29_taxReturnSDStageAlignment,
+  rule30_oneTimeTaxReturnServiceType,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {

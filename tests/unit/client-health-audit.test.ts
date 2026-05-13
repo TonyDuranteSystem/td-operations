@@ -28,6 +28,8 @@ import {
   rule26_taxReturnStageVsPayments,
   rule27_taxReturnYearValidation,
   rule28_duplicatePayments,
+  rule29_taxReturnSDStageAlignment,
+  rule30_oneTimeTaxReturnServiceType,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -1390,15 +1392,11 @@ describe("rule18_partnerServiceScope", () => {
 describe("rule19_legacyStatuses", () => {
   const NOW = new Date("2026-06-01T00:00:00Z")
 
-  it("flags tax_returns row with legacy status 'Activated - Need Link'", () => {
+  it("does NOT flag 'Activated - Need Link' (migrated in tax-return redesign — bug if it reappears, not legacy)", () => {
     const ctx = emptyCtx({
       tax_returns: [{ id: "t1", tax_year: 2025, status: "Activated - Need Link" }],
     })
-    const findings = rule19_legacyStatuses(ctx, NOW)
-    expect(findings).toHaveLength(1)
-    expect(findings[0].severity).toBe("warning")
-    expect(findings[0].description).toContain("legacy status 'Activated - Need Link'")
-    expect(findings[0].description).toContain("imported from old system")
+    expect(rule19_legacyStatuses(ctx, NOW)).toEqual([])
   })
 
   it("flags tax_returns row with legacy status 'Not Invoiced'", () => {
@@ -1408,6 +1406,26 @@ describe("rule19_legacyStatuses", () => {
     const findings = rule19_legacyStatuses(ctx, NOW)
     expect(findings).toHaveLength(1)
     expect(findings[0].description).toContain("Not Invoiced")
+  })
+
+  it("flags tax_returns row with legacy status 'Link Sent - Awaiting Data'", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Link Sent - Awaiting Data" }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("Link Sent - Awaiting Data")
+  })
+
+  it("flags tax_returns row with legacy status 'Paid - Not Started'", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "t1", tax_year: 2025, status: "Paid - Not Started" }],
+    })
+    const findings = rule19_legacyStatuses(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("Paid - Not Started")
   })
 
   it("does NOT flag tax_returns row with a current-workflow status", () => {
@@ -2006,6 +2024,114 @@ describe("rule26_taxReturnStageVsPayments", () => {
     })
     expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
   })
+
+  // ── Wizard Available stage (annual pipeline: expect 2nd+ installment) ────
+
+  it("flags Tax Return SD at 'Wizard Available' on annual client when only 1st installment paid", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Wizard Available",
+          stage_order: 4, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Tax Return 1st installment", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    const findings = rule26_taxReturnStageVsPayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R26")
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("Wizard Available")
+    expect(findings[0].description).toContain("2nd-or-later installment")
+  })
+
+  it("does NOT flag 'Wizard Available' when a 2nd installment payment exists", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Wizard Available",
+          stage_order: 4, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Tax Return 1st installment", status: "Paid", amount: 500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+        { id: "p2", description: "Tax Return 2nd installment", status: "Paid", amount: 500, paid_date: "2026-02-15", created_at: "2026-02-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("does NOT flag 'Wizard Available' when a 3rd installment payment exists", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Wizard Available",
+          stage_order: 4, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Tax Return 3rd installment", status: "Paid", amount: 500, paid_date: "2026-03-15", created_at: "2026-03-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("does NOT flag 'Wizard Available' on One-Time client with a Paid payment", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Wizard Available",
+          stage_order: 4, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Tax Return Full Fee", status: "Paid", amount: 1500, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    expect(rule26_taxReturnStageVsPayments(ctx)).toEqual([])
+  })
+
+  it("flags 'Wizard Available' on One-Time client with NO Paid payment", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Wizard Available",
+          stage_order: 4, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [
+        { id: "p1", description: "Tax Return Full Fee", status: "Pending", amount: 1500, paid_date: null, created_at: "2026-01-15T00:00:00Z" },
+      ],
+    })
+    const findings = rule26_taxReturnStageVsPayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("One-Time")
+    expect(findings[0].description).toContain("Wizard Available")
+  })
+
+  it("flags 'Wizard Available' on annual client when no installment payments at all exist", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Wizard Available",
+          stage_order: 4, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      payments: [],
+    })
+    const findings = rule26_taxReturnStageVsPayments(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("Wizard Available")
+  })
 })
 
 // ── R27: TAX RETURN YEAR VALIDATION ────────────────────────────────────────
@@ -2166,6 +2292,195 @@ describe("rule28_duplicatePayments", () => {
       ],
     })
     expect(rule28_duplicatePayments(ctx)).toEqual([])
+  })
+})
+
+// ── R29: TAX_RETURNS ↔ SD STAGE ALIGNMENT (STRICT) ─────────────────────────
+
+describe("rule29_taxReturnSDStageAlignment", () => {
+  it("flags WARNING when tax_returns.status and SD stage disagree per bridge mapping", () => {
+    // "Data Received" status maps to SD stage "Data Received" per the bridge —
+    // SD is at "Extension Filed", so mismatch.
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2025, status: "Data Received" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Extension Filed",
+          stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    const findings = rule29_taxReturnSDStageAlignment(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R29")
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("'Data Received'")
+    expect(findings[0].description).toContain("'Extension Filed'")
+    expect(findings[0].description).toContain("aligned per the bridge mapping")
+    expect(findings[0].expected_value).toBe("sd.stage=Data Received")
+  })
+
+  it("does NOT flag when SD stage matches bridge-mapped expected stage", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2025, status: "Data Received" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule29_taxReturnSDStageAlignment(ctx)).toEqual([])
+  })
+
+  it("returns no findings when no tax_returns row exists", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule29_taxReturnSDStageAlignment(ctx)).toEqual([])
+  })
+
+  it("returns no findings when no Tax Return SD exists (R10 covers this case)", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2025, status: "Data Received" }],
+    })
+    expect(rule29_taxReturnSDStageAlignment(ctx)).toEqual([])
+  })
+
+  it("ignores cancelled Tax Return SDs", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2025, status: "Data Received" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "cancelled", stage: "Extension Filed",
+          stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule29_taxReturnSDStageAlignment(ctx)).toEqual([])
+  })
+
+  it("skips tax_returns rows whose status has no bridge mapping", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2025, status: "Not Invoiced — completely unmapped value xyz" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule29_taxReturnSDStageAlignment(ctx)).toEqual([])
+  })
+
+  it("emits one finding per mismatched tax_returns row", () => {
+    const ctx = emptyCtx({
+      tax_returns: [
+        { id: "tr1", tax_year: 2024, status: "Data Received" },
+        { id: "tr2", tax_year: 2025, status: "TR Filed" },
+      ],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Extension Filed",
+          stage_order: 2, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    const findings = rule29_taxReturnSDStageAlignment(ctx)
+    expect(findings).toHaveLength(2)
+    expect(findings.every(f => f.rule_id === "R29")).toBe(true)
+  })
+
+  it("returns no findings when SD stage is empty", () => {
+    const ctx = emptyCtx({
+      tax_returns: [{ id: "tr1", tax_year: 2025, status: "Data Received" }],
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "",
+          stage_order: 0, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule29_taxReturnSDStageAlignment(ctx)).toEqual([])
+  })
+})
+
+// ── R30: ONE-TIME TAX RETURN SERVICE TYPE ──────────────────────────────────
+
+describe("rule30_oneTimeTaxReturnServiceType", () => {
+  it("flags INFO when One-Time account has an active 'Tax Return' SD", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    const findings = rule30_oneTimeTaxReturnServiceType(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R30")
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("'Tax Return' service type")
+    expect(findings[0].expected_value).toBe("service_type=Tax Return One-Time")
+  })
+
+  it("does NOT flag for non-One-Time accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "Client" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "in_progress", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule30_oneTimeTaxReturnServiceType(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when the SD is already 'Tax Return One-Time'", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return One-Time", status: "in_progress", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule30_oneTimeTaxReturnServiceType(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when One-Time account has no Tax Return SD at all", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "ITIN", status: "in_progress", stage: "Submitted",
+          stage_order: 1, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule30_oneTimeTaxReturnServiceType(ctx)).toEqual([])
+  })
+
+  it("ignores cancelled Tax Return SDs", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ account_type: "One-Time" }),
+      service_deliveries: [
+        {
+          id: "sd1", service_type: "Tax Return", status: "cancelled", stage: "Data Received",
+          stage_order: 3, account_id: ACCOUNT_ID, contact_id: null, created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+    expect(rule30_oneTimeTaxReturnServiceType(ctx)).toEqual([])
   })
 })
 
