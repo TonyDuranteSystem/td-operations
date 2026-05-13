@@ -10,6 +10,7 @@ import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { LocaleProvider } from '@/components/portal/locale-provider'
 import { Providers } from '@/components/providers'
 import { NotificationBell } from '@/components/portal/notification-bell'
+import { PushToggle } from '@/components/portal/push-toggle'
 import { OnboardingWrapper } from '@/components/portal/onboarding-wrapper'
 import { PullToRefresh } from '@/components/portal/pull-to-refresh'
 import { PortalSwRegister } from '@/components/portal/portal-sw-register'
@@ -131,7 +132,8 @@ export default async function PortalLayout({
           <div className="h-14 lg:hidden" />
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
           {contactId && (
-            <div className="hidden lg:flex justify-end px-8 pt-4">
+            <div className="hidden lg:flex items-center justify-end gap-3 px-8 pt-4">
+              <PushToggle accountId={selectedAccountId || ''} compact />
               <NotificationBell accountId={selectedAccountId || undefined} contactId={contactId} />
             </div>
           )}

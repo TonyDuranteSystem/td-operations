@@ -7,9 +7,10 @@ import { useLocale } from '@/lib/portal/use-locale'
 
 interface PushToggleProps {
   accountId: string
+  compact?: boolean // header mode: hide when already subscribed, smaller button
 }
 
-export function PushToggle({ accountId }: PushToggleProps) {
+export function PushToggle({ accountId, compact = false }: PushToggleProps) {
   const { t } = useLocale()
   const [supported, setSupported] = useState(false)
   const [permission, setPermission] = useState<NotificationPermission>('default')
@@ -133,6 +134,21 @@ export function PushToggle({ accountId }: PushToggleProps) {
 
   if (!supported) return null
   if (loading) return <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+
+  // Compact header mode: only show when not yet subscribed, hide once enabled
+  if (compact) {
+    if (subscribed || permission === 'denied') return null
+    return (
+      <button
+        onClick={handleEnable}
+        disabled={loading}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
+      >
+        <Bell className="h-3.5 w-3.5" />
+        Enable notifications
+      </button>
+    )
+  }
 
   return (
     <div className="flex flex-col sm:flex-row gap-2">
