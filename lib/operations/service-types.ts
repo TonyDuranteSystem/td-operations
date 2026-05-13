@@ -19,6 +19,7 @@ export const VALID_SERVICE_TYPES = [
   "CMRA Mailing Address",
   "State RA Renewal",
   "Tax Return",
+  "Tax Return One-Time",
   "Company Formation",
   "Annual Renewal",
   "EIN",

@@ -276,10 +276,11 @@ describe('createBackfilledSD — service_type strict validation', () => {
     }
   })
 
-  it('VALID_SERVICE_TYPES has exactly 19 values', () => {
-    expect(VALID_SERVICE_TYPES).toHaveLength(19)
+  it('VALID_SERVICE_TYPES has exactly 20 values', () => {
+    expect(VALID_SERVICE_TYPES).toHaveLength(20)
     // Spot-check: must include at least these canonical members
     expect(VALID_SERVICE_TYPES).toContain('Tax Return')
+    expect(VALID_SERVICE_TYPES).toContain('Tax Return One-Time')
     expect(VALID_SERVICE_TYPES).toContain('Company Formation')
     expect(VALID_SERVICE_TYPES).toContain('CMRA Mailing Address')
     expect(VALID_SERVICE_TYPES).toContain('State Annual Report')

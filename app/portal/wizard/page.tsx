@@ -125,14 +125,26 @@ export default async function WizardPage({
     } else if (types.includes('ITIN')) {
       pendingWizardTypes.push({ type: 'itin', label: 'ITIN Application', serviceType: 'ITIN' })
     }
-    if (types.includes('Tax Return')) {
-      // Stage-based gating for standalone business Tax Return:
-      // If SD is at "Company Data Pending", show company_info wizard instead of tax wizard.
-      const taxReturnSd = (sds || []).find(s => s.service_type === 'Tax Return')
-      if (taxReturnSd?.stage === 'Company Data Pending') {
-        pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType: 'Tax Return' })
+    if (types.includes('Tax Return') || types.includes('Tax Return One-Time')) {
+      // Stage-based gating: the tax wizard is only meaningful once the SD
+      // has reached "Wizard Available" (Tax Return stage_order=4, Tax Return
+      // One-Time stage_order=1). Earlier stages are billing/extension gates
+      // the client cannot self-resolve — surfacing the wizard there would
+      // collect data the team isn't ready to process. Legacy SDs still
+      // carrying "Company Data Pending" fall back to the company_info wizard
+      // so the standalone-business intake flow keeps working.
+      const taxReturnSd = (sds || []).find(s =>
+        s.service_type === 'Tax Return' || s.service_type === 'Tax Return One-Time',
+      )
+      const stage = taxReturnSd?.stage
+      const serviceType = taxReturnSd?.service_type === 'Tax Return One-Time' ? 'Tax Return One-Time' : 'Tax Return'
+      const PRE_WIZARD_STAGES = new Set(['1st Installment Paid', 'Extension Filed', 'Awaiting 2nd Payment'])
+      if (stage === 'Company Data Pending') {
+        pendingWizardTypes.push({ type: 'company_info', label: 'Company Information', serviceType })
+      } else if (stage && PRE_WIZARD_STAGES.has(stage) && serviceType === 'Tax Return') {
+        // No wizard yet — bundle TR is gated behind the 2nd installment.
       } else {
-        pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType: 'Tax Return' })
+        pendingWizardTypes.push({ type: 'tax', label: 'Tax Return', serviceType })
       }
     }
 
@@ -358,7 +370,7 @@ export default async function WizardPage({
       // receipt stage, don't render the pause banner — the wizard gate
       // should unblock so the client can still reach their data. This
       // mirrors the portal home check in app/portal/page.tsx.
-      const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Extension Filed'])
+      const PAUSE_ELIGIBLE_TR_STATUS = new Set(['Activated - Need Link', 'Link Sent - Awaiting Data', 'Wizard Available', 'Extension Filed'])
       const pauseEligible = !trStatus || PAUSE_ELIGIBLE_TR_STATUS.has(trStatus)
       if (pauseEligible) {
         const resolved = resolveExtensionDeadline(deadlineIso, taxYear, returnType)

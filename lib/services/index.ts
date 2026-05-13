@@ -183,6 +183,7 @@ const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
   "CMRA Mailing Address": "cmra",
   "State RA Renewal": "state_ra_renewal",
   "Tax Return": "tax_return",
+  "Tax Return One-Time": "tax_return_one_time",
   "Company Formation": "company_formation",
   "Annual Renewal": "annual_renewal_sd",
   EIN: "ein",
