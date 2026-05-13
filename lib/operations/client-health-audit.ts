@@ -195,10 +195,10 @@ export const STATE_ANNUAL_REPORT_POLICY: Record<string, AnnualReportPolicy> = {
   NM: { fixed_mmdd: null, none: true },  // no annual report
 }
 
-// `accounts.state_of_formation` stores full state names ("Florida"), while the
-// policy table above is keyed by 2-letter codes. Normalise before lookup so
-// Rule 7 doesn't false-flag every state as "unknown".
-const STATE_NAME_TO_CODE: Record<string, string> = {
+// accounts.state_of_formation may be stored as a full name ("Florida") or as
+// the 2-letter code ("FL"). STATE_ANNUAL_REPORT_POLICY is keyed by 2-letter
+// codes, so callers must normalise via `normalizeStateCode` before lookup.
+export const STATE_NAME_TO_CODE: Record<string, string> = {
   "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
   "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
   "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
@@ -211,14 +211,22 @@ const STATE_NAME_TO_CODE: Record<string, string> = {
   "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
   "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
   "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
-  "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+  "wisconsin": "WI", "wyoming": "WY",
+  "district of columbia": "DC", "puerto rico": "PR",
 }
 
-export function normalizeStateCode(input: string | null | undefined): string | null {
-  if (!input) return null
-  const trimmed = input.trim()
-  if (trimmed.length === 2) return trimmed.toUpperCase()
-  return STATE_NAME_TO_CODE[trimmed.toLowerCase()] ?? null
+/**
+ * Returns the 2-letter USPS code for a `state_of_formation` value.
+ * Accepts full names ("Florida", "  florida  ") and already-coded inputs
+ * ("FL", "fl"). Unknown values are returned trimmed + upper-cased so the
+ * policy-table miss path still fires.
+ */
+export function normalizeStateCode(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const mapped = STATE_NAME_TO_CODE[trimmed.toLowerCase()]
+  return mapped ?? trimmed.toUpperCase()
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

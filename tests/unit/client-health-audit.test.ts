@@ -584,6 +584,24 @@ describe("rule7_renewalDates", () => {
     expect(findings.some(f => f.description.includes("not in the annual report policy"))).toBe(false)
   })
 
+  it("resolves full state names ('Florida') against the policy table — no unknown-state info, flags missing annual report", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2025-01-01", ra_renewal_date: "2026-01-01", state_of_formation: "Florida" }),
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.description.includes("not in the annual report policy"))).toBe(false)
+    expect(findings.some(f => f.description.includes("requires an annual report"))).toBe(true)
+  })
+
+  it("resolves full state names with mixed case / whitespace ('  new mexico  ') — NM has no annual report requirement", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2025-01-01", ra_renewal_date: "2026-01-01", state_of_formation: "  new mexico  ", annual_report_due_date: "2027-05-01" }),
+    })
+    const findings = rule7_renewalDates(ctx, NOW)
+    expect(findings.some(f => f.description.includes("not in the annual report policy"))).toBe(false)
+    expect(findings.some(f => f.description.includes("no annual report requirement"))).toBe(true)
+  })
+
   it("for ONBOARDING client (offer contract_type), accepts any ra_renewal_date — no drift / equality error", () => {
     const ctx = emptyCtx({
       account: baseAccount({
