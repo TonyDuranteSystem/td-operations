@@ -135,9 +135,22 @@ export function PushToggle({ accountId, compact = false }: PushToggleProps) {
   if (!supported) return null
   if (loading) return <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
 
-  // Compact header mode: only show when not yet subscribed, hide once enabled
+  // Compact header mode
   if (compact) {
-    if (subscribed || permission === 'denied') return null
+    if (permission === 'denied') return null
+    if (subscribed) {
+      return (
+        <button
+          onClick={handleDisable}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+          title="Disable notifications"
+        >
+          <Bell className="h-3.5 w-3.5" />
+          Notifications on
+        </button>
+      )
+    }
     return (
       <button
         onClick={handleEnable}
