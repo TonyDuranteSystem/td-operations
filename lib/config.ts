@@ -25,8 +25,12 @@
  * files are exempted. If pre-push fails, use APP_BASE_URL from this file.
  */
 
-export const APP_BASE_URL = "https://app.tonydurante.us"
-export const PORTAL_BASE_URL = "https://portal.tonydurante.us"
-export const CRM_BASE_URL = "https://crm.tonydurante.us"
+// Production domains. Sandbox can override via env vars (PUBLIC_APP_BASE_URL,
+// PUBLIC_PORTAL_BASE_URL) to point form/portal links at the sandbox deployment
+// while testing — without these overrides, sandbox-issued links would point at
+// production and 404 because production lacks sandbox-only data.
+export const APP_BASE_URL = process.env.PUBLIC_APP_BASE_URL || "https://app.tonydurante.us"
+export const PORTAL_BASE_URL = process.env.PUBLIC_PORTAL_BASE_URL || "https://portal.tonydurante.us"
+export const CRM_BASE_URL = process.env.PUBLIC_CRM_BASE_URL || "https://crm.tonydurante.us"
 // Internal domain — OAuth issuer, QB callback, webhooks (exempt from domain check)
 export const INTERNAL_BASE_URL = "https://td-operations.vercel.app"
