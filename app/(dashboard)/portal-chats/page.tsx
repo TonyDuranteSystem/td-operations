@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, BookmarkPlus, Pencil } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -55,6 +55,7 @@ interface ChatMessage {
   reply_to_id?: string | null
   deleted_at?: string | null
   deleted_by?: string | null
+  edited_at?: string | null
 }
 
 interface MessageAction {
@@ -159,6 +160,11 @@ export default function PortalChatsPage() {
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const adminFileRef = useRef<HTMLInputElement>(null)
+
+  // Message edit state
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
   const prevTotalUnreadRef = useRef(-1)
   const lastSuggestedMsgRef = useRef<string | null>(null)
   const lastSentTextRef = useRef<string>('')
@@ -537,6 +543,28 @@ export default function PortalChatsPage() {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to delete message')
     },
   })
+
+  const editMessage = async (messageId: string, newText: string) => {
+    setEditSaving(true)
+    try {
+      const res = await fetch(`/api/portal/chat/message/${messageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: newText }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Edit failed — please try again.')
+      }
+      setEditingMessageId(null)
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      toast.success('Message updated')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to edit message')
+    } finally {
+      setEditSaving(false)
+    }
+  }
 
   // Mark messages as read when admin opens a thread (general tab only)
   useEffect(() => {
@@ -2100,6 +2128,14 @@ export default function PortalChatsPage() {
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
                           </DropdownMenu.Item>
                           <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                          {isAdmin && (
+                            <DropdownMenu.Item
+                              className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                              onSelect={() => { setEditingMessageId(msg.id); setEditDraft(msg.message) }}
+                            >
+                              <Pencil className="h-3.5 w-3.5 text-zinc-400" /> Edit message
+                            </DropdownMenu.Item>
+                          )}
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-red-600 hover:bg-red-50 cursor-pointer outline-none"
                             onSelect={() => {
@@ -2211,12 +2247,47 @@ export default function PortalChatsPage() {
                             </>
                           )
                         })()}
-                        <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
+                        {editingMessageId === msg.id ? (
+                          <div className="mt-1 space-y-1.5">
+                            <textarea
+                              value={editDraft}
+                              onChange={e => setEditDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Escape') { setEditingMessageId(null); setEditDraft('') }
+                              }}
+                              rows={3}
+                              className="w-full px-2 py-1.5 text-sm text-zinc-900 bg-white border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                              autoFocus
+                            />
+                            <div className="flex items-center gap-2 justify-end">
+                              <button
+                                onClick={() => { setEditingMessageId(null); setEditDraft('') }}
+                                disabled={editSaving}
+                                className="px-2 py-1 text-xs rounded bg-white/20 hover:bg-white/30 text-white"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => editMessage(msg.id, editDraft)}
+                                disabled={editSaving || !editDraft.trim() || editDraft === msg.message}
+                                className="px-2 py-1 text-xs rounded bg-white text-blue-700 font-medium hover:bg-blue-50 disabled:opacity-50 flex items-center gap-1"
+                              >
+                                {editSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm whitespace-pre-wrap break-words" style={{ overflowWrap: 'anywhere' }}>{msg.message}</p>
+                        )}
                         <p className={cn(
                           'text-xs mt-1 flex items-center gap-1',
                           isAdmin ? 'text-blue-200 justify-end' : 'text-zinc-400'
                         )}>
                           {format(parseISO(msg.created_at), 'MMM d, h:mm a')}
+                          {msg.edited_at && (
+                            <span className="italic opacity-75">(edited)</span>
+                          )}
                           {isAdmin && (
                             <span title={msg.read_at ? `Read by client: ${format(parseISO(msg.read_at), 'MMM d, h:mm a')}` : 'Not read yet'}>
                               <CheckCheck className={cn(

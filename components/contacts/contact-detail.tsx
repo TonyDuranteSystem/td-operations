@@ -312,7 +312,12 @@ export function ContactDetail({
           </button>
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold">{contact.full_name}</h1>
+              <EditableField
+                label=""
+                value={contact.full_name}
+                className="text-2xl font-bold"
+                onSave={makeContactSaver('full_name')}
+              />
               {contact.portal_tier && (
                 <span className={cn('text-xs font-medium px-2 py-0.5 rounded', TIER_COLORS[contact.portal_tier] ?? 'bg-zinc-100')}>
                   {contact.portal_tier}

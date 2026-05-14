@@ -593,6 +593,9 @@ export function PortalChat({ accountId, contactId, userId, locale = 'en', accoun
                       isOwn ? 'text-blue-200 justify-end' : 'text-zinc-400'
                     )}>
                       {formatTime(msg.created_at)}
+                      {msg.edited_at && (
+                        <span className="italic opacity-75">(edited)</span>
+                      )}
                       {isOwn && (
                         <CheckCheck className={cn(
                           'h-3 w-3',

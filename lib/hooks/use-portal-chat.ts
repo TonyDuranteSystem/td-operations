@@ -109,7 +109,10 @@ export function usePortalChat(accountId: string | null, contactId: string) {
       // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
       if (updated.deleted_at) {
         setMessages(prev => prev.filter(m => m.id !== updated.id))
+        return
       }
+      // Content edit: update the message in place so the client sees the corrected text.
+      setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
     }
 
     // Primary subscription: messages tagged with this contact.
