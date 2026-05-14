@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { autoCreatePortalUser, sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
-import { notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 
 interface MemberPayload {
   member_type: 'individual' | 'company'
@@ -95,9 +93,13 @@ export async function POST(
 
   const now = new Date().toISOString()
   const accountId = request.account_id
-  const companyName = request.company_name
 
-  // 5. Delete existing members for this account, then insert new
+  // 5. Provision contacts (find-or-create) BEFORE inserting members,
+  //    so we can populate members.contact_id inline. Result is a
+  //    parallel array of contact_id (or null) per member.
+  const memberContactIds = await provisionMemberContacts({ members, accountId, now })
+
+  // 6. Delete existing members for this account, then insert new
   const { error: deleteErr } = await supabaseAdmin
     .from('members')
     .delete()
@@ -118,6 +120,7 @@ export async function POST(
     ownership_pct: parseFloat(String(m.ownership_pct || 0)),
     is_primary: idx === 0,
     is_signer: m.is_signer === true,
+    contact_id: memberContactIds[idx],
     address_street: m.address_street?.trim() || null,
     address_city: m.address_city?.trim() || null,
     address_state: m.address_state?.trim() || null,
@@ -143,7 +146,7 @@ export async function POST(
     return NextResponse.json({ error: `Failed to save members: ${insertErr.message}` }, { status: 500 })
   }
 
-  // 6. Mark request as submitted
+  // 7. Mark request as submitted
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabaseAdmin as any)
     .from('member_info_requests')
@@ -154,43 +157,41 @@ export async function POST(
     })
     .eq('id', request.id)
 
-  // 7. Log action
+  // 8. Log action
   await supabaseAdmin.from('action_log').insert({
     action_type: 'member_info_submitted',
     table_name: 'member_info_requests',
     record_id: request.id,
     account_id: accountId,
     summary: `Member info form submitted: ${members.length} member(s) applied to account ${accountId}`,
-    details: { member_count: members.length, request_id: request.id },
+    details: {
+      member_count: members.length,
+      request_id: request.id,
+      contacts_provisioned: memberContactIds.filter(Boolean).length,
+    },
   })
-
-  // 8. Provision contacts + portal access for each member (best-effort, non-blocking)
-  provisionMemberPortalAccess({ members, accountId, companyName, now }).catch(err =>
-    console.error('[member-info] portal provisioning failed:', err)
-  )
 
   return NextResponse.json({ success: true, member_count: members.length })
 }
 
-// ─── Portal Provisioning ───────────────────────────────────────────────────
+// ─── Contact Provisioning ──────────────────────────────────────────────────
+//
+// For each member with an email, find-or-create a contact and link it to
+// the account as a Member. Portal access is NOT created — the admin grants
+// it manually via the "Send Credentials" button on each contact card.
 
-const ADMIN_SENDER_ID = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
-
-async function provisionMemberPortalAccess({
+async function provisionMemberContacts({
   members,
   accountId,
-  companyName,
   now,
 }: {
   members: MemberPayload[]
   accountId: string
-  companyName: string
   now: string
-}): Promise<void> {
-  for (let idx = 0; idx < members.length; idx++) {
-    const m = members[idx]
-    const isPrimary = idx === 0
+}): Promise<(string | null)[]> {
+  const contactIds: (string | null)[] = []
 
+  for (const m of members) {
     const personEmail = m.member_type === 'company'
       ? m.representative_email?.trim() || null
       : m.email?.trim() || null
@@ -198,23 +199,24 @@ async function provisionMemberPortalAccess({
       ? m.representative_name?.trim() || null
       : m.full_name?.trim() || null
 
-    if (!personEmail || !personName) continue
+    if (!personEmail || !personName) {
+      contactIds.push(null)
+      continue
+    }
 
     try {
-      // a. Find or create contact
+      // Find or create contact by email
       const { data: existingContact } = await supabaseAdmin
         .from('contacts')
-        .select('id, language')
+        .select('id')
         .eq('email', personEmail)
         .limit(1)
         .maybeSingle()
 
       let contactId: string
-      let contactLanguage = 'en'
 
       if (existingContact) {
         contactId = existingContact.id
-        contactLanguage = existingContact.language === 'Italian' || existingContact.language === 'it' ? 'it' : 'en'
       } else {
         // eslint-disable-next-line no-restricted-syntax -- member form provisioning; deferred migration per dev_task 7ebb1e0c
         const { data: created, error: createErr } = await supabaseAdmin
@@ -236,63 +238,25 @@ async function provisionMemberPortalAccess({
 
         if (createErr || !created) {
           console.error(`[member-info] contact create failed for ${personEmail}:`, createErr?.message)
+          contactIds.push(null)
           continue
         }
         contactId = created.id
       }
 
-      // b. Link to account as Member (upsert — safe if already linked)
+      // Link to account as Member (upsert — safe if already linked)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await supabaseAdmin.from('account_contacts').upsert(
         { account_id: accountId, contact_id: contactId, role: 'Member' } as any,
         { onConflict: 'account_id,contact_id' },
       )
 
-      // c. Create portal user (idempotent)
-      const portalResult = await autoCreatePortalUser({ contactId, accountId, tier: 'active' })
-
-      if (!portalResult.success) {
-        console.error(`[member-info] portal user failed for ${personEmail}:`, portalResult.error)
-        continue
-      }
-
-      if (!portalResult.alreadyExists && portalResult.tempPassword) {
-        // d. New user → full welcome email with credentials
-        await sendPortalWelcomeEmail({ email: personEmail, fullName: personName, tempPassword: portalResult.tempPassword, language: contactLanguage })
-      } else if (portalResult.alreadyExists && !isPrimary) {
-        // e. Existing user (non-primary) → portal notification about the new company
-        const isItalian = contactLanguage === 'it'
-        const msg = isItalian
-          ? `Sei stato aggiunto come socio di **${companyName}**. Puoi ora accedere al portale di questa società.`
-          : `You've been added as a member of **${companyName}**. You now have access to this company's portal.`
-
-        const { error: chatErr } = await supabaseAdmin.from('portal_messages').insert({
-          account_id: accountId,
-          contact_id: contactId,
-          sender_type: 'admin',
-          sender_id: ADMIN_SENDER_ID,
-          message: msg,
-        })
-
-        if (!chatErr) {
-          notifyClientOfAdminMessage({
-            account_id: accountId,
-            contact_id: contactId,
-            messagePreview: isItalian ? `Aggiunto come socio di ${companyName}` : `Added as member of ${companyName}`,
-          }).catch(e => console.error('[member-info] notify failed:', e))
-        }
-      }
-
-      await supabaseAdmin.from('action_log').insert({
-        action_type: 'member_portal_provisioned',
-        table_name: 'contacts',
-        record_id: contactId,
-        account_id: accountId,
-        summary: `Portal provisioned for ${personName} (${portalResult.alreadyExists ? 'existing' : 'new'} user)`,
-        details: { is_primary: isPrimary, already_existed: portalResult.alreadyExists },
-      })
+      contactIds.push(contactId)
     } catch (err) {
-      console.error(`[member-info] provisioning error for ${personEmail}:`, err)
+      console.error(`[member-info] contact provisioning error for ${personEmail}:`, err)
+      contactIds.push(null)
     }
   }
+
+  return contactIds
 }
