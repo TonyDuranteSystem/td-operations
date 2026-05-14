@@ -564,6 +564,10 @@ Only works on 'draft' offers. Use offer_get to review content before calling thi
           ? `🔑 Portal access created — credentials sent`
           : `👤 Portal user already exists — notification sent`
 
+        const welcomeLine = result.welcomeUrl
+          ? `🔗 Welcome link: ${result.welcomeUrl} (share via WhatsApp/Telegram)`
+          : ""
+
         return {
           content: [{
             type: "text" as const,
@@ -575,6 +579,7 @@ Only works on 'draft' offers. Use offer_get to review content before calling thi
               `👁️ Open tracking: ${result.trackingId}`,
               ``,
               portalLine,
+              welcomeLine,
               ``,
               result.warnings.length ? `⚠️ Warnings: ${result.warnings.join(", ")}` : "",
             ].filter(Boolean).join("\n"),

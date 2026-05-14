@@ -24,6 +24,7 @@ import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
+import { createWelcomeToken } from "@/lib/portal/welcome-token"
 import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 
 // ─── Types ────────────────────────────────────────────────
@@ -37,6 +38,7 @@ export interface PublishOfferResult {
   emailType: "portal_access" | "portal_notification" | "none"
   trackingId?: string
   gmailMessageId?: string
+  welcomeUrl?: string
   warnings: string[]
 }
 
@@ -95,6 +97,28 @@ export async function publishOffer(
   if (!contactCheck) {
     // autoCreatePortalUser should have created the contact, but verify
     warnings.push("Contact record not found after portal user creation — portal sidebar may not display correctly.")
+  }
+
+  // ─── 3b. Create welcome-link token (additive channel) ───
+  // Only meaningful when we have a fresh temp password to share. The
+  // portal-access email still always sends; this URL is for WhatsApp /
+  // Telegram / SMS fallback delivery.
+  let welcomeUrl: string | undefined
+  if (isNewUser && tempPassword) {
+    try {
+      const welcome = await createWelcomeToken({
+        contactId: contactCheck?.id,
+        email: offer.client_email,
+        tempPassword,
+        language: offer.language || "en",
+        source: "offer",
+        sourceId: token,
+      })
+      welcomeUrl = welcome.welcomeUrl
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      warnings.push(`Welcome-link token creation failed: ${msg}`)
+    }
   }
 
   // ─── 4. Build and send email ───
@@ -262,6 +286,7 @@ export async function publishOffer(
     emailType,
     trackingId,
     gmailMessageId: result.sendResult?.id,
+    welcomeUrl,
     warnings,
   }
 }
