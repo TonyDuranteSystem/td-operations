@@ -19,6 +19,7 @@ const LABELS = {
     strategy: 'Our Strategy',
     services: 'Proposed Services',
     servicesIntro: 'Based on your situation, you can choose between the following options.',
+    servicesIntroFixed: 'Below are the services we\'re proposing.',
     recommended: 'RECOMMENDED',
     includes: 'INCLUDES:',
     costSummary: 'Cost Summary',
@@ -77,6 +78,7 @@ const LABELS = {
     strategy: 'La Strategia',
     services: 'Servizi Proposti',
     servicesIntro: 'In base alla vostra situazione, potete scegliere tra le opzioni seguenti.',
+    servicesIntroFixed: 'Di seguito i servizi che proponiamo.',
     recommended: 'CONSIGLIATO',
     includes: 'INCLUDE:',
     costSummary: 'Riepilogo Costi',
@@ -508,7 +510,9 @@ export default function OfferPageWithCode() {
             <div className="offer-section">
               <div className="offer-section-title">{L.services}</div>
               {o.services && o.services.length > 1 && (
-                <p style={{ marginBottom: 20, fontSize: 15, color: '#6b7280' }}>{L.servicesIntro}</p>
+                <p style={{ marginBottom: 20, fontSize: 15, color: '#6b7280' }}>
+                  {o.services.some(s => (s as any).optional) ? L.servicesIntro : L.servicesIntroFixed}
+                </p>
               )}
               <div className="offer-servizi-grid">
                 {o.services?.map((sv, i) => {
