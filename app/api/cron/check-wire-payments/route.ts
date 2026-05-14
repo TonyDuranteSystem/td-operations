@@ -3,26 +3,32 @@
  * Schedule: every 6 hours via Vercel cron
  *
  * Bank feed sources (synced by separate crons/APIs):
- * - Mercury API (every 15 min via /api/cron/mercury-sync)
+ * - Mercury API (every 15 min via /api/cron/mercury-sync — also runs matcher)
  * - Plaid/Relay (every 6h via /api/cron/plaid-sync)
  * - Airwallex API (synced in Step 3 below)
  *
  * This cron:
- * 1. Syncs Airwallex EUR deposits to td_bank_feeds
- * 2. Runs matchAndReconcile() on all unmatched feeds (auto-matches invoices)
- * 3. Matches remaining pending_activations against unmatched feeds
+ * 1. Logs pending awaiting_payment activations + open invoices for observability
+ * 2. Syncs Airwallex EUR deposits to td_bank_feeds (inline — keeps its own
+ *    retry/error handling)
+ * 3. Runs content-dedup safety net
+ * 4. Marks Mercury Stripe payouts as outgoing
+ * 5. Delegates to processBankFeedMatches() — the canonical match + activation
+ *    chain. Same lib used by the Mercury / Airwallex crons and the admin
+ *    "Sync All Banks Now" button. NO hand-rolled match loop here.
  *
  * QB is downstream accounting only — not used for payment detection.
  */
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
-import { matchAndReconcile, markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
+import { markMercuryStripePayoutsOutgoing } from "@/lib/bank-feed-matcher"
 import { syncAirwallexDeposits } from "@/lib/airwallex-sync"
 import { logCron } from "@/lib/cron-log"
-import { runActivation } from "@/lib/operations/activate-service"
+import { processBankFeedMatches } from "@/lib/operations/process-bank-feed-matches"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -38,13 +44,13 @@ export async function GET(req: NextRequest) {
     fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
     const dateStr = fourteenDaysAgo.toISOString().split("T")[0]
 
-    // ─── Step 1: Get pending wire transfer activations ───────────────
+    // ─── Step 1: Observability — log pending counts ──────────────────
 
     // Match ALL awaiting_payment activations regardless of payment_method.
     // Clients often select 'stripe' at signing but pay via bank transfer.
     const { data: pendingList, error: pErr } = await supabase
       .from("pending_activations")
-      .select("*")
+      .select("id, status")
       .eq("status", "awaiting_payment")
 
     if (pErr) {
@@ -53,17 +59,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: pErr.message }, { status: 500 })
     }
 
-    // ─── Step 2: Get open CRM invoices ───────────────────────────────
-
     const { data: openInvoices } = await supabase
       .from("payments")
-      .select("id, account_id, invoice_number, invoice_status, total, amount, amount_currency, description, accounts:account_id(company_name)")
+      .select("id")
       .in("invoice_status", ["Sent", "Overdue"])
       .or("is_test.is.null,is_test.eq.false")
 
     console.warn(`[check-wire] ${pendingList?.length ?? 0} pending activations, ${openInvoices?.length ?? 0} open invoices`)
 
-    // ─── Step 3: Sync Airwallex EUR deposits via API ──────────────────
+    // ─── Step 2: Sync Airwallex EUR deposits via API ──────────────────
+    // Kept inline — has its own retry / error handling we don't want to lose.
 
     let airwallexFeedCount = 0
     try {
@@ -77,7 +82,7 @@ export async function GET(req: NextRequest) {
       console.error("[check-wire] Airwallex API sync failed:", airwallexErr)
     }
 
-    // ─── Step 5b: Content-based dedup safety net ────────────────────
+    // ─── Step 3: Content-based dedup safety net ─────────────────────
     // Catch duplicates that slip past external_id (e.g. same deposit from different sources)
 
     try {
@@ -113,7 +118,7 @@ export async function GET(req: NextRequest) {
       console.error("[check-wire] Content dedup failed:", dedupErr)
     }
 
-    // ─── Step 5c: Mark Mercury Stripe payouts as outgoing ────────────
+    // ─── Step 4: Mark Mercury Stripe payouts as outgoing ────────────
     // These rows are already tracked by the Stripe sync; marking them outgoing
     // prevents the matcher from wasting cycles trying to reconcile them.
     let stripePayoutsMarked = 0
@@ -127,162 +132,23 @@ export async function GET(req: NextRequest) {
       console.error("[check-wire] Stripe outgoing mark failed:", stripeOutgoingErr)
     }
 
-    // ─── Step 6: Match all unmatched feeds against invoices ──────────
-
-    // Fetch all feeds and filter in code (PostgREST .eq on text may return stale results)
-    const { data: allFeeds } = await supabase
-      .from("td_bank_feeds")
-      .select("id, status")
-      .order("created_at", { ascending: false })
-      .limit(500)
-
-    const unmatchedFeeds = (allFeeds || []).filter(f => f.status === "unmatched")
-
-    let invoiceMatched = 0
-    const matchResults: Array<{ feedId: string; matched: boolean; error?: string; confidence?: string }> = []
-    for (const feed of unmatchedFeeds || []) {
-      const result = await matchAndReconcile(feed.id)
-      if (result.matched) invoiceMatched++
-      matchResults.push({ feedId: feed.id, matched: result.matched, error: result.error, confidence: result.confidence })
+    // ─── Step 5: Auto-match + auto-activate via shared orchestrator ─
+    // Replaces the prior hand-rolled match loop. processBankFeedMatches:
+    //   - calls matchAndReconcile on every unmatched feed (limit 200)
+    //   - runs runActivation on any linked pending_activation when matched
+    //   - parks crashed activations at status='activation_crashed' for retry
+    //   - holds medium-confidence rows at status='needs_review' (Antonio's
+    //     locked policy: auto-activate ONLY on exact match).
+    let matchResult: Awaited<ReturnType<typeof processBankFeedMatches>> | { error: string } | null = null
+    try {
+      matchResult = await processBankFeedMatches()
+    } catch (matchErr) {
+      const msg = matchErr instanceof Error ? matchErr.message : String(matchErr)
+      console.error("[check-wire] processBankFeedMatches failed:", msg)
+      matchResult = { error: msg }
     }
 
-    // ─── Step 5: Match pending activations against td_bank_feeds ───
-    // Covers all bank feed sources: Airwallex (EUR), Mercury (USD), Plaid/Relay (USD).
-    let activationMatched = 0
-    if (pendingList && pendingList.length > 0) {
-      const stillPending = pendingList.filter(p => p.status === "awaiting_payment" && p.amount)
-      if (stillPending.length > 0) {
-        const { data: recentFeeds } = await supabase
-          .from("td_bank_feeds")
-          .select("id, amount, currency, sender_name, sender_reference, memo, transaction_date, source")
-          .eq("status", "unmatched")
-          .order("transaction_date", { ascending: false })
-          .limit(200)
-
-        for (const pending of stillPending) {
-          const pendingAmount = parseFloat(String(pending.amount))
-          const clientNameLower = (pending.client_name || "").toLowerCase()
-
-          for (const feed of recentFeeds || []) {
-            const feedAmount = parseFloat(String(feed.amount || 0))
-            const feedText = `${feed.sender_name || ""} ${feed.sender_reference || ""} ${feed.memo || ""}`.toLowerCase()
-
-            const amountDiff = Math.abs(feedAmount - pendingAmount)
-            const exactAmount = amountDiff < 1
-            const tolerance = pendingAmount * 0.05
-            const amountMatch = amountDiff <= tolerance
-            const nameMatch = clientNameLower && feedText.includes(clientNameLower.split(" ")[0])
-
-            if (exactAmount || (amountMatch && nameMatch)) {
-              console.warn(`[check-wire] BANK FEED MATCH: ${pending.client_name} — ${feed.source} ${feedAmount} (${feed.transaction_date})`)
-
-              const { data: feedUpdated } = await supabase
-                .from("pending_activations")
-                .update({
-                  status: "payment_confirmed",
-                  payment_confirmed_at: new Date().toISOString(),
-                  notes: `Matched ${feed.source} feed ${feedAmount} ${feed.currency || ""} on ${feed.transaction_date}`,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", pending.id)
-                .eq("status", "awaiting_payment")
-                .select("id, lead_id")
-
-              if (!feedUpdated || feedUpdated.length === 0) continue
-
-              // Mark bank feed as matched
-              await supabase
-                .from("td_bank_feeds")
-                .update({ status: "matched", matched_by: "auto", updated_at: new Date().toISOString() })
-                .eq("id", feed.id)
-
-              if (feedUpdated[0].lead_id) {
-                await supabase
-                  .from("leads")
-                  .update({ status: "Converted", updated_at: new Date().toISOString() })
-                  .eq("id", feedUpdated[0].lead_id)
-              }
-
-              // Mark portal invoice as Paid if exists
-              const { data: actWithInv } = await supabase
-                .from("pending_activations")
-                .select("portal_invoice_id")
-                .eq("id", pending.id)
-                .single()
-
-              if (actWithInv?.portal_invoice_id) {
-                try {
-                  const { syncInvoiceStatus } = await import("@/lib/portal/unified-invoice")
-                  const today = new Date().toISOString().split("T")[0]
-                  await syncInvoiceStatus("invoice", actWithInv.portal_invoice_id, "Paid", today, feedAmount)
-                } catch { /* non-blocking */ }
-              }
-
-              // Trigger activate-service directly (no HTTP hop)
-              try {
-                const activateResult = await runActivation(pending.id)
-
-                if (!activateResult.ok) {
-                  const errMsg = activateResult.error || "unknown"
-                  console.error(`[check-wire] runActivation returned error for ${pending.client_name}: ${errMsg}`)
-
-                  // Mark activation as failed so it's visible in CRM
-                  await supabase
-                    .from("pending_activations")
-                    .update({
-                      status: "activation_failed",
-                      notes: `${pending.notes || ""}\nActivation failed: ${errMsg.slice(0, 200)}`,
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq("id", pending.id)
-
-                  // Create CRM task for manual review
-                  // eslint-disable-next-line no-restricted-syntax
-                  await supabase.from("tasks").insert({
-                    task_title: `[ACTIVATION FAILED] ${pending.client_name} — wire payment matched but activation failed`,
-                    assigned_to: "Luca",
-                    category: "Internal",
-                    priority: "Urgent",
-                    status: "To Do",
-                    description: `Pending activation ${pending.id} matched bank feed but runActivation returned: ${errMsg}. Offer: ${pending.offer_token}. Check Vercel logs and retry via CRM.`,
-                  })
-                }
-              } catch (e) {
-                console.error("[check-wire] runActivation threw from bank feed:", e)
-
-                // Mark activation as failed
-                await supabase
-                  .from("pending_activations")
-                  .update({
-                    status: "activation_failed",
-                    notes: `${pending.notes || ""}\nActivation threw: ${e instanceof Error ? e.message : String(e)}`,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq("id", pending.id)
-
-                // Create CRM task for manual review
-                // eslint-disable-next-line no-restricted-syntax
-                await supabase.from("tasks").insert({
-                  task_title: `[ACTIVATION FAILED] ${pending.client_name} — wire payment matched but activation call threw`,
-                  assigned_to: "Luca",
-                  category: "Internal",
-                  priority: "Urgent",
-                  status: "To Do",
-                  description: `Pending activation ${pending.id} matched bank feed but runActivation threw. Offer: ${pending.offer_token}. Error: ${e instanceof Error ? e.message : String(e)}`,
-                })
-              }
-
-              activationMatched++
-              break
-            }
-          }
-        }
-      }
-    }
-
-    const totalMatched = invoiceMatched + activationMatched
-
-    console.warn(`[check-wire] Done. Airwallex: ${airwallexFeedCount} new. Invoices matched: ${invoiceMatched}. Activations matched: ${activationMatched}.`)
+    console.warn(`[check-wire] Done. Airwallex: ${airwallexFeedCount} new. Match:`, matchResult)
 
     logCron({
       endpoint: "/api/cron/check-wire-payments",
@@ -293,21 +159,16 @@ export async function GET(req: NextRequest) {
         open_invoices: openInvoices?.length ?? 0,
         airwallex_feeds: airwallexFeedCount,
         stripe_payouts_marked_outgoing: stripePayoutsMarked,
-        unmatched_feeds: unmatchedFeeds?.length ?? 0,
-        invoice_matched: invoiceMatched,
-        activation_matched: activationMatched,
-        match_details: matchResults.slice(0, 10),
+        match: matchResult,
       },
     })
 
     return NextResponse.json({
       ok: true,
-      total_feeds_in_table: allFeeds?.length ?? 0,
+      pending_activations: pendingList?.length ?? 0,
       new_airwallex_feeds: airwallexFeedCount,
-      unmatched_feeds_found: unmatchedFeeds?.length ?? 0,
-      invoice_matched: invoiceMatched,
-      activation_matched: activationMatched,
-      total_matched: totalMatched,
+      stripe_payouts_marked_outgoing: stripePayoutsMarked,
+      match: matchResult,
     })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

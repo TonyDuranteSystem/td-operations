@@ -214,9 +214,11 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
 }
 
 function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean }) {
+  const router = useRouter()
   const [connections, setConnections] = useState<PlaidConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
+  const [syncingAllBanks, setSyncingAllBanks] = useState(false)
 
   const fetchConnections = useCallback(async () => {
     setLoading(true)
@@ -245,6 +247,33 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
     setSyncing(false)
   }
 
+  // PR C: triggers the same sync + match + activate chain that runs every
+  // 15 min via cron. Used when staff don't want to wait for the next tick.
+  const handleSyncAllBanks = async () => {
+    setSyncingAllBanks(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/sync-bank-feeds-now', { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.ok === false) {
+        toast.error(data.error || `Sync failed (${res.status})`)
+        return
+      }
+      const mercuryAdded = typeof data?.mercury?.added === 'number' ? data.mercury.added : 0
+      const airwallexAdded = typeof data?.airwallex?.added === 'number' ? data.airwallex.added : 0
+      const matched = typeof data?.match?.auto_activated === 'number' ? data.match.auto_activated : 0
+      const needsReview = typeof data?.match?.needs_review === 'number' ? data.match.needs_review : 0
+      const crashed = typeof data?.match?.activation_crashed === 'number' ? data.match.activation_crashed : 0
+      toast.success(
+        `Synced. Mercury +${mercuryAdded}, Airwallex +${airwallexAdded}, matched ${matched}, ${needsReview} need review, ${crashed} crashed.`,
+      )
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Sync failed — please try again.')
+    } finally {
+      setSyncingAllBanks(false)
+    }
+  }
+
   const totalBalance = connections.reduce((sum, conn) =>
     sum + (conn.accounts ?? []).reduce((s, a) => s + (a.balances.current ?? 0), 0), 0
   )
@@ -266,12 +295,21 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={handleSyncAllBanks}
+            disabled={syncingAllBanks}
+            title="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+            className="flex items-center gap-1.5 bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
+          >
+            {syncingAllBanks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Sync All Banks Now
+          </button>
+          <button
             onClick={handleSync}
             disabled={syncing || loading}
             className="flex items-center gap-1.5 border rounded px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
-            Sync Now
+            Refresh
           </button>
           <ConnectBankButton onSuccess={fetchConnections} />
         </div>

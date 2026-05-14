@@ -82,7 +82,7 @@
     },
     {
       "path": "/api/cron/airwallex-sync?days=7",
-      "schedule": "0 */6 * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/stripe-sync",

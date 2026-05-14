@@ -4,6 +4,11 @@
  *
  * Replaces Plaid for Mercury — direct API gives full sender name, memo, reference.
  * Call manually or via Vercel Cron (every 15 min recommended).
+ *
+ * PR C: after a successful sync that added new feeds, run
+ * processBankFeedMatches() to auto-match + auto-activate. The match step is
+ * idempotent and safe even when `added=0`, but skipping that case avoids
+ * needless DB scans.
  */
 
 export const dynamic = "force-dynamic"
@@ -12,6 +17,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { syncMercuryTransactions } from "@/lib/mercury-sync"
 import { logCron } from "@/lib/cron-log"
+import { processBankFeedMatches, type ProcessBankFeedMatchesResult } from "@/lib/operations/process-bank-feed-matches"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -27,13 +33,26 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await syncMercuryTransactions(from, to)
+
+    // PR C: trigger auto-match + auto-activate on the unmatched batch.
+    let matchResult: ProcessBankFeedMatchesResult | { error: string } | null = null
+    if (result.added > 0) {
+      try {
+        matchResult = await processBankFeedMatches()
+      } catch (matchErr) {
+        const msg = matchErr instanceof Error ? matchErr.message : String(matchErr)
+        console.error("[mercury-sync] processBankFeedMatches failed:", msg)
+        matchResult = { error: msg }
+      }
+    }
+
     logCron({
       endpoint: "/api/cron/mercury-sync",
       status: "success",
       duration_ms: Date.now() - startTime,
-      details: { from, to, ...result },
+      details: { from, to, ...result, match: matchResult },
     })
-    return NextResponse.json({ ok: true, from, to, ...result })
+    return NextResponse.json({ ok: true, from, to, ...result, match: matchResult })
   } catch (err) {
     const msg = (err as Error).message
     logCron({
