@@ -4,6 +4,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
     from: vi.fn(),
+    auth: {
+      admin: {
+        updateUserById: vi.fn(),
+      },
+    },
   },
 }))
 
@@ -26,6 +31,7 @@ vi.mock('@/lib/portal/auto-create', () => ({
 
 vi.mock('@/lib/portal/welcome-token', () => ({
   createWelcomeToken: vi.fn(),
+  findWelcomeTokenBySource: vi.fn(),
 }))
 
 vi.mock('@/lib/mcp/action-log', () => ({
@@ -41,7 +47,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailPost } from '@/lib/gmail'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { autoCreatePortalUser } from '@/lib/portal/auto-create'
-import { createWelcomeToken } from '@/lib/portal/welcome-token'
+import { createWelcomeToken, findWelcomeTokenBySource } from '@/lib/portal/welcome-token'
 import { logAction } from '@/lib/mcp/action-log'
 
 interface OfferRow {
@@ -89,11 +95,16 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('resendOfferEmail — existing portal user (dominant path)', () => {
-  it('sends portal_notification email, does not create welcome token, logs resend', async () => {
+describe('resendOfferEmail — existing portal user, valid welcome token (reuse path)', () => {
+  it('sends portal_notification, reuses existing welcome token, does NOT reset password', async () => {
     const stubs = setSupabaseStubs(baseOffer)
     ;(findAuthUserByEmail as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'auth-1', email: baseOffer.client_email,
+    })
+    ;(findWelcomeTokenBySource as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      token: 'existing-tok',
+      welcomeUrl: 'https://app.tonydurante.us/welcome/existing-tok',
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     })
     ;(gmailPost as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'gm-1', threadId: 't-1' })
 
@@ -101,18 +112,15 @@ describe('resendOfferEmail — existing portal user (dominant path)', () => {
 
     expect(result.success).toBe(true)
     expect(result.emailType).toBe('portal_notification')
-    expect(result.welcomeUrl).toBeUndefined()
+    expect(result.welcomeUrl).toBe('https://app.tonydurante.us/welcome/existing-tok')
     expect(result.gmailMessageId).toBe('gm-1')
 
-    // Gmail was called once
     expect(gmailPost).toHaveBeenCalledTimes(1)
-    // No portal user creation
     expect(autoCreatePortalUser).not.toHaveBeenCalled()
-    // No welcome token issued (existing user path)
+    // Valid token already existed → no password reset, no new token
+    expect(supabaseAdmin.auth.admin.updateUserById).not.toHaveBeenCalled()
     expect(createWelcomeToken).not.toHaveBeenCalled()
-    // Tracking row inserted
     expect(stubs.trackingChain.insert).toHaveBeenCalledTimes(1)
-    // Audit logged with action_type='resend'
     expect(logAction).toHaveBeenCalledWith(
       expect.objectContaining({
         action_type: 'resend',
@@ -121,9 +129,94 @@ describe('resendOfferEmail — existing portal user (dominant path)', () => {
           email_type: 'portal_notification',
           gmail_message_id: 'gm-1',
           created_portal_user: false,
+          welcome_url: 'https://app.tonydurante.us/welcome/existing-tok',
         }),
       })
     )
+  })
+})
+
+describe('resendOfferEmail — existing portal user, no/expired welcome token (regenerate path)', () => {
+  it('resets password and issues new welcome token when no token exists', async () => {
+    setSupabaseStubs(baseOffer)
+    ;(findAuthUserByEmail as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'auth-1', email: baseOffer.client_email,
+    })
+    ;(findWelcomeTokenBySource as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    ;(supabaseAdmin.auth.admin.updateUserById as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: { user: { id: 'auth-1' } },
+      error: null,
+    })
+    ;(createWelcomeToken as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      token: 'new-tok',
+      welcomeUrl: 'https://app.tonydurante.us/welcome/new-tok',
+    })
+    ;(gmailPost as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'gm-1', threadId: 't-1' })
+
+    const result = await resendOfferEmail(baseOffer.token)
+
+    expect(result.success).toBe(true)
+    expect(result.emailType).toBe('portal_notification')
+    expect(result.welcomeUrl).toBe('https://app.tonydurante.us/welcome/new-tok')
+    expect(supabaseAdmin.auth.admin.updateUserById).toHaveBeenCalledTimes(1)
+    expect(supabaseAdmin.auth.admin.updateUserById).toHaveBeenCalledWith(
+      'auth-1',
+      expect.objectContaining({ password: expect.stringMatching(/^TD[a-z0-9]+!$/) }),
+    )
+    expect(createWelcomeToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: baseOffer.client_email,
+        source: 'offer',
+        sourceId: baseOffer.token,
+      }),
+    )
+  })
+
+  it('resets password when existing welcome token is expired', async () => {
+    setSupabaseStubs(baseOffer)
+    ;(findAuthUserByEmail as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'auth-1', email: baseOffer.client_email,
+    })
+    ;(findWelcomeTokenBySource as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      token: 'old-tok',
+      welcomeUrl: 'https://app.tonydurante.us/welcome/old-tok',
+      expires_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    })
+    ;(supabaseAdmin.auth.admin.updateUserById as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: { user: { id: 'auth-1' } },
+      error: null,
+    })
+    ;(createWelcomeToken as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      token: 'fresh-tok',
+      welcomeUrl: 'https://app.tonydurante.us/welcome/fresh-tok',
+    })
+    ;(gmailPost as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'gm-1', threadId: 't-1' })
+
+    const result = await resendOfferEmail(baseOffer.token)
+
+    expect(result.success).toBe(true)
+    expect(result.welcomeUrl).toBe('https://app.tonydurante.us/welcome/fresh-tok')
+    expect(supabaseAdmin.auth.admin.updateUserById).toHaveBeenCalledTimes(1)
+    expect(createWelcomeToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not block the send if password reset fails', async () => {
+    setSupabaseStubs(baseOffer)
+    ;(findAuthUserByEmail as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'auth-1', email: baseOffer.client_email,
+    })
+    ;(findWelcomeTokenBySource as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    ;(supabaseAdmin.auth.admin.updateUserById as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: null,
+      error: { message: 'auth admin down' },
+    })
+    ;(gmailPost as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'gm-1', threadId: 't-1' })
+
+    const result = await resendOfferEmail(baseOffer.token)
+
+    expect(result.success).toBe(true)
+    expect(result.welcomeUrl).toBeUndefined()
+    expect(createWelcomeToken).not.toHaveBeenCalled()
   })
 })
 

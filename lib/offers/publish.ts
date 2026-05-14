@@ -24,7 +24,7 @@ import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
-import { createWelcomeToken } from "@/lib/portal/welcome-token"
+import { createWelcomeToken, findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 
@@ -379,7 +379,13 @@ export async function resendOfferEmail(
   const emailType: ResendOfferEmailResult["emailType"] =
     createdPortalUser && tempPassword ? "portal_access" : "portal_notification"
 
-  // 3. Issue a fresh welcome token only when we have a new temp password
+  // 3. Welcome-link handling.
+  //   - New portal user just created → fresh welcome token with new password.
+  //   - Existing portal user → reuse a still-valid welcome token if present;
+  //     otherwise reset the auth user's password and issue a new welcome
+  //     token. This DOES wipe any custom password the client previously set
+  //     — accepted trade-off so staff has a working share link (WhatsApp /
+  //     Telegram) and the client has working credentials again.
   let welcomeUrl: string | undefined
   if (createdPortalUser && tempPassword) {
     try {
@@ -391,6 +397,31 @@ export async function resendOfferEmail(
         sourceId: token,
       })
       welcomeUrl = welcome.welcomeUrl
+    } catch {
+      // best-effort — email send must not be blocked by welcome-token failure
+    }
+  } else if (existingUser) {
+    try {
+      const existingLink = await findWelcomeTokenBySource("offer", token)
+      if (existingLink && new Date(existingLink.expires_at).getTime() > Date.now()) {
+        welcomeUrl = existingLink.welcomeUrl
+      } else {
+        const newTempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+        const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(
+          existingUser.id,
+          { password: newTempPassword },
+        )
+        if (!pwErr) {
+          const welcome = await createWelcomeToken({
+            email: offer.client_email,
+            tempPassword: newTempPassword,
+            language: offer.language || "en",
+            source: "offer",
+            sourceId: token,
+          })
+          welcomeUrl = welcome.welcomeUrl
+        }
+      }
     } catch {
       // best-effort — email send must not be blocked by welcome-token failure
     }
