@@ -127,6 +127,30 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       return { matched: false, error: `Invoice query failed: ${invQueryErr.message}` }
     }
 
+    // Build contact → linked-company-names map. Handles the cross-entity payment case:
+    // an ITIN invoice is linked to a contact (not an account), but the wire arrives from
+    // the contact's LLC bank account (e.g. Valerio's ITIN paid from Closify Consulting LLC).
+    // Without this map, the matcher only checks `accounts.company_name` (null for ITIN)
+    // and `contacts.full_name` ("Valerio Di Santo") — neither matches "CLOSIFY CONSULTING"
+    // in the sender name. Also covers the inverse: company invoice paid by a member's
+    // personal account (matched via contact_id → other companies they're a member of).
+    const contactIdsInScope = Array.from(
+      new Set((allInvoices ?? []).map(i => i.contact_id).filter((id): id is string => !!id))
+    )
+    const contactToLinkedCompanies: Record<string, string[]> = {}
+    if (contactIdsInScope.length > 0) {
+      const { data: links } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contact_id, accounts:account_id(company_name)")
+        .in("contact_id", contactIdsInScope)
+      for (const link of (links ?? [])) {
+        const company = ((link.accounts as unknown as { company_name?: string } | null)?.company_name || "").trim()
+        if (!company || !link.contact_id) continue
+        if (!contactToLinkedCompanies[link.contact_id]) contactToLinkedCompanies[link.contact_id] = []
+        contactToLinkedCompanies[link.contact_id].push(company)
+      }
+    }
+
     // Filter BOTH status and currency in code — PostgREST .eq()/.in() on custom enums returns wrong results
     const openStatuses = new Set(["Sent", "Overdue", "Partial"])
     const currencyFiltered = (allInvoices || []).filter(inv =>
@@ -159,15 +183,23 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
       // Skip if amount is way off
       if (amountDiff > tolerance && amountDiff > 1) continue
 
-      const companyName = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
+      const directCompanyName = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
       const invoiceNum = (inv.invoice_number || "").toLowerCase()
 
-      // Check if sender/memo/reference contains company name or invoice number
-      // Use word boundary regex to avoid substring false matches (e.g. "solution" inside "solutions")
-      const nameWords = companyName.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-      const nameMatch = nameWords.length > 0 && nameWords.some(w => {
-        const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-        return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
+      // Build the full pool of company names to test against the feed:
+      // the invoice's directly-linked account (if any) + every company the linked
+      // contact is a member of (covers third-party payments — see contactToLinkedCompanies above).
+      const linkedCompanyNames = (contactToLinkedCompanies[inv.contact_id || ""] || []).map(n => n.toLowerCase())
+      const companyNamePool = Array.from(new Set([directCompanyName, ...linkedCompanyNames].filter(Boolean)))
+
+      // Check if sender/memo/reference contains any of the candidate company names.
+      // Use word boundary regex to avoid substring false matches (e.g. "solution" inside "solutions").
+      const nameMatch = companyNamePool.some(cname => {
+        const nameWords = cname.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
+        return nameWords.length > 0 && nameWords.some(w => {
+          const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+          return re.test(effectiveSender) || re.test(senderLower) || re.test(memoLower) || re.test(refLower)
+        })
       })
 
       // Contact-first resolution: also match against contact full_name
@@ -248,13 +280,21 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
           if (amountDiff > tolerance && amountDiff > 1) continue
 
-          const paidCompany = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
+          const paidDirectCompany = ((inv.accounts as unknown as { company_name: string })?.company_name || "").toLowerCase()
           const paidInvNum = (inv.invoice_number || "").toLowerCase()
 
-          const paidNameWords = paidCompany.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
-          const paidNameMatch = paidNameWords.length > 0 && paidNameWords.some(w => {
-            const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
-            return re.test(feedText)
+          // Same pool expansion as the primary pass: include contact's linked-account companies.
+          // This is THE retroactive fix for ITIN-style invoices paid from the contact's LLC bank
+          // account (e.g. Valerio's ITIN paid by Closify Consulting LLC wire).
+          const paidLinkedCompanies = (contactToLinkedCompanies[inv.contact_id || ""] || []).map(n => n.toLowerCase())
+          const paidCompanyPool = Array.from(new Set([paidDirectCompany, ...paidLinkedCompanies].filter(Boolean)))
+
+          const paidNameMatch = paidCompanyPool.some(cname => {
+            const paidNameWords = cname.split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w))
+            return paidNameWords.length > 0 && paidNameWords.some(w => {
+              const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+              return re.test(feedText)
+            })
           })
 
           // Contact-first resolution for retroactive pass
