@@ -19,6 +19,7 @@ import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contrac
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { syncInvoiceStatus } from "@/lib/portal/unified-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
+import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
 import { calculateCommission } from "@/lib/referral-utils"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
@@ -835,18 +836,56 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // without a follow-up email.
     if (contactId) {
       try {
-        const { data: contactLang } = await supabase
+        // Fetch contact name + language and (optionally) account company_name
+        // so {{firstName}}, {{lastName}}, {{companyName}} placeholders in the
+        // catalog-driven welcome templates can be substituted.
+        const { data: contact } = await supabase
           .from("contacts")
-          .select("language")
+          .select("language, first_name, last_name, full_name")
           .eq("id", contactId)
           .single()
-        const isIt = contactLang?.language === "it" || contactLang?.language === "Italian"
 
-        if (contractType === "onboarding") {
-          const title = isIt ? "Benvenuto a bordo!" : "Welcome onboard!"
-          const body = isIt
-            ? "Inizia il tuo percorso completando il modulo di onboarding."
-            : "Start your journey by completing the onboarding wizard."
+        let companyName: string | undefined
+        if (autoAccountId) {
+          const { data: acct } = await supabase
+            .from("accounts")
+            .select("company_name")
+            .eq("id", autoAccountId)
+            .single()
+          companyName = acct?.company_name ?? undefined
+        }
+        if (!companyName) companyName = activation.client_name || undefined
+
+        const language: "it" | "en" =
+          contact?.language === "it" || contact?.language === "Italian" ? "it" : "en"
+
+        // ONE combined welcome per offer (Antonio's locked decision): for
+        // bundled offers, getWelcomeMessage picks the highest-priority template
+        // across all pipelines. Falls back to contractType when pipelines is
+        // empty (e.g. onboarding/formation where the SD is created later by
+        // the wizard, not at payment).
+        const template = await getWelcomeMessage({
+          contractType,
+          pipelines,
+          language,
+        })
+
+        // Derive firstName from full_name when first_name is missing.
+        const firstName =
+          contact?.first_name ||
+          (contact?.full_name ? contact.full_name.split(/\s+/)[0] : undefined)
+
+        if (template) {
+          const vars = {
+            firstName,
+            lastName: contact?.last_name ?? undefined,
+            companyName,
+            serviceName: template.title,
+            wizardUrl: template.wizardPath ?? "/portal/wizard",
+          }
+          const title = renderTemplate(template.title, vars)
+          const body = renderTemplate(template.body, vars)
+          const link = template.wizardPath ?? "/portal"
 
           createPortalNotification({
             account_id: autoAccountId || undefined,
@@ -854,54 +893,40 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             type: "service",
             title,
             body,
-            link: "/portal/wizard",
+            link,
           }).catch(() => {})
 
-          if (autoAccountId) {
-            await supabase.from("portal_messages").insert({
-              account_id: autoAccountId,
-              contact_id: contactId,
-              sender_type: "admin",
-              sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
-              message: `${title} ${body}`,
-            })
-          }
-        } else if (contractType === "formation") {
-          const title = isIt ? "Benvenuto a bordo!" : "Welcome onboard!"
-          const body = isIt
-            ? "Inizia il tuo percorso completando il modulo di formazione."
-            : "Start your journey by completing the formation wizard."
-
-          createPortalNotification({
-            account_id: autoAccountId || undefined,
-            contact_id: contactId,
-            type: "service",
-            title,
-            body,
-            link: "/portal/wizard",
-          }).catch(() => {})
-
-          if (autoAccountId) {
-            await supabase.from("portal_messages").insert({
-              account_id: autoAccountId,
-              contact_id: contactId,
-              sender_type: "admin",
-              sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
-              message: `${title} ${body}`,
-            })
-          }
-        } else if (autoAccountId && pipelines.length > 0) {
-          // Tax return / ITIN / other non-wizard contract types — keep the
-          // generic notification (these don't have an onboarding wizard to
-          // direct the customer toward).
-          createPortalNotification({
+          // portal_messages.account_id IS NULL-able (verified 2026-05-14) — we
+          // insert whenever either account_id or contact_id is set, which fixes
+          // the previous bug where ITIN-only activations (no autoAccountId)
+          // silently skipped the chat message. Valerio Sicari hit this case on
+          // 2026-05-13 and needed a manual follow-up.
+          await supabase.from("portal_messages").insert({
             account_id: autoAccountId,
             contact_id: contactId,
+            sender_type: "admin",
+            sender_id: "b0da5d9c-acf6-4761-9cae-2c3b14dbc631",
+            message: `${title}\n\n${body}`,
+          })
+        } else {
+          // No catalog template matched — fall back to the legacy generic copy
+          // so any service we forgot to seed still produces SOME welcome rather
+          // than dead silence.
+          const title =
+            language === "it"
+              ? "Benvenuto! Il tuo servizio sta per partire"
+              : "Welcome! Your service is being set up"
+          const body =
+            language === "it"
+              ? "Stiamo preparando il tuo servizio. Accedi al portale per i prossimi passi."
+              : "We're preparing your service. Check the portal for next steps."
+
+          createPortalNotification({
+            account_id: autoAccountId || undefined,
+            contact_id: contactId,
             type: "service",
-            title: isIt ? "Benvenuto! Il tuo servizio sta per partire" : "Welcome! Your service is being set up",
-            body: isIt
-              ? `Stiamo preparando il tuo servizio ${pipelines[0]}. Accedi al portale per i prossimi passi.`
-              : `We're preparing your ${pipelines[0]} service. Check the portal for next steps.`,
+            title,
+            body,
             link: "/portal",
           }).catch(() => {})
         }
