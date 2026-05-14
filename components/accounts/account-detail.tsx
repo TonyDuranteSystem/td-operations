@@ -1549,13 +1549,13 @@ function MembersSection({ accountId, accountCompanyName }: { accountId: string; 
               onClick={handleSendMemberInfoForm}
               disabled={sendingForm || !hasPrimaryContact}
               className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              title={!hasPrimaryContact ? 'No primary contact set — mark a contact as primary in the Contacts section above' : 'Send member info form via portal chat'}
+              title={!hasPrimaryContact ? 'Primary member has no linked contact — link a contact to the primary member first' : 'Send member info form via portal chat'}
             >
               {sendingForm ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               {formRequest ? 'Resend' : 'Send Info Form'}
             </button>
             {!hasPrimaryContact && (
-              <span className="text-xs text-amber-600">No primary contact</span>
+              <span className="text-xs text-amber-600">Primary member has no linked contact</span>
             )}
             {hasPrimaryContact && formRequest && (
               <span className="text-xs text-muted-foreground">
