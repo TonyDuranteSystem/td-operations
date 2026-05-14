@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { retryActivation } from '@/app/(dashboard)/client-health/actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
+import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from '@/components/offers/welcome-link-button'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
@@ -85,6 +86,7 @@ export function LeadActions({
   const [revisingOffer, setRevisingOffer] = useState(false)
   const [settingDiscussion, setSettingDiscussion] = useState(false)
   const [retryingActivation, setRetryingActivation] = useState(false)
+  const welcomeLinkRef = useRef<WelcomeLinkButtonHandle | null>(null)
 
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
@@ -183,6 +185,9 @@ export function LeadActions({
         return
       }
       toast.success(data.message || 'Reminder email sent')
+      if (Object.prototype.hasOwnProperty.call(data, 'welcome_url')) {
+        welcomeLinkRef.current?.setWelcomeUrl(data.welcome_url ?? null)
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'An error occurred')
     } finally {
@@ -350,6 +355,15 @@ export function LeadActions({
               {resendingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Resend Email
             </button>
+          )}
+
+          {isOfferPublished && offer && (
+            <WelcomeLinkButton
+              ref={welcomeLinkRef}
+              offerToken={offer.token}
+              offerStatus={offer.status}
+              size="md"
+            />
           )}
 
           {/* Step 2: Activate Lead (enabled only after offer exists) */}

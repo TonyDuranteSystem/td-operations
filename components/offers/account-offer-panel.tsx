@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard, Check, X, Link as LinkIcon, Copy,
+  FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard, Check, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { CreateOfferDialog } from './create-offer-dialog'
+import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from './welcome-link-button'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 
@@ -57,9 +58,8 @@ export function AccountOfferPanel({
   const [showSendConfirm, setShowSendConfirm] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [welcomeUrl, setWelcomeUrl] = useState<string | null>(null)
-  const [welcomeCopied, setWelcomeCopied] = useState(false)
   const [resendingEmail, setResendingEmail] = useState(false)
+  const welcomeLinkRef = useRef<WelcomeLinkButtonHandle | null>(null)
 
   // Offer panel visible to all dashboard users (admin + team)
 
@@ -89,8 +89,8 @@ export function AccountOfferPanel({
       if (data.portal_created) {
         toast.success('Portal access created — client will receive login credentials')
       }
-      if (data.welcome_url) {
-        setWelcomeUrl(data.welcome_url)
+      if (Object.prototype.hasOwnProperty.call(data, 'welcome_url')) {
+        welcomeLinkRef.current?.setWelcomeUrl(data.welcome_url ?? null)
       }
       setShowSendConfirm(false)
       router.refresh()
@@ -98,44 +98,6 @@ export function AccountOfferPanel({
       toast.error(err instanceof Error ? err.message : 'An error occurred')
     } finally {
       setSendingOffer(false)
-    }
-  }
-
-  // Look up the welcome link for an already-published offer so the Copy
-  // button is available after a page refresh, not just immediately after
-  // publishing. Returns null for offers that did not create one (existing
-  // portal user, or before this feature shipped).
-  useEffect(() => {
-    if (!offer?.token) {
-      setWelcomeUrl(null)
-      return
-    }
-    if (offer.status === 'draft') {
-      setWelcomeUrl(null)
-      return
-    }
-    let cancelled = false
-    fetch(`/api/crm/admin-actions/offer-welcome-link?token=${encodeURIComponent(offer.token)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return
-        if (data?.welcome_url) setWelcomeUrl(data.welcome_url)
-      })
-      .catch(() => {
-        // Non-fatal — the button just won't appear.
-      })
-    return () => { cancelled = true }
-  }, [offer?.token, offer?.status])
-
-  const copyWelcomeLink = async () => {
-    if (!welcomeUrl) return
-    try {
-      await navigator.clipboard.writeText(welcomeUrl)
-      setWelcomeCopied(true)
-      toast.success('Welcome link copied — paste into WhatsApp/Telegram')
-      setTimeout(() => setWelcomeCopied(false), 2000)
-    } catch {
-      toast.error('Could not copy to clipboard')
     }
   }
 
@@ -157,7 +119,7 @@ export function AccountOfferPanel({
       // (e.g. when the previous welcome token has expired and no new one
       // could be generated).
       if (Object.prototype.hasOwnProperty.call(data, 'welcome_url')) {
-        setWelcomeUrl(data.welcome_url ?? null)
+        welcomeLinkRef.current?.setWelcomeUrl(data.welcome_url ?? null)
       }
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to resend email')
@@ -316,17 +278,13 @@ export function AccountOfferPanel({
               </a>
 
               {/* Copy Welcome Link — only for published offers that created a welcome token (new portal users) */}
-              {welcomeUrl && (
-                <button
-                  onClick={copyWelcomeLink}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition-colors"
-                  title="Share with the client via WhatsApp/Telegram. Link decrypts the temp password and expires in 7 days."
-                >
-                  {welcomeCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  {welcomeCopied ? 'Copied' : 'Copy Welcome Link'}
-                  <LinkIcon className="h-3 w-3 opacity-60" />
-                </button>
-              )}
+              <WelcomeLinkButton
+                ref={welcomeLinkRef}
+                offerToken={offer.token}
+                offerStatus={offer.status}
+                size="sm"
+              />
+
 
               {/* Resend Email — non-draft offers only. Sends a portal reminder
                   email and refreshes the welcome-link state from the response. */}
