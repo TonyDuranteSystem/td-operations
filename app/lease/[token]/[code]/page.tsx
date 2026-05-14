@@ -70,7 +70,9 @@ export default function LeasePageWithCode() {
   // Signing
   const [signing, setSigning] = useState(false)
   const [signed, setSigned] = useState(false)
+  const [regenning, setRegenning] = useState(false)
   const sigCanvasRef = useRef<HTMLCanvasElement>(null)
+  const sigClearRef = useRef<HTMLButtonElement>(null)
   const sigPadRef = useRef<any>(null)
   const leaseBodyRef = useRef<HTMLDivElement>(null)
   const pdfBlobRef = useRef<Blob | null>(null)
@@ -192,9 +194,10 @@ export default function LeasePageWithCode() {
         canvas.parentNode?.replaceChild(img, canvas)
       }
 
-      // 3. Hide action bar
+      // 3. Hide action bar + clear button from PDF snapshot
       const actionBar = document.getElementById('lease-action-bar')
       if (actionBar) actionBar.style.display = 'none'
+      if (sigClearRef.current) sigClearRef.current.style.display = 'none'
 
       // 4. Generate PDF from HTML
       const html2pdf = (await import('html2pdf.js')).default
@@ -208,6 +211,7 @@ export default function LeasePageWithCode() {
           image: { type: 'jpeg', quality: 0.95 },
           html2canvas: { scale: 2, useCORS: true },
           jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+          ...(({ pagebreak: { mode: 'css', avoid: '.lease-sig-block' } }) as object),
         })
         .from(element)
         .outputPdf('blob')
@@ -263,6 +267,74 @@ export default function LeasePageWithCode() {
     }
   }
 
+  // ─── ADMIN REGEN ───
+  async function handleAdminRegen() {
+    if (!lease || !isAdmin) return
+    setRegenning(true)
+    try {
+      const banner = document.getElementById('lease-signed-confirmation')
+      if (banner) banner.style.display = 'none'
+
+      const html2pdf = (await import('html2pdf.js')).default
+      const element = leaseBodyRef.current
+      if (!element) throw new Error('Lease body not found')
+
+      const pdfBlob: Blob = await html2pdf()
+        .set({
+          margin: [0.5, 0.6, 0.7, 0.6],
+          filename: `Lease_Agreement_${lease.tenant_company.replace(/\s+/g, '_')}_Clean.pdf`,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+          ...(({ pagebreak: { mode: 'css', avoid: '.lease-sig-block' } }) as object),
+        })
+        .from(element)
+        .outputPdf('blob')
+
+      if (banner) banner.style.display = ''
+
+      const newPath = `${token}/lease-regen-${Date.now()}.pdf`
+      const uploadRes = await fetch(`${SB_URL}/storage/v1/object/signed-leases/${newPath}`, {
+        method: 'POST',
+        headers: {
+          'apikey': SB_ANON,
+          'Authorization': `Bearer ${SB_ANON}`,
+          'Content-Type': 'application/pdf',
+        },
+        body: pdfBlob,
+      })
+      if (!uploadRes.ok) throw new Error('Storage upload failed')
+
+      await supabasePublic
+        .from('lease_agreements')
+        .update({ pdf_storage_path: newPath })
+        .eq('id', lease.id)
+
+      const driveRes = await fetch('/api/lease-regen-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lease_id: lease.id, token: lease.token, pdf_path: newPath }),
+      })
+      if (!driveRes.ok) {
+        const d = await driveRes.json().catch(() => ({})) as { error?: string }
+        throw new Error(d.error || 'Drive re-upload failed')
+      }
+
+      const url = URL.createObjectURL(pdfBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Lease_Agreement_${lease.tenant_company}_Clean.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+
+      alert('✅ PDF regenerated and portal document updated.')
+    } catch (err) {
+      alert(`❌ Regeneration failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setRegenning(false)
+    }
+  }
+
   // ─── RENDER ───
 
   if (loading) {
@@ -293,6 +365,7 @@ export default function LeasePageWithCode() {
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 50, marginBottom: 16 }} />
             <h2 style={{ fontSize: 20, color: '#222', margin: 0 }}>Verify Your Identity</h2>
             <p style={{ fontSize: 14, color: '#666', marginTop: 8 }}>Enter the email address associated with this lease to view it.</p>
@@ -338,6 +411,7 @@ export default function LeasePageWithCode() {
 
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={LOGO_URL} alt="Tony Durante LLC" style={{ height: 48, marginBottom: 16 }} />
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, letterSpacing: 1 }}>OFFICE LEASE AGREEMENT</h1>
           <div style={{ width: 60, height: 2, background: '#0A3161', margin: '12px auto' }} />
@@ -481,7 +555,7 @@ export default function LeasePageWithCode() {
           IN WITNESS WHEREOF, the Parties have executed this Agreement as of the Effective Date written above.
         </p>
 
-        <div style={{ display: 'flex', gap: 40, marginBottom: 24 }}>
+        <div className="lease-sig-block" style={{ display: 'flex', gap: 40, marginBottom: 24, pageBreakInside: 'avoid' }}>
           {/* Landlord */}
           <div style={{ flex: 1 }}>
             <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>Landlord</p>
@@ -493,7 +567,7 @@ export default function LeasePageWithCode() {
             </div>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{lease.landlord_signer}</strong></p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: {lease.landlord_title}</p>
-            <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
+            <p style={{ fontSize: 13, color: '#666' }}>Date: {signed && lease.signed_at ? new Date(lease.signed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : today()}</p>
           </div>
 
           {/* Tenant */}
@@ -502,10 +576,17 @@ export default function LeasePageWithCode() {
             <p style={{ fontWeight: 700, marginBottom: 12 }}>{lease.tenant_company}</p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{lease.tenant_contact_name}</strong></p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: Owner/Member</p>
-            <p style={{ fontSize: 13, color: '#666' }}>Date: {today()}</p>
+            <p style={{ fontSize: 13, color: '#666' }}>Date: {signed && lease.signed_at ? new Date(lease.signed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : today()}</p>
 
-            {/* Signature canvas */}
-            {!signed && (
+            {/* Signature — canvas when signing, attestation when already signed */}
+            {signed ? (
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>Tenant Signature:</p>
+                <p style={{ fontSize: 13, fontStyle: 'italic', color: '#444', margin: 0 }}>
+                  ✓ Electronically signed on {new Date(lease.signed_at!).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                </p>
+              </div>
+            ) : (
               <div style={{ marginTop: 16 }}>
                 <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Tenant Signature:</p>
                 <canvas
@@ -513,6 +594,7 @@ export default function LeasePageWithCode() {
                   style={{ width: '100%', height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}
                 />
                 <button
+                  ref={sigClearRef}
                   onClick={() => sigPadRef.current?.clear()}
                   style={{ marginTop: 4, fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                 >
@@ -525,7 +607,7 @@ export default function LeasePageWithCode() {
 
         {/* Signed confirmation */}
         {signed && (
-          <div style={{ background: '#f0f7f0', border: '1px solid #b8d4b8', borderRadius: 6, padding: 20, textAlign: 'center', marginTop: 24 }}>
+          <div id="lease-signed-confirmation" style={{ background: '#f0f7f0', border: '1px solid #b8d4b8', borderRadius: 6, padding: 20, textAlign: 'center', marginTop: 24 }}>
             <p style={{ color: '#2d6a2d', fontWeight: 700, fontSize: 16, margin: 0 }}>Lease Agreement Signed Successfully</p>
             <p style={{ color: '#4a8a4a', fontSize: 14, marginTop: 8 }}>
               A copy has been saved. Tony Durante LLC will be in touch shortly.
@@ -583,6 +665,24 @@ export default function LeasePageWithCode() {
           <p style={{ fontSize: 13, color: '#888', marginTop: 8 }}>
             By clicking, you confirm that you have read and agree to the terms above.
           </p>
+        </div>
+      )}
+
+      {/* Admin: regenerate clean PDF — outside PDF capture area */}
+      {isAdmin && signed && (
+        <div style={{ maxWidth: 800, margin: '8px auto', textAlign: 'center' }}>
+          <div style={{ background: '#fef9e7', border: '1px solid #f0c040', borderRadius: 6, padding: '12px 20px', display: 'inline-block' }}>
+            <p style={{ fontSize: 12, color: '#856404', margin: '0 0 8px', fontFamily: 'Georgia, serif' }}>
+              Admin: regenerate clean PDF with fixed layout
+            </p>
+            <button
+              onClick={handleAdminRegen}
+              disabled={regenning}
+              style={{ padding: '8px 20px', fontSize: 13, fontWeight: 600, background: regenning ? '#999' : '#856404', color: '#fff', border: 'none', borderRadius: 4, cursor: regenning ? 'default' : 'pointer', fontFamily: 'Georgia, serif' }}
+            >
+              {regenning ? 'Regenerating…' : 'Regenerate PDF'}
+            </button>
+          </div>
         </div>
       )}
     </div>
