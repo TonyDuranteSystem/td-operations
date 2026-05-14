@@ -58,6 +58,9 @@ export interface LeaseData {
   securityDeposit?: number         // Default 150
   lateFee?: number                 // Default 25
   lateFeePerDay?: number           // Default 5
+
+  // Signed copy — when set, fills in signature dates and adds electronic attestation
+  signedDate?: string              // YYYY-MM-DD — makes this a signed copy
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -264,7 +267,7 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
   const sqft = data.squareFeet ?? 120
   const fullAddress = `${premisesAddress.replace(/,?\s*(Largo|FL|33771).*/i, '')}, Suite ${suiteNumber}, Largo, FL 33771`
 
-  const termMonths = data.termMonths ?? 12
+  const _termMonths = data.termMonths ?? 12
   const monthlyRent = data.monthlyRent ?? 100
   const yearlyRent = data.yearlyRent ?? 1200
   const deposit = data.securityDeposit ?? 150
@@ -610,6 +613,8 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
   })
   pw.y -= 30
 
+  const signedDateStr = data.signedDate ? fmtDate(data.signedDate) : null
+
   // Signature lines
   const sigY = pw.y
   pw.page.drawText('By:', {
@@ -619,7 +624,17 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
     font: pw.font,
     color: C.medium,
   })
-  pw.page.drawRectangle({ x: leftX + 20, y: sigY - 2, width: sigW - 20, height: 0.5, color: C.rule })
+  if (signedDateStr) {
+    pw.page.drawText(`/s/ ${landlordSigner}`, {
+      x: leftX + 20,
+      y: sigY,
+      size: 10,
+      font: pw.fontItalic,
+      color: C.dark,
+    })
+  } else {
+    pw.page.drawRectangle({ x: leftX + 20, y: sigY - 2, width: sigW - 20, height: 0.5, color: C.rule })
+  }
 
   pw.page.drawText('By:', {
     x: rightX,
@@ -628,7 +643,17 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
     font: pw.font,
     color: C.medium,
   })
-  pw.page.drawRectangle({ x: rightX + 20, y: sigY - 2, width: sigW - 20, height: 0.5, color: C.rule })
+  if (signedDateStr) {
+    pw.page.drawText(`/s/ ${data.tenantContactName}`, {
+      x: rightX + 20,
+      y: sigY,
+      size: 10,
+      font: pw.fontItalic,
+      color: C.dark,
+    })
+  } else {
+    pw.page.drawRectangle({ x: rightX + 20, y: sigY - 2, width: sigW - 20, height: 0.5, color: C.rule })
+  }
 
   pw.y -= 28
 
@@ -707,7 +732,11 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
     font: pw.font,
     color: C.light,
   })
-  pw.page.drawRectangle({ x: leftX + 30, y: dateY - 2, width: sigW - 30, height: 0.5, color: C.rule })
+  if (signedDateStr) {
+    pw.page.drawText(signedDateStr, { x: leftX + 30, y: dateY, size: 10, font: pw.font, color: C.dark })
+  } else {
+    pw.page.drawRectangle({ x: leftX + 30, y: dateY - 2, width: sigW - 30, height: 0.5, color: C.rule })
+  }
 
   pw.page.drawText('Date:', {
     x: rightX,
@@ -716,7 +745,11 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
     font: pw.font,
     color: C.light,
   })
-  pw.page.drawRectangle({ x: rightX + 30, y: dateY - 2, width: sigW - 30, height: 0.5, color: C.rule })
+  if (signedDateStr) {
+    pw.page.drawText(signedDateStr, { x: rightX + 30, y: dateY, size: 10, font: pw.font, color: C.dark })
+  } else {
+    pw.page.drawRectangle({ x: rightX + 30, y: dateY - 2, width: sigW - 30, height: 0.5, color: C.rule })
+  }
 
   // Final page footer
   pw.drawPageFooter()
