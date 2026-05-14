@@ -8,11 +8,11 @@ export const dynamic = "force-dynamic"
 /**
  * GET /api/accounts/[id]/member-info-form
  * Returns the latest member info request for this account (if any),
- * plus whether a primary member with a linked contact exists (so the UI can
- * disable the Send button proactively when no primary member is set).
+ * plus whether a primary member can be resolved to a contact (so the UI can
+ * disable the Send button proactively).
  *
- * NOTE: is_primary lives in the `members` table (set by the Primary checkbox
- * in the Members section), NOT in account_contacts.
+ * Resolution order: members.contact_id → contacts.email match.
+ * The "Primary" checkbox on the member row is the only thing the admin needs to set.
  */
 export async function GET(
   _req: NextRequest,
@@ -28,13 +28,28 @@ export async function GET(
       .maybeSingle(),
     supabaseAdmin
       .from("members")
-      .select("contact_id")
+      .select("contact_id, email")
       .eq("account_id", params.id)
       .eq("is_primary", true)
       .maybeSingle(),
   ])
 
-  return NextResponse.json({ request: request ?? null, has_primary_contact: !!primary?.contact_id })
+  let hasPrimaryContact = false
+  if (primary) {
+    if (primary.contact_id) {
+      hasPrimaryContact = true
+    } else if (primary.email) {
+      const { data: contactByEmail } = await supabaseAdmin
+        .from("contacts")
+        .select("id")
+        .eq("email", primary.email)
+        .limit(1)
+        .maybeSingle()
+      hasPrimaryContact = !!contactByEmail
+    }
+  }
+
+  return NextResponse.json({ request: request ?? null, has_primary_contact: hasPrimaryContact })
 }
 
 /**
@@ -43,8 +58,8 @@ export async function GET(
  * Creates (or retrieves existing) member info request form for an MMLLC account,
  * then sends the link via portal chat to the primary member's contact.
  *
- * Requires: a member with is_primary=true AND contact_id set in the members table.
- * Returns 400 if primary member has no contact_id.
+ * Resolution order for contact: members.contact_id → contacts.email match.
+ * The "Primary" checkbox on the member row is the only thing the admin needs to set.
  *
  * Idempotent: if a pending request already exists, reuses it and sends a new message.
  *
@@ -66,23 +81,41 @@ export async function POST(
     return NextResponse.json({ error: "Account not found" }, { status: 404 })
   }
 
-  // Resolve primary member — required before creating or sending.
-  // is_primary is set via the Primary checkbox in the Members section (members table).
+  // Resolve primary member. The "Primary" checkbox sets members.is_primary — that's all the admin needs.
+  // contact_id on the member row is optional; we fall back to email lookup if it's not set.
   const { data: primaryMember } = await supabaseAdmin
     .from("members")
-    .select("contact_id")
+    .select("contact_id, email")
     .eq("account_id", accountId)
     .eq("is_primary", true)
     .maybeSingle()
 
-  if (!primaryMember?.contact_id) {
+  if (!primaryMember) {
     return NextResponse.json(
       { error: "No primary member set. Check the 'Primary' checkbox on the member you want to receive the form." },
       { status: 400 }
     )
   }
 
-  const contactId = primaryMember.contact_id
+  // Resolve contact_id: direct link first, then email fallback
+  let contactId: string | null = primaryMember.contact_id ?? null
+
+  if (!contactId && primaryMember.email) {
+    const { data: contactByEmail } = await supabaseAdmin
+      .from("contacts")
+      .select("id")
+      .eq("email", primaryMember.email)
+      .limit(1)
+      .maybeSingle()
+    contactId = contactByEmail?.id ?? null
+  }
+
+  if (!contactId) {
+    return NextResponse.json(
+      { error: "Primary member has no contact record in the system. Add them as a contact first." },
+      { status: 400 }
+    )
+  }
 
   // Fetch contact language for bilingual message
   const { data: contactData } = await supabaseAdmin
