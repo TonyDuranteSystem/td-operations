@@ -421,7 +421,7 @@ function UnmatchedRow({
       toast.error(r.error ?? 'Reject failed')
       return
     }
-    toast.success('Candidate rejected — pick a different invoice below')
+    toast.success('Candidate rejected — click the link icon to pick a different invoice or create one')
     router.refresh()
   }
 
@@ -682,7 +682,7 @@ function UnmatchedRow({
                 Reject candidate
               </button>
               <span className="text-[11px] text-muted-foreground ml-1">
-                Or pick a different invoice below.
+                Or click the link icon (↗) above to pick a different invoice or create a new one.
               </span>
             </div>
           </div>
