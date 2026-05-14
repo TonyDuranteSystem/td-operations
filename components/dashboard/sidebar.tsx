@@ -40,7 +40,6 @@ import {
   AlertTriangle,
   ClipboardCheck,
   MapPin,
-  GitMerge,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -99,8 +98,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'addresses', name: 'Addresses', href: '/addresses', icon: MapPin, tooltip: 'Address registry — manage shared legal, mailing, and registered agent addresses used across all accounts.' },
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
-  { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, and financial overview. Create and manage client billing.' },
-  { id: 'reconciliation', name: 'Reconciliation', href: '/reconciliation', icon: GitMerge, tooltip: 'Bank wire reconciliation — match incoming bank feeds to invoices, review uncertain matches, retry crashed activations.' },
+  { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
@@ -371,8 +369,7 @@ export function Sidebar({
       // Tasks badge removed — daily work tracked via message action tags instead
       if (item.id === 'portal-chats' && livePortalChats > 0) return { ...item, badge: livePortalChats }
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, badge: liveTeamChat }
-      if (item.id === 'finance' && liveOverdue > 0) return { ...item, badge: liveOverdue }
-      if (item.id === 'reconciliation' && liveReconReview > 0) return { ...item, badge: liveReconReview }
+      if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       return item
     })
     .filter((item): item is NavItem => {

@@ -1,15 +1,15 @@
 'use client'
 
 import { useState, useCallback, useEffect, useTransition, useMemo } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
-  Loader2, ArrowRight, CheckCircle2, AlertCircle,
-  Search, Building2, User, Trash2,
+  Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
+  Search, Building2, User, Trash2, Check, RotateCw,
 } from 'lucide-react'
 import { matchBankFeedToInvoice, ignoreBankFeed, deleteDuplicateBankFeed } from './actions'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -51,6 +51,7 @@ export interface BankFeedRecord {
   status: string
   created_at: string
   matched_at: string | null
+  review_metadata?: unknown
   payments?: {
     invoice_number: string | null
     description: string | null
@@ -115,9 +116,11 @@ const STATUS_COLORS: Record<string, string> = {
   matched: 'bg-emerald-100 text-emerald-700',
   ignored: 'bg-zinc-100 text-zinc-500',
   partial: 'bg-orange-100 text-orange-700',
+  needs_review: 'bg-amber-100 text-amber-800',
+  activation_crashed: 'bg-red-100 text-red-700',
 }
 
-type FilterTab = 'all' | 'unmatched' | 'matched' | 'ignored'
+type FilterTab = 'all' | 'unmatched' | 'needs_review' | 'activation_crashed' | 'matched' | 'ignored'
 
 // ── Helpers ──
 
@@ -349,17 +352,78 @@ interface TargetServiceDelivery {
   start_date: string | null
 }
 
+interface CandidateInfo {
+  invoice_number: string | null
+  company_name: string
+  amount: number
+  amount_currency: string | null
+  confidence: string | null
+}
+
 function UnmatchedRow({
-  feed, openInvoices, isMatching, onStartMatch, onCancelMatch,
+  feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo,
 }: {
   feed: BankFeedRecord
   openInvoices: OpenInvoice[]
   isMatching: boolean
   onStartMatch: () => void
   onCancelMatch: () => void
+  candidateInfo?: CandidateInfo | null
 }) {
+  const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  const [candidateBusy, setCandidateBusy] = useState<null | 'confirm' | 'reject'>(null)
   const amount = Number(feed.amount)
+
+  async function callAdminEndpoint(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.ok === false) {
+        return { ok: false, error: data.error || `Request failed (${res.status})` }
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Network error' }
+    }
+  }
+
+  const handleConfirmCandidate = async () => {
+    if (!feed.matched_payment_id) {
+      toast.error('No candidate payment to confirm')
+      return
+    }
+    setCandidateBusy('confirm')
+    const r = await callAdminEndpoint('/api/crm/admin-actions/bank-feed-confirm-match', {
+      feed_id: feed.id,
+      payment_id: feed.matched_payment_id,
+    })
+    setCandidateBusy(null)
+    if (!r.ok) {
+      toast.error(r.error ?? 'Confirm failed')
+      return
+    }
+    toast.success('Match confirmed — invoice marked paid')
+    router.refresh()
+  }
+
+  const handleRejectCandidate = async () => {
+    setCandidateBusy('reject')
+    const r = await callAdminEndpoint('/api/crm/admin-actions/bank-feed-reject-match', {
+      feed_id: feed.id,
+    })
+    setCandidateBusy(null)
+    if (!r.ok) {
+      toast.error(r.error ?? 'Reject failed')
+      return
+    }
+    toast.success('Candidate rejected — pick a different invoice below')
+    router.refresh()
+  }
 
   // Client/contact search state
   const [searchQuery, setSearchQuery] = useState('')
@@ -561,8 +625,11 @@ function UnmatchedRow({
         <span className="font-semibold w-24 shrink-0">{formatCurrency(amount, feed.currency)}</span>
         <span className="text-xs truncate flex-1">{feed.sender_name || '—'}</span>
         <span className="text-xs text-muted-foreground truncate max-w-[200px]">{feed.memo || ''}</span>
-        <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.unmatched)}>
-          unmatched
+        <span className={cn(
+          'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
+          candidateInfo ? STATUS_COLORS.needs_review : STATUS_COLORS.unmatched,
+        )}>
+          {candidateInfo ? 'needs review' : 'unmatched'}
         </span>
         <div className="flex items-center gap-1 shrink-0">
           {!isMatching ? (
@@ -581,6 +648,46 @@ function UnmatchedRow({
           )}
         </div>
       </div>
+
+      {/* Auto-matched candidate banner — shown only when feed.status='needs_review' */}
+      {candidateInfo && (
+        <div className="px-4 pb-3">
+          <div className="border border-amber-300 bg-amber-50 rounded-md p-3 space-y-2">
+            <div className="flex items-start gap-2 text-xs text-amber-900">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <p>
+                <span className="font-semibold">Auto-matched candidate:</span>{' '}
+                <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                {' '}for <span className="font-medium">{candidateInfo.company_name}</span>
+                {' '}({formatCurrency(candidateInfo.amount, candidateInfo.amount_currency)}
+                {candidateInfo.confidence ? `, confidence: ${candidateInfo.confidence}` : ''})
+                — please verify.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleConfirmCandidate}
+                disabled={candidateBusy !== null}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {candidateBusy === 'confirm' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Confirm this match
+              </button>
+              <button
+                onClick={handleRejectCandidate}
+                disabled={candidateBusy !== null}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {candidateBusy === 'reject' ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                Reject candidate
+              </button>
+              <span className="text-[11px] text-muted-foreground ml-1">
+                Or pick a different invoice below.
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isMatching && (
         <div className="px-4 pb-3 pt-1 space-y-3">
@@ -983,6 +1090,73 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
   )
 }
 
+function CrashedRow({ feed }: { feed: BankFeedRecord }) {
+  const router = useRouter()
+  const [busy, setBusy] = useState(false)
+  const payment = feed.payments
+  const meta = (feed.review_metadata ?? {}) as Record<string, unknown>
+  const activationError = typeof meta.activation_error === 'string' ? meta.activation_error : null
+
+  const handleRetry = async () => {
+    setBusy(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/bank-feed-retry-activation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feed_id: feed.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.ok === false) {
+        toast.error(data.error || `Retry failed (${res.status})`)
+        return
+      }
+      toast.success('Activation succeeded')
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border-b last:border-b-0">
+      <div className="flex items-center gap-3 px-4 py-3 text-sm">
+        <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
+          {SOURCE_LABELS[feed.source] ?? feed.source}
+        </span>
+        <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
+        <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
+        <span className="text-xs text-muted-foreground truncate">{feed.sender_name || '—'}</span>
+        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
+        <span className="text-xs truncate flex-1">{getCompanyName(payment?.accounts)}</span>
+        <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.activation_crashed)}>
+          activation crashed
+        </span>
+        <button
+          onClick={handleRetry}
+          disabled={busy}
+          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-50 hover:bg-red-100 text-red-700 disabled:opacity-50 shrink-0"
+          title="Retry activation"
+        >
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />}
+          Retry
+        </button>
+      </div>
+      <div className="px-4 pb-3">
+        <div className="border border-red-300 bg-red-50 rounded-md px-3 py-2 flex items-start gap-2 text-xs text-red-800">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <p>
+            <span className="font-semibold">Auto-activation failed:</span>{' '}
+            {activationError ?? 'No error message recorded.'}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function IgnoredRow({ feed }: { feed: BankFeedRecord }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0 opacity-60">
@@ -1096,9 +1270,19 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   const counts = useMemo(() => ({
     all: bankFeeds.length,
     unmatched: bankFeeds.filter(f => f.status === 'unmatched').length,
+    needs_review: bankFeeds.filter(f => f.status === 'needs_review').length,
+    activation_crashed: bankFeeds.filter(f => f.status === 'activation_crashed').length,
     matched: bankFeeds.filter(f => f.status === 'matched').length,
     ignored: bankFeeds.filter(f => f.status === 'ignored').length,
   }), [bankFeeds])
+
+  // Build a lookup so needs_review rows can show the candidate invoice
+  // banner using the same openInvoices data already in scope.
+  const openInvoiceById = useMemo(() => {
+    const map = new Map<string, OpenInvoice>()
+    for (const inv of openInvoices) map.set(inv.id, inv)
+    return map
+  }, [openInvoices])
 
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
@@ -1140,8 +1324,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
 
       {/* Filter bar + search */}
       <div className="flex items-center justify-between gap-3">
-        <div className="flex gap-1">
-          {(['all', 'unmatched', 'matched', 'ignored'] as FilterTab[]).map(f => (
+        <div className="flex gap-1 flex-wrap">
+          {(['all', 'unmatched', 'needs_review', 'activation_crashed', 'matched', 'ignored'] as FilterTab[]).map(f => (
             <button
               key={f}
               onClick={() => { setFilter(f); setPage(0) }}
@@ -1149,6 +1333,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors',
                 filter === f
                   ? f === 'unmatched' ? 'bg-amber-100 text-amber-700'
+                    : f === 'needs_review' ? 'bg-amber-100 text-amber-800'
+                    : f === 'activation_crashed' ? 'bg-red-100 text-red-700'
                     : f === 'matched' ? 'bg-emerald-100 text-emerald-700'
                     : f === 'ignored' ? 'bg-zinc-200 text-zinc-700'
                     : 'bg-blue-100 text-blue-700'
@@ -1156,8 +1342,12 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
               )}
             >
               {f === 'unmatched' && <AlertCircle className="h-3 w-3" />}
+              {f === 'needs_review' && <AlertTriangle className="h-3 w-3" />}
+              {f === 'activation_crashed' && <AlertTriangle className="h-3 w-3" />}
               {f === 'matched' && <CheckCircle2 className="h-3 w-3" />}
-              {f.charAt(0).toUpperCase() + f.slice(1)} ({counts[f]})
+              {f === 'needs_review' ? 'Needs Review' :
+               f === 'activation_crashed' ? 'Crashed' :
+               f.charAt(0).toUpperCase() + f.slice(1)} ({counts[f]})
             </button>
           ))}
         </div>
@@ -1192,14 +1382,46 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
           </div>
         ) : (
           paginated.map(feed => {
-            const inner = feed.status === 'unmatched' ? (
+            // needs_review = an auto-matched candidate awaiting Confirm/Reject.
+            // Reuses UnmatchedRow's manual-picker so admin can also pick a
+            // different invoice instead.
+            let candidateInfo: CandidateInfo | null = null
+            if (feed.status === 'needs_review' && feed.matched_payment_id) {
+              const inv = openInvoiceById.get(feed.matched_payment_id)
+              if (inv) {
+                const invAmount = inv.invoice_status === 'Partial'
+                  ? Number(inv.amount_due ?? inv.total ?? 0)
+                  : Number(inv.total ?? inv.amount ?? 0)
+                candidateInfo = {
+                  invoice_number: inv.invoice_number,
+                  company_name: getCompanyName(inv.accounts),
+                  amount: invAmount,
+                  amount_currency: inv.amount_currency,
+                  confidence: feed.match_confidence,
+                }
+              } else if (feed.payments) {
+                // Fallback: payment may not be in the open-invoice set anymore.
+                candidateInfo = {
+                  invoice_number: feed.payments.invoice_number,
+                  company_name: getCompanyName(feed.payments.accounts),
+                  amount: Number(feed.amount),
+                  amount_currency: feed.currency,
+                  confidence: feed.match_confidence,
+                }
+              }
+            }
+
+            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' ? (
               <UnmatchedRow
                 feed={feed}
                 openInvoices={openInvoices}
                 isMatching={matchingFeed === feed.id}
                 onStartMatch={() => setMatchingFeed(feed.id)}
                 onCancelMatch={() => setMatchingFeed(null)}
+                candidateInfo={candidateInfo}
               />
+            ) : feed.status === 'activation_crashed' ? (
+              <CrashedRow feed={feed} />
             ) : feed.status === 'matched' ? (
               <MatchedRow feed={feed} canDeleteDuplicate={eligibleForDeleteDuplicate.has(feed.id)} />
             ) : (
