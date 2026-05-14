@@ -56,6 +56,9 @@ const PUBLIC_PREFIXES = [
   // Legacy MMLLC member info collection form (token+code URL auth)
   '/member-info',
   '/api/member-info',
+  // Contact request form — token+code URL auth (admin sends to client via portal chat)
+  '/contact-request',
+  '/api/contact-request',
   // Portal announcements — public read for the client portal banner
   '/api/portal/announcements',
   // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session
