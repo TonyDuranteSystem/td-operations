@@ -24,6 +24,8 @@ import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
+import { createWelcomeToken } from "@/lib/portal/welcome-token"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 
 // ─── Types ────────────────────────────────────────────────
@@ -37,6 +39,7 @@ export interface PublishOfferResult {
   emailType: "portal_access" | "portal_notification" | "none"
   trackingId?: string
   gmailMessageId?: string
+  welcomeUrl?: string
   warnings: string[]
 }
 
@@ -95,6 +98,28 @@ export async function publishOffer(
   if (!contactCheck) {
     // autoCreatePortalUser should have created the contact, but verify
     warnings.push("Contact record not found after portal user creation — portal sidebar may not display correctly.")
+  }
+
+  // ─── 3b. Create welcome-link token (additive channel) ───
+  // Only meaningful when we have a fresh temp password to share. The
+  // portal-access email still always sends; this URL is for WhatsApp /
+  // Telegram / SMS fallback delivery.
+  let welcomeUrl: string | undefined
+  if (isNewUser && tempPassword) {
+    try {
+      const welcome = await createWelcomeToken({
+        contactId: contactCheck?.id,
+        email: offer.client_email,
+        tempPassword,
+        language: offer.language || "en",
+        source: "offer",
+        sourceId: token,
+      })
+      welcomeUrl = welcome.welcomeUrl
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      warnings.push(`Welcome-link token creation failed: ${msg}`)
+    }
   }
 
   // ─── 4. Build and send email ───
@@ -262,6 +287,7 @@ export async function publishOffer(
     emailType,
     trackingId,
     gmailMessageId: result.sendResult?.id,
+    welcomeUrl,
     warnings,
   }
 }
@@ -278,6 +304,200 @@ function fail(error: string): PublishOfferResult {
     emailType: "none",
     warnings: [],
   }
+}
+
+// ─── Resend ───────────────────────────────────────────────
+
+export interface ResendOfferEmailResult {
+  success: boolean
+  error?: string
+  emailType: "portal_access" | "portal_notification" | "none"
+  welcomeUrl?: string
+  trackingId?: string
+  gmailMessageId?: string
+}
+
+/**
+ * resendOfferEmail — re-deliver the portal-access or portal-notification email
+ * for an offer that's already past 'draft'. Use case: client says they didn't
+ * receive the email; staff clicks Resend (CRM panel or offer_resend MCP tool).
+ *
+ * Differences from publishOffer:
+ *   - Skips the 7-day email_tracking idempotency gate — the whole point is to
+ *     re-send.
+ *   - Does NOT change offers.status or leads.status. Whether the client viewed
+ *     or signed the offer is independent of email delivery.
+ *   - Issues a fresh welcome token ONLY when a new portal user is created
+ *     (defensive branch). Existing portal users keep their previous welcome
+ *     token; we can't re-derive their password without resetting it.
+ *   - Logs action_log with action_type='resend' so audit history is distinct
+ *     from the original publish.
+ */
+export async function resendOfferEmail(
+  token: string,
+  actor?: string,
+): Promise<ResendOfferEmailResult> {
+  // 1. Fetch offer
+  const { data: offer, error: fetchError } = await supabaseAdmin
+    .from("offers")
+    .select("id, token, client_name, client_email, language, status, lead_id, account_id")
+    .eq("token", token)
+    .single()
+
+  if (fetchError || !offer) {
+    return { success: false, error: `Offer not found: ${token}`, emailType: "none" }
+  }
+  if (!offer.client_email) {
+    return { success: false, error: "Cannot resend: client_email is not set on this offer.", emailType: "none" }
+  }
+  if (offer.status === "draft") {
+    return { success: false, error: "Cannot resend: offer is in 'draft'. Use offer_send to publish first.", emailType: "none" }
+  }
+
+  // 2. Decide which template based on portal user existence
+  const existingUser = await findAuthUserByEmail(offer.client_email)
+  let tempPassword: string | undefined
+  let createdPortalUser = false
+
+  if (!existingUser) {
+    // Defensive: portal user should exist (publishOffer creates it). If it
+    // doesn't, recreate so the resent email gives the client a working login.
+    const portalResult = await autoCreatePortalUser({
+      leadId: offer.lead_id || undefined,
+      accountId: offer.account_id || undefined,
+      tier: "lead",
+      emailOverride: offer.client_email,
+      nameOverride: offer.client_name,
+    })
+    if (!portalResult.success) {
+      return { success: false, error: `Portal user (re)creation failed: ${portalResult.error}`, emailType: "none" }
+    }
+    tempPassword = portalResult.tempPassword
+    createdPortalUser = !portalResult.alreadyExists
+  }
+
+  const emailType: ResendOfferEmailResult["emailType"] =
+    createdPortalUser && tempPassword ? "portal_access" : "portal_notification"
+
+  // 3. Issue a fresh welcome token only when we have a new temp password
+  let welcomeUrl: string | undefined
+  if (createdPortalUser && tempPassword) {
+    try {
+      const welcome = await createWelcomeToken({
+        email: offer.client_email,
+        tempPassword,
+        language: offer.language || "en",
+        source: "offer",
+        sourceId: token,
+      })
+      welcomeUrl = welcome.welcomeUrl
+    } catch {
+      // best-effort — email send must not be blocked by welcome-token failure
+    }
+  }
+
+  // 4. Build the email (same templates as publishOffer)
+  const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
+  const lang = (offer.language || "en") as "en" | "it"
+  const firstName = offer.client_name.split(" ")[0]
+  const portalLoginUrl = `${PORTAL_BASE_URL}/portal/login`
+
+  const subject = emailType === "portal_access"
+    ? lang === "it"
+      ? "La tua Offerta Consulenziale — Tony Durante LLC"
+      : "Your Consulting Proposal — Tony Durante LLC"
+    : lang === "it"
+      ? "Nuovo documento disponibile — Tony Durante LLC"
+      : "New document available — Tony Durante LLC"
+
+  const htmlBody = emailType === "portal_access"
+    ? buildPortalAccessEmail(firstName, offer.client_email, tempPassword!, portalLoginUrl, lang, pixelUrl)
+    : buildPortalNotificationEmail(firstName, portalLoginUrl, lang, pixelUrl)
+
+  const plainText = emailType === "portal_access"
+    ? lang === "it"
+      ? `Ciao ${firstName}, abbiamo preparato la tua offerta consulenziale. Accedi al portale per consultarla: ${portalLoginUrl} — Email: ${offer.client_email} — Password temporanea: ${tempPassword}`
+      : `Hi ${firstName}, your consulting proposal is ready. Log in to review it: ${portalLoginUrl} — Email: ${offer.client_email} — Temporary password: ${tempPassword}`
+    : lang === "it"
+      ? `Ciao ${firstName}, un nuovo documento è disponibile nel tuo portale: ${portalLoginUrl}`
+      : `Hi ${firstName}, a new document is available in your portal: ${portalLoginUrl}`
+
+  const fromEmail = "support@tonydurante.us"
+  const boundary = `boundary_${Date.now()}`
+  const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+  const encodedSubject = hasNonAscii
+    ? `=?UTF-8?B?${Buffer.from(subject, "utf-8").toString("base64")}?=`
+    : subject
+
+  const mimeParts = [
+    [
+      `From: Tony Durante LLC <${fromEmail}>`,
+      `To: ${offer.client_email}`,
+      `Subject: ${encodedSubject}`,
+      "MIME-Version: 1.0",
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ].join("\r\n"),
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(plainText).toString("base64"),
+    "",
+    `--${boundary}`,
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(htmlBody).toString("base64"),
+    "",
+    `--${boundary}--`,
+  ]
+  const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
+
+  // 5. Send — no idempotency gate (this is a deliberate re-send)
+  let gmailMessageId: string | undefined
+  try {
+    const send = (await gmailPost("/messages/send", { raw: encodedRaw })) as { id: string; threadId: string }
+    gmailMessageId = send.id
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { success: false, error: `Gmail send failed: ${msg}`, emailType }
+  }
+
+  // 6. Record tracking + audit. Status of the offer/lead is NOT changed.
+  try {
+    await supabaseAdmin.from("email_tracking").insert({
+      tracking_id: trackingId,
+      offer_token: token,
+      recipient: offer.client_email,
+      subject,
+      from_email: fromEmail,
+    })
+  } catch {
+    // tracking failure must not invalidate the actual send
+  }
+
+  logAction({
+    actor: actor || "claude.ai",
+    action_type: "resend",
+    table_name: "offers",
+    record_id: offer.id,
+    summary: `Resent offer email: ${offer.client_name} (${token}) → ${offer.client_email} [${emailType}]`,
+    details: {
+      token,
+      lead_id: offer.lead_id,
+      account_id: offer.account_id,
+      language: offer.language,
+      email_type: emailType,
+      gmail_message_id: gmailMessageId,
+      tracking_id: trackingId,
+      welcome_url: welcomeUrl ?? null,
+      created_portal_user: createdPortalUser,
+    },
+  })
+
+  return { success: true, emailType, welcomeUrl, trackingId, gmailMessageId }
 }
 
 // ─── Email: Portal Access (new user with credentials) ────

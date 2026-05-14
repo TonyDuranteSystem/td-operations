@@ -37,6 +37,12 @@ export type CatalogPendingReviewSource = "whop_webhook" | "stripe_webhook" | "pl
 /** catalog_pending_review.status — CHECK constraint */
 export type CatalogPendingReviewStatus = "pending" | "approved_added" | "approved_aliased" | "rejected"
 
+/** contact_request_forms.form_type — CHECK constraint */
+export type ContactRequestFormsFormType = "add_new" | "update_existing"
+
+/** contact_request_forms.status — CHECK constraint */
+export type ContactRequestFormsStatus = "pending" | "submitted" | "cancelled"
+
 /** contacts.portal_tier — CHECK constraint */
 export type ContactsPortalTier = "lead" | "formation" | "onboarding" | "active"
 

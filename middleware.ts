@@ -59,6 +59,8 @@ const PUBLIC_PREFIXES = [
   // Contact request form — token+code URL auth (admin sends to client via portal chat)
   '/contact-request',
   '/api/contact-request',
+  // Portal welcome link — token-keyed credential page sent after offer publish
+  '/welcome',
   // Portal announcements — public read for the client portal banner
   '/api/portal/announcements',
   // Stable pay redirect — /pay/<opaque-token> regenerates a Stripe session

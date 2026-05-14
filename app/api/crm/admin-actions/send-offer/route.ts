@@ -47,6 +47,7 @@ export async function POST(request: Request) {
       portal_already_existed: result.portalAlreadyExisted,
       email_type: result.emailType,
       tracking_id: result.trackingId,
+      welcome_url: result.welcomeUrl,
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
