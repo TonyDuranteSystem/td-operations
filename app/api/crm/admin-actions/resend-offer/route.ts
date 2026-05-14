@@ -12,7 +12,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { gmailPost } from "@/lib/gmail"
-import { findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
+import { createWelcomeToken, findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 
 export async function POST(request: Request) {
@@ -119,20 +120,44 @@ export async function POST(request: Request) {
       gmail_message_id: gmailResult.id,
     })
 
-    // Look up the most recent welcome-link for this offer so the caller can
-    // refresh the "Copy Welcome Link" button. Returns null if no welcome
-    // token was ever issued (offer pre-dates the welcome-link feature, or
-    // the original publish hit the existing-user branch) or if the latest
-    // one is expired. We never regenerate here — that requires a fresh temp
-    // password, which would mean resetting the client's auth password.
+    // Refresh / regenerate the welcome link for the "Copy Welcome Link"
+    // button. Strategy:
+    //   1. If a valid (non-expired) welcome token already exists for this
+    //      offer, reuse it — no password reset needed.
+    //   2. Otherwise (no token, or expired), reset the auth user's password
+    //      to a fresh temp value and stash it in a new welcome token. This
+    //      DOES invalidate any custom password the client previously set;
+    //      acceptable trade-off so staff has a working share link for
+    //      WhatsApp / Telegram, and the client gets working credentials.
     let welcomeUrl: string | null = null
+    let welcomeRegenerated = false
     try {
-      const link = await findWelcomeTokenBySource("offer", offer.token)
-      if (link && new Date(link.expires_at).getTime() > Date.now()) {
-        welcomeUrl = link.welcomeUrl
+      const existing = await findWelcomeTokenBySource("offer", offer.token)
+      if (existing && new Date(existing.expires_at).getTime() > Date.now()) {
+        welcomeUrl = existing.welcomeUrl
+      } else {
+        const authUser = await findAuthUserByEmail(offer.client_email)
+        if (authUser) {
+          const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+          const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(
+            authUser.id,
+            { password: tempPassword },
+          )
+          if (!pwErr) {
+            const link = await createWelcomeToken({
+              email: offer.client_email,
+              tempPassword,
+              language: offer.language || "en",
+              source: "offer",
+              sourceId: offer.token,
+            })
+            welcomeUrl = link.welcomeUrl
+            welcomeRegenerated = true
+          }
+        }
       }
     } catch {
-      // welcome-link lookup is best-effort; do not fail the resend
+      // welcome-link refresh is best-effort; do not fail the resend
     }
 
     logAction({
@@ -148,6 +173,7 @@ export async function POST(request: Request) {
         admin_email: user?.email,
         tracking_id: trackingId,
         welcome_url: welcomeUrl,
+        welcome_regenerated: welcomeRegenerated,
       },
     })
 
