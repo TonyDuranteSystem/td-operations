@@ -8531,6 +8531,63 @@ export type Database = {
           },
         ]
       }
+      portal_welcome_tokens: {
+        Row: {
+          contact_id: string | null
+          created_at: string
+          email: string
+          encrypted_password: string
+          expires_at: string
+          first_viewed_at: string | null
+          id: string
+          language: string
+          source: string
+          source_id: string | null
+          token: string
+        }
+        Insert: {
+          contact_id?: string | null
+          created_at?: string
+          email: string
+          encrypted_password: string
+          expires_at: string
+          first_viewed_at?: string | null
+          id?: string
+          language?: string
+          source?: string
+          source_id?: string | null
+          token?: string
+        }
+        Update: {
+          contact_id?: string | null
+          created_at?: string
+          email?: string
+          encrypted_password?: string
+          expires_at?: string
+          first_viewed_at?: string | null
+          id?: string
+          language?: string
+          source?: string
+          source_id?: string | null
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_welcome_tokens_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_welcome_tokens_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       push_subscriptions: {
         Row: {
           account_id: string | null
