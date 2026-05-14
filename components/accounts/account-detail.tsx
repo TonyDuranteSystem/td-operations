@@ -8,7 +8,7 @@ import {
   Calendar, Shield, FileText, CreditCard, Briefcase, Clock,
   AlertCircle, CheckCircle2, ExternalLink, MessageSquare, Inbox, Unlink,
   Pencil, Plus, Search, Loader2, Stethoscope, X, Activity, BadgeCheck, Send,
-  Rocket, Upload, Hash, DollarSign,
+  Rocket, Upload, Hash, DollarSign, ListOrdered,
 } from 'lucide-react'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
@@ -34,6 +34,7 @@ import { updateAccountField, updateContactField, addAccountNote, updateAccountCo
 import { StatusChangeDialog } from './status-change-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
+import { ActivityFeed } from './activity-feed'
 import { AddressPicker } from '@/components/shared/address-picker'
 import { RAPicker } from '@/components/shared/ra-picker'
 import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
@@ -52,6 +53,7 @@ const TABS = [
   { key: 'documents', label: 'Documents', icon: FileText, adminOnly: false },
   { key: 'correspondence', label: 'Correspondence', icon: Inbox, adminOnly: false },
   { key: 'communications', label: 'Communications', icon: MessageSquare, adminOnly: false },
+  { key: 'activity', label: 'Activity', icon: ListOrdered, adminOnly: false },
   { key: 'backend', label: 'Backend', icon: Activity, adminOnly: true },
 ]
 
@@ -866,6 +868,9 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
       )}
       {activeTab === 'communications' && (
         <AccountCommunications accountId={account.id} />
+      )}
+      {activeTab === 'activity' && (
+        <ActivityFeed kind="account" accountId={account.id} contactIds={contacts.map((c) => c.id)} />
       )}
       {activeTab === 'backend' && (
         <BackendActivityPanel kind="account" accountId={account.id} />
