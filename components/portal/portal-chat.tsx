@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus } from 'lucide-react'
+import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { usePortalChat } from '@/lib/hooks/use-portal-chat'
 import type { ChatAttachment } from '@/lib/types'
@@ -20,24 +21,50 @@ function isImageUrl(url: string): boolean {
 
 const URL_PATTERN = /(https?:\/\/[^\s]+)/
 
+// Convert any URL pointing to this portal into a relative path for in-app
+// navigation. External URLs stay absolute and open in a new tab.
+function toInternalPath(url: string): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.origin === window.location.origin) {
+      return parsed.pathname + parsed.search + parsed.hash
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 function renderMessageText(text: string, isOwn: boolean) {
   const parts = text.split(URL_PATTERN)
-  return parts.map((part, i) =>
-    URL_PATTERN.test(part) ? (
+  const linkClass = cn(
+    'underline underline-offset-2 break-all',
+    isOwn ? 'text-blue-100 hover:text-white' : 'text-blue-600 hover:text-blue-800'
+  )
+  return parts.map((part, i) => {
+    if (!URL_PATTERN.test(part)) return part
+    const internalPath = toInternalPath(part)
+    if (internalPath) {
+      // Same-origin link → in-app SPA navigation, stays inside the PWA
+      return (
+        <Link key={i} href={internalPath} className={linkClass}>
+          {part}
+        </Link>
+      )
+    }
+    return (
       <a
         key={i}
         href={part}
         target="_blank"
         rel="noopener noreferrer"
-        className={cn(
-          'underline underline-offset-2 break-all',
-          isOwn ? 'text-blue-100 hover:text-white' : 'text-blue-600 hover:text-blue-800'
-        )}
+        className={linkClass}
       >
         {part}
       </a>
-    ) : part
-  )
+    )
+  })
 }
 
 function formatFileSize(bytes: number): string {
