@@ -19,12 +19,13 @@
  *   - Allow publication from any status other than 'draft'
  */
 
+import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
-import { createWelcomeToken } from "@/lib/portal/welcome-token"
+import { createWelcomeToken, findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { APP_BASE_URL, PORTAL_BASE_URL } from "@/lib/config"
 
@@ -327,9 +328,9 @@ export interface ResendOfferEmailResult {
  *     re-send.
  *   - Does NOT change offers.status or leads.status. Whether the client viewed
  *     or signed the offer is independent of email delivery.
- *   - Issues a fresh welcome token ONLY when a new portal user is created
- *     (defensive branch). Existing portal users keep their previous welcome
- *     token; we can't re-derive their password without resetting it.
+ *   - For an existing portal user, reuses the latest valid welcome token for
+ *     this offer if one exists; otherwise rotates the auth password and
+ *     issues a fresh welcome token so staff has a working credentials URL.
  *   - Logs action_log with action_type='resend' so audit history is distinct
  *     from the original publish.
  */
@@ -379,7 +380,10 @@ export async function resendOfferEmail(
   const emailType: ResendOfferEmailResult["emailType"] =
     createdPortalUser && tempPassword ? "portal_access" : "portal_notification"
 
-  // 3. Issue a fresh welcome token only when we have a new temp password
+  // 3. Issue a fresh welcome token. New-user branch already has a temp
+  // password from autoCreatePortalUser. For an existing user, reuse the
+  // latest valid welcome token if one exists; otherwise rotate the auth
+  // password and create a new one so staff has a working credentials URL.
   let welcomeUrl: string | undefined
   if (createdPortalUser && tempPassword) {
     try {
@@ -391,6 +395,31 @@ export async function resendOfferEmail(
         sourceId: token,
       })
       welcomeUrl = welcome.welcomeUrl
+    } catch {
+      // best-effort — email send must not be blocked by welcome-token failure
+    }
+  } else if (existingUser) {
+    try {
+      const existingLink = await findWelcomeTokenBySource("offer", token)
+      if (existingLink && new Date(existingLink.expires_at).getTime() > Date.now()) {
+        welcomeUrl = existingLink.welcomeUrl
+      } else {
+        const newPassword = crypto.randomBytes(4).toString("hex")
+        const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(
+          existingUser.id,
+          { password: newPassword },
+        )
+        if (!pwErr) {
+          const welcome = await createWelcomeToken({
+            email: offer.client_email,
+            tempPassword: newPassword,
+            language: offer.language || "en",
+            source: "offer",
+            sourceId: token,
+          })
+          welcomeUrl = welcome.welcomeUrl
+        }
+      }
     } catch {
       // best-effort — email send must not be blocked by welcome-token failure
     }

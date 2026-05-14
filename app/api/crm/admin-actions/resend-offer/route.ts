@@ -6,13 +6,15 @@
  * does NOT create new versions, does NOT have any destructive effect.
  */
 
+import crypto from "node:crypto"
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { gmailPost } from "@/lib/gmail"
-import { findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
+import { createWelcomeToken, findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 
 export async function POST(request: Request) {
@@ -120,19 +122,38 @@ export async function POST(request: Request) {
     })
 
     // Look up the most recent welcome-link for this offer so the caller can
-    // refresh the "Copy Welcome Link" button. Returns null if no welcome
-    // token was ever issued (offer pre-dates the welcome-link feature, or
-    // the original publish hit the existing-user branch) or if the latest
-    // one is expired. We never regenerate here — that requires a fresh temp
-    // password, which would mean resetting the client's auth password.
+    // refresh the "Copy Welcome Link" button. If none exists (offer pre-dates
+    // the welcome-link feature, or the original publish hit the existing-user
+    // branch) or the latest one is expired, regenerate: rotate the client's
+    // auth password to a fresh temp and issue a new welcome token so staff
+    // has a working credentials URL to share via WhatsApp / Telegram / SMS.
     let welcomeUrl: string | null = null
     try {
       const link = await findWelcomeTokenBySource("offer", offer.token)
       if (link && new Date(link.expires_at).getTime() > Date.now()) {
         welcomeUrl = link.welcomeUrl
+      } else {
+        const authUser = await findAuthUserByEmail(offer.client_email)
+        if (authUser) {
+          const tempPassword = crypto.randomBytes(4).toString("hex")
+          const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(
+            authUser.id,
+            { password: tempPassword },
+          )
+          if (!pwErr) {
+            const welcome = await createWelcomeToken({
+              email: offer.client_email,
+              tempPassword,
+              language: offer.language || "en",
+              source: "offer",
+              sourceId: offer.token,
+            })
+            welcomeUrl = welcome.welcomeUrl
+          }
+        }
       }
     } catch {
-      // welcome-link lookup is best-effort; do not fail the resend
+      // welcome-link lookup/regeneration is best-effort; do not fail the resend
     }
 
     logAction({
