@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState, Suspense } from 'react'
-import { useParams } from 'next/navigation'
-import { ContactRequestForm } from '@/components/forms/contact-request-form'
+import { useParams, useSearchParams } from 'next/navigation'
+import dynamic from 'next/dynamic'
 
 /**
  * Generic portal form viewer. Detects the form type from the token+code
@@ -10,13 +10,27 @@ import { ContactRequestForm } from '@/components/forms/contact-request-form'
  * INSIDE the portal layout (logged in, sidebar visible).
  *
  * To support a new form type:
- *   1. Register it in FORM_TABLES in /api/forms/lookup
- *   2. Import its form component and add a case in renderForm() below
+ *   1. Add ONE entry to lib/forms/registry.ts
+ *   2. Add ONE dynamic() line to FORM_COMPONENTS below
  */
+
+type FormComponentProps = { token: string; accessCode: string; embedded: true; adminMode?: boolean }
+
+const FORM_COMPONENTS: Record<string, React.ComponentType<FormComponentProps>> = {
+  contact_request: dynamic(() =>
+    import('@/components/forms/contact-request-form').then(m => ({ default: m.ContactRequestForm as React.ComponentType<FormComponentProps> }))
+  ),
+  member_info: dynamic(() =>
+    import('@/components/forms/member-info-form').then(m => ({ default: m.MemberInfoForm as React.ComponentType<FormComponentProps> }))
+  ),
+}
+
 function PortalFormPageInner() {
   const params = useParams()
+  const searchParams = useSearchParams()
   const token = String(params.token)
   const accessCode = String(params.access_code)
+  const adminMode = searchParams.get('preview') === 'td'
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -55,16 +69,17 @@ function PortalFormPageInner() {
     )
   }
 
-  switch (formType) {
-    case 'contact_request':
-      return <ContactRequestForm token={token} accessCode={accessCode} embedded />
-    default:
-      return (
-        <div className="p-8 max-w-md mx-auto bg-white rounded-lg border mt-8 text-center">
-          <p className="text-amber-700">This form type is not yet available in the portal viewer.</p>
-        </div>
-      )
+  const FormComponent = formType ? FORM_COMPONENTS[formType] : undefined
+
+  if (!FormComponent) {
+    return (
+      <div className="p-8 max-w-md mx-auto bg-white rounded-lg border mt-8 text-center">
+        <p className="text-amber-700">This form type is not yet available in the portal viewer.</p>
+      </div>
+    )
   }
+
+  return <FormComponent token={token} accessCode={accessCode} embedded adminMode={adminMode} />
 }
 
 export default function PortalFormPage() {

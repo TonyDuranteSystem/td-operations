@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { APP_BASE_URL } from "@/lib/config"
+import { buildFormUrl, buildAdminPreviewUrl } from "@/lib/forms/smart-url"
 import { notifyClientOfAdminMessage } from "@/lib/portal/notifications"
 
 export const dynamic = "force-dynamic"
@@ -186,8 +186,8 @@ export async function POST(
     accessCode = created.access_code
   }
 
-  const formUrl = `${APP_BASE_URL}/member-info/${token}/${accessCode}`
-  const adminPreviewUrl = `${formUrl}?preview=td`
+  const formUrl = await buildFormUrl({ contactId, token, accessCode, formType: 'member_info' })
+  const adminPreviewUrl = buildAdminPreviewUrl('member_info', token, accessCode)
 
   const chatMessage = isItalian
     ? `Ciao! Abbiamo bisogno di aggiornare le informazioni dei soci di **${account.company_name}**.\n\nPer favore compila questo breve modulo con i dati aggiornati di tutti i soci:\n\n${formUrl}`

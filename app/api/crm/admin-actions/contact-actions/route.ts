@@ -22,7 +22,7 @@ import { upgradePortalTier } from "@/lib/portal/auto-create"
 import { createSD } from "@/lib/operations/service-delivery"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
-import { APP_BASE_URL } from "@/lib/config"
+import { buildFormUrl } from "@/lib/forms/smart-url"
 import type { Json } from "@/lib/database.types"
 import { enqueueJob } from "@/lib/jobs/queue"
 import {
@@ -704,8 +704,13 @@ export async function POST(req: NextRequest) {
               einSideEffects.push("Member info request created")
             }
 
-            const formUrl = `${APP_BASE_URL}/member-info/${reqToken}/${reqCode}`
             const msgRecipient = contact_id || null
+            const formUrl = await buildFormUrl({
+              contactId: msgRecipient ?? '',
+              token: reqToken,
+              accessCode: reqCode,
+              formType: 'member_info',
+            })
 
             if (msgRecipient) {
               await supabaseAdmin.from("portal_messages").insert({

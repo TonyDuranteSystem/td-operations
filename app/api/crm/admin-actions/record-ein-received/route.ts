@@ -7,7 +7,7 @@ import { advanceStage, createSD } from '@/lib/operations/service-delivery'
 import { updateAccount } from '@/lib/operations/account'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { enqueueJob } from '@/lib/jobs/queue'
-import { APP_BASE_URL } from '@/lib/config'
+import { buildFormUrl } from '@/lib/forms/smart-url'
 
 export async function POST(req: NextRequest) {
   try {
@@ -203,10 +203,14 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        memberInfoFormUrl = `${APP_BASE_URL}/member-info/${reqToken}/${reqCode}`
-
         // Send portal message to primary contact
         const primaryContact = formationSD.contact_id
+        memberInfoFormUrl = await buildFormUrl({
+          contactId: primaryContact ?? '',
+          token: reqToken,
+          accessCode: reqCode,
+          formType: 'member_info',
+        })
         if (primaryContact) {
           const msgBody = `Great news! The EIN for ${account.company_name} has been issued (${normalizedEIN}).\n\nTo proceed with opening your business bank account, we need the complete information for all LLC members.\n\nPlease fill out this short form:\n${memberInfoFormUrl}\n\nOnce submitted, we will update your account and guide you through the next steps.`
           await supabaseAdmin.from('portal_messages').insert({

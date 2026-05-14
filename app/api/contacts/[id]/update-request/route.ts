@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { APP_BASE_URL } from "@/lib/config"
 import { notifyClientOfAdminMessage } from "@/lib/portal/notifications"
-import { buildFormUrl } from "@/lib/forms/smart-url"
+import { buildFormUrl, buildAdminPreviewUrl } from "@/lib/forms/smart-url"
 
 export const dynamic = "force-dynamic"
 
@@ -132,9 +131,9 @@ export async function POST(
     contactId,
     token,
     accessCode,
-    publicPath: "contact-request",
+    formType: 'contact_request',
   })
-  const adminPreviewUrl = `${APP_BASE_URL}/contact-request/${token}/${accessCode}?preview=td`
+  const adminPreviewUrl = buildAdminPreviewUrl('contact_request', token, accessCode)
 
   const chatMessage = isItalian
     ? `Ciao! Per favore conferma o aggiorna i tuoi dati di contatto compilando questo breve modulo:\n\n${formUrl}`
