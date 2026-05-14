@@ -8,6 +8,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { createSD } from "@/lib/operations/service-delivery"
+import { auditClientHealth, type Severity } from "@/lib/operations/client-health-audit"
 
 export function registerOperationsTools(server: McpServer) {
 
@@ -1316,6 +1317,56 @@ export function registerOperationsTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // audit_client_health
+  // ═══════════════════════════════════════
+  server.tool(
+    "audit_client_health",
+    "Run the 20-rule client health audit on a single account. Returns findings only (no fix actions). Rules cover: tier consistency, portal access, SS-4 sync, CMRA SD advance after lease, Formation SD continuity, One-Time scope, renewal dates, document completeness, onboarding vs formation context, Tax Return dual tracking, offer type consistency, lead linkage, DBA tracking, MMLLC member completeness, OA signer count, closed-account portal access, same-year tax return on new formation, partner client service scope, legacy/stale statuses (legacy tax_return statuses + pending payments > 30d), entity type validation. Pure data audit — does NOT mutate state.",
+    {
+      account_id: z.string().uuid().describe("Account UUID to audit"),
+    },
+    async ({ account_id }) => {
+      try {
+        const result = await auditClientHealth(account_id)
+        const icon: Record<Severity, string> = { error: "🔴", warning: "🟠", info: "🔵" }
+
+        const header = [
+          `# Client Health Audit — ${result.company_name ?? result.account_id}`,
+          `Generated: ${result.generated_at}`,
+          `Summary: ${result.summary.error} error · ${result.summary.warning} warning · ${result.summary.info} info (${result.summary.total} total)`,
+          "",
+        ]
+
+        if (result.findings.length === 0) {
+          return { content: [{ type: "text" as const, text: [...header, "✅ No findings — all 10 rules passed."].join("\n") }] }
+        }
+
+        const grouped: Record<string, typeof result.findings> = {}
+        for (const f of result.findings) {
+          const key = `${f.rule_id} · ${f.rule_title}`
+          if (!grouped[key]) grouped[key] = []
+          grouped[key].push(f)
+        }
+
+        const body: string[] = []
+        for (const [key, items] of Object.entries(grouped)) {
+          body.push(`## ${key}`)
+          for (const f of items) {
+            body.push(`- ${icon[f.severity]} **${f.severity.toUpperCase()}** — ${f.description}`)
+            if (f.current_value) body.push(`  - Current: \`${f.current_value}\``)
+            if (f.expected_value) body.push(`  - Expected: \`${f.expected_value}\``)
+          }
+          body.push("")
+        }
+
+        return { content: [{ type: "text" as const, text: [...header, ...body].join("\n") }] }
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Audit error: ${error instanceof Error ? error.message : String(error)}` }] }
       }
     }
   )
