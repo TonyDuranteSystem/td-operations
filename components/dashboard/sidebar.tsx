@@ -40,6 +40,7 @@ import {
   AlertTriangle,
   ClipboardCheck,
   MapPin,
+  LayoutGrid,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -98,6 +99,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'addresses', name: 'Addresses', href: '/addresses', icon: MapPin, tooltip: 'Address registry — manage shared legal, mailing, and registered agent addresses used across all accounts.' },
   { id: 'pipeline', name: 'Pipeline', href: '/pipeline', icon: TrendingUp, tooltip: 'Visual pipeline of active service deliveries across all stages.' },
   { id: 'trackers', name: 'Trackers', href: '/trackers', icon: Gauge, tooltip: 'Track service deliveries by type — drag cards between stages to advance.' },
+  { id: 'pipeline-overview', name: 'Pipeline Overview', href: '/pipeline-overview', icon: LayoutGrid, tooltip: 'All active service deliveries across every pipeline in one view — oldest cards surface first.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, adminOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Admin only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
