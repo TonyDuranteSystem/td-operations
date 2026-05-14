@@ -3378,6 +3378,111 @@ export type Database = {
           },
         ]
       }
+      contact_request_forms: {
+        Row: {
+          access_code: string
+          account_id: string | null
+          created_at: string
+          form_type: string
+          id: string
+          pre_populated_data: Json | null
+          recipient_contact_id: string
+          status: string
+          submitted_at: string | null
+          submitted_data: Json | null
+          target_contact_id: string | null
+          token: string
+          updated_at: string
+        }
+        Insert: {
+          access_code?: string
+          account_id?: string | null
+          created_at?: string
+          form_type: string
+          id?: string
+          pre_populated_data?: Json | null
+          recipient_contact_id: string
+          status?: string
+          submitted_at?: string | null
+          submitted_data?: Json | null
+          target_contact_id?: string | null
+          token?: string
+          updated_at?: string
+        }
+        Update: {
+          access_code?: string
+          account_id?: string | null
+          created_at?: string
+          form_type?: string
+          id?: string
+          pre_populated_data?: Json | null
+          recipient_contact_id?: string
+          status?: string
+          submitted_at?: string | null
+          submitted_data?: Json | null
+          target_contact_id?: string | null
+          token?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contact_request_forms_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_recipient_contact_id_fkey"
+            columns: ["recipient_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_recipient_contact_id_fkey"
+            columns: ["recipient_contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_target_contact_id_fkey"
+            columns: ["target_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_request_forms_target_contact_id_fkey"
+            columns: ["target_contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
           address_city: string | null

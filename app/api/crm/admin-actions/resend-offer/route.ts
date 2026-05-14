@@ -12,6 +12,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { gmailPost } from "@/lib/gmail"
+import { findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
 import { PORTAL_BASE_URL, APP_BASE_URL } from "@/lib/config"
 
 export async function POST(request: Request) {
@@ -118,6 +119,22 @@ export async function POST(request: Request) {
       gmail_message_id: gmailResult.id,
     })
 
+    // Look up the most recent welcome-link for this offer so the caller can
+    // refresh the "Copy Welcome Link" button. Returns null if no welcome
+    // token was ever issued (offer pre-dates the welcome-link feature, or
+    // the original publish hit the existing-user branch) or if the latest
+    // one is expired. We never regenerate here — that requires a fresh temp
+    // password, which would mean resetting the client's auth password.
+    let welcomeUrl: string | null = null
+    try {
+      const link = await findWelcomeTokenBySource("offer", offer.token)
+      if (link && new Date(link.expires_at).getTime() > Date.now()) {
+        welcomeUrl = link.welcomeUrl
+      }
+    } catch {
+      // welcome-link lookup is best-effort; do not fail the resend
+    }
+
     logAction({
       actor: "crm-admin",
       action_type: "email",
@@ -130,12 +147,14 @@ export async function POST(request: Request) {
         email_type: "resend_reminder",
         admin_email: user?.email,
         tracking_id: trackingId,
+        welcome_url: welcomeUrl,
       },
     })
 
     return NextResponse.json({
       ok: true,
       message: `Reminder email sent to ${offer.client_email}`,
+      welcome_url: welcomeUrl,
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

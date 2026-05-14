@@ -59,6 +59,7 @@ export function AccountOfferPanel({
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [welcomeUrl, setWelcomeUrl] = useState<string | null>(null)
   const [welcomeCopied, setWelcomeCopied] = useState(false)
+  const [resendingEmail, setResendingEmail] = useState(false)
 
   // Offer panel visible to all dashboard users (admin + team)
 
@@ -135,6 +136,33 @@ export function AccountOfferPanel({
       setTimeout(() => setWelcomeCopied(false), 2000)
     } catch {
       toast.error('Could not copy to clipboard')
+    }
+  }
+
+  const doResendEmail = async () => {
+    if (!offer?.token || resendingEmail) return
+    setResendingEmail(true)
+    try {
+      const res = await fetch('/api/crm/admin-actions/resend-offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offer_token: offer.token }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to resend email')
+      }
+      toast.success(data.message || `Reminder email sent to ${clientEmail}`)
+      // Refresh welcome link from the response — null clears the Copy button
+      // (e.g. when the previous welcome token has expired and no new one
+      // could be generated).
+      if (Object.prototype.hasOwnProperty.call(data, 'welcome_url')) {
+        setWelcomeUrl(data.welcome_url ?? null)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to resend email')
+    } finally {
+      setResendingEmail(false)
     }
   }
 
@@ -297,6 +325,20 @@ export function AccountOfferPanel({
                   {welcomeCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                   {welcomeCopied ? 'Copied' : 'Copy Welcome Link'}
                   <LinkIcon className="h-3 w-3 opacity-60" />
+                </button>
+              )}
+
+              {/* Resend Email — non-draft offers only. Sends a portal reminder
+                  email and refreshes the welcome-link state from the response. */}
+              {hasOffer && !isOfferDraft && clientEmail && (
+                <button
+                  onClick={doResendEmail}
+                  disabled={resendingEmail}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+                  title="Re-send the portal reminder email. Status is unchanged."
+                >
+                  {resendingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                  Resend Email
                 </button>
               )}
 

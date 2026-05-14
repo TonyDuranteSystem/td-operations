@@ -14,7 +14,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
-import { publishOffer } from "@/lib/offers/publish"
+import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
@@ -588,6 +588,59 @@ Only works on 'draft' offers. Use offer_get to review content before calling thi
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         return { content: [{ type: "text" as const, text: `❌ offer_send error: ${msg}` }] }
+      }
+    }
+  )
+
+  // ═══════════════════════════════════════
+  // offer_resend — Re-send the portal email for an already-published offer
+  // ═══════════════════════════════════════
+  server.tool(
+    "offer_resend",
+    `Re-send the portal access / portal notification email for an offer that's already past 'draft'. Use this when a client says they did not receive the original email.
+
+What it does:
+1. Re-sends the portal-access email (new portal users) or portal-notification email (existing portal users) — same templates as offer_send
+2. Issues a fresh welcome-link token + URL when a new portal user is created (defensive branch)
+3. Logs to action_log with action_type='resend'
+
+What it does NOT do:
+- Change the offer status
+- Change the lead status
+- Apply the 7-day idempotency gate (this is a deliberate re-send)
+
+Only works on offers past 'draft'. Use offer_send for the initial publish.`,
+    {
+      token: z.string().describe("Offer token to resend"),
+    },
+    async ({ token }) => {
+      try {
+        const result = await resendOfferEmail(token, "claude.ai")
+
+        if (!result.success) {
+          return { content: [{ type: "text" as const, text: `❌ ${result.error}` }] }
+        }
+
+        const welcomeLine = result.welcomeUrl
+          ? `🔗 Welcome link: ${result.welcomeUrl} (share via WhatsApp/Telegram)`
+          : ""
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `✅ Offer email resent`,
+              ``,
+              `📧 Email type: ${result.emailType}`,
+              `🆔 Message ID: ${result.gmailMessageId}`,
+              `👁️ Open tracking: ${result.trackingId}`,
+              welcomeLine,
+            ].filter(Boolean).join("\n"),
+          }],
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return { content: [{ type: "text" as const, text: `❌ offer_resend error: ${msg}` }] }
       }
     }
   )
