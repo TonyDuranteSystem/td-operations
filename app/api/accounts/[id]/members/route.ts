@@ -11,7 +11,7 @@ export async function GET(
   try {
     const { data, error } = await supabaseAdmin
       .from("members")
-      .select("id, member_type, full_name, company_name, email, phone, ownership_pct, is_primary, is_signer, contact_id, ein, representative_name, representative_email, representative_phone, address_street, address_city, address_state, address_country, updated_at")
+      .select("*")
       .eq("account_id", params.id)
       .order("is_primary", { ascending: false })
 
