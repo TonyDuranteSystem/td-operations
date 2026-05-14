@@ -240,6 +240,8 @@ function ContactsSection({
   const [newEmail, setNewEmail] = useState('')
   const [creating, setCreating] = useState(false)
   const [unlinkTarget, setUnlinkTarget] = useState<{ id: string; name: string; role: string | null } | null>(null)
+  const [sendingNewContact, setSendingNewContact] = useState(false)
+  const [updatingContactId, setUpdatingContactId] = useState<string | null>(null)
 
   const CONTACT_ROLE_OPTIONS = [
     { label: '—', value: '' },
@@ -308,6 +310,44 @@ function ContactsSection({
     }
   }
 
+  const handleSendNewContactRequest = async () => {
+    setSendingNewContact(true)
+    try {
+      const res = await fetch(`/api/accounts/${account.id}/contact-request`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to send request')
+        return
+      }
+      toast.success(data.is_existing ? 'Request resent via portal chat' : 'Request sent via portal chat')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to send request')
+    } finally {
+      setSendingNewContact(false)
+    }
+  }
+
+  const handleSendUpdateRequest = async (contactId: string, contactName: string) => {
+    setUpdatingContactId(contactId)
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/update-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: account.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to send update request')
+        return
+      }
+      toast.success(`Update request sent to ${contactName}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to send update request')
+    } finally {
+      setUpdatingContactId(null)
+    }
+  }
+
   const handleLink = async (contactId: string, contactName: string) => {
     setLinking(true)
     try {
@@ -335,13 +375,24 @@ function ContactsSection({
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
           Contacts ({contacts.length})
         </h3>
-        <button
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSendNewContactRequest}
+            disabled={sendingNewContact || contacts.length === 0}
+            className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            title={contacts.length === 0 ? 'Link a contact first to receive the request' : 'Send a form to the owner to add a new contact'}
+          >
+            {sendingNewContact ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            Request New Contact
+          </button>
+          <button
             onClick={() => setShowSearch(!showSearch)}
             className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
           >
             <Plus className="h-3.5 w-3.5" />
             Link Contact
           </button>
+        </div>
       </div>
 
       {/* Link contact search */}
@@ -458,8 +509,16 @@ function ContactsSection({
                   {c.full_name}
                 </Link>
                 <button
+                  onClick={() => handleSendUpdateRequest(c.id, c.full_name)}
+                  disabled={updatingContactId === c.id}
+                  className="ml-auto p-1 rounded hover:bg-emerald-50 text-zinc-300 hover:text-emerald-600 transition-colors disabled:opacity-40"
+                  title={`Ask ${c.full_name} to confirm or update their info`}
+                >
+                  {updatingContactId === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                </button>
+                <button
                   onClick={() => setUnlinkTarget({ id: c.id, name: c.full_name, role: c.role ?? null })}
-                  className="ml-auto p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
+                  className="p-1 rounded hover:bg-red-50 text-zinc-300 hover:text-red-500 transition-colors"
                   title={`Remove ${c.full_name} from this company`}
                 >
                   <Unlink className="h-3.5 w-3.5" />
