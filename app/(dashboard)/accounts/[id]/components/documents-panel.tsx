@@ -18,6 +18,8 @@ interface DocStatus {
   created_at?: string | null
   suite_number?: string
   contract_year?: number
+  term_start_date?: string | null
+  term_end_date?: string | null
 }
 
 interface DocumentStatuses {
@@ -34,6 +36,7 @@ interface DocumentsPanelProps {
   onGenerateOA: () => void
   onGenerateLease: () => void
   onGenerateSS4: () => void
+  onRegenLease: (leaseId: string, data: { signedAt?: string | null; termStartDate?: string | null; termEndDate?: string | null }) => void
 }
 
 const STATUS_CONFIG: Record<string, { icon: typeof CheckCircle2; color: string; label: string }> = {
@@ -55,7 +58,7 @@ function formatDate(d: string | null | undefined): string {
   }
 }
 
-export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLease, onGenerateSS4 }: DocumentsPanelProps) {
+export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLease, onGenerateSS4, onRegenLease }: DocumentsPanelProps) {
   const router = useRouter()
   const [statuses, setStatuses] = useState<DocumentStatuses | null>(null)
   const [loading, setLoading] = useState(true)
@@ -276,6 +279,22 @@ export function DocumentsPanel({ accountId, isAdmin, onGenerateOA, onGenerateLea
                       >
                         <RefreshCw className="h-3 w-3" />
                         Recreate
+                      </button>
+                    )}
+
+                    {/* Regen PDF button for signed lease */}
+                    {doc.key === 'lease' && status === 'signed' && doc.data && (
+                      <button
+                        onClick={() => onRegenLease(doc.data!.id, {
+                          signedAt: doc.data!.signed_at,
+                          termStartDate: doc.data!.term_start_date,
+                          termEndDate: doc.data!.term_end_date,
+                        })}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-zinc-50 text-zinc-600 hover:bg-zinc-100 transition-colors"
+                        title="Regenerate PDF with new dates"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Regen PDF
                       </button>
                     )}
 

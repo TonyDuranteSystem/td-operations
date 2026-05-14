@@ -18,6 +18,7 @@ import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/documents-panel'
 import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/generate-oa-dialog'
 import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-lease-dialog'
+import { RegenLeasePdfDialog } from '@/app/(dashboard)/accounts/[id]/components/regen-lease-pdf-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from './service-deliveries-section'
@@ -568,6 +569,12 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
+  const [regenLeaseData, setRegenLeaseData] = useState<{
+    leaseId: string
+    signedAt?: string | null
+    termStartDate?: string | null
+    termEndDate?: string | null
+  } | null>(null)
   const [showPlaceClient, setShowPlaceClient] = useState(false)
   const [showDiagnostic, setShowDiagnostic] = useState(false)
   const [showStatusDialog, setShowStatusDialog] = useState(false)
@@ -732,6 +739,7 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         onGenerateOA={() => setShowOADialog(true)}
         onGenerateLease={() => setShowLeaseDialog(true)}
         onGenerateSS4={() => setShowSS4Dialog(true)}
+        onRegenLease={(leaseId, data) => setRegenLeaseData({ leaseId, ...data })}
       />
 
       {/* SS-4 / EIN Application Pipeline Card */}
@@ -769,6 +777,14 @@ export function AccountDetail({ account, contacts, services, payments, deals, ta
         onClose={() => setShowLeaseDialog(false)}
         accountId={account.id}
         companyName={account.company_name}
+      />
+      <RegenLeasePdfDialog
+        open={!!regenLeaseData}
+        onClose={() => setRegenLeaseData(null)}
+        leaseId={regenLeaseData?.leaseId ?? ''}
+        signedAt={regenLeaseData?.signedAt}
+        termStartDate={regenLeaseData?.termStartDate}
+        termEndDate={regenLeaseData?.termEndDate}
       />
       <GenerateSS4Dialog
         open={showSS4Dialog}
