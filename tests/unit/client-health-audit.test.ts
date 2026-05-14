@@ -30,6 +30,10 @@ import {
   rule28_duplicatePayments,
   rule29_taxReturnSDStageAlignment,
   rule30_oneTimeTaxReturnServiceType,
+  rule31_mmllcMemberPortalAccess,
+  rule32_stuckClientOnboardingSD,
+  rule33_placeholderPayment,
+  rule34_clientSinceVsFormationDate,
   runRules,
   type HealthContext,
   type AccountRow,
@@ -123,6 +127,46 @@ describe("rule1_tierConsistency", () => {
       contacts: [{ id: "c1", email: "x@y.com", portal_tier: "active" }],
     })
     expect(rule1_tierConsistency(ctx)).toEqual([])
+  })
+
+  it("flags EIN + tier='onboarding' as ERROR with explicit tier-name in message", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ ein_number: "12-3456789", portal_tier: "onboarding" }),
+    })
+    const findings = rule1_tierConsistency(ctx)
+    expect(findings.some(f => f.severity === "error" && f.description.includes("'onboarding'"))).toBe(true)
+  })
+
+  it("flags EIN + tier='formation' as ERROR with explicit tier-name in message", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ ein_number: "12-3456789", portal_tier: "formation" }),
+    })
+    const findings = rule1_tierConsistency(ctx)
+    expect(findings.some(f => f.severity === "error" && f.description.includes("'formation'"))).toBe(true)
+  })
+
+  it("flags tier='lead' with a Paid payment as WARNING (tier should have advanced)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ portal_tier: "lead" }),
+      payments: [{
+        id: "p1", description: "Onboarding", status: "Paid", amount: 500,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    const findings = rule1_tierConsistency(ctx)
+    expect(findings.some(f => f.severity === "warning" && f.description.includes("'lead'"))).toBe(true)
+  })
+
+  it("does NOT flag tier='lead' when payments are Pending (not Paid)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ portal_tier: "lead" }),
+      payments: [{
+        id: "p1", description: "Onboarding", status: "Pending", amount: 500,
+        paid_date: null, created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    const findings = rule1_tierConsistency(ctx)
+    expect(findings.some(f => f.description.includes("'lead' but"))).toBe(false)
   })
 })
 
@@ -958,7 +1002,46 @@ describe("rule13_dbaTracking", () => {
     const findings = rule13_dbaTracking(ctx)
     expect(findings).toHaveLength(1)
     expect(findings[0].severity).toBe("info")
-    expect(findings[0].description).toContain("no DBA tracking")
+    expect(findings[0].description).toContain("DBA document found")
+  })
+
+  it("flags dba_details rows linked through SDs (canonical DBA store)", () => {
+    const ctx = emptyCtx({
+      dba_details: [
+        { id: "dba1", dba_name: "Everboost Trading", delivery_id: "sd1" },
+      ],
+    })
+    const findings = rule13_dbaTracking(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("dba_details")
+    expect(findings[0].current_value).toContain("Everboost Trading")
+  })
+
+  it("flags 'doing business' phrase in accounts.notes", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ notes: "Company is also doing business as Fiscalot Pay." }),
+    })
+    const findings = rule13_dbaTracking(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("accounts.notes")
+  })
+
+  it("flags 'd/b/a' keyword in accounts.notes", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ notes: "Operates d/b/a Acme Holdings." }),
+    })
+    expect(rule13_dbaTracking(ctx)).toHaveLength(1)
+  })
+
+  it("emits one finding PER signal when dba_details, doc, and notes all hit", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ notes: "DBA on file" }),
+      dba_details: [{ id: "dba1", dba_name: "Brand X", delivery_id: "sd1" }],
+      documents: [{ id: "d1", account_id: ACCOUNT_ID, contact_id: null, document_type_name: "DBA Filing", file_name: "dba.pdf" }],
+    })
+    const findings = rule13_dbaTracking(ctx)
+    expect(findings).toHaveLength(3)
+    expect(findings.every(f => f.rule_id === "R13")).toBe(true)
   })
 
   it("flags document with 'Trade Name' in file_name", () => {
@@ -1400,6 +1483,54 @@ describe("rule18_partnerServiceScope", () => {
         { id: "p1", contact_id: "c1", partner_name: "Partner A", agreed_services: ["cmra"] },
         { id: "p2", contact_id: "c1", partner_name: "Partner B", agreed_services: ["state_ra_renewal"] },
       ],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("flags via accounts.partner_id → account_partner (canonical link, no contact partner row)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        account_type: "One-Time",
+        partner_id: "p-account",
+        ra_renewal_date: "2027-01-01",
+      }),
+      account_partner: {
+        id: "p-account", contact_id: "partner-contact", partner_name: "Maxscale",
+        agreed_services: ["cmra"],
+      },
+      client_partners: [],
+    })
+    const findings = rule18_partnerServiceScope(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].current_value).toContain("Maxscale")
+    expect(findings[0].current_value).toContain("RA renewal")
+  })
+
+  it("does NOT flag when accounts.partner_id agreed_services covers the renewal column", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        account_type: "One-Time",
+        partner_id: "p-account",
+        cmra_renewal_date: "2026-12-31",
+      }),
+      account_partner: {
+        id: "p-account", contact_id: "partner-contact", partner_name: "Maxscale",
+        agreed_services: ["cmra"],
+      },
+      client_partners: [],
+    })
+    expect(rule18_partnerServiceScope(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when neither accounts.partner_id nor client_partners are set", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({
+        account_type: "One-Time",
+        partner_id: null,
+        ra_renewal_date: "2027-01-01",
+      }),
+      account_partner: null,
+      client_partners: [],
     })
     expect(rule18_partnerServiceScope(ctx)).toEqual([])
   })
@@ -2224,6 +2355,33 @@ describe("rule27_taxReturnYearValidation", () => {
     })
     expect(rule27_taxReturnYearValidation(ctx, NOW)).toEqual([])
   })
+
+  it("does NOT fire first-year check for ONBOARDING clients (offer.contract_type=onboarding)", () => {
+    // Company formed in 2010 (way before TD relationship), first TR is 2024 —
+    // this is correct for an onboarding client who filed earlier years
+    // themselves. R27's first-return check must skip.
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2010-04-15" }),
+      tax_returns: [{ id: "tr1", tax_year: 2024, status: "Filed" }],
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.description.includes("first tax return should be for"))).toBe(false)
+  })
+
+  it("does NOT fire first-year check when R25 gap heuristic identifies an onboarding client", () => {
+    // Formation 2010, first payment 2024 → R25 onboarding gap (> 6 months).
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2010-04-15" }),
+      tax_returns: [{ id: "tr1", tax_year: 2024, status: "Filed" }],
+      payments: [{
+        id: "p1", description: "Annual fee", status: "Paid", amount: 1200,
+        paid_date: "2024-01-15", created_at: "2024-01-15T00:00:00Z",
+      }],
+    })
+    const findings = rule27_taxReturnYearValidation(ctx, NOW)
+    expect(findings.some(f => f.description.includes("first tax return should be for"))).toBe(false)
+  })
 })
 
 // ── R28: DUPLICATE PAYMENTS ────────────────────────────────────────────────
@@ -2499,6 +2657,338 @@ describe("rule30_oneTimeTaxReturnServiceType", () => {
       ],
     })
     expect(rule30_oneTimeTaxReturnServiceType(ctx)).toEqual([])
+  })
+})
+
+// ── R31: MMLLC MEMBER PORTAL ACCESS ────────────────────────────────────────
+
+describe("rule31_mmllcMemberPortalAccess", () => {
+  it("flags MMLLC member with contact_id but no auth user", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "person", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c-alice", email: "alice@example.com" },
+        { member_type: "person", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c-bob", email: "bob@example.com" },
+      ],
+      member_contact_ids_with_auth: ["c-alice"], // only Alice has auth
+    })
+    const findings = rule31_mmllcMemberPortalAccess(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R31")
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("Bob")
+    expect(findings[0].description).toContain("c-bob")
+  })
+
+  it("does NOT flag MMLLC members who all have auth users", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "person", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c-alice", email: "alice@example.com" },
+        { member_type: "person", full_name: "Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: "c-bob", email: "bob@example.com" },
+      ],
+      member_contact_ids_with_auth: ["c-alice", "c-bob"],
+    })
+    expect(rule31_mmllcMemberPortalAccess(ctx)).toEqual([])
+  })
+
+  it("does NOT fire for non-MMLLC accounts", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Single Member LLC" }),
+      members: [
+        { member_type: "person", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 100, contact_id: "c-alice", email: "alice@example.com" },
+      ],
+      member_contact_ids_with_auth: [],
+    })
+    expect(rule31_mmllcMemberPortalAccess(ctx)).toEqual([])
+  })
+
+  it("does NOT flag company-type members (the signer is the company's representative)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "person", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c-alice", email: "alice@example.com" },
+        { member_type: "company", full_name: "Holdco LLC", representative_name: "Bob Smith", is_primary: false, ownership_pct: 50, contact_id: "c-holdco", email: null },
+      ],
+      member_contact_ids_with_auth: ["c-alice"],
+    })
+    expect(rule31_mmllcMemberPortalAccess(ctx)).toEqual([])
+  })
+
+  it("skips members without contact_id (R14 already covers that case)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [
+        { member_type: "person", full_name: "Alice", representative_name: null, is_primary: true, ownership_pct: 50, contact_id: "c-alice", email: "alice@example.com" },
+        { member_type: "person", full_name: "Unlinked Bob", representative_name: null, is_primary: false, ownership_pct: 50, contact_id: null, email: "bob@example.com" },
+      ],
+      member_contact_ids_with_auth: ["c-alice"],
+    })
+    expect(rule31_mmllcMemberPortalAccess(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when members array is empty (R14 covers that)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ entity_type: "Multi Member LLC" }),
+      members: [],
+      member_contact_ids_with_auth: [],
+    })
+    expect(rule31_mmllcMemberPortalAccess(ctx)).toEqual([])
+  })
+})
+
+// ── R32: STUCK CLIENT ONBOARDING SD ────────────────────────────────────────
+
+describe("rule32_stuckClientOnboardingSD", () => {
+  const NOW = new Date("2026-06-01T00:00:00Z")
+
+  it("flags Client Onboarding SD stuck at 'Review & CRM Setup' for 30+ days (stage_entered_at)", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Client Onboarding", status: "in_progress",
+        stage: "Review & CRM Setup", stage_order: 2,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+        stage_entered_at: "2026-04-01T00:00:00Z", // 61 days before NOW
+        updated_at: "2026-04-01T00:00:00Z",
+      }],
+    })
+    const findings = rule32_stuckClientOnboardingSD(ctx, NOW)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R32")
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("Review & CRM Setup")
+    expect(findings[0].description).toMatch(/\b6[0-9] days/)
+  })
+
+  it("falls back to updated_at when stage_entered_at is missing", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Client Onboarding", status: "in_progress",
+        stage: "Review & CRM Setup", stage_order: 2,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-03-01T00:00:00Z",
+      }],
+    })
+    const findings = rule32_stuckClientOnboardingSD(ctx, NOW)
+    expect(findings).toHaveLength(1)
+  })
+
+  it("falls back to created_at when both timestamps are missing", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Client Onboarding", status: "in_progress",
+        stage: "Review & CRM Setup", stage_order: 2,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+      }],
+    })
+    const findings = rule32_stuckClientOnboardingSD(ctx, NOW)
+    expect(findings).toHaveLength(1)
+  })
+
+  it("does NOT flag SDs at 'Review & CRM Setup' for less than 30 days", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Client Onboarding", status: "in_progress",
+        stage: "Review & CRM Setup", stage_order: 2,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-05-15T00:00:00Z",
+        stage_entered_at: "2026-05-15T00:00:00Z", // ~17 days before NOW
+        updated_at: "2026-05-15T00:00:00Z",
+      }],
+    })
+    expect(rule32_stuckClientOnboardingSD(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag SDs at a different stage", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Client Onboarding", status: "in_progress",
+        stage: "Magic Button Sent", stage_order: 1,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+        stage_entered_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      }],
+    })
+    expect(rule32_stuckClientOnboardingSD(ctx, NOW)).toEqual([])
+  })
+
+  it("does NOT flag SDs of a different service_type", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Company Formation", status: "in_progress",
+        stage: "Review & CRM Setup", stage_order: 2,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+        stage_entered_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      }],
+    })
+    expect(rule32_stuckClientOnboardingSD(ctx, NOW)).toEqual([])
+  })
+
+  it("ignores cancelled Client Onboarding SDs", () => {
+    const ctx = emptyCtx({
+      service_deliveries: [{
+        id: "sd1", service_type: "Client Onboarding", status: "cancelled",
+        stage: "Review & CRM Setup", stage_order: 2,
+        account_id: ACCOUNT_ID, contact_id: null,
+        created_at: "2026-01-01T00:00:00Z",
+        stage_entered_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      }],
+    })
+    expect(rule32_stuckClientOnboardingSD(ctx, NOW)).toEqual([])
+  })
+})
+
+// ── R33: PLACEHOLDER PAYMENT AMOUNT ────────────────────────────────────────
+
+describe("rule33_placeholderPayment", () => {
+  it("flags a $1 payment as INFO", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Cash received", status: "Paid", amount: 1,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    const findings = rule33_placeholderPayment(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R33")
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("$1")
+    expect(findings[0].description).toContain("cash placeholder")
+  })
+
+  it("flags a $0.01 payment as INFO", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Manual entry", status: "Paid", amount: 0.01,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    const findings = rule33_placeholderPayment(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].description).toContain("$0.01")
+  })
+
+  it("does NOT flag a normal payment amount", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Setup fee", status: "Paid", amount: 1500,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    expect(rule33_placeholderPayment(ctx)).toEqual([])
+  })
+
+  it("does NOT flag a $0 payment (covered by R21)", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "1st installment", status: "Paid", amount: 0,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    expect(rule33_placeholderPayment(ctx)).toEqual([])
+  })
+
+  it("does NOT flag when description contains 'test' (case-insensitive)", () => {
+    const ctx = emptyCtx({
+      payments: [{
+        id: "p1", description: "Test charge", status: "Paid", amount: 1,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    expect(rule33_placeholderPayment(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when account.is_test=true", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ is_test: true }),
+      payments: [{
+        id: "p1", description: "Cash", status: "Paid", amount: 1,
+        paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z",
+      }],
+    })
+    expect(rule33_placeholderPayment(ctx)).toEqual([])
+  })
+
+  it("emits one finding per placeholder payment", () => {
+    const ctx = emptyCtx({
+      payments: [
+        { id: "p1", description: "Cash A", status: "Paid", amount: 1, paid_date: "2026-01-15", created_at: "2026-01-15T00:00:00Z" },
+        { id: "p2", description: "Cash B", status: "Paid", amount: 0.01, paid_date: "2026-02-01", created_at: "2026-02-01T00:00:00Z" },
+        { id: "p3", description: "Setup", status: "Paid", amount: 1500, paid_date: "2026-03-01", created_at: "2026-03-01T00:00:00Z" },
+      ],
+    })
+    const findings = rule33_placeholderPayment(ctx)
+    expect(findings).toHaveLength(2)
+  })
+})
+
+// ── R34: client_since VS formation_date ────────────────────────────────────
+
+describe("rule34_clientSinceVsFormationDate", () => {
+  it("flags WARNING when onboarding client (via offer.contract_type) has null client_since", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2010-04-15", client_since: null }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    const findings = rule34_clientSinceVsFormationDate(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].rule_id).toBe("R34")
+    expect(findings[0].severity).toBe("warning")
+    expect(findings[0].description).toContain("missing client_since")
+  })
+
+  it("flags WARNING via R25 gap heuristic (>6mo between formation and first payment)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2010-04-15", client_since: null }),
+      payments: [{
+        id: "p1", description: "Annual fee", status: "Paid", amount: 1200,
+        paid_date: "2024-01-15", created_at: "2024-01-15T00:00:00Z",
+      }],
+    })
+    const findings = rule34_clientSinceVsFormationDate(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("warning")
+  })
+
+  it("flags INFO when client_since equals formation_date for onboarding client", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2010-04-15", client_since: "2010-04-15" }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    const findings = rule34_clientSinceVsFormationDate(ctx)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe("info")
+    expect(findings[0].description).toContain("equals formation_date")
+  })
+
+  it("does NOT flag when client_since is set and differs from formation_date", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2010-04-15", client_since: "2024-01-15" }),
+      most_recent_offer: { contract_type: "onboarding" },
+    })
+    expect(rule34_clientSinceVsFormationDate(ctx)).toEqual([])
+  })
+
+  it("does NOT fire for non-onboarding clients (formation contract)", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: "2026-01-01", client_since: null }),
+      most_recent_offer: { contract_type: "formation" },
+    })
+    expect(rule34_clientSinceVsFormationDate(ctx)).toEqual([])
+  })
+
+  it("does NOT fire when there is no onboarding signal at all", () => {
+    const ctx = emptyCtx({
+      account: baseAccount({ formation_date: null, client_since: null }),
+    })
+    expect(rule34_clientSinceVsFormationDate(ctx)).toEqual([])
   })
 })
 

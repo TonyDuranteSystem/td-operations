@@ -45,6 +45,10 @@ export interface AuditResult {
 }
 
 // Narrowed row shapes (only the fields each rule actually reads).
+// New fields added after the initial release are kept optional so existing
+// test fixtures (and any external callers building HealthContext by hand)
+// continue to type-check without forced churn. Live fetches always populate
+// these — see `auditClientHealth` below.
 export interface AccountRow {
   id: string
   company_name: string | null
@@ -59,6 +63,12 @@ export interface AccountRow {
   ra_renewal_date: string | null
   cmra_renewal_date: string | null
   annual_report_due_date: string | null
+  // R13 (DBA notes), R18 (partner link), R33 (skip test accounts),
+  // R34 (client_since for onboarding clients). Optional for fixtures.
+  notes?: string | null
+  partner_id?: string | null
+  is_test?: boolean | null
+  client_since?: string | null
 }
 
 export interface ContactRow {
@@ -76,6 +86,16 @@ export interface SDRow {
   account_id: string | null
   contact_id: string | null
   created_at: string | null
+  // R32 needs to know how long the SD has been at its current stage.
+  // Optional so existing fixtures continue to type-check.
+  stage_entered_at?: string | null
+  updated_at?: string | null
+}
+
+export interface DbaDetailRow {
+  id: string
+  dba_name: string
+  delivery_id: string
 }
 
 export interface SS4Row {
@@ -115,6 +135,8 @@ export interface MemberRow {
   is_primary: boolean | null
   ownership_pct: number | null
   contact_id: string | null
+  /** Member's email — used by R31 to look up portal/auth status. */
+  email?: string | null
 }
 
 export interface OARow {
@@ -168,10 +190,25 @@ export interface HealthContext {
   payments: PaymentRow[]
   /** Partner registry rows linked to any contact on this account. */
   client_partners: PartnerRow[]
+  /**
+   * Partner row referenced by `accounts.partner_id`. This is the canonical
+   * link from a managed client to its partner (e.g. Maxscale). R18 prefers
+   * this over the contact-keyed `client_partners` array. Optional so existing
+   * fixtures keep type-checking.
+   */
+  account_partner?: PartnerRow | null
+  /** dba_details rows linked through any SD on this account. */
+  dba_details?: DbaDetailRow[]
   /** True iff any offer on this account has contract_type='renewal'. */
   has_renewal_offer: boolean
   /** True iff at least one linked contact has an auth.users row. */
   has_auth_user: boolean
+  /**
+   * Subset of `members[*].contact_id` whose linked contact has an auth user.
+   * Used by R31 to detect MMLLC members without portal access. Members whose
+   * contact_id is null are not in this set (R14 already covers that case).
+   */
+  member_contact_ids_with_auth?: string[]
 }
 
 // ── State annual-report configuration ──────────────────────────────────────
@@ -306,7 +343,18 @@ export function rule1_tierConsistency(ctx: HealthContext): Finding[] {
 
   // Account-level expectation.
   if (a.ein_number) {
-    if (accountTier !== "active") {
+    if (accountTier === "onboarding" || accountTier === "formation") {
+      // EIN exists but tier is one of the pre-EIN tiers — concrete error
+      // observed on Mojo Labs / Clifton Pals / Infinity Commerce.
+      findings.push({
+        rule_id: "R1",
+        rule_title: "Tier consistency",
+        severity: "error",
+        description: `Account has an EIN but portal_tier is '${accountTier}' — should advance to 'active' once EIN is recorded.`,
+        current_value: `account.portal_tier=${accountTier}, ein=${a.ein_number}`,
+        expected_value: "active",
+      })
+    } else if (accountTier !== "active") {
       findings.push({
         rule_id: "R1",
         rule_title: "Tier consistency",
@@ -349,6 +397,22 @@ export function rule1_tierConsistency(ctx: HealthContext): Finding[] {
           expected_value: `>= ${accountTier}`,
         })
       }
+    }
+  }
+
+  // Lead tier on an account with confirmed (Paid) payments — they paid for a
+  // service so they should have advanced past 'lead' already.
+  if (accountTier === "lead") {
+    const paidCount = ctx.payments.filter(p => (p.status || "").trim() === "Paid").length
+    if (paidCount > 0) {
+      findings.push({
+        rule_id: "R1",
+        rule_title: "Tier consistency",
+        severity: "warning",
+        description: `Account portal_tier is 'lead' but ${paidCount} Paid payment(s) on file — tier should have advanced.`,
+        current_value: `account.portal_tier=lead, paid_payments=${paidCount}`,
+        expected_value: "formation | onboarding | active",
+      })
     }
   }
 
@@ -923,14 +987,15 @@ export function rule12_leadLinkage(ctx: HealthContext): Finding[] {
 // ── Rule 13: DBA TRACKING ──────────────────────────────────────────────────
 //
 // Learned from reviewing Everboost and Fiscalot: clients sometimes operate
-// under a DBA (Doing Business As) / Trade Name / Fictitious Name, but the
-// system has no first-class column for it. The signal we DO have is a
-// document filed under that label. Surfacing the document tells staff to
-// capture the DBA structurally somewhere.
+// under a DBA (Doing Business As) / Trade Name / Fictitious Name. The system
+// has multiple weak signals — a `dba_details` row attached to one of the
+// account's SDs, a DBA-flavoured document on file, or a free-text note in
+// `accounts.notes` mentioning a trade name. Any of these means a DBA exists
+// and should be surfaced so staff can verify the canonical record.
 
-const DBA_KEYWORDS = ["dba", "trade name", "fictitious name"]
+const DBA_KEYWORDS = ["dba", "d/b/a", "trade name", "fictitious name", "doing business"]
 
-function matchesDBA(value: string | null): boolean {
+function matchesDBA(value: string | null | undefined): boolean {
   if (!value) return false
   const v = value.toLowerCase()
   return DBA_KEYWORDS.some(k => v.includes(k))
@@ -938,23 +1003,58 @@ function matchesDBA(value: string | null): boolean {
 
 export function rule13_dbaTracking(ctx: HealthContext): Finding[] {
   const a = ctx.account
+  const findings: Finding[] = []
+
+  // 1. dba_details rows linked to any SD on this account. The dba_details
+  //    table is the canonical structural store — surfacing the row means
+  //    staff can confirm the DBA is on file or remove a stale entry.
+  const dbaDetails = ctx.dba_details ?? []
+  if (dbaDetails.length > 0) {
+    const names = dbaDetails
+      .map(d => d.dba_name)
+      .filter((n): n is string => !!n)
+      .join(", ")
+    findings.push({
+      rule_id: "R13",
+      rule_title: "DBA tracking",
+      severity: "info",
+      description: "Account has dba_details row(s) — verify the DBA is current.",
+      current_value: `dba_details.count=${dbaDetails.length}, names=${names || "(unnamed)"}`,
+      expected_value: "DBA on file and visible in CRM",
+    })
+  }
+
+  // 2. Document filed under a DBA-flavoured label.
   const accountDocs = ctx.documents.filter(d => d.account_id === a.id)
   const contactIds = new Set(ctx.contacts.map(c => c.id))
   const contactDocs = ctx.documents.filter(d => d.contact_id && contactIds.has(d.contact_id))
   const allDocs = [...accountDocs, ...contactDocs]
-
   const dbaDoc = allDocs.find(d => matchesDBA(d.document_type_name) || matchesDBA(d.file_name))
-  if (!dbaDoc) return []
+  if (dbaDoc) {
+    const label = dbaDoc.document_type_name || dbaDoc.file_name || "unknown"
+    findings.push({
+      rule_id: "R13",
+      rule_title: "DBA tracking",
+      severity: "info",
+      description: "DBA document found — verify it's captured structurally (dba_details).",
+      current_value: `document=${label}`,
+      expected_value: "matching dba_details row",
+    })
+  }
 
-  const label = dbaDoc.document_type_name || dbaDoc.file_name || "unknown"
-  return [{
-    rule_id: "R13",
-    rule_title: "DBA tracking",
-    severity: "info",
-    description: "DBA document found but no DBA tracking in the system.",
-    current_value: `document=${label}`,
-    expected_value: "first-class DBA field on account",
-  }]
+  // 3. Free-text note mentioning DBA / trade name / d/b/a.
+  if (matchesDBA(a.notes)) {
+    findings.push({
+      rule_id: "R13",
+      rule_title: "DBA tracking",
+      severity: "info",
+      description: "accounts.notes references a DBA / trade name — verify the DBA is captured structurally.",
+      current_value: "accounts.notes contains DBA keyword",
+      expected_value: "matching dba_details row",
+    })
+  }
+
+  return findings
 }
 
 // ── Rule 14: MMLLC MEMBER COMPLETENESS ─────────────────────────────────────
@@ -1142,12 +1242,28 @@ const RENEWAL_COLUMN_TO_SLUGS: Array<{ column: keyof AccountRow; slugs: string[]
 
 export function rule18_partnerServiceScope(ctx: HealthContext): Finding[] {
   if (!isOneTime(ctx.account)) return []
-  if (ctx.client_partners.length === 0) return []
 
-  // Union of every agreed service across all partner rows linked to this
-  // account's contacts.
+  // The canonical client→partner link is `accounts.partner_id` (see
+  // `app/api/crm/admin-actions/partner-actions/route.ts` add_client/remove_client).
+  // The `client_partners` array is keyed by `contact_id` and represents the
+  // PARTNER's own contact record — it does not, by itself, mark a managed
+  // client as scoped to that partner. We accept either signal: the direct
+  // account→partner pointer (preferred), or a contact-keyed client_partners
+  // row (legacy / when a partner doubles as a contact). At least one signal
+  // is required, otherwise this is not a partner client.
+  const accountPartner = ctx.account_partner ?? null
+  const contactPartners = ctx.client_partners
+  if (!accountPartner && contactPartners.length === 0) return []
+
+  // Union of every agreed service across whichever partner rows we found.
   const agreed = new Set<string>()
-  for (const p of ctx.client_partners) {
+  const partnerNames: string[] = []
+  if (accountPartner) {
+    partnerNames.push(accountPartner.partner_name)
+    for (const s of accountPartner.agreed_services ?? []) agreed.add(s)
+  }
+  for (const p of contactPartners) {
+    partnerNames.push(p.partner_name)
     for (const s of p.agreed_services ?? []) agreed.add(s)
   }
 
@@ -1161,13 +1277,13 @@ export function rule18_partnerServiceScope(ctx: HealthContext): Finding[] {
 
   if (offending.length === 0) return []
 
-  const partnerNames = ctx.client_partners.map(p => p.partner_name).join(", ")
+  const uniquePartnerNames = Array.from(new Set(partnerNames)).join(", ")
   return [{
     rule_id: "R18",
     rule_title: "Partner client service scope",
     severity: "warning",
     description: "One-Time partner client has renewal dates for services not in the partner agreement.",
-    current_value: `partner=${partnerNames}; out_of_scope=${offending.join(", ")}; agreed_services=[${Array.from(agreed).join(",")}]`,
+    current_value: `partner=${uniquePartnerNames}; out_of_scope=${offending.join(", ")}; agreed_services=[${Array.from(agreed).join(",")}]`,
     expected_value: "renewal dates only for services in agreed_services (or null)",
   }]
 }
@@ -1550,7 +1666,11 @@ export function rule27_taxReturnYearValidation(ctx: HealthContext, now: Date = n
   }
 
   const a = ctx.account
-  if (a.formation_date && ctx.tax_returns.length === 1) {
+  // Onboarding clients pre-date their TD relationship — their formation_date
+  // is historical, so the first tax return TD files is not expected to be the
+  // formation-year return (the client may have filed prior years themselves).
+  // Skip the formation-year alignment check in that case.
+  if (a.formation_date && ctx.tax_returns.length === 1 && !isOnboardingClient(ctx)) {
     const formationYear = new Date(a.formation_date).getUTCFullYear()
     const tr = ctx.tax_returns[0]
     if (Number.isFinite(formationYear) && tr.tax_year !== null && tr.tax_year > formationYear) {
@@ -1673,6 +1793,149 @@ export function rule30_oneTimeTaxReturnServiceType(ctx: HealthContext): Finding[
   }]
 }
 
+// ── Rule 31: MMLLC MEMBER PORTAL ACCESS ────────────────────────────────────
+//
+// Learned from reviewing MMLLC clients: each member is supposed to be able to
+// log into the portal to sign documents (OA, member info form, payments) and
+// review filings. When a member's `contact_id` has no auth.users row, that
+// member can't log in — they'll need an invite before anything that requires
+// portal authentication can proceed. Companies-as-members are skipped because
+// the legal signer is the company's representative (covered by R14).
+
+export function rule31_mmllcMemberPortalAccess(ctx: HealthContext): Finding[] {
+  if (!isMultiMember(ctx.account)) return []
+  if (ctx.members.length === 0) return []
+
+  const authSet = new Set(ctx.member_contact_ids_with_auth ?? [])
+  const findings: Finding[] = []
+
+  for (const m of ctx.members) {
+    if (m.member_type === "company") continue
+    if (!m.contact_id) continue
+    if (authSet.has(m.contact_id)) continue
+    const label = m.full_name ?? m.contact_id
+    findings.push({
+      rule_id: "R31",
+      rule_title: "MMLLC member portal access",
+      severity: "warning",
+      description: `MMLLC member ${label} (contact ${m.contact_id}) has no portal access.`,
+      current_value: `member.contact_id=${m.contact_id}, auth.user=null`,
+      expected_value: "auth.users row for member's contact",
+    })
+  }
+
+  return findings
+}
+
+// ── Rule 32: STUCK CLIENT ONBOARDING SD ────────────────────────────────────
+//
+// The Client Onboarding pipeline has "Review & CRM Setup" as stage_order 2
+// (`lib/jobs/handlers/onboarding-setup.ts:800,808,893`). It's where the SD
+// lands right after the magic button — staff is supposed to review the
+// submission and advance it. An SD that sits at that stage for 30+ days is
+// almost always a forgotten case rather than active work. Cancelled SDs are
+// excluded.
+
+const STUCK_ONBOARDING_DAYS = 30
+
+export function rule32_stuckClientOnboardingSD(ctx: HealthContext, now: Date = new Date()): Finding[] {
+  const findings: Finding[] = []
+  for (const sd of ctx.service_deliveries) {
+    if (sd.service_type !== "Client Onboarding") continue
+    if ((sd.status || "").toLowerCase() === "cancelled") continue
+    if ((sd.stage || "").trim() !== "Review & CRM Setup") continue
+    // Use stage_entered_at when set (more precise — measures time at stage),
+    // otherwise fall back to updated_at, then created_at.
+    const ref = sd.stage_entered_at || sd.updated_at || sd.created_at
+    if (!ref) continue
+    const refMs = new Date(ref).getTime()
+    if (!Number.isFinite(refMs)) continue
+    const days = Math.floor((now.getTime() - refMs) / (1000 * 60 * 60 * 24))
+    if (days < STUCK_ONBOARDING_DAYS) continue
+    findings.push({
+      rule_id: "R32",
+      rule_title: "Stuck Client Onboarding SD",
+      severity: "warning",
+      description: `Client Onboarding SD stuck at 'Review & CRM Setup' for ${days} days.`,
+      current_value: `sd.id=${sd.id}, stage="Review & CRM Setup", days_in_stage=${days}`,
+      expected_value: "advance past 'Review & CRM Setup'",
+    })
+  }
+  return findings
+}
+
+// ── Rule 33: $1 / 1¢ PLACEHOLDER PAYMENT ───────────────────────────────────
+//
+// Staff sometimes record a $1 or $0.01 payment when the actual amount is
+// pending (cash, wire awaiting confirmation, manual reconciliation). These
+// placeholders are visually distinct from $0 (which is its own R21 case) and
+// need to be replaced once the real amount is known. Test data (is_test, or a
+// description containing "test") is excluded.
+
+const PLACEHOLDER_AMOUNTS = new Set([1, 0.01])
+
+export function rule33_placeholderPayment(ctx: HealthContext): Finding[] {
+  if (ctx.account.is_test === true) return []
+  const findings: Finding[] = []
+  for (const p of ctx.payments) {
+    if (p.amount === null) continue
+    if (!PLACEHOLDER_AMOUNTS.has(p.amount)) continue
+    if ((p.description || "").toLowerCase().includes("test")) continue
+    findings.push({
+      rule_id: "R33",
+      rule_title: "Placeholder payment amount",
+      severity: "info",
+      description: `Payment of $${p.amount} appears to be a cash placeholder — verify actual amount received.`,
+      current_value: `payment.id=${p.id}, amount=${p.amount}, description="${p.description ?? ""}"`,
+      expected_value: "actual payment amount",
+    })
+  }
+  return findings
+}
+
+// ── Rule 34: client_since VS formation_date ────────────────────────────────
+//
+// `accounts.client_since` records when TD's relationship with the client
+// began. For onboarding clients (company existed before TD took over), this
+// should be the day TD started managing them — typically the first payment
+// or signed-offer date — which by definition differs from formation_date.
+// Two checks:
+//   1. Onboarding client with client_since NULL → WARNING (staff should
+//      capture the relationship start so renewal math is correct).
+//   2. client_since === formation_date on an onboarding client → INFO
+//      (suspicious; the two should differ for non-formation clients).
+
+export function rule34_clientSinceVsFormationDate(ctx: HealthContext): Finding[] {
+  if (!isOnboardingClient(ctx)) return []
+  const a = ctx.account
+  const findings: Finding[] = []
+
+  if (!a.client_since) {
+    findings.push({
+      rule_id: "R34",
+      rule_title: "client_since vs formation_date",
+      severity: "warning",
+      description: "Onboarding client missing client_since — should be set to first payment or offer date.",
+      current_value: `client_since=null, formation_date=${a.formation_date ?? "null"}`,
+      expected_value: "first payment or offer date",
+    })
+    return findings
+  }
+
+  if (a.formation_date && a.client_since === a.formation_date) {
+    findings.push({
+      rule_id: "R34",
+      rule_title: "client_since vs formation_date",
+      severity: "info",
+      description: "client_since equals formation_date — for onboarding clients these should differ.",
+      current_value: `client_since=${a.client_since}, formation_date=${a.formation_date}`,
+      expected_value: "client_since reflects TD relationship start (typically != formation_date)",
+    })
+  }
+
+  return findings
+}
+
 // ── Aggregator ─────────────────────────────────────────────────────────────
 
 export const RULE_FUNCTIONS = [
@@ -1706,6 +1969,10 @@ export const RULE_FUNCTIONS = [
   rule28_duplicatePayments,
   rule29_taxReturnSDStageAlignment,
   rule30_oneTimeTaxReturnServiceType,
+  rule31_mmllcMemberPortalAccess,
+  rule32_stuckClientOnboardingSD,
+  rule33_placeholderPayment,
+  rule34_clientSinceVsFormationDate,
 ] as const
 
 export function runRules(ctx: HealthContext): Finding[] {
@@ -1743,7 +2010,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
   const { data: account, error: accountErr } = await supabaseAdmin
     .from("accounts")
     .select(
-      "id, company_name, account_type, status, entity_type, ein_number, formation_date, state_of_formation, portal_tier, portal_account, ra_renewal_date, cmra_renewal_date, annual_report_due_date",
+      "id, company_name, account_type, status, entity_type, ein_number, formation_date, state_of_formation, portal_tier, portal_account, ra_renewal_date, cmra_renewal_date, annual_report_due_date, notes, partner_id, is_test, client_since",
     )
     .eq("id", accountId)
     .single()
@@ -1770,7 +2037,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
   const [sdResult, ss4Result, leaseResult, docsResult, taxReturnsResult, offersResult, leadsResult, membersResult, oaResult, paymentsResult, partnersResult] = await Promise.all([
     supabaseAdmin
       .from("service_deliveries")
-      .select("id, service_type, status, stage, stage_order, account_id, contact_id, created_at")
+      .select("id, service_type, status, stage, stage_order, account_id, contact_id, created_at, stage_entered_at, updated_at")
       .or(orClauses.join(",")),
     supabaseAdmin
       .from("ss4_applications")
@@ -1801,7 +2068,7 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       : Promise.resolve({ data: [] as LeadRow[] }),
     supabaseAdmin
       .from("members")
-      .select("member_type, full_name, representative_name, is_primary, ownership_pct, contact_id")
+      .select("member_type, full_name, representative_name, is_primary, ownership_pct, contact_id, email")
       .eq("account_id", accountId),
     supabaseAdmin
       .from("oa_agreements")
@@ -1819,20 +2086,68 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
       : Promise.resolve({ data: [] as PartnerRow[] }),
   ])
 
+  const accountRow = account as AccountRow
+  const sdRows = (sdResult.data || []) as SDRow[]
+  const memberRows = (membersResult.data || []) as MemberRow[]
+
   // Auth user check — only call findAuthUserByEmail if at least one contact
-  // has an email. Paginated listUsers is slow, so we short-circuit.
+  // has an email. Paginated listUsers is slow, so we short-circuit. Cache
+  // results by email so R31's per-member lookup doesn't duplicate calls.
+  const authByEmail = new Map<string, boolean>()
+  async function lookupAuth(email: string): Promise<boolean> {
+    const cached = authByEmail.get(email)
+    if (cached !== undefined) return cached
+    try {
+      const found = await findAuthUserByEmail(email)
+      authByEmail.set(email, !!found)
+      return !!found
+    } catch {
+      authByEmail.set(email, false)
+      return false
+    }
+  }
+
   let hasAuthUser = false
   for (const c of contacts) {
     if (!c.email) continue
-    try {
-      const found = await findAuthUserByEmail(c.email)
-      if (found) {
-        hasAuthUser = true
-        break
-      }
-    } catch {
-      // Treat lookup failure as "unknown" rather than blocking the audit.
+    if (await lookupAuth(c.email)) {
+      hasAuthUser = true
+      break
     }
+  }
+
+  // Per-member auth lookup for R31. Members carry their own `email` column;
+  // members.contact_id is the link key the rule reports on. Member rows
+  // without a contact_id are skipped here (R14 already flags those).
+  const memberContactIdsWithAuth: string[] = []
+  const memberEmails = memberRows
+    .map(m => ({ contact_id: m.contact_id, email: m.email }))
+    .filter((m): m is { contact_id: string; email: string } => !!m.contact_id && !!m.email)
+  for (const m of memberEmails) {
+    if (await lookupAuth(m.email)) memberContactIdsWithAuth.push(m.contact_id)
+  }
+
+  // Partner directly linked to the account via accounts.partner_id. This is
+  // the canonical signal that the account is partner-managed (R18).
+  let accountPartner: PartnerRow | null = null
+  if (accountRow.partner_id) {
+    const { data: ap } = await supabaseAdmin
+      .from("client_partners")
+      .select("id, contact_id, partner_name, agreed_services")
+      .eq("id", accountRow.partner_id)
+      .maybeSingle()
+    accountPartner = (ap as PartnerRow | null) || null
+  }
+
+  // dba_details rows attached to any SD on this account (R13).
+  const sdIds = sdRows.map(sd => sd.id)
+  let dbaRows: DbaDetailRow[] = []
+  if (sdIds.length > 0) {
+    const { data: dba } = await supabaseAdmin
+      .from("dba_details")
+      .select("id, dba_name, delivery_id")
+      .in("delivery_id", sdIds)
+    dbaRows = (dba as DbaDetailRow[] | null) || []
   }
 
   const allOffers = (offersResult.data || []) as OfferRow[]
@@ -1841,21 +2156,24 @@ export async function auditClientHealth(accountId: string): Promise<AuditResult>
   )
 
   const ctx: HealthContext = {
-    account: account as AccountRow,
+    account: accountRow,
     contacts,
-    service_deliveries: (sdResult.data || []) as SDRow[],
+    service_deliveries: sdRows,
     ss4_applications: (ss4Result.data || []) as SS4Row[],
     lease_agreements: (leaseResult.data || []) as LeaseRow[],
     documents: (docsResult.data || []) as DocumentRow[],
     tax_returns: (taxReturnsResult.data || []) as TaxReturnRow[],
     most_recent_offer: allOffers[0] || null,
     leads: (leadsResult.data || []) as LeadRow[],
-    members: (membersResult.data || []) as MemberRow[],
+    members: memberRows,
     oa_agreements: (oaResult.data || []) as OARow[],
     payments: (paymentsResult.data || []) as PaymentRow[],
     client_partners: (partnersResult.data || []) as PartnerRow[],
+    account_partner: accountPartner,
+    dba_details: dbaRows,
     has_renewal_offer: hasRenewalOffer,
     has_auth_user: hasAuthUser,
+    member_contact_ids_with_auth: memberContactIdsWithAuth,
   }
 
   const findings = runRules(ctx)
