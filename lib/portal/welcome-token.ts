@@ -16,18 +16,8 @@
  * Expiry: 7 days. The welcome page renders an expired notice past that.
  */
 import crypto from "node:crypto"
-import type { SupabaseClient } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-
-// `portal_welcome_tokens` lives in sandbox but is not yet in the
-// production-generated `Database` type — npm run gen:types queries the
-// production schema and omits the table until the migration ships. Until then
-// type the table locally and access it through an untyped-client cast so the
-// build stays green. Remove this once the migration is promoted to production
-// and `npm run gen:types` adds the table to lib/database.types.ts.
-// eslint-disable-next-line no-restricted-syntax -- deferred prod migration: portal_welcome_tokens is sandbox-only until promoted; remove cast when gen:types includes it.
-const sb = supabaseAdmin as unknown as SupabaseClient
 
 const ALGO = "aes-256-gcm"
 const IV_LEN = 12
@@ -96,7 +86,7 @@ export async function createWelcomeToken(
   const encrypted_password = encryptPassword(token, input.tempPassword)
   const expires_at = new Date(Date.now() + EXPIRY_MS).toISOString()
 
-  const { error } = await sb.from("portal_welcome_tokens").insert({
+  const { error } = await supabaseAdmin.from("portal_welcome_tokens").insert({
     token,
     contact_id: input.contactId ?? null,
     email: input.email,
@@ -118,7 +108,7 @@ export async function createWelcomeToken(
 }
 
 export async function getWelcomeToken(token: string): Promise<WelcomeTokenRow | null> {
-  const { data, error } = await sb
+  const { data, error } = await supabaseAdmin
     .from("portal_welcome_tokens")
     .select("token, contact_id, email, encrypted_password, language, source, source_id, expires_at, first_viewed_at, created_at")
     .eq("token", token)
@@ -135,7 +125,7 @@ export function isWelcomeTokenExpired(row: { expires_at: string }): boolean {
 
 export async function markWelcomeTokenViewed(token: string): Promise<void> {
   // Only set first_viewed_at if currently null (first open).
-  await sb
+  await supabaseAdmin
     .from("portal_welcome_tokens")
     .update({ first_viewed_at: new Date().toISOString() })
     .eq("token", token)
@@ -146,7 +136,7 @@ export async function findWelcomeTokenBySource(
   source: string,
   sourceId: string,
 ): Promise<{ token: string; welcomeUrl: string; expires_at: string } | null> {
-  const { data, error } = await sb
+  const { data, error } = await supabaseAdmin
     .from("portal_welcome_tokens")
     .select("token, expires_at")
     .eq("source", source)
