@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
   Loader2, FileText, Rocket, Trash2, RotateCcw, UserX, Send,
-  MessageCircle, GitBranch,
+  MessageCircle, GitBranch, Copy, Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -85,6 +85,24 @@ export function LeadActions({
   const [revisingOffer, setRevisingOffer] = useState(false)
   const [settingDiscussion, setSettingDiscussion] = useState(false)
   const [retryingActivation, setRetryingActivation] = useState(false)
+  const [welcomeUrl, setWelcomeUrl] = useState<string | null>(null)
+  const [welcomeCopied, setWelcomeCopied] = useState(false)
+
+  useEffect(() => {
+    if (!offer?.token || offer.status === 'draft') {
+      setWelcomeUrl(null)
+      return
+    }
+    let cancelled = false
+    fetch(`/api/crm/admin-actions/offer-welcome-link?token=${encodeURIComponent(offer.token)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        if (data?.welcome_url) setWelcomeUrl(data.welcome_url)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [offer?.token, offer?.status])
 
   const isConverted = leadStatus === 'Converted'
   const isLost = leadStatus === 'Lost'
@@ -183,6 +201,9 @@ export function LeadActions({
         return
       }
       toast.success(data.message || 'Reminder email sent')
+      if (data.welcome_url) {
+        setWelcomeUrl(data.welcome_url)
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'An error occurred')
     } finally {
@@ -349,6 +370,23 @@ export function LeadActions({
             >
               {resendingOffer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Resend Email
+            </button>
+          )}
+
+          {welcomeUrl && (
+            <button
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(welcomeUrl)
+                  setWelcomeCopied(true)
+                  setTimeout(() => setWelcomeCopied(false), 2000)
+                } catch { toast.error('Failed to copy') }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition-colors"
+              title="Share via WhatsApp/Telegram — link expires in 7 days"
+            >
+              {welcomeCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {welcomeCopied ? 'Copied' : 'Copy Welcome Link'}
             </button>
           )}
 
