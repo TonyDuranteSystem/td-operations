@@ -59,7 +59,11 @@ function newMember(type: MemberType = 'individual'): MemberRow {
 }
 
 function fromPrePopulated(data: Partial<MemberRow>): MemberRow {
-  return { ...newMember(data.member_type || 'individual'), ...data, id: Math.random().toString(36).slice(2) }
+  const base = newMember(data.member_type || 'individual')
+  const sanitized = Object.fromEntries(
+    Object.entries(data).map(([k, v]) => [k, v ?? ''])
+  ) as Partial<MemberRow>
+  return { ...base, ...sanitized, id: Math.random().toString(36).slice(2) }
 }
 
 function totalOwnership(members: MemberRow[]): number {
@@ -190,21 +194,25 @@ export function MemberInfoForm({
 
     const payload = members.map(m => ({ ...m, is_signer: m.id === signerMemberId }))
 
-    const res = await fetch(`/api/member-info/${token}/${accessCode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ members: payload }),
-    })
+    try {
+      const res = await fetch(`/api/member-info/${token}/${accessCode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ members: payload }),
+      })
 
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}))
-      setSubmitError(d.error || 'Submission failed. Please try again.')
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setSubmitError(d.error || 'Submission failed. Please try again.')
+        return
+      }
+
+      setSubmitted(true)
+    } catch {
+      setSubmitError('Network error. Please check your connection and try again.')
+    } finally {
       setSubmitting(false)
-      return
     }
-
-    setSubmitted(true)
-    setSubmitting(false)
   }
 
   // ─── Render States ────────────────────────────────────────
@@ -409,23 +417,23 @@ function MemberCard({ member, index, total, isSigner, onSelectSigner, onChange, 
           <>
             <Field label="Full Name" required value={member.full_name} onChange={v => onChange(member.id, 'full_name', v)} />
             <Field label="Email" type="email" required value={member.email} onChange={v => onChange(member.id, 'email', v)} />
-            <Field label="Phone" type="tel" value={member.phone} onChange={v => onChange(member.id, 'phone', v)} />
+            <Field label="Phone" type="tel" required value={member.phone} onChange={v => onChange(member.id, 'phone', v)} />
             <Field label="Ownership %" type="number" required value={member.ownership_pct} onChange={v => onChange(member.id, 'ownership_pct', v)} min="0" max="100" step="0.01" />
             <div className="mi-section-label">Address</div>
-            <Field label="Street" value={member.address_street} onChange={v => onChange(member.id, 'address_street', v)} />
+            <Field label="Street" required value={member.address_street} onChange={v => onChange(member.id, 'address_street', v)} />
             <div className="mi-fields-row">
-              <Field label="City" value={member.address_city} onChange={v => onChange(member.id, 'address_city', v)} />
-              <Field label="State" value={member.address_state} onChange={v => onChange(member.id, 'address_state', v)} />
+              <Field label="City" required value={member.address_city} onChange={v => onChange(member.id, 'address_city', v)} />
+              <Field label="State" required value={member.address_state} onChange={v => onChange(member.id, 'address_state', v)} />
             </div>
             <div className="mi-fields-row">
-              <Field label="ZIP" value={member.address_zip} onChange={v => onChange(member.id, 'address_zip', v)} />
-              <Field label="Country" value={member.address_country} onChange={v => onChange(member.id, 'address_country', v)} />
+              <Field label="ZIP" required value={member.address_zip} onChange={v => onChange(member.id, 'address_zip', v)} />
+              <Field label="Country" required value={member.address_country} onChange={v => onChange(member.id, 'address_country', v)} />
             </div>
           </>
         ) : (
           <>
             <Field label="Company Name" required value={member.company_name} onChange={v => onChange(member.id, 'company_name', v)} />
-            <Field label="EIN" value={member.ein} onChange={v => onChange(member.id, 'ein', v)} placeholder="XX-XXXXXXX" />
+            <Field label="EIN" required value={member.ein} onChange={v => onChange(member.id, 'ein', v)} placeholder="XX-XXXXXXX" />
             <Field label="Ownership %" type="number" required value={member.ownership_pct} onChange={v => onChange(member.id, 'ownership_pct', v)} min="0" max="100" step="0.01" />
             <div className="mi-section-label">Company Address</div>
             <Field label="Street" required value={member.address_street} onChange={v => onChange(member.id, 'address_street', v)} />
@@ -440,7 +448,7 @@ function MemberCard({ member, index, total, isSigner, onSelectSigner, onChange, 
             <div className="mi-section-label">Representative (person acting on behalf of the company)</div>
             <Field label="Representative Name" required value={member.representative_name} onChange={v => onChange(member.id, 'representative_name', v)} />
             <Field label="Representative Email" type="email" required value={member.representative_email} onChange={v => onChange(member.id, 'representative_email', v)} />
-            <Field label="Representative Phone" type="tel" value={member.representative_phone} onChange={v => onChange(member.id, 'representative_phone', v)} />
+            <Field label="Representative Phone" type="tel" required value={member.representative_phone} onChange={v => onChange(member.id, 'representative_phone', v)} />
             <div className="mi-section-label">Representative Address</div>
             <Field label="Street" required value={member.representative_address_street} onChange={v => onChange(member.id, 'representative_address_street', v)} />
             <div className="mi-fields-row">
