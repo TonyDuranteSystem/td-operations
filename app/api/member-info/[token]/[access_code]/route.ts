@@ -61,15 +61,36 @@ export async function POST(
     if (!m.member_type || !['individual', 'company'].includes(m.member_type)) {
       return NextResponse.json({ error: 'Each member must have a valid type (individual or company).' }, { status: 400 })
     }
-    if (m.member_type === 'individual' && !m.full_name?.trim()) {
-      return NextResponse.json({ error: 'Individual members must have a full name.' }, { status: 400 })
-    }
-    if (m.member_type === 'company' && !m.company_name?.trim()) {
-      return NextResponse.json({ error: 'Company members must have a company name.' }, { status: 400 })
-    }
     const pct = parseFloat(String(m.ownership_pct || 0))
     if (isNaN(pct) || pct <= 0 || pct > 100) {
       return NextResponse.json({ error: 'Each member must have a valid ownership percentage (1–100).' }, { status: 400 })
+    }
+    if (m.member_type === 'individual') {
+      if (!m.full_name?.trim()) return NextResponse.json({ error: 'Individual members must have a full name.' }, { status: 400 })
+      if (!m.email?.trim()) return NextResponse.json({ error: 'Individual members must have an email.' }, { status: 400 })
+      if (!m.phone?.trim()) return NextResponse.json({ error: 'Individual members must have a phone number.' }, { status: 400 })
+      if (!m.address_street?.trim()) return NextResponse.json({ error: 'Individual members must have a street address.' }, { status: 400 })
+      if (!m.address_city?.trim()) return NextResponse.json({ error: 'Individual members must have a city.' }, { status: 400 })
+      if (!m.address_state?.trim()) return NextResponse.json({ error: 'Individual members must have a state.' }, { status: 400 })
+      if (!m.address_zip?.trim()) return NextResponse.json({ error: 'Individual members must have a ZIP code.' }, { status: 400 })
+      if (!m.address_country?.trim()) return NextResponse.json({ error: 'Individual members must have a country.' }, { status: 400 })
+    }
+    if (m.member_type === 'company') {
+      if (!m.company_name?.trim()) return NextResponse.json({ error: 'Company members must have a company name.' }, { status: 400 })
+      if (!m.ein?.trim()) return NextResponse.json({ error: 'Company members must have an EIN.' }, { status: 400 })
+      if (!m.address_street?.trim()) return NextResponse.json({ error: 'Company members must have a street address.' }, { status: 400 })
+      if (!m.address_city?.trim()) return NextResponse.json({ error: 'Company members must have a city.' }, { status: 400 })
+      if (!m.address_state?.trim()) return NextResponse.json({ error: 'Company members must have a state.' }, { status: 400 })
+      if (!m.address_zip?.trim()) return NextResponse.json({ error: 'Company members must have a ZIP code.' }, { status: 400 })
+      if (!m.address_country?.trim()) return NextResponse.json({ error: 'Company members must have a country.' }, { status: 400 })
+      if (!m.representative_name?.trim()) return NextResponse.json({ error: 'Company members must have a representative name.' }, { status: 400 })
+      if (!m.representative_email?.trim()) return NextResponse.json({ error: 'Company members must have a representative email.' }, { status: 400 })
+      if (!m.representative_phone?.trim()) return NextResponse.json({ error: 'Company members must have a representative phone number.' }, { status: 400 })
+      if (!m.representative_address_street?.trim()) return NextResponse.json({ error: 'Company members must have a representative street address.' }, { status: 400 })
+      if (!m.representative_address_city?.trim()) return NextResponse.json({ error: 'Company members must have a representative city.' }, { status: 400 })
+      if (!m.representative_address_state?.trim()) return NextResponse.json({ error: 'Company members must have a representative state.' }, { status: 400 })
+      if (!m.representative_address_zip?.trim()) return NextResponse.json({ error: 'Company members must have a representative ZIP code.' }, { status: 400 })
+      if (!m.representative_address_country?.trim()) return NextResponse.json({ error: 'Company members must have a representative country.' }, { status: 400 })
     }
   }
 
