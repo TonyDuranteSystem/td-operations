@@ -6,22 +6,27 @@
  *
  * Field mappings verified 2026-03-18 via debug PDFs with field names rendered.
  *
- * 1040-NR PAGE 1 KEY FIELDS (verified):
+ * 1040-NR PAGE 1 KEY FIELDS (re-verified 2026-05-13 via scripts/debug-pdf-fields.ts):
  *   f1_01 = tax year beginning (header)
  *   f1_02 = tax year ending (header)
- *   f1_11 = "Other" line text (under Filed pursuant)
- *   f1_12 = Your first name and middle initial
- *   f1_13 = Last name
- *   f1_14 = Home address (street)
- *   f1_15 = Apt. no.
- *   f1_17 = City, town
- *   f1_18 = (after city, maybe overflow)
- *   f1_19 = Foreign country name (left)
- *   f1_20 = State
- *   f1_21 = ZIP code
- *   f1_22 = Foreign country name (bottom row)
- *   f1_23 = Foreign province/state/county
- *   f1_24 = Foreign postal code
+ *   f1_03 = tax year suffix
+ *   f1_04 = (top header row write-in, ~Y=708)
+ *   f1_05–f1_07 = Deceased date MM/DD/YY widgets
+ *   f1_08–f1_10 = Spouse date MM/DD/YY widgets
+ *   f1_11 = "Other" line text (under Filed pursuant), Y=696
+ *   f1_12 = (Y=696 middle — NOT a name field)
+ *   f1_13 = (Y=696 right — NOT a name field)
+ *   f1_14 = Your first name and middle initial (Y=666)   ← was wrong as f1_12
+ *   f1_15 = Last name (Y=666)                            ← was wrong as f1_13
+ *   f1_16 = Your identifying number / ITIN (Y=666)       ← left blank
+ *   f1_17 = Home address (street) (Y=642)                ← was wrong as f1_14
+ *   f1_18 = Apt. no. (Y=642)                             ← was wrong as f1_15
+ *   f1_19 = City, town (Y=618)                           ← was wrong as f1_17
+ *   f1_20 = State (Y=618)
+ *   f1_21 = ZIP code (Y=618)
+ *   f1_22 = Foreign country name (Y=594)
+ *   f1_23 = Foreign province/state/county (Y=594)
+ *   f1_24 = Foreign postal code (Y=594)
  *   c1_5[0-4] = Filing status: Single/MFS/QSS/Estate/Trust
  *   c1_6[0/1] = Digital assets Yes/No
  *   f1_42 = Line 1a (Wages)
@@ -63,9 +68,20 @@ const SCHEDULE_OI_URL = "https://www.irs.gov/pub/irs-pdf/f1040nro.pdf"
 const PREPARER = {
   name: "Antonio Durante",
   company: "Tony Durante LLC",
-  ein: "92-3081958",
+  ein: "83-4299021",
+  ptin: "P02389222",
   phone: "+1 (727) 452-1093",
   address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+}
+
+// CAA mailing address used as the taxpayer's "home address" for ITIN apps —
+// the IRS routes correspondence to the CAA. No "c/o" prefix per 2026-05-13.
+const CAA_HOME = {
+  street: "10225 Ulmerton Rd",
+  apt: "3D",
+  city: "Largo",
+  state: "FL",
+  zip: "33771",
 }
 
 export interface F1040NRFillData {
@@ -100,27 +116,46 @@ export async function fill1040NR(data: F1040NRFillData): Promise<Uint8Array> {
 
   const setText = (name: string, val: string | undefined) => {
     if (!val) return
-    try { form.getTextField(name).setText(val) } catch { /* skip */ }
+    try {
+      form.getTextField(name).setText(val)
+    } catch (err) {
+      // Surface failures instead of silently swallowing — a silent catch
+      // hid the wrong-field-map bug that landed Valerio Di Santo's name
+      // and address in the Deceased/Spouse and First Name slots (2026-05-13).
+      console.warn(
+        `[1040nr-fill] setText failed for "${name}" value="${val}":`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
   const setCheck = (name: string, check: boolean) => {
     if (!check) return
-    try { form.getCheckBox(name).check() } catch { /* skip */ }
+    try {
+      form.getCheckBox(name).check()
+    } catch (err) {
+      console.warn(
+        `[1040nr-fill] setCheck failed for "${name}":`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
-  // === HEADER — Name ===
+  // === HEADER — Name (Y=666, corrected field map) ===
   const fullFirst = data.middle_initial
     ? `${data.first_name} ${data.middle_initial}`
     : data.first_name
-  setText(`${P1}.f1_12[0]`, fullFirst)    // Your first name and middle initial
-  setText(`${P1}.f1_13[0]`, data.last_name) // Last name
+  setText(`${P1}.f1_14[0]`, fullFirst)      // Your first name and middle initial
+  setText(`${P1}.f1_15[0]`, data.last_name) // Last name
   // f1_16 = ITIN/SSN — left blank (applying for it)
 
   // === ADDRESS (Tony Durante LLC office as mailing address) ===
-  setText(`${P1}.f1_14[0]`, `c/o Tony Durante LLC, 10225 Ulmerton Rd`)  // Home address
-  setText(`${P1}.f1_15[0]`, "3D")    // Apt. no. (Suite 3D)
-  setText(`${P1}.f1_17[0]`, "Largo") // City
-  setText(`${P1}.f1_20[0]`, "FL")    // State
-  setText(`${P1}.f1_21[0]`, "33771") // ZIP code
+  // Field map shifted in 2026-05-13 fix: home address is f1_17 (was wrongly f1_14).
+  // No "c/o" prefix on the street line.
+  setText(`${P1}.f1_17[0]`, CAA_HOME.street) // Home address (Y=642)
+  setText(`${P1}.f1_18[0]`, CAA_HOME.apt)    // Apt. no. (Y=642)
+  setText(`${P1}.f1_19[0]`, CAA_HOME.city)   // City (Y=618)
+  setText(`${P1}.f1_20[0]`, CAA_HOME.state)  // State (Y=618)
+  setText(`${P1}.f1_21[0]`, CAA_HOME.zip)    // ZIP code (Y=618)
 
   // Foreign address
   setText(`${P1}.f1_22[0]`, data.foreign_country)
@@ -159,10 +194,11 @@ export async function fill1040NR(data: F1040NRFillData): Promise<Uint8Array> {
 
   // === PAID PREPARER ===
   setText(`${P2}.f2_51[0]`, PREPARER.name)     // Preparer's name
-  setText(`${P2}.f2_53[0]`, PREPARER.company)   // Firm's name
-  setText(`${P2}.f2_54[0]`, PREPARER.phone)     // Phone no.
-  setText(`${P2}.f2_55[0]`, PREPARER.address)   // Firm's address
-  setText(`${P2}.f2_56[0]`, PREPARER.ein)       // Firm's EIN
+  setText(`${P2}.f2_52[0]`, PREPARER.ptin)     // PTIN
+  setText(`${P2}.f2_53[0]`, PREPARER.company)  // Firm's name
+  setText(`${P2}.f2_54[0]`, PREPARER.phone)    // Phone no.
+  setText(`${P2}.f2_55[0]`, PREPARER.address)  // Firm's address
+  setText(`${P2}.f2_56[0]`, PREPARER.ein)      // Firm's EIN
 
   // Apply Unicode font to all field appearances before flattening
   form.updateFieldAppearances(unicodeFont)
@@ -182,11 +218,28 @@ export async function fillScheduleOI(data: F1040NRFillData): Promise<Uint8Array>
 
   const setText = (name: string, val: string | undefined) => {
     if (!val) return
-    try { form.getTextField(name).setText(val) } catch { /* skip */ }
+    try {
+      form.getTextField(name).setText(val)
+    } catch (err) {
+      // Surface failures instead of silently swallowing — a silent catch
+      // hid the wrong-field-map bug that landed Valerio Di Santo's name
+      // and address in the Deceased/Spouse and First Name slots (2026-05-13).
+      console.warn(
+        `[1040nr-fill] setText failed for "${name}" value="${val}":`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
   const setCheck = (name: string, check: boolean) => {
     if (!check) return
-    try { form.getCheckBox(name).check() } catch { /* skip */ }
+    try {
+      form.getCheckBox(name).check()
+    } catch (err) {
+      console.warn(
+        `[1040nr-fill] setCheck failed for "${name}":`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
   // Header

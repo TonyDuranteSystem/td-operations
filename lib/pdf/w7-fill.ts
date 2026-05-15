@@ -65,9 +65,13 @@ const W7_PDF_URL = "https://www.irs.gov/pub/irs-pdf/fw7.pdf"
 const AGENT = {
   nameAndTitle: "Antonio Durante, Certified Acceptance Agent",
   company: "Tony Durante LLC",
-  ein: "92-3081958",
+  ein: "83-4299021",
+  ptin: "P02389222",
+  officeCode: "00000015",
   phone: "+1 (727) 452-1093",
-  address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+  fax: "(727) 513-5584",
+  mailingStreet: "10225 Ulmerton Rd, Suite 3D",
+  mailingCityStateZip: "Largo, FL 33771, United States",
 }
 
 export interface W7FillData {
@@ -110,12 +114,29 @@ export interface W7FillData {
   reason?: "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h"
 }
 
-/** Format date from YYYY-MM-DD to MM/DD/YYYY (IRS format) */
+/**
+ * Format date to MMDDYYYY (8 chars, no separators).
+ *
+ * The W-7 date AcroForm fields (DOB, passport expiry, US entry date) all have
+ * maxLength=8 — slashes are pre-printed on the form layout, not part of the
+ * field value. Passing "MM/DD/YYYY" (10 chars) silently fails because pdf-lib
+ * throws "Attempted to set text with length=10 for TextField with maxLength=8"
+ * and the old try/catch swallowed it. This bug left Valerio Di Santo's DOB and
+ * passport expiry blank on his rescued W-7 (2026-05-13).
+ *
+ * Accepts: "YYYY-MM-DD" (wizard format), "MM/DD/YYYY", or already-8-digit input.
+ */
 function formatDate(d: string | undefined): string {
   if (!d) return ""
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) return d
+  // Already MMDDYYYY (8 digits)
+  if (/^\d{8}$/.test(d)) return d
+  // MM/DD/YYYY → strip slashes
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) return d.replace(/\//g, "")
+  // YYYY-MM-DD → MMDDYYYY
   const parts = d.split("-")
-  if (parts.length === 3) return `${parts[1]}/${parts[2]}/${parts[0]}`
+  if (parts.length === 3 && parts[0].length === 4) {
+    return `${parts[1]}${parts[2]}${parts[0]}`
+  }
   return d
 }
 
@@ -138,12 +159,29 @@ export async function fillW7(data: W7FillData): Promise<Uint8Array> {
 
   const setText = (fieldName: string, value: string | undefined) => {
     if (!value) return
-    try { form.getTextField(fieldName).setText(value) } catch { /* skip */ }
+    try {
+      form.getTextField(fieldName).setText(value)
+    } catch (err) {
+      // Surface the failure instead of silently dropping it. A silent catch
+      // hid the DOB / passport-expiry maxLength=8 bug for months until
+      // Valerio Di Santo's W-7 came back blank on those fields (2026-05-13).
+      console.warn(
+        `[w7-fill] setText failed for "${fieldName}" value="${value}":`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
   const setCheck = (fieldName: string, check: boolean) => {
     if (!check) return
-    try { form.getCheckBox(fieldName).check() } catch { /* skip */ }
+    try {
+      form.getCheckBox(fieldName).check()
+    } catch (err) {
+      console.warn(
+        `[w7-fill] setCheck failed for "${fieldName}":`,
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
   // === APPLICATION TYPE ===
@@ -172,8 +210,10 @@ export async function fillW7(data: W7FillData): Promise<Uint8Array> {
   }
 
   // === LINE 2 - MAILING ADDRESS (Tony Durante LLC office) ===
-  setText(`${P}.f1_13[0]`, `c/o ${AGENT.company}, ${AGENT.address.split(",")[0]}`)
-  setText(`${P}.f1_14[0]`, "Largo, FL 33771, United States")
+  // Field label is "Street address, apartment number, or rural route number" —
+  // suite/apt belongs on the same line. No "c/o" prefix (per Antonio, 2026-05-13).
+  setText(`${P}.f1_13[0]`, AGENT.mailingStreet)
+  setText(`${P}.f1_14[0]`, AGENT.mailingCityStateZip)
 
   // === LINE 3 - FOREIGN ADDRESS ===
   setText(`${P}.f1_15[0]`, data.foreign_street)
@@ -231,11 +271,13 @@ export async function fillW7(data: W7FillData): Promise<Uint8Array> {
   }
 
   // === ACCEPTANCE AGENT SECTION ===
-  setText(`${P}.f1_42[0]`, AGENT.phone)       // Phone
-  // f1_43 = Fax (skip)
+  setText(`${P}.f1_42[0]`, AGENT.phone)        // Phone
+  setText(`${P}.f1_43[0]`, AGENT.fax)          // Fax
   setText(`${P}.f1_44[0]`, AGENT.nameAndTitle) // Name and title
   setText(`${P}.f1_45[0]`, AGENT.company)      // Name of company
   setText(`${P}.f1_46[0]`, AGENT.ein)          // EIN
+  setText(`${P}.f1_47[0]`, AGENT.ptin)         // PTIN
+  setText(`${P}.f1_48[0]`, AGENT.officeCode)   // Office code
 
   // Replace the form's default Helvetica/WinAnsi appearances with the Unicode
   // font so non-Latin-1 characters (e.g. Maltese ħ) render correctly when flattened.

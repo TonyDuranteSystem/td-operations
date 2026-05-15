@@ -159,13 +159,28 @@ export async function POST(req: NextRequest) {
         token: submissionToken,
         contact_id: contact_id || null,
         account_id: account_id || null,
-        entity_type: entity_type || 'SMLLC',
         language: 'en',
         prefilled_data: {},
         submitted_data: data,
         changed_fields: {},
         upload_paths: uploadPaths,
         status: 'completed',
+      }
+
+      // entity_type only exists on formation/onboarding/tax_return/company_info
+      // submission tables. itin_submissions and closure_submissions don't have
+      // that column — including it caused the upsert to fail silently and the
+      // ITIN auto-chain to never run for Valerio Di Santo, Antony Fioravanti,
+      // and Luca Gallacci (2026-04-22 → 2026-05-13). Verified against
+      // information_schema 2026-05-13.
+      const TABLES_WITH_ENTITY_TYPE = new Set([
+        'formation_submissions',
+        'onboarding_submissions',
+        'tax_return_submissions',
+        'company_info_submissions',
+      ])
+      if (TABLES_WITH_ENTITY_TYPE.has(submissionTable)) {
+        submissionRecord.entity_type = entity_type || 'SMLLC'
       }
 
       // Only include lead_id for tables that have it (tax_return_submissions does not)
@@ -183,7 +198,16 @@ export async function POST(req: NextRequest) {
         .single()
 
       if (subErr) {
+        // Do NOT silently continue. Previously this just logged and let
+        // submissionId stay null, which caused the background handler to
+        // bail with "invalid payload" and the client to see "submitted
+        // successfully" while the auto-chain never ran. Fail loudly so the
+        // client retries and so the error is visible in logs.
         console.error('[wizard-submit] Submission upsert failed:', subErr.message)
+        return NextResponse.json(
+          { error: `Failed to save submission: ${subErr.message}` },
+          { status: 500 },
+        )
       }
       submissionId = (sub as Record<string, unknown> | null)?.id as string || null
     }
