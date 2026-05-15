@@ -97,6 +97,115 @@ export interface UpdateTasksBulkResult {
   error?: string
 }
 
+// ─── createWorkflowTask ─────────────────────────────────────
+
+type TaskInsert = Database["public"]["Tables"]["tasks"]["Insert"]
+
+export interface CreateWorkflowTaskParams {
+  /** Workflow definition slug, e.g. 'itin_review'. */
+  workflow_slug: string
+  /** Pinned-at-creation copy of the workflow definition. */
+  workflow_snapshot: Record<string, unknown>
+  /** Workflow-specific data validated by WORKFLOW_SCHEMAS[snapshot.task_meta_schema]. */
+  task_meta: Record<string, unknown>
+  task_title: string
+  assigned_to: string
+  status?: TaskInsert["status"]
+  priority?: TaskInsert["priority"]
+  due_date?: string | null
+  description?: string | null
+  account_id?: string | null
+  deal_id?: string | null
+  service_id?: string | null
+  delivery_id?: string | null
+  contact_id?: string | null
+  actor?: string
+  summary?: string
+  details?: Record<string, unknown>
+}
+
+export interface CreateWorkflowTaskResult {
+  success: boolean
+  outcome: "created" | "error"
+  task_id?: string
+  error?: string
+}
+
+/**
+ * Create a workflow-aware task. Inserts the row through this single guarded
+ * surface so the lint rule (no raw .insert on tasks) is satisfied and so the
+ * action_log audit trail is consistent with updateTask.
+ *
+ * Used by:
+ *   - The workflow dispatcher's spawn_task path (app/api/tasks/[id]/action)
+ *   - Slice 2's chain.spawn_next_workflow handler
+ *   - The auto-chain task creation in /api/itin-form-completed (Slice 4)
+ */
+export async function createWorkflowTask(
+  params: CreateWorkflowTaskParams,
+): Promise<CreateWorkflowTaskResult> {
+  try {
+    if (!params.workflow_slug) {
+      return { success: false, outcome: "error", error: "workflow_slug is required" }
+    }
+    if (!params.task_title) {
+      return { success: false, outcome: "error", error: "task_title is required" }
+    }
+    if (!params.assigned_to) {
+      return { success: false, outcome: "error", error: "assigned_to is required" }
+    }
+
+    const nowIso = new Date().toISOString()
+    const insertRow: TaskInsert = {
+      task_title: params.task_title,
+      assigned_to: params.assigned_to,
+      status: params.status ?? "To Do",
+      priority: params.priority ?? "Normal",
+      due_date: params.due_date ?? null,
+      description: params.description ?? null,
+      account_id: params.account_id ?? null,
+      deal_id: params.deal_id ?? null,
+      service_id: params.service_id ?? null,
+      delivery_id: params.delivery_id ?? null,
+      contact_id: params.contact_id ?? null,
+      // Workflow fields — typed loosely until lib/database.types.ts regen.
+      workflow_slug: params.workflow_slug,
+      workflow_snapshot: params.workflow_snapshot,
+      task_meta: params.task_meta,
+      created_at: nowIso,
+      updated_at: nowIso,
+    } as TaskInsert
+
+    const { data, error } = await supabaseAdmin
+      .from("tasks")
+      .insert(insertRow)
+      .select("id")
+      .single()
+
+    if (error) {
+      return { success: false, outcome: "error", error: error.message }
+    }
+
+    logAction({
+      actor: params.actor || "system",
+      action_type: "create",
+      table_name: "tasks",
+      record_id: data.id,
+      account_id: params.account_id ?? undefined,
+      summary: params.summary || `Workflow task created (${params.workflow_slug})`,
+      details: params.details || { workflow_slug: params.workflow_slug },
+    })
+
+    return { success: true, outcome: "created", task_id: data.id }
+  } catch (err) {
+    return {
+      success: false,
+      outcome: "error",
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
 // ─── updateTask ────────────────────────────────────────────
 
 export async function updateTask(
