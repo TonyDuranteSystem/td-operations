@@ -61,33 +61,12 @@ export async function POST(
     if (!m.member_type || !['individual', 'company'].includes(m.member_type)) {
       return NextResponse.json({ error: 'Each member must have a valid type (individual or company).' }, { status: 400 })
     }
-
-    const label = m.member_type === 'individual' ? (m.full_name?.trim() || 'Individual member') : (m.company_name?.trim() || 'Company member')
-
-    if (m.member_type === 'individual') {
-      if (!m.full_name?.trim()) return NextResponse.json({ error: 'Individual members must have a full name.' }, { status: 400 })
-      if (!m.email?.trim()) return NextResponse.json({ error: `${label}: email is required.` }, { status: 400 })
-      if (!m.phone?.trim()) return NextResponse.json({ error: `${label}: phone is required.` }, { status: 400 })
-      if (!m.address_street?.trim()) return NextResponse.json({ error: `${label}: street address is required.` }, { status: 400 })
-      if (!m.address_city?.trim()) return NextResponse.json({ error: `${label}: city is required.` }, { status: 400 })
-      if (!m.address_zip?.trim()) return NextResponse.json({ error: `${label}: ZIP is required.` }, { status: 400 })
-      if (!m.address_country?.trim()) return NextResponse.json({ error: `${label}: country is required.` }, { status: 400 })
+    if (m.member_type === 'individual' && !m.full_name?.trim()) {
+      return NextResponse.json({ error: 'Individual members must have a full name.' }, { status: 400 })
     }
-
-    if (m.member_type === 'company') {
-      if (!m.company_name?.trim()) return NextResponse.json({ error: 'Company members must have a company name.' }, { status: 400 })
-      if (!m.ein?.trim()) return NextResponse.json({ error: `${label}: EIN is required.` }, { status: 400 })
-      if (!m.address_street?.trim()) return NextResponse.json({ error: `${label}: company street address is required.` }, { status: 400 })
-      if (!m.address_city?.trim()) return NextResponse.json({ error: `${label}: company city is required.` }, { status: 400 })
-      if (!m.address_country?.trim()) return NextResponse.json({ error: `${label}: company country is required.` }, { status: 400 })
-      if (!m.representative_name?.trim()) return NextResponse.json({ error: `${label}: representative name is required.` }, { status: 400 })
-      if (!m.representative_email?.trim()) return NextResponse.json({ error: `${label}: representative email is required.` }, { status: 400 })
-      if (!m.representative_phone?.trim()) return NextResponse.json({ error: `${label}: representative phone is required.` }, { status: 400 })
-      if (!m.representative_address_street?.trim()) return NextResponse.json({ error: `${label}: representative street address is required.` }, { status: 400 })
-      if (!m.representative_address_city?.trim()) return NextResponse.json({ error: `${label}: representative city is required.` }, { status: 400 })
-      if (!m.representative_address_country?.trim()) return NextResponse.json({ error: `${label}: representative country is required.` }, { status: 400 })
+    if (m.member_type === 'company' && !m.company_name?.trim()) {
+      return NextResponse.json({ error: 'Company members must have a company name.' }, { status: 400 })
     }
-
     const pct = parseFloat(String(m.ownership_pct || 0))
     if (isNaN(pct) || pct <= 0 || pct > 100) {
       return NextResponse.json({ error: 'Each member must have a valid ownership percentage (1–100).' }, { status: 400 })
