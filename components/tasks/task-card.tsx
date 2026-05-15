@@ -6,7 +6,9 @@ import { cn } from '@/lib/utils'
 import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
 import { TaskRowActions } from '@/components/tasks/task-row-actions'
+import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import type { Task } from '@/lib/types'
+import type { CrmRole } from '@/lib/tasks/types'
 import { differenceInDays, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 
@@ -27,7 +29,29 @@ function isFollowUp(task: Task, today: string): boolean {
   return differenceInDays(now, updated) >= 5
 }
 
-export function TaskCard({ task, today, onEdit }: { task: Task; today: string; onEdit?: (task: Task) => void }) {
+/**
+ * Router component. Delegates workflow-driven tasks to WorkflowTaskCard,
+ * everything else to the legacy LegacyTaskCard. Keeping the routing out of
+ * the inner component avoids violating React's hooks-order rules.
+ */
+export function TaskCard(props: {
+  task: Task
+  today: string
+  onEdit?: (task: Task) => void
+  /**
+   * Viewer's CRM role. Defaults to 'admin' so the workflow-aware render path
+   * shows all actions on dashboards that haven't yet plumbed the auth context
+   * down. The dispatcher route enforces RBAC server-side regardless.
+   */
+  role?: CrmRole
+}) {
+  if (props.task.workflow_snapshot && typeof props.task.workflow_snapshot === 'object') {
+    return <WorkflowTaskCard task={props.task} today={props.today} role={props.role ?? 'admin'} />
+  }
+  return <LegacyTaskCard task={props.task} today={props.today} onEdit={props.onEdit} />
+}
+
+function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; onEdit?: (task: Task) => void }) {
   const [isPending, startTransition] = useTransition()
 
   const dueInfo = task.due_date ? getDaysLabel(task.due_date, today) : null

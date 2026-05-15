@@ -33,8 +33,11 @@ export async function GET(request: NextRequest) {
 
   let query = supabaseAdmin
     .from('tasks')
+    // workflow_slug / workflow_snapshot / task_meta are Workflow System Slice 1
+    // columns. Not yet in lib/database.types.ts (regen pending Slice 14). Cast
+    // via 'as never' on the column list to bypass the generated narrowing.
     .select(
-      'id, task_title, status, priority, due_date, assigned_to, category, description, account_id, delivery_id, updated_at, created_at, contact_id, stage_order, attachments, accounts(company_name), service_deliveries(service_type)'
+      'id, task_title, status, priority, due_date, assigned_to, category, description, account_id, delivery_id, updated_at, created_at, contact_id, stage_order, attachments, workflow_slug, workflow_snapshot, task_meta, accounts(company_name), service_deliveries(service_type)' as never
     )
 
   if (accountId) {
@@ -77,8 +80,13 @@ export async function GET(request: NextRequest) {
       delivery_id: r.delivery_id ?? null,
       company_name: r.accounts?.company_name ?? null,
       service_type: r.service_deliveries?.service_type ?? null,
+      attachments: r.attachments ?? [],
       updated_at: r.updated_at,
       created_at: r.created_at,
+      // Workflow System fields (Slice 1). Null on non-workflow tasks.
+      workflow_slug: r.workflow_slug ?? null,
+      workflow_snapshot: r.workflow_snapshot ?? null,
+      task_meta: r.task_meta ?? null,
     }
   })
 

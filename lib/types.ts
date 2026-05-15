@@ -29,6 +29,14 @@ export interface Task {
   attachments?: TaskAttachment[]
   updated_at: string
   created_at: string
+  /**
+   * Workflow System fields (Slice 1 migration: 2026-05-15). When
+   * workflow_snapshot is non-null, TaskCard delegates rendering to
+   * WorkflowTaskCard. See lib/tasks/types.ts for the snapshot shape.
+   */
+  workflow_slug?: string | null
+  workflow_snapshot?: Record<string, unknown> | null
+  task_meta?: Record<string, unknown> | null
 }
 
 export interface TaskStats {
