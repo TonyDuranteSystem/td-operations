@@ -29,6 +29,9 @@ import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { APP_BASE_URL } from "@/lib/config"
 import { generateW7Pdf, generate1040NRPdf, generateScheduleOIPdf } from "@/lib/itin-pdf-generator"
+import { createWorkflowTask } from "@/lib/operations/task"
+import { getWorkflowSchema } from "@/lib/tasks/workflow-schemas"
+import { parseWorkflowSnapshot } from "@/lib/tasks/workflow-snapshot-schema"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -65,7 +68,7 @@ export async function POST(req: NextRequest) {
       if (lead) { clientName = lead.full_name; clientEmail = lead.email || "" }
     } else if (sub.contact_id) {
       const { data: contact } = await supabaseAdmin.from("contacts").select("full_name, email").eq("id", sub.contact_id).single()
-      if (contact) { clientName = contact.full_name; clientEmail = contact.email || "" } // eslint-disable-line @typescript-eslint/no-unused-vars
+      if (contact) { clientName = contact.full_name; clientEmail = contact.email || "" }
     }
 
     // Get company name if linked
@@ -286,6 +289,15 @@ export async function POST(req: NextRequest) {
     // Now: static import at top of file (handler import is build-validated);
     // gate split so each failure mode reports honestly.
     let docsGenerated = false
+    // Captured from Step 4 to be pinned into task_meta on the Slice 4 workflow
+    // task in Step 6. Each entry mirrors the itin_review_v1 Zod schema.
+    const generatedAttachments: Array<{
+      kind: "w7" | "1040nr" | "schedule_oi"
+      file_id: string
+      file_name: string
+      mime_type: "application/pdf"
+    }> = []
+    let itinDriveFolderId: string | null = null
     try {
       if (!sd.first_name || !sd.last_name) {
         results.push({ step: "docs_generated", status: "skipped", detail: "Missing first_name or last_name in submission data" })
@@ -307,6 +319,7 @@ export async function POST(req: NextRequest) {
             const nf = await cf(driveFolderId, "ITIN")
             itinFolder = { id: nf.id, name: "ITIN", mimeType: "application/vnd.google-apps.folder" }
           }
+          itinDriveFolderId = itinFolder.id
 
           const slug = `${sd.first_name}_${sd.last_name}`.replace(/\s+/g, "_")
           const w7Name = `W-7_${slug}.pdf`
@@ -317,6 +330,9 @@ export async function POST(req: NextRequest) {
           const oiUpload = await uploadBinaryToDrive(oiName, oiBuffer, "application/pdf", itinFolder.id) as { id?: string }
 
           docsGenerated = true
+          if (w7Upload?.id) generatedAttachments.push({ kind: "w7", file_id: w7Upload.id, file_name: w7Name, mime_type: "application/pdf" })
+          if (nrUpload?.id) generatedAttachments.push({ kind: "1040nr", file_id: nrUpload.id, file_name: nrName, mime_type: "application/pdf" })
+          if (oiUpload?.id) generatedAttachments.push({ kind: "schedule_oi", file_id: oiUpload.id, file_name: oiName, mime_type: "application/pdf" })
 
           // Register PDFs in the portal documents table so the client sees
           // them under Documents (category=3 Tax, portal_visible=true).
@@ -406,6 +422,11 @@ export async function POST(req: NextRequest) {
     }
 
     // --- STEP 6: Create task for Luca ---
+    // Workflow System (Slice 4 / dev_task e364e980): when docs were generated
+    // AND we have everything required by the itin_review_v1 schema, create a
+    // catalog-driven workflow task that renders via WorkflowTaskCard with
+    // Approve / Needs Fix / Waiting / Recall actions. Otherwise (or on any
+    // failure) fall back to the legacy plain task. Bug #16 mitigation.
     try {
       const taskTitle = docsGenerated
         ? `Review ITIN documents -- ${displayName}`
@@ -414,27 +435,109 @@ export async function POST(req: NextRequest) {
       const { data: existingTask } = await supabaseAdmin
         .from("tasks").select("id").eq("task_title", taskTitle).maybeSingle()
 
-      if (!existingTask) {
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-          supabaseAdmin.from("tasks").insert({
-            task_title: taskTitle,
-            description: docsGenerated
-              ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Largo FL.`
-              : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
-            assigned_to: "Luca",
-            priority: "High",
-            category: "KYC",
-            status: "To Do",
-            due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            delivery_id: deliveryId || undefined,
-            account_id: sub.account_id || undefined,
-            contact_id: contactId || undefined,
-            created_by: "System",
-          }),
-          "tasks.insert"
-        )
-        results.push({ step: "task_created", status: "ok", detail: taskTitle })
+      if (existingTask) {
+        // Task already exists — no-op (idempotent).
+      } else {
+        // Decide path: workflow task or legacy task.
+        const canBuildWorkflowMeta =
+          docsGenerated &&
+          generatedAttachments.length >= 3 &&
+          itinDriveFolderId &&
+          clientEmail &&
+          sd.first_name &&
+          sd.last_name
+
+        let workflowTaskCreated = false
+        if (canBuildWorkflowMeta) {
+          // Load the itin_review catalog row to pin its metadata as the snapshot.
+          const { data: catalogRow } = await supabaseAdmin
+            .from("catalog_entries")
+            .select("metadata")
+            .eq("catalog_id", "task_workflows")
+            .eq("slug", "itin_review")
+            .maybeSingle()
+          const rawSnapshot = catalogRow?.metadata as Record<string, unknown> | null | undefined
+          const taskMeta: Record<string, unknown> = {
+            submission_id: sub.id,
+            drive_folder_id: itinDriveFolderId,
+            attachments: generatedAttachments,
+            generated_at: new Date().toISOString(),
+            client_language: (sub.language === "it" ? "it" : "en"),
+            client_email: clientEmail,
+            client_first_name: sd.first_name,
+            client_last_name: sd.last_name,
+          }
+          // Validate against the Zod schema BEFORE inserting. A bad shape fails
+          // loud here rather than producing a broken workflow task that the
+          // dispatcher would reject every time an action is clicked.
+          const schema = getWorkflowSchema("itin_review_v1")
+          const metaParsed = schema?.safeParse(taskMeta)
+          // Snapshot shape parse — proves the catalog row is well-formed.
+          let snapshotIsValid = false
+          if (rawSnapshot) {
+            try {
+              parseWorkflowSnapshot({ ...rawSnapshot, slug: "itin_review" })
+              snapshotIsValid = true
+            } catch (parseErr) {
+              console.warn("[itin-form-completed] itin_review snapshot is malformed; falling back:", parseErr)
+            }
+          }
+          if (rawSnapshot && snapshotIsValid && metaParsed && metaParsed.success) {
+            const spawn = await createWorkflowTask({
+              workflow_slug: "itin_review",
+              workflow_snapshot: { ...rawSnapshot, slug: "itin_review" },
+              task_meta: taskMeta,
+              task_title: taskTitle,
+              description: `W-7 + 1040-NR + Schedule OI auto-generated for ${displayName}. Review the PDFs, then click Approve & Send to Client (workflow action) to email the package to ${clientEmail} and advance the SD.`,
+              assigned_to: "Luca",
+              priority: "High",
+              status: "To Do",
+              due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || undefined,
+              account_id: sub.account_id || undefined,
+              contact_id: contactId || undefined,
+              actor: "itin-form-completed:auto-chain",
+              summary: "Workflow ITIN review task created",
+              details: { workflow_slug: "itin_review", submission_id: sub.id },
+            })
+            if (spawn.success) {
+              workflowTaskCreated = true
+              results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (workflow: itin_review, task ${spawn.task_id})` })
+            } else {
+              console.warn("[itin-form-completed] createWorkflowTask failed, falling back to legacy:", spawn.error)
+            }
+          } else if (!metaParsed?.success) {
+            console.warn("[itin-form-completed] task_meta failed itin_review_v1 validation; falling back to legacy task:", metaParsed?.error?.message)
+          }
+        }
+
+        // Legacy fallback: plain task with no workflow_snapshot. Used when (a)
+        // docs were NOT generated (so reviewer has different next-steps), (b)
+        // the catalog row is missing/malformed (defensive), or (c) workflow
+        // task creation itself failed. Keeps the auto-chain robust even if the
+        // workflow system has any hiccup.
+        if (!workflowTaskCreated) {
+          await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
+            supabaseAdmin.from("tasks").insert({
+              task_title: taskTitle,
+              description: docsGenerated
+                ? `W-7 + 1040-NR + Schedule OI have been auto-generated for ${displayName}.\n\nReview the PDFs in Drive.\nIf correct, send to client: itin_prepare_documents(token="${token}", send_email=true)\nClient must print, sign in wet ink, print passport copies, and mail to Largo FL.`
+                : `ITIN form completed for ${displayName}.\n\nDocument generation failed. Run manually:\n1. itin_form_review(token="${token}", apply_changes=true)\n2. itin_prepare_documents(token="${token}")`,
+              assigned_to: "Luca",
+              priority: "High",
+              category: "KYC",
+              status: "To Do",
+              due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              delivery_id: deliveryId || undefined,
+              account_id: sub.account_id || undefined,
+              contact_id: contactId || undefined,
+              created_by: "System",
+            }),
+            "tasks.insert"
+          )
+          results.push({ step: "task_created", status: "ok", detail: `${taskTitle} (legacy)` })
+        }
       }
     } catch (e) {
       results.push({ step: "task_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
