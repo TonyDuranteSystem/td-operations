@@ -137,6 +137,25 @@ export interface HandlerResult {
   side_effects: SideEffect[]
   /** Override the action's on_success_status (rare — typically the action's value is used). */
   next_status?: TaskStatus
+  /**
+   * Extra fields to patch on the parent task. The dispatcher merges this into
+   * the post-success update alongside status + task_meta. Used by
+   * task.reassign (assigned_to), task.snooze (due_date), etc.
+   *
+   * The handler MUST NOT include status or task_meta here — those come from
+   * action.on_success_status and the merge of action.on_success_meta with
+   * existing task.task_meta. Use this for everything else.
+   */
+  task_patch?: Record<string, unknown>
+  /**
+   * Handler-supplied data to merge into task_meta on success.
+   * Merge order (lowest to highest precedence):
+   *   existing task_meta (minus last_error) → handler.task_meta_patch → action.on_success_meta.
+   * The action's catalog-declared on_success_meta wins, so workflow_state
+   * cannot be overridden by a handler — but handlers can add dynamic fields
+   * (block note, sent message id, advanced stage name, etc.).
+   */
+  task_meta_patch?: Record<string, unknown>
   /** Spawn a downstream task (Slice 2's chain.spawn_next_workflow uses this). */
   spawn_task?: { workflow_slug: string; task_meta: Record<string, unknown>; assigned_to?: string }
   /** Arbitrary handler return payload persisted to task_action_log.result. */

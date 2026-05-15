@@ -29,14 +29,46 @@ function unregisterTestHandlers() {
   // the same slug throws. We avoid that by using a unique slug per test.
 }
 
-describe("workflow-registry — Slice 1 (empty)", () => {
-  it("getRegisteredHandlerSlugs returns an array (empty at Slice 1)", () => {
+// Slice 2: 14 handlers registered (5 task.* + 9 chain.*). Two are stubs
+// (chain.send_for_signature, chain.upload_document) but they ARE registered
+// — they just return success=false with NOT_IMPLEMENTED.
+const SLICE_2_REGISTERED_HANDLERS = [
+  "task.flag_blocked",
+  "task.waiting_with_optional_message",
+  "task.snooze",
+  "task.reassign",
+  "task.cancel",
+  "chain.advance_sd_stage",
+  "chain.spawn_next_workflow",
+  "chain.send_client_message",
+  "chain.send_email",
+  "chain.send_for_signature",
+  "chain.await_client_action",
+  "chain.upload_document",
+  "chain.update_contact_field",
+  "chain.update_account_field",
+] as const
+
+describe("workflow-registry — Slice 2 (14 handlers)", () => {
+  it("getRegisteredHandlerSlugs returns exactly the Slice 2 set (excluding test fixtures)", () => {
     const slugs = getRegisteredHandlerSlugs()
     expect(Array.isArray(slugs)).toBe(true)
-    // Slice 1 ships empty. When Slice 2 lands and registers handlers,
-    // update this to reflect that — but the array shape contract is the
-    // permanent invariant tested here.
-    expect(slugs.filter((s) => !s.startsWith(TEST_PREFIX))).toEqual([])
+    const real = slugs.filter((s) => !s.startsWith(TEST_PREFIX)).sort()
+    expect(real).toEqual([...SLICE_2_REGISTERED_HANDLERS].sort())
+  })
+
+  it("every Slice 2 handler is callable via getWorkflowHandler", () => {
+    for (const slug of SLICE_2_REGISTERED_HANDLERS) {
+      const fn = getWorkflowHandler(slug)
+      expect(fn, `Missing handler: ${slug}`).not.toBeNull()
+      expect(typeof fn, `Not a function: ${slug}`).toBe("function")
+    }
+  })
+
+  it("every Slice 2 handler resolves via requireWorkflowHandler", () => {
+    for (const slug of SLICE_2_REGISTERED_HANDLERS) {
+      expect(() => requireWorkflowHandler(slug)).not.toThrow()
+    }
   })
 
   it("getWorkflowHandler returns null for an unregistered slug", () => {
