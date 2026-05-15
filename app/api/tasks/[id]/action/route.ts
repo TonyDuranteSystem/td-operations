@@ -334,17 +334,30 @@ async function finalizeSuccess(args: {
   const now = new Date().toISOString()
   const nextStatus = result.next_status ?? action.on_success_status
 
-  // Compose the task_meta update: existing meta + workflow-state from action + clear any prior error.
+  // Compose the task_meta update:
+  //   existing meta (minus last_error)
+  //   → handler.task_meta_patch (dynamic data: block note, sent message id, ...)
+  //   → action.on_success_meta (catalog-declared final state — wins on conflict)
   const baseMeta = (task.task_meta ?? {}) as Record<string, unknown>
   const { last_error: _drop, ...metaWithoutError } = baseMeta as { last_error?: unknown }
   const nextMeta: Record<string, unknown> = {
     ...metaWithoutError,
+    ...(result.task_meta_patch ?? {}),
     ...(action.on_success_meta ?? {}),
   }
 
   // updateTask auto-stamps completed_date when status flips to Done and writes
   // to action_log. task_meta is passed through the patch as a JSONB column.
-  const patch = { status: nextStatus, task_meta: nextMeta } as Parameters<typeof updateTask>[0]["patch"]
+  // task_patch from the handler is merged in for fields like assigned_to/due_date.
+  const handlerPatch = (result.task_patch ?? {}) as Record<string, unknown>
+  // Strip status / task_meta from handlerPatch — those come from the action contract.
+  delete handlerPatch.status
+  delete handlerPatch.task_meta
+  const patch = {
+    status: nextStatus,
+    task_meta: nextMeta,
+    ...handlerPatch,
+  } as Parameters<typeof updateTask>[0]["patch"]
   const update = await updateTask({
     id: task.id,
     patch,

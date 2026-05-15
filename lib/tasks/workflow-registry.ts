@@ -17,18 +17,52 @@
 
 import type { WorkflowHandler } from "./types"
 
+// Task lifecycle handlers (Slice 2).
+import { taskFlagBlocked } from "./workflow-handlers/task-flag-blocked"
+import { taskWaitingWithOptionalMessage } from "./workflow-handlers/task-waiting-with-optional-message"
+import { taskSnooze } from "./workflow-handlers/task-snooze"
+import { taskReassign } from "./workflow-handlers/task-reassign"
+import { taskCancel } from "./workflow-handlers/task-cancel"
+
+// Chain primitives (Slice 2).
+import { chainAdvanceSdStage } from "./workflow-handlers/chain-advance-sd-stage"
+import { chainSpawnNextWorkflow } from "./workflow-handlers/chain-spawn-next-workflow"
+import { chainSendClientMessage } from "./workflow-handlers/chain-send-client-message"
+import { chainSendEmail } from "./workflow-handlers/chain-send-email"
+import { chainSendForSignature } from "./workflow-handlers/chain-send-for-signature"
+import { chainAwaitClientAction } from "./workflow-handlers/chain-await-client-action"
+import { chainUploadDocument } from "./workflow-handlers/chain-upload-document"
+import { chainUpdateContactField } from "./workflow-handlers/chain-update-contact-field"
+import { chainUpdateAccountField } from "./workflow-handlers/chain-update-account-field"
+
 /**
- * Slice 1: empty.
- * Slice 2 will populate with:
- *   'task.flag_blocked', 'task.waiting_with_optional_message', 'task.snooze',
- *   'task.reassign', 'task.cancel', 'chain.advance_sd_stage',
- *   'chain.spawn_next_workflow', 'chain.send_client_message', 'chain.send_email',
- *   'chain.send_for_signature', 'chain.await_client_action',
- *   'chain.upload_document', 'chain.update_contact_field',
- *   'chain.update_account_field'.
+ * Slice 2: 5 task.* + 9 chain.* handlers registered.
  * Slice 4 will add 'itin.approve_and_send' and 'itin.recall_and_recorrect'.
+ *
+ * `chain.send_for_signature` and `chain.upload_document` are intentional
+ * NOT_IMPLEMENTED stubs — their underlying helpers (lib/operations/signature.ts,
+ * lib/operations/document.ts::insertDocument) have not been extracted yet.
+ * Tracked as follow-up dev_tasks. Calling them via the dispatcher returns a
+ * clean handler error; no silent failure.
  */
-const HANDLERS: Record<string, WorkflowHandler> = {}
+const HANDLERS: Record<string, WorkflowHandler> = {
+  // Task lifecycle
+  "task.flag_blocked": taskFlagBlocked,
+  "task.waiting_with_optional_message": taskWaitingWithOptionalMessage,
+  "task.snooze": taskSnooze,
+  "task.reassign": taskReassign,
+  "task.cancel": taskCancel,
+  // Chain primitives
+  "chain.advance_sd_stage": chainAdvanceSdStage,
+  "chain.spawn_next_workflow": chainSpawnNextWorkflow,
+  "chain.send_client_message": chainSendClientMessage,
+  "chain.send_email": chainSendEmail,
+  "chain.send_for_signature": chainSendForSignature, // stub
+  "chain.await_client_action": chainAwaitClientAction,
+  "chain.upload_document": chainUploadDocument, // stub
+  "chain.update_contact_field": chainUpdateContactField,
+  "chain.update_account_field": chainUpdateAccountField,
+}
 
 /** Look up a handler by slug. Returns null if not registered. */
 export function getWorkflowHandler(slug: string): WorkflowHandler | null {
