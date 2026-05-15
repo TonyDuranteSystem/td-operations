@@ -29,15 +29,18 @@ function unregisterTestHandlers() {
   // the same slug throws. We avoid that by using a unique slug per test.
 }
 
-// Slice 2: 14 handlers registered (5 task.* + 9 chain.*). Two are stubs
-// (chain.send_for_signature, chain.upload_document) but they ARE registered
-// — they just return success=false with NOT_IMPLEMENTED.
-const SLICE_2_REGISTERED_HANDLERS = [
+// Slice 2: 14 generic handlers (5 task.* + 9 chain.* — 2 chain.* are
+// NOT_IMPLEMENTED stubs but ARE registered).
+// Slice 4: + 2 service-specific handlers (itin.approve_and_send,
+// itin.recall_and_recorrect).
+const REGISTERED_HANDLERS = [
+  // Slice 2 — task lifecycle
   "task.flag_blocked",
   "task.waiting_with_optional_message",
   "task.snooze",
   "task.reassign",
   "task.cancel",
+  // Slice 2 — chain primitives
   "chain.advance_sd_stage",
   "chain.spawn_next_workflow",
   "chain.send_client_message",
@@ -47,26 +50,29 @@ const SLICE_2_REGISTERED_HANDLERS = [
   "chain.upload_document",
   "chain.update_contact_field",
   "chain.update_account_field",
+  // Slice 4 — ITIN service-specific
+  "itin.approve_and_send",
+  "itin.recall_and_recorrect",
 ] as const
 
-describe("workflow-registry — Slice 2 (14 handlers)", () => {
-  it("getRegisteredHandlerSlugs returns exactly the Slice 2 set (excluding test fixtures)", () => {
+describe("workflow-registry — current handler set", () => {
+  it("getRegisteredHandlerSlugs returns exactly the registered set (excluding test fixtures)", () => {
     const slugs = getRegisteredHandlerSlugs()
     expect(Array.isArray(slugs)).toBe(true)
     const real = slugs.filter((s) => !s.startsWith(TEST_PREFIX)).sort()
-    expect(real).toEqual([...SLICE_2_REGISTERED_HANDLERS].sort())
+    expect(real).toEqual([...REGISTERED_HANDLERS].sort())
   })
 
-  it("every Slice 2 handler is callable via getWorkflowHandler", () => {
-    for (const slug of SLICE_2_REGISTERED_HANDLERS) {
+  it("every registered handler is callable via getWorkflowHandler", () => {
+    for (const slug of REGISTERED_HANDLERS) {
       const fn = getWorkflowHandler(slug)
       expect(fn, `Missing handler: ${slug}`).not.toBeNull()
       expect(typeof fn, `Not a function: ${slug}`).toBe("function")
     }
   })
 
-  it("every Slice 2 handler resolves via requireWorkflowHandler", () => {
-    for (const slug of SLICE_2_REGISTERED_HANDLERS) {
+  it("every registered handler resolves via requireWorkflowHandler", () => {
+    for (const slug of REGISTERED_HANDLERS) {
       expect(() => requireWorkflowHandler(slug)).not.toThrow()
     }
   })
