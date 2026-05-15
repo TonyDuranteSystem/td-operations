@@ -28,6 +28,7 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { APP_BASE_URL } from "@/lib/config"
+import { generateW7Pdf, generate1040NRPdf, generateScheduleOIPdf } from "@/lib/itin-pdf-generator"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -272,27 +273,23 @@ export async function POST(req: NextRequest) {
     }
 
     // --- STEP 4: Auto-generate W-7 + 1040-NR + Schedule OI ---
+    // Bug #5 fix (2026-05-14, dev_task 222be20a): the previous version of this
+    // step used a `webpackIgnore: true` dynamic import via a string variable
+    // (`const modPath = "@/lib/itin-pdf-generator"; await import(modPath)`).
+    // That pattern fails silently at Vercel's serverless runtime because the
+    // `@/`-aliased path is not resolved when webpack is told to skip it. The
+    // import threw, the surrounding `try { ... } catch {}` swallowed the error,
+    // `generateW7Pdf` stayed null, and the gate below reported the misleading
+    // "Missing name fields". Net effect: every portal-wizard ITIN client (and
+    // every external-form client) silently skipped this step and required a
+    // manual `itin_prepare_documents` MCP call by Luca to generate the PDFs.
+    // Now: static import at top of file (handler import is build-validated);
+    // gate split so each failure mode reports honestly.
     let docsGenerated = false
     try {
-      // Import the prepare documents function from MCP tools
-      // We call the same logic but directly, not via MCP
-      // Try to import PDF generator — if not available, skip and create manual task
-      let generateW7Pdf: ((data: Record<string, unknown>) => Promise<Buffer>) | null = null
-      let generate1040NRPdf: ((data: Record<string, unknown>) => Promise<Buffer>) | null = null
-      let generateScheduleOIPdf: ((data: Record<string, unknown>) => Promise<Buffer>) | null = null
-
-      try {
-        // Dynamic import with variable to prevent webpack static analysis
-        const modPath = "@/lib/itin-pdf-generator"
-        const mod = await import(/* webpackIgnore: true */ modPath)
-        generateW7Pdf = mod.generateW7Pdf
-        generate1040NRPdf = mod.generate1040NRPdf
-        generateScheduleOIPdf = mod.generateScheduleOIPdf
-      } catch {
-        // PDF generator not yet extracted — will create manual task instead
-      }
-
-      if (generateW7Pdf && generate1040NRPdf && generateScheduleOIPdf && sd.first_name && sd.last_name) {
+      if (!sd.first_name || !sd.last_name) {
+        results.push({ step: "docs_generated", status: "skipped", detail: "Missing first_name or last_name in submission data" })
+      } else {
         const w7Buffer = await generateW7Pdf(sd)
         const nrBuffer = await generate1040NRPdf(sd)
         const oiBuffer = await generateScheduleOIPdf(sd)
@@ -342,8 +339,6 @@ export async function POST(req: NextRequest) {
             results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/ (no account or contact — portal documents skipped)` })
           }
         }
-      } else {
-        results.push({ step: "docs_generated", status: "skipped", detail: "Missing name fields" })
       }
     } catch (e) {
       results.push({ step: "docs_generated", status: "error", detail: e instanceof Error ? e.message : String(e) })
