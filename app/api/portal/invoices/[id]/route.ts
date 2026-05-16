@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { resolveMailingAddress } from '@/lib/addresses'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -67,10 +68,31 @@ export async function GET(
     }
   }
 
+  // Fetch seller (account) data for the invoice header
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: account } = await (supabaseAdmin as any)
+    .from('accounts')
+    .select('company_name, invoice_logo_url, physical_address, ein_number, state_of_formation, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .eq('id', invoice.account_id)
+    .single()
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const acct = account as any
+  const sellerAddress = resolveMailingAddress(acct?.mailing_address ?? null, acct?.physical_address ?? null)
+
+  const seller = acct ? {
+    company_name: acct.company_name ?? null,
+    invoice_logo_url: acct.invoice_logo_url ?? null,
+    ein_number: acct.ein_number ?? null,
+    state_of_formation: acct.state_of_formation ?? null,
+    address: sellerAddress,
+  } : null
+
   return NextResponse.json({
     ...invoice,
     customer,
     items: items ?? [],
     payment_methods: paymentMethods,
+    seller,
   })
 }
