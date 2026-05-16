@@ -308,6 +308,23 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   const renderNavItem = (item: NavItem) => {
     const badge = item.href === '/portal/chat' && liveUnreadCount > 0 ? liveUnreadCount : 0
+
+    // Context-aware label for the wizard nav item.
+    // The tab serves two purposes depending on the client's stage:
+    //   - formation / onboarding tier → company data collection ("Complete Setup")
+    //   - active tier with a Banking Fintech SD → bank account application ("Bank Applications")
+    // Italian had a single static label ("Completa Registrazione") that made sense
+    // for onboarding but was invisible to banking clients searching for "bank applications".
+    let navLabel = t(item.key)
+    if (item.key === 'nav.wizard') {
+      const isBankingContext = portalTier !== 'formation' && portalTier !== 'onboarding'
+      if (isBankingContext) {
+        navLabel = locale === 'it' ? 'Apertura Conto Bancario' : 'Bank Applications'
+      } else {
+        navLabel = locale === 'it' ? 'Completa Registrazione' : 'Complete Setup'
+      }
+    }
+
     return (
       <Link
         key={item.href}
@@ -322,7 +339,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         )}
       >
         <item.icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{t(item.key)}</span>
+        <span className="flex-1">{navLabel}</span>
         {badge > 0 && (
           <span className="min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
             {badge > 99 ? '99+' : badge}
