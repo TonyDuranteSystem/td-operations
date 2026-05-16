@@ -168,6 +168,9 @@ export async function createWorkflowTask(
       service_id: params.service_id ?? null,
       delivery_id: params.delivery_id ?? null,
       contact_id: params.contact_id ?? null,
+      // tasks.attachments is NOT NULL with no default — always satisfy the
+      // constraint here so callers don't have to remember it.
+      attachments: [],
       // Workflow fields — typed loosely until lib/database.types.ts regen.
       workflow_slug: params.workflow_slug,
       workflow_snapshot: params.workflow_snapshot,

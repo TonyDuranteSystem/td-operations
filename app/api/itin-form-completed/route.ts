@@ -533,6 +533,9 @@ export async function POST(req: NextRequest) {
               account_id: sub.account_id || undefined,
               contact_id: contactId || undefined,
               created_by: "System",
+              // tasks.attachments is NOT NULL with no default — satisfy
+              // explicitly so dbWriteSafe doesn't silently capture a 23502.
+              attachments: [],
             }),
             "tasks.insert"
           )
