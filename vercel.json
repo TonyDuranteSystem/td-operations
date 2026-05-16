@@ -93,6 +93,10 @@
       "schedule": "0 8 * * *"
     },
     {
+      "path": "/api/cron/itin-processing-check",
+      "schedule": "0 9 * * 1"
+    },
+    {
       "path": "/api/cron/audit-health-check",
       "schedule": "0 7 * * *"
     },
