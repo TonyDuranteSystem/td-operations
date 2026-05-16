@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { LOGO_URL } from '@/lib/supabase/public-client'
+import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   TOOLTIPS,
@@ -240,15 +239,24 @@ export default function ITINFormCodePage() {
 
       if (subErr) throw new Error(subErr.message)
 
-      // 5. Notify backend
+      // 5. Notify backend — both submission_id and token are required by
+      // /api/itin-form-completed (validated at the top of the route). Sending
+      // only token used to silently 400 here and the auto-chain never ran;
+      // the silent catch below would swallow the failure. Fixed 2026-05-16
+      // during Slice 4 sandbox QA.
       try {
-        await fetch('/api/itin-form-completed', {
+        const res = await fetch('/api/itin-form-completed', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: submission.token }),
+          body: JSON.stringify({ submission_id: submission.id, token: submission.token }),
         })
-      } catch {
-        // Non-blocking — form is already saved
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          console.error('[itin-form/submit] auto-chain notify failed:', res.status, data)
+        }
+      } catch (notifyErr) {
+        console.error('[itin-form/submit] auto-chain notify threw:', notifyErr)
+        // Form is already saved; non-blocking for the user.
       }
 
       setSubmitted(true)
