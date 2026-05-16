@@ -614,6 +614,14 @@ export async function uploadBinaryToDrive(
  * Returns { buffer, mimeType, fileName }
  */
 export async function downloadFileBinary(fileId: string): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
+  if (process.env.SANDBOX_MODE === '1') {
+    // Sandbox mode: mock the binary download so callers (e.g., sendEmail's
+    // Drive-attachment build) don't 404 on the sandbox-mock IDs produced by
+    // mocked upload functions. Returns a tiny placeholder PDF buffer.
+    console.warn(`[SANDBOX] downloadFileBinary skipped for fileId='${fileId}'`)
+    const placeholder = Buffer.from('%PDF-1.4\n%sandbox-mock-pdf\n%%EOF\n')
+    return { buffer: placeholder, mimeType: 'application/pdf', fileName: `sandbox-mock-${fileId}.pdf` }
+  }
   const token = await getAccessToken()
   const meta = (await getFileMetadata(fileId)) as { mimeType: string; name: string }
 
