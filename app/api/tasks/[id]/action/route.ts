@@ -32,10 +32,12 @@ import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createWorkflowTask, updateTask } from "@/lib/operations/task"
+import { advanceStage } from "@/lib/operations/service-delivery"
 import { getCrmRole, isDashboardUser } from "@/lib/auth"
 import { parseWorkflowSnapshot } from "@/lib/tasks/workflow-snapshot-schema"
 import { getWorkflowSchema } from "@/lib/tasks/workflow-schemas"
 import { requireWorkflowHandler } from "@/lib/tasks/workflow-registry"
+import { getWorkflowCatalogRow, resolveCatalogTransition } from "@/lib/tasks/chain-transitions"
 import type {
   HandlerContext,
   HandlerResult,
@@ -323,6 +325,37 @@ function serializeSideEffect(se: SideEffect): SerializedSideEffect {
   return { kind: se.kind, detail: se.detail, ref_id: se.ref_id }
 }
 
+/**
+ * Compose a default title for a catalog-spawned workflow task. Pulls the
+ * client's name from inherited task_meta when available (the itin_review_v1
+ * shape carries client_first_name + client_last_name through the whole chain).
+ * Falls back to a workflow-only title if no client info is present.
+ */
+function composeSpawnedTitle(
+  snapshot: Record<string, unknown>,
+  taskMeta: Record<string, unknown>,
+  parentTask: TaskRow,
+): string {
+  const label =
+    typeof snapshot.label_admin === "string" && snapshot.label_admin.trim()
+      ? snapshot.label_admin
+      : typeof snapshot.slug === "string"
+        ? snapshot.slug
+        : "Workflow task"
+  const first = typeof taskMeta.client_first_name === "string" ? taskMeta.client_first_name : ""
+  const last = typeof taskMeta.client_last_name === "string" ? taskMeta.client_last_name : ""
+  const clientName = `${first} ${last}`.trim()
+  if (clientName) return `${label} — ${clientName}`
+  // Fall back to the parent task's title cue.
+  const parentCue = parentTask.task_title.replace(/^\[[^\]]+\]\s*/, "").trim()
+  return parentCue ? `${label} — ${parentCue}` : label
+}
+
+function readSnapshotAssignee(snapshot: Record<string, unknown>): string | null {
+  const v = snapshot.default_assignee
+  return typeof v === "string" && v.trim() ? v : null
+}
+
 async function finalizeSuccess(args: {
   task: TaskRow
   snapshot: WorkflowSnapshot
@@ -330,7 +363,7 @@ async function finalizeSuccess(args: {
   result: HandlerResult
   logId: string
 }) {
-  const { task, action, result, logId } = args
+  const { task, snapshot, action, result, logId } = args
   const now = new Date().toISOString()
   const nextStatus = result.next_status ?? action.on_success_status
 
@@ -384,32 +417,118 @@ async function finalizeSuccess(args: {
     )
   }
 
-  // Spawn downstream task if requested. The handler returns the workflow slug
-  // and task_meta; the dispatcher inherits parent linkage (account / deal /
-  // contact / service / delivery) and copies the parent's assigned_to unless
-  // the handler overrides. The spawned task's workflow_snapshot is left null;
-  // it will be filled by the auto-chain at the next dispatch (Slice 5).
+  // ── Spawn downstream task ────────────────────────────────────────────
+  // Two paths, in order of precedence:
+  //
+  //   (1) Handler explicitly returned `spawn_task` → spawn that. The handler
+  //       is the more-specific caller; if it chose the next workflow + task_meta
+  //       itself, the dispatcher honors it. Snapshot can be pinned from the
+  //       catalog row for the spawned slug.
+  //
+  //   (2) Handler did NOT set spawn_task → consult the services catalog's
+  //       workflow_chain.transitions[current_workflow][transition_key]. If
+  //       the catalog declares a spawn_workflow there, the dispatcher does
+  //       the spawn using parent task_meta as a starting point + the new
+  //       workflow's pinned snapshot. transition_key = result.transition or
+  //       action.slug as fallback. Bug-#16-style: if catalog row missing /
+  //       malformed, log a warning and don't spawn (no broken tasks).
+  //
+  // The catalog path is the architectural payoff (Slice 5): adding a new
+  // chain step = catalog edit, no code.
   let spawnedTaskId: string | null = null
+  let advancedSdStage: string | null = null
+
   if (result.spawn_task) {
+    // Path (1) — handler explicit.
+    const explicitSnapshot = (await getWorkflowCatalogRow(result.spawn_task.workflow_slug)) ?? {}
     const spawn = await createWorkflowTask({
       workflow_slug: result.spawn_task.workflow_slug,
-      workflow_snapshot: {},
+      workflow_snapshot: explicitSnapshot,
       task_meta: result.spawn_task.task_meta,
-      task_title: `[${result.spawn_task.workflow_slug}] (spawned from ${task.id.slice(0, 8)})`,
-      assigned_to: result.spawn_task.assigned_to ?? task.assigned_to,
+      task_title: composeSpawnedTitle(explicitSnapshot, result.spawn_task.task_meta, task),
+      assigned_to: result.spawn_task.assigned_to ?? readSnapshotAssignee(explicitSnapshot) ?? task.assigned_to,
       account_id: task.account_id,
       deal_id: task.deal_id,
       service_id: task.service_id,
       delivery_id: task.delivery_id,
       contact_id: task.contact_id,
       actor: "workflow-dispatcher",
-      summary: `Spawned by ${task.workflow_slug}/${action.slug}`,
-      details: { parent_task_id: task.id, workflow_slug: result.spawn_task.workflow_slug },
+      summary: `Spawned by ${task.workflow_slug}/${action.slug} (handler explicit)`,
+      details: { parent_task_id: task.id, workflow_slug: result.spawn_task.workflow_slug, mode: "handler_explicit" },
     })
     if (!spawn.success) {
-      console.warn(`[dispatcher] spawn_task failed: ${spawn.error}`)
+      console.warn(`[dispatcher] explicit spawn_task failed: ${spawn.error}`)
     } else {
       spawnedTaskId = spawn.task_id ?? null
+    }
+  } else {
+    // Path (2) — catalog transition (Slice 5).
+    const transitionKey = result.transition ?? action.slug
+    const resolved = await resolveCatalogTransition({
+      task,
+      workflowSlug: snapshot.slug,
+      transitionKey,
+    })
+
+    if (resolved?.spawn_workflow) {
+      const nextSnapshot = await getWorkflowCatalogRow(resolved.spawn_workflow)
+      if (!nextSnapshot) {
+        console.warn(
+          `[dispatcher] catalog transition wants spawn_workflow='${resolved.spawn_workflow}' but no task_workflows catalog row found — skipping spawn`,
+        )
+      } else {
+        // Inherit task_meta from the parent (post-action merged meta). This
+        // carries chain context (submission_id, attachments, client info)
+        // through every step of an ITIN-like chain.
+        const inheritedMeta: Record<string, unknown> = {
+          ...nextMeta,
+          spawned_from_task_id: task.id,
+          spawned_via: "catalog_transition",
+          spawned_at: now,
+        }
+        const spawn = await createWorkflowTask({
+          workflow_slug: resolved.spawn_workflow,
+          workflow_snapshot: nextSnapshot,
+          task_meta: inheritedMeta,
+          task_title: composeSpawnedTitle(nextSnapshot, inheritedMeta, task),
+          assigned_to: readSnapshotAssignee(nextSnapshot) ?? task.assigned_to,
+          account_id: task.account_id,
+          deal_id: task.deal_id,
+          service_id: task.service_id,
+          delivery_id: task.delivery_id,
+          contact_id: task.contact_id,
+          actor: "workflow-dispatcher",
+          summary: `Spawned by ${task.workflow_slug}/${action.slug} (catalog transition)`,
+          details: {
+            parent_task_id: task.id,
+            workflow_slug: resolved.spawn_workflow,
+            mode: "catalog_transition",
+            transition_key: transitionKey,
+          },
+        })
+        if (!spawn.success) {
+          console.warn(`[dispatcher] catalog-driven spawn failed: ${spawn.error}`)
+        } else {
+          spawnedTaskId = spawn.task_id ?? null
+        }
+      }
+    }
+
+    if (resolved?.advance_sd_stage && task.delivery_id) {
+      // Catalog says advance the SD. Reuse existing helper. Failure is
+      // non-fatal for the dispatcher response (the action itself succeeded);
+      // log so ops sees it.
+      const adv = await advanceStage({
+        delivery_id: task.delivery_id,
+        target_stage: resolved.advance_sd_stage,
+        actor: `workflow-dispatcher:${snapshot.slug}/${action.slug}`,
+        notes: `Catalog transition advance from ${snapshot.slug}/${action.slug}`,
+      })
+      if (!adv.success) {
+        console.warn(`[dispatcher] catalog advance_sd_stage='${resolved.advance_sd_stage}' failed: ${adv.error}`)
+      } else {
+        advancedSdStage = adv.to_stage
+      }
     }
   }
 
@@ -419,6 +538,7 @@ async function finalizeSuccess(args: {
       result: ({
         ...(result.result ?? {}),
         ...(spawnedTaskId ? { spawned_task_id: spawnedTaskId } : {}),
+        ...(advancedSdStage ? { advanced_sd_stage: advancedSdStage } : {}),
         ...(result.transition ? { transition: result.transition } : {}),
       } as Record<string, unknown>),
       side_effects: result.side_effects.map(serializeSideEffect),
