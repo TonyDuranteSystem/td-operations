@@ -35,9 +35,10 @@ import { chainUploadDocument } from "./workflow-handlers/chain-upload-document"
 import { chainUpdateContactField } from "./workflow-handlers/chain-update-contact-field"
 import { chainUpdateAccountField } from "./workflow-handlers/chain-update-account-field"
 
-// Service-specific handlers (Slice 4).
+// Service-specific handlers (Slice 4 + Slice 5.1).
 import { itinApproveAndSend } from "./workflow-handlers/itin-approve-and-send"
 import { itinRecallAndRecorrect } from "./workflow-handlers/itin-recall-and-recorrect"
+import { itinConfirmNumberReceived } from "./workflow-handlers/itin-confirm-number-received"
 
 /**
  * Slice 2: 5 task.* + 9 chain.* handlers registered.
@@ -66,9 +67,10 @@ const HANDLERS: Record<string, WorkflowHandler> = {
   "chain.upload_document": chainUploadDocument, // stub
   "chain.update_contact_field": chainUpdateContactField,
   "chain.update_account_field": chainUpdateAccountField,
-  // Service-specific (Slice 4)
+  // Service-specific (Slice 4 + 5.1)
   "itin.approve_and_send": itinApproveAndSend,
   "itin.recall_and_recorrect": itinRecallAndRecorrect,
+  "itin.confirm_number_received": itinConfirmNumberReceived,
 }
 
 /** Look up a handler by slug. Returns null if not registered. */

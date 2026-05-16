@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from 'react'
 import { X, Loader2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { dispatchTaskAction, type DispatchActionResult } from '@/lib/tasks/client-api'
-import type { TaskStatus, WorkflowActionDefinition } from '@/lib/tasks/types'
+import { actionInputFields, type TaskStatus, type WorkflowActionDefinition, type WorkflowInputFieldSpec } from '@/lib/tasks/types'
 
 /**
  * ActionConfirmModal — renders the action's live preview before commit.
@@ -40,7 +40,9 @@ export function ActionConfirmModal({
   expectedStatus,
   contextLine,
 }: ActionConfirmModalProps) {
-  const [paramValue, setParamValue] = useState('')
+  const inputFields = actionInputFields(action)
+  // Per-field state. Map of field name → value (string for all input types).
+  const [paramValues, setParamValues] = useState<Record<string, string>>({})
   const [preview, setPreview] = useState<DispatchActionResult | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -49,19 +51,17 @@ export function ActionConfirmModal({
   // Reset state each time the modal opens.
   useEffect(() => {
     if (!open) return
-    setParamValue('')
+    setParamValues({})
     setPreview(null)
     setPreviewError(null)
     setPreviewLoading(true)
 
     // Fire the preview eagerly so the modal isn't empty while the user reads.
-    const previewParams = action.requires_input
-      ? {} // requires_input fields aren't ready yet — preview without them
-      : {}
+    // requires_input fields aren't filled in yet — preview without them.
     dispatchTaskAction({
       taskId,
       actionSlug: action.slug,
-      params: previewParams,
+      params: {},
       mode: 'preview',
     })
       .then((res) => {
@@ -77,16 +77,21 @@ export function ActionConfirmModal({
 
   if (!open) return null
 
-  const inputSpec = action.requires_input
-  const inputRequired = inputSpec?.required === true
-  const inputValueTrimmed = paramValue.trim()
-  const canSubmit = !inputRequired || inputValueTrimmed.length > 0
+  // A field is "required" unless it explicitly says optional:true.
+  const isFieldRequired = (f: WorkflowInputFieldSpec) => f.optional !== true && f.required !== false
+  const canSubmit = inputFields.every((f) => {
+    if (!isFieldRequired(f)) return true
+    return (paramValues[f.field] ?? '').trim().length > 0
+  })
 
   const handleConfirm = () => {
     startTransition(async () => {
+      // Build params from all input fields. Trim text values; preserve empty
+      // strings for optional fields so the server can distinguish "field
+      // intentionally blank" from "field never rendered".
       const params: Record<string, unknown> = {}
-      if (inputSpec) {
-        params[inputSpec.field] = paramValue
+      for (const f of inputFields) {
+        params[f.field] = (paramValues[f.field] ?? '').trim()
       }
       const result = await dispatchTaskAction({
         taskId,
@@ -158,20 +163,45 @@ export function ActionConfirmModal({
             )}
           </section>
 
-          {/* Required input */}
-          {inputSpec && (
-            <section>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">
-                {inputSpec.label ?? inputSpec.field}
-                {inputRequired && <span className="text-red-500 ml-1">*</span>}
-              </label>
-              <textarea
-                value={paramValue}
-                onChange={(e) => setParamValue(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder={inputRequired ? 'Required' : 'Optional'}
-              />
+          {/* Required inputs (zero or more) */}
+          {inputFields.length > 0 && (
+            <section className="space-y-3">
+              {inputFields.map((f) => {
+                const required = isFieldRequired(f)
+                const value = paramValues[f.field] ?? ''
+                const inputType = f.type ?? 'text'
+                const placeholder = f.placeholder ?? (required ? 'Required' : 'Optional')
+                const update = (v: string) =>
+                  setParamValues((prev) => ({ ...prev, [f.field]: v }))
+                return (
+                  <div key={f.field}>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1">
+                      {f.label ?? f.field}
+                      {required && <span className="text-red-500 ml-1">*</span>}
+                    </label>
+                    {inputType === 'textarea' ? (
+                      <textarea
+                        value={value}
+                        onChange={(e) => update(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder={placeholder}
+                      />
+                    ) : (
+                      <input
+                        type={inputType === 'date' ? 'date' : inputType === 'url' || inputType === 'drive_url' ? 'url' : 'text'}
+                        value={value}
+                        onChange={(e) => update(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder={placeholder}
+                      />
+                    )}
+                    {f.help && (
+                      <p className="text-xs text-zinc-500 mt-1">{f.help}</p>
+                    )}
+                  </div>
+                )
+              })}
             </section>
           )}
         </div>

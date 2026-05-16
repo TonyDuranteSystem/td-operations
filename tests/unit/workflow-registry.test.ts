@@ -50,9 +50,10 @@ const REGISTERED_HANDLERS = [
   "chain.upload_document",
   "chain.update_contact_field",
   "chain.update_account_field",
-  // Slice 4 — ITIN service-specific
+  // Slice 4 + 5.1 — ITIN service-specific
   "itin.approve_and_send",
   "itin.recall_and_recorrect",
+  "itin.confirm_number_received",
 ] as const
 
 describe("workflow-registry — current handler set", () => {

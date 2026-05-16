@@ -74,6 +74,19 @@ export interface WorkflowPermission {
 
 export type CrmRole = "admin" | "team"
 
+/** Spec for a single input on an action's form. */
+export interface WorkflowInputFieldSpec {
+  field: string
+  label?: string
+  required?: boolean
+  optional?: boolean
+  /** Input type. Defaults to 'text'. 'textarea' is multiline. 'url' validates as a URL. */
+  type?: "text" | "textarea" | "url" | "date" | "drive_url" | "itin_number"
+  placeholder?: string
+  /** Optional help text shown under the input. */
+  help?: string
+}
+
 export interface WorkflowActionDefinition {
   slug: string
   label_admin: string
@@ -83,17 +96,27 @@ export interface WorkflowActionDefinition {
   permission: WorkflowPermission
   handler: string
   handler_params?: Record<string, unknown>
-  requires_input?: {
-    field: string
-    label?: string
-    required?: boolean
-    optional?: boolean
-  }
+  /**
+   * Form inputs. Backward-compatible: a single-field shape (Slice 4) still
+   * works; new code can use the multi-field shape (Slice 5.1) by passing
+   * `requires_input: { fields: [...] }`. The dispatcher + modal handle both.
+   */
+  requires_input?:
+    | WorkflowInputFieldSpec
+    | { fields: WorkflowInputFieldSpec[] }
   confirm?: { preview_template?: string; summary?: string }
   /** Coarse status to set when this action succeeds (one of the 5 enum values). */
   on_success_status: TaskStatus
   /** Per Decision A: declarative writes to task_meta on success (e.g. workflow_state). */
   on_success_meta?: Record<string, unknown>
+}
+
+/** Normalize requires_input to an array of field specs. */
+export function actionInputFields(action: WorkflowActionDefinition): WorkflowInputFieldSpec[] {
+  const ri = action.requires_input
+  if (!ri) return []
+  if ("fields" in ri && Array.isArray(ri.fields)) return ri.fields
+  return [ri as WorkflowInputFieldSpec]
 }
 
 export type TaskStatus = "To Do" | "In Progress" | "Waiting" | "Done" | "Cancelled"
