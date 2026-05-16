@@ -22,12 +22,21 @@ const TaskStatusSchema = z.enum(["To Do", "In Progress", "Waiting", "Done", "Can
 
 const TaskPrioritySchema = z.enum(["Urgent", "High", "Normal", "Low"])
 
-const RequiresInputSchema = z.object({
+const InputFieldSpecSchema = z.object({
   field: z.string().min(1),
   label: z.string().optional(),
   required: z.boolean().optional(),
   optional: z.boolean().optional(),
+  type: z.enum(["text", "textarea", "url", "date", "drive_url", "itin_number"]).optional(),
+  placeholder: z.string().optional(),
+  help: z.string().optional(),
 })
+
+/** Backward-compatible: either a single field spec OR `{ fields: [...] }`. */
+const RequiresInputSchema = z.union([
+  InputFieldSpecSchema,
+  z.object({ fields: z.array(InputFieldSpecSchema).min(1) }),
+])
 
 const ConfirmSchema = z.object({
   preview_template: z.string().optional(),
