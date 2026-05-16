@@ -187,6 +187,13 @@ export function ActionConfirmModal({
                         className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder={placeholder}
                       />
+                    ) : inputType === 'file' ? (
+                      <FileUploadField
+                        field={f}
+                        taskId={taskId}
+                        currentValue={value}
+                        onUploaded={(fileId) => update(fileId)}
+                      />
                     ) : (
                       <input
                         type={inputType === 'date' ? 'date' : inputType === 'url' || inputType === 'drive_url' ? 'url' : 'text'}
@@ -225,6 +232,89 @@ export function ActionConfirmModal({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * In-modal file upload field. Uploads to the parent task's Drive folder
+ * via POST /api/workflows/upload-task-file on file select, then stores the
+ * resulting Drive file_id as the field value so the workflow handler
+ * consumes it like any other string param. Shows upload progress, the
+ * uploaded file name + Drive link, and an error toast on failure.
+ */
+function FileUploadField({
+  field,
+  taskId,
+  currentValue,
+  onUploaded,
+}: {
+  field: WorkflowInputFieldSpec
+  taskId: string
+  currentValue: string
+  onUploaded: (fileId: string) => void
+}) {
+  const [uploading, setUploading] = useState(false)
+  const [uploadedName, setUploadedName] = useState<string | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    setUploadError(null)
+    setUploadedName(null)
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('task_id', taskId)
+    if (field.upload_subfolder) fd.append('subfolder', field.upload_subfolder)
+    try {
+      const res = await fetch('/api/workflows/upload-task-file', { method: 'POST', body: fd })
+      const body = (await res.json().catch(() => ({}))) as {
+        file_id?: string
+        file_name?: string
+        error?: string
+      }
+      if (!res.ok || !body.file_id) {
+        const msg = body.error || `Upload failed (HTTP ${res.status})`
+        setUploadError(msg)
+        toast.error(msg)
+        return
+      }
+      onUploaded(body.file_id)
+      setUploadedName(body.file_name ?? file.name)
+      toast.success(`${body.file_name ?? file.name} uploaded`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setUploadError(msg)
+      toast.error(`Upload failed: ${msg}`)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        type="file"
+        accept={field.accept}
+        disabled={uploading}
+        onChange={handleChange}
+        className="block w-full text-xs text-zinc-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 disabled:opacity-50"
+      />
+      {uploading && (
+        <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <Loader2 className="h-3 w-3 animate-spin" /> Uploading to Drive…
+        </div>
+      )}
+      {uploadedName && currentValue && !uploading && (
+        <div className="text-xs text-emerald-700">
+          ✓ Uploaded: <span className="font-mono">{uploadedName}</span>
+        </div>
+      )}
+      {uploadError && (
+        <div className="text-xs text-red-700">{uploadError}</div>
+      )}
     </div>
   )
 }
