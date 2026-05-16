@@ -23,7 +23,18 @@
  */
 
 import { updateContact } from "@/lib/operations/contact"
-import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { autoSaveDocument } from "@/lib/portal/auto-save-document"
+import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
+
+const ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+
+function buildClientNotice(firstName: string, lang: "en" | "it"): string {
+  if (lang === "it") {
+    return `Ciao ${firstName}, abbiamo ricevuto il tuo numero ITIN dall'IRS. La lettera ufficiale è ora disponibile nel tuo portale, nella sezione Documenti.`
+  }
+  return `Hi ${firstName}, we received your ITIN number from the IRS. The official letter is now available in your portal under Documents.`
+}
 
 const ITIN_FORMAT = /^9\d{8}$/
 
@@ -96,6 +107,15 @@ export const itinConfirmNumberReceived: WorkflowHandler = async (
     typeof params.irs_letter_drive_url === "string" ? params.irs_letter_drive_url.trim() : ""
   const letterFileId = rawLetterUrl ? parseDriveFileId(rawLetterUrl) : null
 
+  const meta = ctx.task.task_meta as Record<string, unknown> | null
+  const firstName =
+    meta && typeof meta.client_first_name === "string" ? meta.client_first_name : "client"
+  const lang =
+    meta && (meta.client_language === "it" || meta.client_language === "en")
+      ? (meta.client_language as "en" | "it")
+      : "en"
+  const clientNotice = buildClientNotice(firstName, lang)
+
   if (ctx.mode === "preview") {
     return {
       success: true,
@@ -105,11 +125,15 @@ export const itinConfirmNumberReceived: WorkflowHandler = async (
           detail: `Would stamp contact.itin_number='${normalized}', itin_issue_date='${issueDate}'`,
         },
         ...(letterFileId
-          ? [{ kind: "task_meta.letter_preview", detail: `IRS letter Drive file ID: ${letterFileId}` }]
+          ? [
+              { kind: "documents.register_preview", detail: `Would register IRS letter as portal-visible document` },
+              { kind: "task_meta.letter_preview", detail: `IRS letter Drive file ID: ${letterFileId}` },
+            ]
           : []),
+        { kind: "portal_message.preview", detail: `Would post bilingual (${lang}) notice to client` },
       ],
       preview: {
-        portal_message: `Hi ${ctx.task.task_meta && typeof ctx.task.task_meta === "object" && typeof (ctx.task.task_meta as Record<string, unknown>).client_first_name === "string" ? (ctx.task.task_meta as { client_first_name: string }).client_first_name : "client"}, your ITIN ${normalized} has been issued. We'll deliver it via email and your portal next.`,
+        portal_message: clientNotice,
       },
     }
   }
@@ -148,34 +172,139 @@ export const itinConfirmNumberReceived: WorkflowHandler = async (
     }
   }
 
+  const sideEffects: SideEffect[] = [
+    {
+      kind: "contact.itin_stamped",
+      detail: `contacts.itin_number = '${normalized}' (issued ${issueDate})`,
+      ref_id: ctx.task.contact_id,
+    },
+  ]
+
+  // ── Register the IRS letter as a portal-visible document ────────────
+  // So the client sees it under their Documents tab. Skipped when no
+  // letter file was uploaded. autoSaveDocument is idempotent on
+  // (account_id, drive_file_id) so re-runs don't dupe rows.
+  let documentRowId: string | null = null
+  if (letterFileId) {
+    const slug = `${(meta as Record<string, unknown> | null)?.client_first_name ?? ""}_${(meta as Record<string, unknown> | null)?.client_last_name ?? ""}`
+      .replace(/\s+/g, "_")
+      .replace(/^_|_$/g, "")
+    const docName = slug ? `ITIN_Letter_${slug}.pdf` : `ITIN_Letter.pdf`
+    const docResult = await autoSaveDocument({
+      accountId: ctx.task.account_id ?? undefined,
+      contactId: ctx.task.account_id ? undefined : ctx.task.contact_id,
+      fileName: docName,
+      documentType: "ITIN IRS Letter",
+      category: 3,
+      driveFileId: letterFileId,
+      portalVisible: true,
+    } as Parameters<typeof autoSaveDocument>[0])
+    if (docResult.error) {
+      console.warn("[itin.confirm_number_received] autoSaveDocument failed:", docResult.error)
+    } else {
+      documentRowId = docResult.id ?? null
+      sideEffects.push({
+        kind: "documents.portal_registered",
+        detail: `IRS letter registered as portal-visible document`,
+        ref_id: documentRowId ?? letterFileId,
+      })
+    }
+  }
+
+  // ── Post the client-facing notice in their language ─────────────────
+  // Resolve recipient contact for the portal thread (mirrors portal_chat_send).
+  let resolvedContactId = ctx.task.contact_id
+  if (!resolvedContactId && ctx.task.account_id) {
+    const { data: primary } = await supabaseAdmin
+      .from("account_contacts")
+      .select("contact_id")
+      .eq("account_id", ctx.task.account_id)
+      .eq("is_primary", true)
+      .maybeSingle()
+    resolvedContactId = primary?.contact_id ?? null
+  }
+
+  const { data: portalMsg, error: portalErr } = await supabaseAdmin
+    .from("portal_messages")
+    .insert({
+      account_id: ctx.task.account_id ?? null,
+      contact_id: resolvedContactId,
+      sender_type: "admin",
+      sender_id: ADMIN_SENDER_ID,
+      message: clientNotice,
+      topic: ctx.workflow.auto_topic ?? "ITIN",
+      attachments: [],
+    })
+    .select("id, created_at")
+    .single()
+
+  if (portalErr || !portalMsg) {
+    // Non-fatal — the contact stamp + document register already succeeded.
+    // Log loudly so ops sees the missed notification.
+    console.warn("[itin.confirm_number_received] portal_messages insert failed:", portalErr?.message)
+  } else {
+    sideEffects.push({
+      kind: "portal_message.sent",
+      detail: `Bilingual (${lang}) ITIN-received notice posted to client`,
+      ref_id: portalMsg.id,
+      rollback: async () => {
+        await supabaseAdmin
+          .from("portal_messages")
+          .update({ deleted_at: new Date().toISOString(), deleted_by: ctx.actor.id })
+          .eq("id", portalMsg.id)
+      },
+    })
+
+    // R103 notification + email (fire-and-forget, throttled).
+    void (async () => {
+      try {
+        const { createPortalNotification, notifyClientOfAdminMessage } = await import(
+          "@/lib/portal/notifications"
+        )
+        await createPortalNotification({
+          account_id: ctx.task.account_id ?? undefined,
+          contact_id: ctx.task.contact_id ?? undefined,
+          type: "chat",
+          title: "Your ITIN number is in your portal",
+          body: clientNotice.slice(0, 100),
+          link: "/portal/chat",
+        })
+        await notifyClientOfAdminMessage({
+          account_id: ctx.task.account_id ?? null,
+          contact_id: ctx.task.contact_id ?? null,
+          messagePreview: clientNotice,
+        })
+      } catch (err) {
+        console.warn("[itin.confirm_number_received] R103 notification failed:", err)
+      }
+    })()
+  }
+
+  if (letterFileId) {
+    sideEffects.push({
+      kind: "task_meta.letter_recorded",
+      detail: `IRS letter Drive file ID stored in task_meta`,
+      ref_id: letterFileId,
+    })
+  }
+
   return {
     success: true,
-    side_effects: [
-      {
-        kind: "contact.itin_stamped",
-        detail: `contacts.itin_number = '${normalized}' (issued ${issueDate})`,
-        ref_id: ctx.task.contact_id,
-      },
-      ...(letterFileId
-        ? [
-            {
-              kind: "task_meta.letter_recorded",
-              detail: `IRS letter Drive file ID stored in task_meta`,
-              ref_id: letterFileId,
-            },
-          ]
-        : []),
-    ],
+    side_effects: sideEffects,
     task_meta_patch: {
       itin_number: normalized,
       itin_issue_date: issueDate,
       ...(letterFileId ? { irs_letter_file_id: letterFileId, irs_letter_drive_url: rawLetterUrl } : {}),
+      ...(documentRowId ? { portal_document_id: documentRowId } : {}),
+      ...(portalMsg ? { client_notice_message_id: portalMsg.id } : {}),
     },
     result: {
       itin_number: normalized,
       itin_issue_date: issueDate,
       contact_id: ctx.task.contact_id,
       irs_letter_file_id: letterFileId,
+      portal_document_id: documentRowId,
+      client_notice_message_id: portalMsg?.id ?? null,
     },
   }
 }
