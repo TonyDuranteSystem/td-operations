@@ -80,8 +80,20 @@ export interface WorkflowInputFieldSpec {
   label?: string
   required?: boolean
   optional?: boolean
-  /** Input type. Defaults to 'text'. 'textarea' is multiline. 'url' validates as a URL. */
-  type?: "text" | "textarea" | "url" | "date" | "drive_url" | "itin_number"
+  /**
+   * Input type. Defaults to 'text'.
+   *   - text / textarea / url / date — standard form inputs
+   *   - drive_url — accepts a Drive share URL (parsed server-side)
+   *   - itin_number — text with ITIN-format validation
+   *   - file — uploads to the parent task's account Drive folder via
+   *            /api/workflows/upload-task-file; the field value becomes
+   *            the resulting Drive file_id.
+   */
+  type?: "text" | "textarea" | "url" | "date" | "drive_url" | "itin_number" | "file"
+  /** For type='file': subfolder name under the account's Drive folder (e.g. 'ITIN/IRS Letters'). Defaults to 'Workflow Uploads'. */
+  upload_subfolder?: string
+  /** For type='file': accept MIME hint passed to the browser file picker (e.g. 'application/pdf'). */
+  accept?: string
   placeholder?: string
   /** Optional help text shown under the input. */
   help?: string

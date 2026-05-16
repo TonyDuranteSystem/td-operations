@@ -27,9 +27,11 @@ const InputFieldSpecSchema = z.object({
   label: z.string().optional(),
   required: z.boolean().optional(),
   optional: z.boolean().optional(),
-  type: z.enum(["text", "textarea", "url", "date", "drive_url", "itin_number"]).optional(),
+  type: z.enum(["text", "textarea", "url", "date", "drive_url", "itin_number", "file"]).optional(),
   placeholder: z.string().optional(),
   help: z.string().optional(),
+  upload_subfolder: z.string().optional(),
+  accept: z.string().optional(),
 })
 
 /** Backward-compatible: either a single field spec OR `{ fields: [...] }`. */
