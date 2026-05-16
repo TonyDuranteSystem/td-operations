@@ -117,10 +117,11 @@ describe("chain.await_client_action", () => {
 })
 
 describe("chain.spawn_next_workflow", () => {
-  it("fails when neither params nor action.handler_params supply workflow_slug", async () => {
+  it("succeeds without explicit slug — signals dispatcher to consult catalog transitions (Slice 5)", async () => {
     const result = await chainSpawnNextWorkflow(makeCtx({ params: {} }))
-    expect(result.success).toBe(false)
-    expect(result.error?.code).toBe("MISSING_WORKFLOW_SLUG")
+    expect(result.success).toBe(true)
+    expect(result.spawn_task).toBeUndefined()
+    expect(result.side_effects[0].kind).toBe("workflow.transition_signaled")
   })
 
   it("reads workflow_slug from params and sets spawn_task", async () => {

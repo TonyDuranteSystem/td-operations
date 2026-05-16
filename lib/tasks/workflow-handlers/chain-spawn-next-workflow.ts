@@ -43,15 +43,20 @@ export const chainSpawnNextWorkflow: WorkflowHandler = async (
         ? handlerParams.workflow_slug
         : ""
 
+  // Slice 5: when no slug is provided, return success without spawn_task so
+  // the dispatcher's catalog-transition resolver can take over. This is the
+  // "signal: consult workflow_chain.transitions for the next step" use case
+  // — most Slice 5 ITIN-chain actions use this path. When a slug IS provided
+  // (legacy / explicit caller), spawn directly as before.
   if (!slug) {
     return {
-      success: false,
-      error: {
-        code: "MISSING_WORKFLOW_SLUG",
-        message:
-          "chain.spawn_next_workflow requires 'workflow_slug' in params or action.handler_params",
-      },
-      side_effects: [],
+      success: true,
+      side_effects: [
+        {
+          kind: "workflow.transition_signaled",
+          detail: "No explicit workflow_slug — dispatcher consults catalog transitions",
+        },
+      ],
     }
   }
 
